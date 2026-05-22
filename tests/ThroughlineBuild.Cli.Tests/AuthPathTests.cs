@@ -3,7 +3,7 @@ using Xunit;
 
 namespace ThroughlineBuild.Cli.Tests;
 
-[CollectionDefinition("Cli Tests Environment")]
+[CollectionDefinition("Cli Tests Environment", DisableParallelization = true)]
 public class AuthPathTestsCollection;
 
 [Collection("Cli Tests Environment")]
