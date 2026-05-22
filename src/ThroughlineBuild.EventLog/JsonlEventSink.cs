@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization.Metadata;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 
@@ -23,7 +22,6 @@ public sealed class JsonlEventSink : IEventSink, IAsyncDisposable
 
     public async Task EmitAsync(WorkflowEvent ev, CancellationToken ct)
     {
-        var options = new JsonSerializerOptions { WriteIndented = false };
         var json = JsonSerializer.Serialize(ev, typeof(WorkflowEvent), EventLogJsonContext.Default);
         var bytes = Encoding.UTF8.GetBytes(json);
 
