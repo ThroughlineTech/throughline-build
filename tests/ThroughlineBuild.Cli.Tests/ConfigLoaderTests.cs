@@ -156,4 +156,31 @@ log_directory = ".build/events"
             File.Delete(path);
         }
     }
+
+    [Fact]
+    public void ResolveSecrets_AnthropicKeyMissing_DoesNotThrow()
+    {
+        var path = WriteToml(ValidToml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Environment.SetEnvironmentVariable("PLANE_TOKEN", "test-plane-token");
+            Environment.SetEnvironmentVariable("ANTHROPIC_KEY", null);
+            try
+            {
+                var secrets = BuildConfigLoader.ResolveSecrets(config);
+                Assert.Equal("test-plane-token", secrets.PlaneApiToken);
+                Assert.Null(secrets.AnthropicApiKey);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("PLANE_TOKEN", null);
+                Environment.SetEnvironmentVariable("ANTHROPIC_KEY", null);
+            }
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }
