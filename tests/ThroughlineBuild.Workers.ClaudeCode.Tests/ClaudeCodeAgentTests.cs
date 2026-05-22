@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using Xunit;
+using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Workers.ClaudeCode;
 
@@ -135,5 +137,33 @@ public class ClaudeCodeAgentNameTests
         var agent = new ClaudeCodeAgent(new ClaudeCodeOptions { ExecutablePath = "/usr/bin/claude" });
 
         Assert.Equal("claude-code", agent.Name);
+    }
+}
+
+public class ClaudeCodeAgentConfigureEnvironmentTests
+{
+    [Fact]
+    public void ConfigureEnvironment_RemovesAnthropicKey_WhenParentHasIt()
+    {
+        var psi = new ProcessStartInfo("echo") { UseShellExecute = false };
+        psi.Environment["ANTHROPIC_API_KEY"] = "parent-key";
+
+        ClaudeCodeAgent.ConfigureEnvironment(psi, new WorkerOptions(TimeSpan.FromSeconds(30)));
+
+        Assert.False(psi.Environment.ContainsKey("ANTHROPIC_API_KEY"));
+    }
+
+    [Fact]
+    public void ConfigureEnvironment_ExplicitOverrideWins_WhenApiKeyInOptions()
+    {
+        var psi = new ProcessStartInfo("echo") { UseShellExecute = false };
+        psi.Environment["ANTHROPIC_API_KEY"] = "parent-key";
+
+        var options = new WorkerOptions(
+            TimeSpan.FromSeconds(30),
+            EnvironmentVariables: new Dictionary<string, string> { ["ANTHROPIC_API_KEY"] = "explicit-key" });
+        ClaudeCodeAgent.ConfigureEnvironment(psi, options);
+
+        Assert.Equal("explicit-key", psi.Environment["ANTHROPIC_API_KEY"]);
     }
 }
