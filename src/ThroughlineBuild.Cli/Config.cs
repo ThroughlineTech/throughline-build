@@ -27,7 +27,7 @@ public record BuildConfig(
     WorkersConfig Workers,
     EventsConfig Events);
 
-public record BuildSecrets(string PlaneApiToken, string AnthropicApiKey);
+public record BuildSecrets(string PlaneApiToken, string? AnthropicApiKey);
 
 public class ConfigException : Exception
 {
@@ -87,9 +87,6 @@ public static class BuildConfigLoader
                 $"required environment variable '{config.Ticketing.PlaneApiTokenEnv}' is not set");
 
         var anthropicKey = Environment.GetEnvironmentVariable(config.Llm.AnthropicApiKeyEnv);
-        if (string.IsNullOrEmpty(anthropicKey))
-            throw new ConfigException(
-                $"required environment variable '{config.Llm.AnthropicApiKeyEnv}' is not set");
 
         return new BuildSecrets(planeToken, anthropicKey);
     }
