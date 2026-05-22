@@ -16,5 +16,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\ThroughlineBuild.Cli\ThroughlineBuild.Cli.csproj" />
+    <ProjectReference Include="..\..\src\ThroughlineBuild.Helpers\ThroughlineBuild.Helpers.csproj" />
   </ItemGroup>
 </Project>
