@@ -1,4 +1,5 @@
 .worktrees/
+secrets/
 bin/
 obj/
 *.user
