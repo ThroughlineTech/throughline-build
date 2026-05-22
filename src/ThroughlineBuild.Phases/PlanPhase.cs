@@ -89,14 +89,6 @@ public class PlanPhase
             return new PlanResult(false, ticketId, null, null, null, $"git rev-parse failed: {ex.Message}");
         }
 
-        await EmitAsync(EventKind.StateTransition, ticketId, new Dictionary<string, object>
-        {
-            ["from"] = "Backlog",
-            ["to"] = "Planning"
-        }, ct).ConfigureAwait(false);
-
-        await _ticketing.TransitionAsync(ticketId, TicketState.Planning, ct).ConfigureAwait(false);
-
         var topLevelEntries = Directory.EnumerateFileSystemEntries(workingDirectory)
             .ToList()
             .AsReadOnly();
@@ -147,7 +139,7 @@ public class PlanPhase
         await _ticketing.TransitionAsync(ticketId, TicketState.Ready, ct).ConfigureAwait(false);
         await EmitAsync(EventKind.StateTransition, ticketId, new Dictionary<string, object>
         {
-            ["from"] = "Planning",
+            ["from"] = "Backlog",
             ["to"] = "Ready"
         }, ct).ConfigureAwait(false);
 

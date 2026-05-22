@@ -8,11 +8,13 @@ public record TicketingConfig(
     string PlaneBaseUrl,
     string PlaneWorkspaceSlug,
     string PlaneProjectId,
-    string PlaneApiTokenEnv);
+    string PlaneApiTokenEnv,
+    string? PlaneApiToken = null);
 
 public record LlmConfig(
     string DefaultModel,
-    string AnthropicApiKeyEnv);
+    string AnthropicApiKeyEnv,
+    string? AnthropicApiKey = null);
 
 public record WorkersConfig(
     string DefaultAgent,
@@ -81,14 +83,18 @@ public static class BuildConfigLoader
 
     public static BuildSecrets ResolveSecrets(BuildConfig config)
     {
-        var planeToken = Environment.GetEnvironmentVariable(config.Ticketing.PlaneApiTokenEnv);
+        var planeToken = config.Ticketing.PlaneApiToken;
+        if (string.IsNullOrEmpty(planeToken))
+            planeToken = Environment.GetEnvironmentVariable(config.Ticketing.PlaneApiTokenEnv);
         if (string.IsNullOrEmpty(planeToken))
             throw new ConfigException(
-                $"required environment variable '{config.Ticketing.PlaneApiTokenEnv}' is not set");
+                $"plane_api_token not set in config and required environment variable '{config.Ticketing.PlaneApiTokenEnv}' is not set");
 
-        var anthropicKey = Environment.GetEnvironmentVariable(config.Llm.AnthropicApiKeyEnv);
+        var anthropicKey = config.Llm.AnthropicApiKey;
+        if (string.IsNullOrEmpty(anthropicKey))
+            anthropicKey = Environment.GetEnvironmentVariable(config.Llm.AnthropicApiKeyEnv);
 
-        return new BuildSecrets(planeToken, anthropicKey);
+        return new BuildSecrets(planeToken, string.IsNullOrEmpty(anthropicKey) ? null : anthropicKey);
     }
 
     private static TomlTable RequireSection(TomlTable root, string key)
@@ -131,7 +137,8 @@ public static class BuildConfigLoader
             PlaneBaseUrl: RequireString(t, "ticketing", "plane_base_url"),
             PlaneWorkspaceSlug: RequireString(t, "ticketing", "plane_workspace_slug"),
             PlaneProjectId: RequireString(t, "ticketing", "plane_project_id"),
-            PlaneApiTokenEnv: RequireString(t, "ticketing", "plane_api_token_env"));
+            PlaneApiTokenEnv: OptionalString(t, "plane_api_token_env", "PLANE_API_TOKEN"),
+            PlaneApiToken: OptionalString(t, "plane_api_token", string.Empty) is var tok && tok.Length > 0 ? tok : null);
     }
 
     private static LlmConfig ReadLlmSection(TomlTable root)
@@ -140,7 +147,8 @@ public static class BuildConfigLoader
             return new LlmConfig(string.Empty, string.Empty);
         return new LlmConfig(
             DefaultModel: OptionalString(t, "default_model", string.Empty),
-            AnthropicApiKeyEnv: OptionalString(t, "anthropic_api_key_env", string.Empty));
+            AnthropicApiKeyEnv: OptionalString(t, "anthropic_api_key_env", string.Empty),
+            AnthropicApiKey: OptionalString(t, "anthropic_api_key", string.Empty) is var key && key.Length > 0 ? key : null);
     }
 
     private static WorkersConfig ReadWorkersSection(TomlTable root)

@@ -16,14 +16,14 @@ public class ClaudeCodeAgent : IWorkerAgent
 
     public async Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
     {
-        // Write brief to .build/brief.md
+        // Write brief to .build/brief.md (persisted for diagnostics)
         var buildDir = Path.Combine(workingDirectory, ".build");
         Directory.CreateDirectory(buildDir);
         var briefPath = Path.Combine(buildDir, "brief.md");
         await File.WriteAllTextAsync(briefPath, brief.Instruction, ct);
 
-        // Build args
-        var args = new List<string> { "--print", "--input-file", briefPath };
+        // Build args - brief is delivered via stdin
+        var args = new List<string> { "--print" };
         if (options.AllowedTools is { Count: > 0 })
             args.AddRange(new[] { "--allowedTools", string.Join(",", options.AllowedTools) });
         foreach (var extra in _options.ExtraArgs)
@@ -35,6 +35,7 @@ public class ClaudeCodeAgent : IWorkerAgent
         var psi = new ProcessStartInfo(_options.ExecutablePath)
         {
             WorkingDirectory = workingDirectory,
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -54,6 +55,10 @@ public class ClaudeCodeAgent : IWorkerAgent
         process.Start();
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
+
+        // Send brief via stdin then close to signal EOF
+        await process.StandardInput.WriteAsync(brief.Instruction);
+        process.StandardInput.Close();
 
         try
         {

@@ -93,7 +93,7 @@ Exit codes:
     {
         ExecutablePath = config.Workers.ClaudeCodeExecutable
     });
-    var eventSink = new JsonlEventSink(new EventLogOptions
+    await using var eventSink = new JsonlEventSink(new EventLogOptions
     {
         BaseDirectory = config.Events.LogDirectory,
         SessionId = sessionId

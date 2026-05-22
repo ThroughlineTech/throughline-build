@@ -174,8 +174,18 @@ public sealed class PlaneTicketingClient : ITicketing
 
     // ------------------------------------------------------------------ translation
 
-    private static Ticket ToTicket(PlaneIssue issue, IReadOnlyDictionary<string, PlaneState> statesById)
+    private async Task<PlaneIssue> FindIssueAsync(int seq, CancellationToken ct)
     {
+        var issueList = await GetJsonAsync<PlaneIssueList>(
+            $"{IssuesBase}?per_page=100", PlaneJsonContext.Default, ct).ConfigureAwait(false);
+        return issueList.Results.FirstOrDefault(i => i.SequenceId == seq)
+            ?? throw new KeyNotFoundException($"Issue with sequence_id {seq} not found in Plane");
+    }
+
+    private async Task<Ticket> ToTicketAsync(PlaneIssue issue, CancellationToken ct)
+    {
+        var states = await GetStatesByNameAsync(ct).ConfigureAwait(false);
+        var statesById = states.ToDictionary(kvp => kvp.Value, kvp => new PlaneState(kvp.Value, kvp.Key, string.Empty));
         var stateName = statesById.TryGetValue(issue.StateId, out var st) ? st.Name : string.Empty;
         var ticketState = _stateNameMap.TryGetValue(stateName, out var ts) ? ts : TicketState.Backlog;
 
@@ -188,7 +198,7 @@ public sealed class PlaneTicketingClient : ITicketing
             Risk: Risk.Medium,
             DescriptionHtml: issue.DescriptionHtml ?? string.Empty,
             Relations: [],
-            Labels: issue.LabelIds.AsReadOnly(),
+            Labels: (issue.LabelIds ?? []).AsReadOnly(),
             ParentId: issue.ParentId);
     }
 
@@ -199,17 +209,8 @@ public sealed class PlaneTicketingClient : ITicketing
         return await _pipeline.ExecuteAsync(async token =>
         {
             var seq = ParseSequenceId(id);
-            var issueList = await GetJsonAsync<PlaneIssueList>(
-                $"{IssuesBase}?sequence_id={seq}", PlaneJsonContext.Default, token).ConfigureAwait(false);
-
-            var issue = issueList.Results.FirstOrDefault()
-                ?? throw new KeyNotFoundException($"Issue '{id}' not found in Plane");
-
-            // Fetch states for translation
-            var states = await GetStatesByNameAsync(token).ConfigureAwait(false);
-            var statesById = states.ToDictionary(kvp => kvp.Value, kvp => new PlaneState(kvp.Value, kvp.Key, string.Empty));
-
-            return ToTicket(issue, statesById);
+            var issue = await FindIssueAsync(seq, token).ConfigureAwait(false);
+            return await ToTicketAsync(issue, token).ConfigureAwait(false);
         }, ct).ConfigureAwait(false);
     }
 
@@ -225,12 +226,7 @@ public sealed class PlaneTicketingClient : ITicketing
         await _pipeline.ExecuteAsync(async token =>
         {
             var seq = ParseSequenceId(id);
-
-            // Fetch the issue UUID first
-            var issueList = await GetJsonAsync<PlaneIssueList>(
-                $"{IssuesBase}?sequence_id={seq}", PlaneJsonContext.Default, token).ConfigureAwait(false);
-            var issue = issueList.Results.FirstOrDefault()
-                ?? throw new KeyNotFoundException($"Issue '{id}' not found in Plane");
+            var issue = await FindIssueAsync(seq, token).ConfigureAwait(false);
 
             // Resolve state name -> uuid
             var stateName = newState switch
@@ -262,11 +258,7 @@ public sealed class PlaneTicketingClient : ITicketing
         await _pipeline.ExecuteAsync(async token =>
         {
             var seq = ParseSequenceId(id);
-
-            var issueList = await GetJsonAsync<PlaneIssueList>(
-                $"{IssuesBase}?sequence_id={seq}", PlaneJsonContext.Default, token).ConfigureAwait(false);
-            var issue = issueList.Results.FirstOrDefault()
-                ?? throw new KeyNotFoundException($"Issue '{id}' not found in Plane");
+            var issue = await FindIssueAsync(seq, token).ConfigureAwait(false);
 
             var existing = issue.DescriptionHtml ?? string.Empty;
             var combined = existing + html;
@@ -284,11 +276,7 @@ public sealed class PlaneTicketingClient : ITicketing
         return await _pipeline.ExecuteAsync(async token =>
         {
             var seq = ParseSequenceId(id);
-
-            var issueList = await GetJsonAsync<PlaneIssueList>(
-                $"{IssuesBase}?sequence_id={seq}", PlaneJsonContext.Default, token).ConfigureAwait(false);
-            var issue = issueList.Results.FirstOrDefault()
-                ?? throw new KeyNotFoundException($"Issue '{id}' not found in Plane");
+            var issue = await FindIssueAsync(seq, token).ConfigureAwait(false);
 
             var responseBody = await PostJsonAsync(
                 $"{IssuesBase}{issue.Id}/comments/",
@@ -307,11 +295,7 @@ public sealed class PlaneTicketingClient : ITicketing
         await _pipeline.ExecuteAsync(async token =>
         {
             var seq = ParseSequenceId(id);
-
-            var issueList = await GetJsonAsync<PlaneIssueList>(
-                $"{IssuesBase}?sequence_id={seq}", PlaneJsonContext.Default, token).ConfigureAwait(false);
-            var issue = issueList.Results.FirstOrDefault()
-                ?? throw new KeyNotFoundException($"Issue '{id}' not found in Plane");
+            var issue = await FindIssueAsync(seq, token).ConfigureAwait(false);
 
             // Resolve label names to UUIDs
             var labelsByName = await GetLabelsByNameAsync(token).ConfigureAwait(false);
@@ -323,7 +307,7 @@ public sealed class PlaneTicketingClient : ITicketing
             }).ToList();
 
             // Merge with existing label_ids
-            var merged = issue.LabelIds.Union(labelIds).ToList();
+            var merged = (issue.LabelIds ?? []).Union(labelIds).ToList();
 
             await PatchJsonAsync(
                 $"{IssuesBase}{issue.Id}/",
@@ -338,11 +322,7 @@ public sealed class PlaneTicketingClient : ITicketing
         return await _pipeline.ExecuteAsync(async token =>
         {
             var seq = ParseSequenceId(id);
-
-            var issueList = await GetJsonAsync<PlaneIssueList>(
-                $"{IssuesBase}?sequence_id={seq}", PlaneJsonContext.Default, token).ConfigureAwait(false);
-            var issue = issueList.Results.FirstOrDefault()
-                ?? throw new KeyNotFoundException($"Issue '{id}' not found in Plane");
+            var issue = await FindIssueAsync(seq, token).ConfigureAwait(false);
 
             var relationList = await GetJsonAsync<PlaneRelationList>(
                 $"{IssuesBase}{issue.Id}/relations/", PlaneJsonContext.Default, token).ConfigureAwait(false);
