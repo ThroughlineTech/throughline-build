@@ -1,4 +1,4 @@
-# Operation:build-plan-slice
+# Operation: build-plan-slice
 
 First end-to-end vertical: `build plan <id>` runs from a terminal against a real Plane workspace, dispatches Claude Code as a worker, posts results back to Plane. Validates the architecture and establishes the cost baseline against the existing slash command.
 

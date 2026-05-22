@@ -1,4 +1,4 @@
-# Operation:build-scaffolding
+# Operation: build-scaffolding
 
 Validate the .NET 8 AOT toolchain works for the Throughline Build architecture across Mac, Windows, and Linux. Establish project layout, test framework, and CI baseline before any business logic ships.
 

@@ -1,4 +1,4 @@
-# Operation:build-foundation
+# Operation: build-foundation
 
 Define the typed contracts (data model, interfaces) and pure helper functions that all downstream implementations will compose. Foundation work, no I/O, no external dependencies beyond .NET stdlib.
 
