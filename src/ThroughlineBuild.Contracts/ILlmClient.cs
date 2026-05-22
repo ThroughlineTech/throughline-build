@@ -60,11 +60,28 @@ public record LlmResponse(string Content, LlmUsage Usage);
 /// </summary>
 /// <param name="InputTokens">Number of tokens in the input prompt.</param>
 /// <param name="OutputTokens">Number of tokens in the model output.</param>
-public record LlmUsage(int InputTokens, int OutputTokens);
+/// <param name="CacheReadTokens">Number of tokens read from cache, if applicable.</param>
+/// <param name="CacheWriteTokens">Number of tokens written to cache, if applicable.</param>
+public record LlmUsage(int InputTokens, int OutputTokens, int? CacheReadTokens, int? CacheWriteTokens);
 
 /// <summary>
-/// Event in a streaming LLM response.
+/// Base type for events in a streaming LLM response.
 /// </summary>
-/// <param name="Delta">The incremental text content from the stream.</param>
-/// <param name="IsFinal">Indicates whether this is the final event in the stream.</param>
-public record LlmStreamEvent(string Delta, bool IsFinal);
+public abstract record LlmStreamEvent;
+
+/// <summary>
+/// Event containing incremental text content from the stream.
+/// </summary>
+/// <param name="Text">The incremental text content from the stream.</param>
+public record LlmStreamTextDelta(string Text) : LlmStreamEvent;
+
+/// <summary>
+/// Event containing token usage statistics at the end of the stream.
+/// </summary>
+/// <param name="Usage">The token usage statistics for the streamed invocation.</param>
+public record LlmStreamUsage(LlmUsage Usage) : LlmStreamEvent;
+
+/// <summary>
+/// Event indicating the stream has completed.
+/// </summary>
+public record LlmStreamDone() : LlmStreamEvent;
