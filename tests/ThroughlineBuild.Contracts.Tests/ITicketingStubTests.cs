@@ -15,6 +15,12 @@ public class ITicketingStubTests
         private readonly Dictionary<string, List<string>> _comments = new();
         private readonly Dictionary<string, List<Relation>> _relations = new();
 
+        public BackendCapabilities Capabilities { get; } = new(
+            TypedRelations: true,
+            TypedLabels: true,
+            RichHtmlComments: true,
+            Attachments: true);
+
         public TicketingStub()
         {
             // Initialize with a test ticket
@@ -100,17 +106,6 @@ public class ITicketingStubTests
                 return Task.FromResult((IReadOnlyList<Relation>)Array.Empty<Relation>());
             return Task.FromResult((IReadOnlyList<Relation>)relations);
         }
-
-        public Task CreateRelationAsync(string id, Relation relation, CancellationToken ct)
-        {
-            if (!_tickets.TryGetValue(id, out _))
-                throw new KeyNotFoundException($"Ticket {id} not found");
-
-            if (!_relations.ContainsKey(id))
-                _relations[id] = new List<Relation>();
-            _relations[id].Add(relation);
-            return Task.CompletedTask;
-        }
     }
 
     [Fact]
@@ -193,30 +188,17 @@ public class ITicketingStubTests
     }
 
     [Fact]
-    public async Task ITicketing_CreateRelationAsync_CreatesRelation()
-    {
-        var stub = new TicketingStub();
-        var relation = new Relation("blocks", "TLB-2");
-        await stub.CreateRelationAsync("TLB-1", relation, CancellationToken.None);
-
-        var relations = await stub.GetRelationsAsync("TLB-1", CancellationToken.None);
-        Assert.Single(relations);
-        Assert.Equal("blocks", relations[0].Kind);
-        Assert.Equal("TLB-2", relations[0].TargetId);
-    }
-
-    [Fact]
     public void BackendCapabilities_Record_Compiles()
     {
         var caps = new BackendCapabilities(
-            SupportsComments: true,
-            SupportsLabels: true,
-            SupportsRelations: true,
-            SupportsHtmlDescription: true);
+            TypedRelations: true,
+            TypedLabels: true,
+            RichHtmlComments: true,
+            Attachments: true);
 
-        Assert.True(caps.SupportsComments);
-        Assert.True(caps.SupportsLabels);
-        Assert.True(caps.SupportsRelations);
-        Assert.True(caps.SupportsHtmlDescription);
+        Assert.True(caps.TypedRelations);
+        Assert.True(caps.TypedLabels);
+        Assert.True(caps.RichHtmlComments);
+        Assert.True(caps.Attachments);
     }
 }

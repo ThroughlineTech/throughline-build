@@ -9,6 +9,11 @@ using ThroughlineBuild.Contracts.Models;
 public interface ITicketing
 {
     /// <summary>
+    /// Describes the optional capabilities supported by this ticketing backend.
+    /// </summary>
+    BackendCapabilities Capabilities { get; }
+
+    /// <summary>
     /// Fetch a single ticket by ID.
     /// </summary>
     Task<Ticket> GetAsync(string id, CancellationToken ct);
@@ -42,18 +47,13 @@ public interface ITicketing
     /// Fetch all relations for a ticket.
     /// </summary>
     Task<IReadOnlyList<Relation>> GetRelationsAsync(string id, CancellationToken ct);
-
-    /// <summary>
-    /// Create a new relation from a ticket to another ticket.
-    /// </summary>
-    Task CreateRelationAsync(string id, Relation relation, CancellationToken ct);
 }
 
 /// <summary>
 /// Describes optional capabilities supported by a ticketing backend.
 /// </summary>
 public record BackendCapabilities(
-    bool SupportsComments,
-    bool SupportsLabels,
-    bool SupportsRelations,
-    bool SupportsHtmlDescription);
+    bool TypedRelations,
+    bool TypedLabels,
+    bool RichHtmlComments,
+    bool Attachments);
