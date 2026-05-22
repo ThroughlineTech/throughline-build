@@ -42,9 +42,7 @@ public class ClaudeCodeAgent : IWorkerAgent
         };
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);
-        if (options.EnvironmentVariables != null)
-            foreach (var (k, v) in options.EnvironmentVariables)
-                psi.Environment[k] = v;
+        ConfigureEnvironment(psi, options);
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(options.Timeout);
@@ -81,5 +79,15 @@ public class ClaudeCodeAgent : IWorkerAgent
 
         return new WorkerResult(Status.Escalate, "No WORKER_RESULT found in output", Array.Empty<string>(),
             $"Stdout did not contain a WORKER_RESULT block. Stderr: {stderr}", new Dictionary<string, object>());
+    }
+
+    internal static void ConfigureEnvironment(ProcessStartInfo psi, WorkerOptions options)
+    {
+        // Ensure Claude Code uses OAuth auth rather than API-key auth; worker LLM cost
+        // flows to the user's subscription, not to per-token API billing.
+        psi.Environment.Remove("ANTHROPIC_API_KEY");
+        if (options.EnvironmentVariables != null)
+            foreach (var (k, v) in options.EnvironmentVariables)
+                psi.Environment[k] = v;
     }
 }
