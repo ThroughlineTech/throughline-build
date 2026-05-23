@@ -71,6 +71,62 @@ public class ProcessGitClientWorktreeTests : IDisposable
         Assert.False(Directory.Exists(linkedDir));
     }
 
+    [Fact]
+    public async Task CreateWorktreeAsync_CreatesAndListsWorktree()
+    {
+        var repoDir = CreateTempGitRepo();
+        var worktreeDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        _tempDirs.Add(worktreeDir);
+
+        var client = new ProcessGitClient(repoDir);
+        var result = await client.CreateWorktreeAsync(worktreeDir, "wt-test-branch", "HEAD", repoDir, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Null(result.FailureReason);
+        Assert.NotNull(result.AbsolutePath);
+
+        var worktrees = await client.ListWorktreesAsync(CancellationToken.None);
+        Assert.Contains(worktrees, w => string.Equals(
+            Path.GetFullPath(w.Path).TrimEnd(Path.DirectorySeparatorChar),
+            Path.GetFullPath(worktreeDir).TrimEnd(Path.DirectorySeparatorChar),
+            StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task CreateWorktreeAsync_FailsCleanlyWhenPathExists()
+    {
+        var repoDir = CreateTempGitRepo();
+        var existingDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        _tempDirs.Add(existingDir);
+        Directory.CreateDirectory(existingDir);
+        // Write a file so the directory is non-empty; git refuses to add a worktree
+        // into a non-empty directory (exits non-zero: "not an empty directory").
+        File.WriteAllText(Path.Combine(existingDir, "dummy.txt"), "block");
+
+        var client = new ProcessGitClient(repoDir);
+        var result = await client.CreateWorktreeAsync(existingDir, "wt-conflict-branch", "HEAD", repoDir, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.FailureReason);
+        Assert.True(result.FailureReason!.Length > 0);
+    }
+
+    [Fact]
+    public async Task HeadShaAsync_ReturnsFortyCharSha()
+    {
+        var repoDir = CreateTempGitRepo();
+        var worktreeDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        _tempDirs.Add(worktreeDir);
+
+        var client = new ProcessGitClient(repoDir);
+        await client.CreateWorktreeAsync(worktreeDir, "wt-sha-branch", "HEAD", repoDir, CancellationToken.None);
+
+        var sha = await client.HeadShaAsync(worktreeDir, CancellationToken.None);
+
+        Assert.Equal(40, sha.Length);
+        Assert.Matches("^[0-9a-f]{40}$", sha);
+    }
+
     public void Dispose()
     {
         foreach (var dir in _tempDirs)
