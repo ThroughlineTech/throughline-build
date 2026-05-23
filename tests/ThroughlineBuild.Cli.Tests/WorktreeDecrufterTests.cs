@@ -1,3 +1,4 @@
+using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Helpers;
 using ThroughlineBuild.Phases;
 using Xunit;
