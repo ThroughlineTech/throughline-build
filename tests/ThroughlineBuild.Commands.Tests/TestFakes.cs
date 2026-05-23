@@ -1,0 +1,136 @@
+using ThroughlineBuild.Contracts;
+using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Helpers;
+
+namespace ThroughlineBuild.Commands.Tests;
+
+// Shared fake implementations used by CloseCommandTests and DeferCommandTests.
+
+internal sealed class TempDir : IDisposable
+{
+    public string Path { get; }
+    public TempDir()
+    {
+        Path = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            "tlb67-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path);
+    }
+    public void Dispose()
+    {
+        try { if (Directory.Exists(Path)) Directory.Delete(Path, true); }
+        catch { /* best-effort cleanup */ }
+    }
+}
+
+internal sealed class FakeTicketing : ITicketing
+{
+    private readonly Ticket _ticket;
+
+    public List<(string id, string html)> Comments { get; } = new();
+    public List<(string id, TicketState state)> Transitions { get; } = new();
+    public int RollupCalls { get; private set; }
+    public bool RollupThrows { get; set; }
+    // Track-through count for IGitClient calls observed via the decrufter
+    // (not used directly on this fake; left for symmetry).
+    public int ListWorktreeCallsViaGit { get; set; }
+
+    public FakeTicketing(Ticket ticket) { _ticket = ticket; }
+
+    public BackendCapabilities Capabilities => new BackendCapabilities(true, true, true, false);
+
+    public Task<Ticket> GetAsync(string id, CancellationToken ct) =>
+        Task.FromResult(_ticket);
+
+    public Task<IReadOnlyList<Ticket>> GetBatchAsync(IEnumerable<string> ids, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<Ticket>>(new[] { _ticket });
+
+    public Task TransitionAsync(string id, TicketState newState, CancellationToken ct)
+    {
+        Transitions.Add((id, newState));
+        return Task.CompletedTask;
+    }
+
+    public Task AppendDescriptionAsync(string id, string html, CancellationToken ct) =>
+        Task.CompletedTask;
+
+    public Task<string> CreateCommentAsync(string id, string html, CancellationToken ct)
+    {
+        Comments.Add((id, html));
+        return Task.FromResult($"comment-{Comments.Count}");
+    }
+
+    public Task ApplyLabelsAsync(string id, IEnumerable<string> labels, CancellationToken ct) =>
+        Task.CompletedTask;
+
+    public Task<IReadOnlyList<Relation>> GetRelationsAsync(string id, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<Relation>>(Array.Empty<Relation>());
+
+    public Task<RollupResult> RollupParentAsync(string id, CancellationToken ct)
+    {
+        RollupCalls++;
+        if (RollupThrows)
+            throw new InvalidOperationException("simulated rollup failure");
+        return Task.FromResult(new RollupResult(false, null, null));
+    }
+}
+
+internal sealed class FakeEventSink : IEventSink
+{
+    public List<WorkflowEvent> Events { get; } = new();
+
+    public Task EmitAsync(WorkflowEvent ev, CancellationToken ct)
+    {
+        Events.Add(ev);
+        return Task.CompletedTask;
+    }
+
+    public Task FlushAsync(CancellationToken ct) => Task.CompletedTask;
+}
+
+internal sealed class FakeGitClient : IGitClient
+{
+    public List<string> UnmergedBranches { get; set; } = new();
+    public int ListWorktreesCalls { get; private set; }
+
+    public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
+        Task.FromResult("abc123");
+
+    public Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct)
+    {
+        ListWorktreesCalls++;
+        return Task.FromResult<IReadOnlyList<WorktreeInfo>>(Array.Empty<WorktreeInfo>());
+    }
+
+    public Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct) =>
+        Task.FromResult(new WorktreeRemoveResult(true, null));
+
+    public Task<IReadOnlyList<string>> GetBranchesNotMergedAsync(string pattern, string baseBranch, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<string>>(UnmergedBranches);
+}
+
+internal sealed class FakeLlmClient : ILlmClient
+{
+    private readonly string _content;
+    public FakeLlmClient(string content) { _content = content; }
+
+    public Task<LlmResponse> InvokeAsync(
+        string modelId,
+        IReadOnlyList<LlmMessage> messages,
+        InvocationOptions options,
+        CancellationToken ct)
+    {
+        return Task.FromResult(new LlmResponse(_content, new LlmUsage(0, 0, null, null)));
+    }
+
+    public async IAsyncEnumerable<LlmStreamEvent> InvokeStreamAsync(
+        string modelId,
+        IReadOnlyList<LlmMessage> messages,
+        InvocationOptions options,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        yield return new LlmStreamTextDelta(_content);
+        yield return new LlmStreamDone();
+        await Task.CompletedTask;
+    }
+}
