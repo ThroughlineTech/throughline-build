@@ -144,6 +144,43 @@ public class WorktreeDecrufterTests
     }
 
     [Fact]
+    public async Task DecruftAsync_NodeModulesJunction_JunctionRemovedBeforeWorktreeRemove()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var worktreePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        var targetPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        Directory.CreateDirectory(worktreePath);
+        Directory.CreateDirectory(targetPath);
+        var nodeModules = Path.Combine(worktreePath, "node_modules");
+        Directory.CreateDirectory(nodeModules);
+        var junctionPath = Path.Combine(nodeModules, "some-dep");
+        try
+        {
+            try { Directory.CreateSymbolicLink(junctionPath, targetPath); }
+            catch (UnauthorizedAccessException) { return; } // no symlink privilege - skip
+
+            var git = new FakeGitClient
+            {
+                Worktrees = new() { MakeWorktreeInfo(worktreePath) },
+                RemoveResult = new(true, null)
+            };
+            var decrufter = new WorktreeDecrufter(git, new FakeProcessKiller());
+
+            var result = await decrufter.DecruftAsync(worktreePath, Path.GetTempPath(), CancellationToken.None);
+
+            Assert.True(result.Outcomes[DecruftStep.PreCleanReparsePoints].Success);
+            Assert.False(Directory.Exists(junctionPath));
+            Assert.True(Directory.Exists(targetPath));
+        }
+        finally
+        {
+            if (Directory.Exists(worktreePath)) Directory.Delete(worktreePath, true);
+            if (Directory.Exists(targetPath)) Directory.Delete(targetPath, true);
+        }
+    }
+
+    [Fact]
     public async Task DecruftAsync_BothFail_DirectoryDeleteRuns()
     {
         var worktreePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());

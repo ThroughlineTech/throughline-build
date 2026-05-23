@@ -119,9 +119,12 @@ public sealed class WorktreeDecrufter
             {
                 try
                 {
-                    var di = new DirectoryInfo(nodeModules);
-                    if (di.LinkTarget != null)
-                        di.Delete(false);
+                    foreach (var sub in Directory.GetDirectories(nodeModules))
+                    {
+                        var subDi = new DirectoryInfo(sub);
+                        if (subDi.LinkTarget != null)
+                            subDi.Delete(false);
+                    }
                 }
                 catch (Exception ex)
                 {
