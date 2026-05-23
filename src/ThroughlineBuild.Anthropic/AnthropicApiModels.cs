@@ -11,7 +11,10 @@ public record AnthropicRequest(
     [property: JsonPropertyName("model")] string Model,
     [property: JsonPropertyName("max_tokens")] int MaxTokens,
     [property: JsonPropertyName("messages")] List<AnthropicMessage> Messages,
-    [property: JsonPropertyName("temperature")] double? Temperature
+    [property: JsonPropertyName("temperature")] double? Temperature,
+    [property: JsonPropertyName("system")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? System = null
 );
 
 public record AnthropicContentBlock(

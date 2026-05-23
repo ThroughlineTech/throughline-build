@@ -37,7 +37,8 @@ public class AnthropicClient : ILlmClient
             Messages: messages
                 .Select(m => new AnthropicMessage(m.Role, m.Content))
                 .ToList(),
-            Temperature: options.Temperature
+            Temperature: options.Temperature,
+            System: options.System
         );
 
         // Serialize using source generator

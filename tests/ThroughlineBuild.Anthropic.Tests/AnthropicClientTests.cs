@@ -228,6 +228,76 @@ public class AnthropicClientTests
             () => client.InvokeStreamAsync("claude-opus", messages, options, CancellationToken.None));
     }
 
+    [Fact]
+    public async Task InvokeAsync_WithSystemPrompt_IncludesSystemFieldInRequest()
+    {
+        // Arrange
+        var handler = new FakeMessageHandler(HttpStatusCode.OK, new AnthropicResponse(
+            Content: new List<AnthropicContentBlock>
+            {
+                new("text", "Hello, world!")
+            },
+            Usage: new AnthropicUsage(
+                InputTokens: 10,
+                OutputTokens: 5,
+                CacheReadInputTokens: 0,
+                CacheCreationInputTokens: 0
+            )
+        ));
+
+        var httpClient = new HttpClient(handler);
+        var client = new AnthropicClient(httpClient, _options);
+
+        var messages = new[]
+        {
+            new LlmMessage("user", "hello")
+        };
+        var options = new InvocationOptions(MaxTokens: 100, Temperature: null, System: "You are a translator.");
+
+        // Act
+        await client.InvokeAsync("claude-opus", messages, options, CancellationToken.None);
+
+        // Assert
+        var body = handler.LastRequestBody;
+        var request = JsonSerializer.Deserialize<AnthropicRequest>(body, AnthropicJsonContext.Default.AnthropicRequest);
+        Assert.NotNull(request);
+        Assert.Equal("You are a translator.", request.System);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WithoutSystemPrompt_OmitsSystemFieldFromJson()
+    {
+        // Arrange
+        var handler = new FakeMessageHandler(HttpStatusCode.OK, new AnthropicResponse(
+            Content: new List<AnthropicContentBlock>
+            {
+                new("text", "Hello, world!")
+            },
+            Usage: new AnthropicUsage(
+                InputTokens: 10,
+                OutputTokens: 5,
+                CacheReadInputTokens: 0,
+                CacheCreationInputTokens: 0
+            )
+        ));
+
+        var httpClient = new HttpClient(handler);
+        var client = new AnthropicClient(httpClient, _options);
+
+        var messages = new[]
+        {
+            new LlmMessage("user", "hello")
+        };
+        var options = new InvocationOptions(null, null);
+
+        // Act
+        await client.InvokeAsync("claude-opus", messages, options, CancellationToken.None);
+
+        // Assert
+        var body = handler.LastRequestBody;
+        Assert.DoesNotContain("\"system\"", body);
+    }
+
     /// <summary>
     /// Fake HttpMessageHandler for testing without real HTTP calls.
     /// Supports retries by returning error status codes for initial attempts.

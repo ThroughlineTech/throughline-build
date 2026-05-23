@@ -46,7 +46,8 @@ public record LlmMessage(string Role, string Content);
 /// </summary>
 /// <param name="MaxTokens">Maximum number of tokens in the response, if specified.</param>
 /// <param name="Temperature">Sampling temperature (0.0 to 2.0), controlling response randomness, if specified.</param>
-public record InvocationOptions(int? MaxTokens, double? Temperature);
+/// <param name="System">Optional system prompt forwarded to the underlying LLM.</param>
+public record InvocationOptions(int? MaxTokens, double? Temperature, string? System = null);
 
 /// <summary>
 /// Response from an LLM invocation.
