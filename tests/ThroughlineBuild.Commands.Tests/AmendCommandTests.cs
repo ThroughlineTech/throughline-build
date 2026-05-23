@@ -1,0 +1,202 @@
+using ThroughlineBuild.Commands;
+using ThroughlineBuild.Contracts;
+using ThroughlineBuild.Contracts.Models;
+using Xunit;
+
+namespace ThroughlineBuild.Commands.Tests;
+
+public class AmendCommandTests
+{
+    private static Ticket MakeTicket(
+        TicketState state = TicketState.Ready,
+        IReadOnlyList<string>? labels = null) => new Ticket(
+        Id: "TLB-1",
+        Title: "Test ticket",
+        Type: "feature",
+        State: state,
+        Size: Size.S,
+        Risk: Risk.Low,
+        DescriptionHtml: "<p>desc</p>",
+        Relations: Array.Empty<Relation>(),
+        Labels: labels ?? Array.Empty<string>(),
+        ParentId: null);
+
+    private static TicketCommandContext MakeCtx(
+        string ticketId = "TLB-1",
+        Dictionary<string, string>? args = null) =>
+        new TicketCommandContext(ticketId, args ?? new Dictionary<string, string>());
+
+    [Fact]
+    public async Task SizeOnly_existing_non_size_labels_preserved()
+    {
+        var ticket = MakeTicket(labels: new[] { "plan-ticket", "risk:low", "size:s" });
+        var ticketing = new FakeTicketing(ticket);
+        var events = new FakeEventSink();
+        var cmd = new AmendCommand(ticketing, events);
+
+        var ctx = MakeCtx(args: new Dictionary<string, string> { ["size"] = "M" });
+        var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Single(ticketing.ApplyLabels);
+        var applied = ticketing.ApplyLabels[0].labels;
+        Assert.Contains("plan-ticket", applied);
+        Assert.Contains("risk:low", applied);
+        Assert.Contains("size:m", applied);
+        Assert.DoesNotContain("size:s", applied);
+        Assert.Empty(ticketing.AppendDescriptions);
+    }
+
+    [Fact]
+    public async Task NoteOnly_appends_Context_Note_with_today_date_and_verbatim_note()
+    {
+        var ticket = MakeTicket();
+        var ticketing = new FakeTicketing(ticket);
+        var events = new FakeEventSink();
+        var cmd = new AmendCommand(ticketing, events);
+
+        var today = DateOnly.FromDateTime(DateTime.Now).ToString("yyyy-MM-dd");
+        var ctx = MakeCtx(args: new Dictionary<string, string> { ["note"] = "rationale text" });
+        var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Single(ticketing.AppendDescriptions);
+        var html = ticketing.AppendDescriptions[0].html;
+        Assert.Contains(today, html);
+        Assert.Contains("rationale text", html);
+        Assert.Empty(ticketing.ApplyLabels);
+    }
+
+    [Fact]
+    public async Task SizeAndNote_size_first_then_note()
+    {
+        var ticket = MakeTicket(labels: new[] { "plan-ticket" });
+        var ticketing = new FakeTicketing(ticket);
+        var events = new FakeEventSink();
+        var cmd = new AmendCommand(ticketing, events);
+
+        var ctx = MakeCtx(args: new Dictionary<string, string>
+        {
+            ["size"] = "L",
+            ["note"] = "some rationale"
+        });
+        var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Single(ticketing.ApplyLabels);
+        Assert.Single(ticketing.AppendDescriptions);
+
+        // Verify order: size (ApplyLabels) was called before note (AppendDescriptions).
+        // Both calls are tracked with a sequence counter in FakeTicketing.
+        Assert.True(ticketing.ApplyLabels[0].sequence < ticketing.AppendDescriptions[0].sequence,
+            "ApplyLabels must be called before AppendDescriptions");
+    }
+
+    [Fact]
+    public async Task Terminal_rejected_no_writes()
+    {
+        var ticket = MakeTicket(state: TicketState.Done);
+        var ticketing = new FakeTicketing(ticket);
+        var events = new FakeEventSink();
+        var cmd = new AmendCommand(ticketing, events);
+
+        var ctx = MakeCtx(args: new Dictionary<string, string> { ["size"] = "M" });
+        var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.Message);
+        Assert.Contains("Cancelled or Done", result.Message);
+        Assert.Empty(ticketing.ApplyLabels);
+        Assert.Empty(ticketing.AppendDescriptions);
+    }
+
+    [Fact]
+    public async Task MissingFlags_rejected()
+    {
+        var ticket = MakeTicket();
+        var ticketing = new FakeTicketing(ticket);
+        var events = new FakeEventSink();
+        var cmd = new AmendCommand(ticketing, events);
+
+        var ctx = MakeCtx(args: new Dictionary<string, string>());
+        var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.Message);
+        Assert.Contains("at least one", result.Message);
+    }
+
+    [Fact]
+    public async Task InvalidSize_rejected()
+    {
+        var ticket = MakeTicket();
+        var ticketing = new FakeTicketing(ticket);
+        var events = new FakeEventSink();
+        var cmd = new AmendCommand(ticketing, events);
+
+        var ctx = MakeCtx(args: new Dictionary<string, string> { ["size"] = "XL" });
+        var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Empty(ticketing.ApplyLabels);
+        Assert.Empty(ticketing.AppendDescriptions);
+    }
+
+    // ---------- Fakes ----------
+
+    private sealed class FakeTicketing : ITicketing
+    {
+        private readonly Ticket _ticket;
+        private int _seq;
+
+        public List<(string id, IReadOnlyList<string> labels, int sequence)> ApplyLabels { get; } = new();
+        public List<(string id, string html, int sequence)> AppendDescriptions { get; } = new();
+
+        public FakeTicketing(Ticket ticket) { _ticket = ticket; }
+
+        public BackendCapabilities Capabilities => new BackendCapabilities(true, true, true, false);
+
+        public Task<Ticket> GetAsync(string id, CancellationToken ct) =>
+            Task.FromResult(_ticket);
+
+        public Task<IReadOnlyList<Ticket>> GetBatchAsync(IEnumerable<string> ids, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<Ticket>>(new[] { _ticket });
+
+        public Task TransitionAsync(string id, TicketState newState, CancellationToken ct) =>
+            Task.CompletedTask;
+
+        public Task AppendDescriptionAsync(string id, string html, CancellationToken ct)
+        {
+            AppendDescriptions.Add((id, html, ++_seq));
+            return Task.CompletedTask;
+        }
+
+        public Task<string> CreateCommentAsync(string id, string html, CancellationToken ct) =>
+            Task.FromResult("comment-1");
+
+        public Task ApplyLabelsAsync(string id, IEnumerable<string> labels, CancellationToken ct)
+        {
+            ApplyLabels.Add((id, labels.ToList(), ++_seq));
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<Relation>> GetRelationsAsync(string id, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<Relation>>(Array.Empty<Relation>());
+
+        public Task<RollupResult> RollupParentAsync(string id, CancellationToken ct) =>
+            Task.FromResult(new RollupResult(false, null, null));
+    }
+
+    private sealed class FakeEventSink : IEventSink
+    {
+        public List<WorkflowEvent> Events { get; } = new();
+
+        public Task EmitAsync(WorkflowEvent ev, CancellationToken ct)
+        {
+            Events.Add(ev);
+            return Task.CompletedTask;
+        }
+
+        public Task FlushAsync(CancellationToken ct) => Task.CompletedTask;
+    }
+}

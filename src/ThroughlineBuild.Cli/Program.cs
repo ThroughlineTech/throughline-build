@@ -37,11 +37,63 @@ Exit codes:
 
     var verb = args[0];
 
+    var cwd2 = Directory.GetCurrentDirectory();
+
+    string configPath2;
+    try
+    {
+        configPath2 = BuildConfigLoader.FindConfigFile(cwd2)
+            ?? throw new ConfigException($"config file not found: searched from {cwd2} upwards for .build/config.toml");
+    }
+    catch (ConfigException ex)
+    {
+        Console.Error.WriteLine($"Config error: {ex.Message}");
+        return 2;
+    }
+
+    BuildConfig config2;
+    try
+    {
+        config2 = BuildConfigLoader.Load(configPath2);
+    }
+    catch (ConfigException ex)
+    {
+        Console.Error.WriteLine($"Config error: {ex.Message}");
+        return 2;
+    }
+
+    BuildSecrets secrets2;
+    try
+    {
+        secrets2 = BuildConfigLoader.ResolveSecrets(config2);
+    }
+    catch (ConfigException ex)
+    {
+        Console.Error.WriteLine($"Secret error: {ex.Message}");
+        return 3;
+    }
+
+    var sessionId2 = Guid.NewGuid().ToString("N");
+    var http2 = new HttpClient();
+    var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
+    {
+        BaseUrl = config2.Ticketing.PlaneBaseUrl,
+        ApiToken = secrets2.PlaneApiToken,
+        WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
+        ProjectId = config2.Ticketing.PlaneProjectId,
+        ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
+    });
+    await using var eventSink2 = new JsonlEventSink(new EventLogOptions
+    {
+        BaseDirectory = config2.Events.LogDirectory,
+        SessionId = sessionId2
+    });
+
     // Build the ticket-command registry. B05 wires the dispatch path; concrete
     // commands (amend/close/defer/reopen) get registered here as they land in
     // subsequent briefs (B06-B09).
     var registry = new TicketCommandRegistry();
-    // registry.Register("amend", new AmendTicketCommand(...));
+    registry.Register("amend", new AmendCommand(ticketing2, eventSink2));
     // registry.Register("close", new CloseTicketCommand(...));
     // registry.Register("defer", new DeferTicketCommand(...));
     // registry.Register("reopen", new ReopenTicketCommand(...));
