@@ -14,31 +14,25 @@ return await RunAsync(args);
 
 static async Task<int> RunAsync(string[] args)
 {
-    const string Usage = """
-build - Throughline Build
-
-Usage:
-  build plan <ticket-id>                                  Run the plan phase for a ticket
-  build amend <ticket-id> [--size S|M|L] [--note "..."]   Amend an existing ticket (at least one flag required)
-  build close <ticket-id> <reason>                        Close a ticket (reason required)
-  build defer <ticket-id> <reason>                        Defer a ticket (reason required)
-  build reopen <ticket-id> [reason]                       Reopen a previously closed or deferred ticket (reason optional)
-  build --help                                            Show this help
-
-Exit codes:
-  0  Success
-  1  Phase or command failure
-  2  Config error or unknown verb
-  3  Missing secret (env var not set)
-""";
-
     if (args.Length == 0 || args[0] == "--help" || args[0] == "help")
     {
-        Console.WriteLine(Usage);
+        Console.WriteLine(CliUsage.UsageText);
         return 0;
     }
 
     var verb = args[0];
+
+    // Arg validation for phase verbs happens BEFORE config load so a missing id
+    // surfaces a usage error (exit 2) rather than a config-not-found error.
+    if (verb == "plan" || verb == "implement")
+    {
+        if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]))
+        {
+            Console.Error.WriteLine("Error: ticket-id is required");
+            Console.Error.WriteLine($"Usage: build {verb} <ticket-id>");
+            return 2;
+        }
+    }
 
     var cwd2 = Directory.GetCurrentDirectory();
 
@@ -92,9 +86,6 @@ Exit codes:
         SessionId = sessionId2
     });
 
-    // Build the ticket-command registry. B05 wires the dispatch path; concrete
-    // commands (amend/close/defer/reopen) get registered here as they land in
-    // subsequent briefs (B06-B09).
     var registry = new TicketCommandRegistry();
     registry.Register("amend", new AmendCommand(ticketing2, eventSink2));
 
@@ -117,8 +108,6 @@ Exit codes:
         var verbTicketId = args[1];
         var extraArgs = new Dictionary<string, string>(StringComparer.Ordinal);
         int parseStart = 2;
-        // For 'close', 'defer', and 'reopen', accept reason as first positional
-        // arg after ticket-id (reason is optional for reopen, required for the others).
         if ((verb == "close" || verb == "defer" || verb == "reopen") && args.Length >= 3 && !args[2].StartsWith("--"))
         {
             extraArgs["reason"] = args[2];
@@ -160,108 +149,100 @@ Exit codes:
         }
     }
 
-    if (verb != "plan")
+    if (verb != "plan" && verb != "implement")
     {
         Console.Error.WriteLine($"Unknown subcommand: {verb}");
-        Console.Error.WriteLine(Usage);
-        return 2;
-    }
-
-    if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]))
-    {
-        Console.Error.WriteLine("Error: ticket-id is required");
-        Console.Error.WriteLine("Usage: build plan <ticket-id>");
+        Console.Error.WriteLine(CliUsage.UsageText);
         return 2;
     }
 
     var ticketId = args[1];
     var cwd = Directory.GetCurrentDirectory();
 
-    string configPath;
-    try
-    {
-        configPath = BuildConfigLoader.FindConfigFile(cwd)
-            ?? throw new ConfigException($"config file not found: searched from {cwd} upwards for .build/config.toml");
-    }
-    catch (ConfigException ex)
-    {
-        Console.Error.WriteLine($"Config error: {ex.Message}");
-        return 2;
-    }
-
-    BuildConfig config;
-    try
-    {
-        config = BuildConfigLoader.Load(configPath);
-    }
-    catch (ConfigException ex)
-    {
-        Console.Error.WriteLine($"Config error: {ex.Message}");
-        return 2;
-    }
-
-    BuildSecrets secrets;
-    try
-    {
-        secrets = BuildConfigLoader.ResolveSecrets(config);
-    }
-    catch (ConfigException ex)
-    {
-        Console.Error.WriteLine($"Secret error: {ex.Message}");
-        return 3;
-    }
-
     var sessionId = Guid.NewGuid().ToString("N");
     var http = new HttpClient();
     var ticketing = new PlaneTicketingClient(http, new PlaneClientOptions
     {
-        BaseUrl = config.Ticketing.PlaneBaseUrl,
-        ApiToken = secrets.PlaneApiToken,
-        WorkspaceSlug = config.Ticketing.PlaneWorkspaceSlug,
-        ProjectId = config.Ticketing.PlaneProjectId,
-        ProjectIdentifier = config.Ticketing.PlaneProjectIdentifier
+        BaseUrl = config2.Ticketing.PlaneBaseUrl,
+        ApiToken = secrets2.PlaneApiToken,
+        WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
+        ProjectId = config2.Ticketing.PlaneProjectId,
+        ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
     });
     var worker = new ClaudeCodeAgent(new ClaudeCodeOptions
     {
-        ExecutablePath = config.Workers.ClaudeCodeExecutable
+        ExecutablePath = config2.Workers.ClaudeCodeExecutable
     });
     await using var eventSink = new JsonlEventSink(new EventLogOptions
     {
-        BaseDirectory = config.Events.LogDirectory,
+        BaseDirectory = config2.Events.LogDirectory,
         SessionId = sessionId
     });
     var buildOptions = new BuildOptions(
         SessionId: sessionId,
-        WorkerName: config.Workers.DefaultAgent,
-        WorkerTimeout: TimeSpan.FromMinutes(config.Workers.TimeoutMinutes));
+        WorkerName: config2.Workers.DefaultAgent,
+        WorkerTimeout: TimeSpan.FromMinutes(config2.Workers.TimeoutMinutes));
 
-    var phase = new PlanPhase(ticketing, worker, eventSink, buildOptions);
-    PlanResult result;
-    try
+    if (verb == "plan")
     {
-        using var cts = new CancellationTokenSource();
-        Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
-        result = await phase.RunAsync(ticketId, cwd, cts.Token);
-    }
-    catch (KeyNotFoundException ex)
-    {
-        Console.Error.WriteLine($"Ticket not found: {ex.Message}");
-        return 2;
-    }
-    catch (OperationCanceledException)
-    {
-        Console.Error.WriteLine("Cancelled.");
-        return 1;
-    }
+        var phase = new PlanPhase(ticketing, worker, eventSink, buildOptions);
+        PlanResult result;
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+            result = await phase.RunAsync(ticketId, cwd, cts.Token);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            Console.Error.WriteLine($"Ticket not found: {ex.Message}");
+            return 2;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
 
-    if (!result.Success)
-    {
-        Console.Error.WriteLine($"Plan phase failed: {result.FailureReason}");
-        return 1;
-    }
+        if (!result.Success)
+        {
+            Console.Error.WriteLine($"Plan phase failed: {result.FailureReason}");
+            return 1;
+        }
 
-    Console.WriteLine($"Plan complete: {result.TicketId} risk={result.RiskLabel} size={result.SizeLabel}");
-    return 0;
+        Console.WriteLine($"Plan complete: {result.TicketId} risk={result.RiskLabel} size={result.SizeLabel}");
+        return 0;
+    }
+    else // implement
+    {
+        var phase = new ImplementPhase(ticketing, worker, eventSink, buildOptions);
+        ImplementResult result;
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+            result = await phase.RunAsync(ticketId, cwd, cts.Token);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            Console.Error.WriteLine($"Ticket not found: {ex.Message}");
+            return 2;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+
+        if (!result.Success)
+        {
+            Console.Error.WriteLine($"Implement phase failed: {result.FailureReason}");
+            return 1;
+        }
+
+        Console.WriteLine($"Implement complete: {result.TicketId} commit={result.CommitSha} branch={result.BranchName}");
+        return 0;
+    }
 }
 
 static string? WireUpConditionalCommands(
@@ -273,11 +254,9 @@ static string? WireUpConditionalCommands(
     IEventSink eventSink,
     string mainWorktreePath)
 {
-    // Only process verbs that require heavy-dep wiring
     if (verb != "close" && verb != "defer" && verb != "reopen")
         return null;
 
-    // All three verbs require anthropic api key for reason translation
     if (string.IsNullOrEmpty(secrets.AnthropicApiKey))
     {
         return "anthropic api key required for close/defer/reopen (reason translation)";
