@@ -199,6 +199,75 @@ public sealed class ProcessGitClient : IGitClient
             return new WorktreeRemoveResult(false, stderr.Trim());
         return new WorktreeRemoveResult(true, null);
     }
+
+    public async Task<WorktreeCreateResult> CreateWorktreeAsync(
+        string worktreePath,
+        string newBranch,
+        string fromRef,
+        string mainWorktreePath,
+        CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = mainWorktreePath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("worktree");
+            psi.ArgumentList.Add("add");
+            psi.ArgumentList.Add("-b");
+            psi.ArgumentList.Add(newBranch);
+            psi.ArgumentList.Add(worktreePath);
+            psi.ArgumentList.Add(fromRef);
+
+            using var proc = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start git process");
+            var stderr = await proc.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
+            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+            if (proc.ExitCode != 0)
+                return new WorktreeCreateResult(false, stderr.Trim(), null);
+            return new WorktreeCreateResult(true, null, Path.GetFullPath(worktreePath));
+        }
+        catch (Exception ex)
+        {
+            return new WorktreeCreateResult(false, ex.Message, null);
+        }
+    }
+
+    // Returns the HEAD SHA of the given worktree, or empty string on failure.
+    // Does not throw on git-level failure; callers check string.Length == 40 to detect failure.
+    public async Task<string> HeadShaAsync(string worktreePath, CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = worktreePath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("rev-parse");
+            psi.ArgumentList.Add("HEAD");
+
+            using var proc = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start git process");
+            var stdout = await proc.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+            if (proc.ExitCode != 0)
+                return string.Empty;
+            return stdout.Trim();
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
 }
 
 public class PlanPhase : IWorkflowPhase

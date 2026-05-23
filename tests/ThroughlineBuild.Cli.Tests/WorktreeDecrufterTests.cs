@@ -26,6 +26,12 @@ internal sealed class FakeGitClient : IGitClient
 
     public Task<IReadOnlyList<string>> GetBranchesNotMergedAsync(string pattern, string baseBranch, CancellationToken ct)
         => Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
+
+    public Task<WorktreeCreateResult> CreateWorktreeAsync(string worktreePath, string newBranch, string fromRef, string mainWorktreePath, CancellationToken ct) =>
+        Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
+
+    public Task<string> HeadShaAsync(string worktreePath, CancellationToken ct) =>
+        Task.FromResult("0000000000000000000000000000000000000000");
 }
 
 internal sealed class FakeProcessKiller : IProcessKiller
