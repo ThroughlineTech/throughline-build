@@ -131,6 +131,49 @@ public sealed class ProcessGitClient : IGitClient
         return result;
     }
 
+    public async Task<IReadOnlyList<string>> GetBranchesNotMergedAsync(string pattern, string baseBranch, CancellationToken ct)
+    {
+        try
+        {
+            var wd = _workingDirectory ?? Directory.GetCurrentDirectory();
+            var psi = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = wd,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("branch");
+            psi.ArgumentList.Add("--list");
+            psi.ArgumentList.Add(pattern);
+            psi.ArgumentList.Add("--no-merged");
+            psi.ArgumentList.Add(baseBranch);
+
+            using var proc = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start git process");
+            var stdout = await proc.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+            if (proc.ExitCode != 0)
+                return Array.Empty<string>();
+
+            var result = new List<string>();
+            foreach (var rawLine in stdout.Split('\n'))
+            {
+                var line = rawLine.TrimEnd('\r').Trim();
+                if (line.StartsWith("* "))
+                    line = line.Substring(2).Trim();
+                if (line.Length == 0) continue;
+                result.Add(line);
+            }
+            return result;
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
+    }
+
     public async Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct)
     {
         var wd = _workingDirectory ?? Directory.GetCurrentDirectory();

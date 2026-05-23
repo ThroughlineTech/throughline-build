@@ -23,6 +23,9 @@ internal sealed class FakeGitClient : IGitClient
 
     public Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct)
         => Task.FromResult(force ? RemoveForceResult : RemoveResult);
+
+    public Task<IReadOnlyList<string>> GetBranchesNotMergedAsync(string pattern, string baseBranch, CancellationToken ct)
+        => Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
 }
 
 internal sealed class FakeProcessKiller : IProcessKiller

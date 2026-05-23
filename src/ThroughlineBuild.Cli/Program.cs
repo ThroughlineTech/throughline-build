@@ -1,8 +1,11 @@
 using System.Net.Http;
+using ThroughlineBuild.Anthropic;
 using ThroughlineBuild.Cli;
 using ThroughlineBuild.Commands;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.EventLog;
+using ThroughlineBuild.Helpers;
+using ThroughlineBuild.JudgmentSlots;
 using ThroughlineBuild.Phases;
 using ThroughlineBuild.Plane;
 using ThroughlineBuild.Workers.ClaudeCode;
@@ -94,7 +97,26 @@ Exit codes:
     // subsequent briefs (B06-B09).
     var registry = new TicketCommandRegistry();
     registry.Register("amend", new AmendCommand(ticketing2, eventSink2));
-    // registry.Register("close", new CloseTicketCommand(...));
+
+    if (verb == "close")
+    {
+        if (string.IsNullOrEmpty(secrets2.AnthropicApiKey))
+        {
+            Console.Error.WriteLine("Secret error: anthropic api key required for close (reason translation)");
+            return 3;
+        }
+        var anthropicClient = new AnthropicClient(http2, new AnthropicOptions { ApiKey = secrets2.AnthropicApiKey });
+        var translator = new ReasonTranslator(anthropicClient);
+        var gitClient = new ProcessGitClient(cwd2);
+        var decrufter = new WorktreeDecrufter(gitClient);
+        registry.Register("close", new CloseCommand(
+            ticketing2,
+            eventSink2,
+            gitClient,
+            translator,
+            decrufter,
+            cwd2));
+    }
     // registry.Register("defer", new DeferTicketCommand(...));
     // registry.Register("reopen", new ReopenTicketCommand(...));
 
@@ -109,7 +131,14 @@ Exit codes:
 
         var verbTicketId = args[1];
         var extraArgs = new Dictionary<string, string>(StringComparer.Ordinal);
-        for (int i = 2; i + 1 < args.Length; i += 2)
+        int parseStart = 2;
+        // For 'close', accept reason as first positional arg after ticket-id.
+        if (verb == "close" && args.Length >= 3 && !args[2].StartsWith("--"))
+        {
+            extraArgs["reason"] = args[2];
+            parseStart = 3;
+        }
+        for (int i = parseStart; i + 1 < args.Length; i += 2)
         {
             var key = args[i];
             if (key.StartsWith("--"))
