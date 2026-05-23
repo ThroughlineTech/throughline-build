@@ -38,7 +38,7 @@ From `EventKind` at [src/ThroughlineBuild.Contracts/Models/WorkflowEvent.cs:11](
 | Value | Name              | Meaning |
 |-------|-------------------|---------|
 | 0     | `StateTransition` | Ticket moved between Plane states (e.g. Backlog -> Ready). |
-| 1     | `LlmCall`         | Direct LLM invocation (reserved; not yet emitted by PlanPhase). |
+| 1     | `LlmCall`         | Direct LLM invocation. Emitted by PlanPhase once per successful plan with worker token usage. |
 | 2     | `WorkerSpawn`     | A worker agent (e.g. Claude Code) was launched. |
 | 3     | `VerifierVerdict` | A worker or verifier returned a status. |
 | 4     | `GateFailure`     | A precondition gate rejected the run (reserved). |
@@ -67,6 +67,7 @@ From `Phase` at [src/ThroughlineBuild.Contracts/Models/Phase.cs:3](../src/Throug
 |-------------------|-------------------|---------|
 | `WorkerSpawn`     | `worker`          | `{"worker": "claude-code"}` |
 | `VerifierVerdict` | `status`          | `{"status": "Ok"}`, `{"status": "Failed"}` |
+| `LlmCall`         | `model`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_create_tokens`, `wall_clock_ms`, optional `partial` | `{"model": "claude-opus", "input_tokens": 1234, "output_tokens": 567, "cache_read_tokens": 0, "cache_create_tokens": 0, "wall_clock_ms": 2500}` |
 | `TicketWrite`     | `action`          | `{"action": "append_description"}`, `{"action": "apply_labels"}`, `{"action": "create_comment"}` |
 | `StateTransition` | `from`, `to`      | `{"from": "Backlog", "to": "Ready"}` |
 
@@ -76,11 +77,12 @@ New emit sites should follow this style: short, lowercase, snake_case keys; valu
 
 ## Happy-path Plan example
 
-A successful `build plan <ticket>` against a ticket in `Backlog` produces six events in this order:
+A successful `build plan <ticket>` against a ticket in `Backlog` produces seven events in this order:
 
 ```jsonl
 {"SessionId":"<sid>","Timestamp":"...","Kind":2,"TicketId":"TLB-34","Phase":0,"Data":{"worker":"claude-code"}}
 {"SessionId":"<sid>","Timestamp":"...","Kind":3,"TicketId":"TLB-34","Phase":0,"Data":{"status":"Ok"}}
+{"SessionId":"<sid>","Timestamp":"...","Kind":1,"TicketId":"TLB-34","Phase":0,"Data":{"model":"claude-opus","input_tokens":1234,"output_tokens":567,"cache_read_tokens":0,"cache_create_tokens":0,"wall_clock_ms":2500}}
 {"SessionId":"<sid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":0,"Data":{"action":"append_description"}}
 {"SessionId":"<sid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":0,"Data":{"action":"apply_labels"}}
 {"SessionId":"<sid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":0,"Data":{"action":"create_comment"}}
