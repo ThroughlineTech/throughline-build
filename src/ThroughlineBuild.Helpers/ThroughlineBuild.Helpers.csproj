@@ -6,4 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>12</LangVersion>
   </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\ThroughlineBuild.Phases\ThroughlineBuild.Phases.csproj" />
+  </ItemGroup>
 </Project>
