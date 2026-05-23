@@ -199,5 +199,9 @@ public class PlanPhaseTests
         public FakeGitClient(string sha) { _sha = sha; }
         public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
             Task.FromResult(_sha);
+        public Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<WorktreeInfo>>(Array.Empty<WorktreeInfo>());
+        public Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct) =>
+            Task.FromResult(new WorktreeRemoveResult(true, null));
     }
 }

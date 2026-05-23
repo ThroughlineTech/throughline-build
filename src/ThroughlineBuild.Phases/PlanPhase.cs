@@ -20,13 +20,31 @@ public record PlanResult(
     string? PlannedAtSha,
     string? FailureReason);
 
+public record WorktreeInfo(
+    string Path,
+    string Branch,
+    string HeadSha,
+    bool IsLocked,
+    bool IsPrunable);
+
+public record WorktreeRemoveResult(bool Success, string? FailureReason);
+
 public interface IGitClient
 {
     Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct);
+    Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct);
+    Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct);
 }
 
 public sealed class ProcessGitClient : IGitClient
 {
+    private readonly string? _workingDirectory;
+
+    public ProcessGitClient(string? workingDirectory = null)
+    {
+        _workingDirectory = workingDirectory;
+    }
+
     public async Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct)
     {
         var psi = new ProcessStartInfo("git", $"rev-parse {refspec}")
@@ -47,6 +65,112 @@ public sealed class ProcessGitClient : IGitClient
             throw new InvalidOperationException($"git rev-parse {refspec} failed (exit {proc.ExitCode}): {stderr.Trim()}");
         }
         return stdout.Trim();
+    }
+
+    public async Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct)
+    {
+        var wd = _workingDirectory ?? Directory.GetCurrentDirectory();
+        var psi = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = wd,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        psi.ArgumentList.Add("worktree");
+        psi.ArgumentList.Add("list");
+        psi.ArgumentList.Add("--porcelain");
+
+        using var proc = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start git process");
+        var stdout = await proc.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+        await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+        if (proc.ExitCode != 0)
+        {
+            var stderr = await proc.StandardError.ReadToEndAsync().ConfigureAwait(false);
+            throw new InvalidOperationException($"git worktree list failed (exit {proc.ExitCode}): {stderr.Trim()}");
+        }
+        return ParseWorktreeList(stdout);
+    }
+
+    private static IReadOnlyList<WorktreeInfo> ParseWorktreeList(string output)
+    {
+        var result = new List<WorktreeInfo>();
+        string? currentPath = null;
+        string? currentSha = null;
+        string? currentBranch = null;
+        bool isLocked = false;
+        bool isPrunable = false;
+
+        void FlushCurrent()
+        {
+            if (currentPath is not null)
+            {
+                result.Add(new WorktreeInfo(
+                    currentPath,
+                    currentBranch ?? "",
+                    currentSha ?? "",
+                    isLocked,
+                    isPrunable));
+                currentPath = null;
+                currentSha = null;
+                currentBranch = null;
+                isLocked = false;
+                isPrunable = false;
+            }
+        }
+
+        foreach (var rawLine in output.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r');
+            if (line.Length == 0)
+            {
+                FlushCurrent();
+                continue;
+            }
+            if (line.StartsWith("worktree "))
+                currentPath = line.Substring("worktree ".Length);
+            else if (line.StartsWith("HEAD "))
+                currentSha = line.Substring("HEAD ".Length);
+            else if (line.StartsWith("branch refs/heads/"))
+                currentBranch = line.Substring("branch refs/heads/".Length);
+            else if (line == "detached")
+                currentBranch = "";
+            else if (line.StartsWith("locked"))
+                isLocked = true;
+            else if (line.StartsWith("prunable"))
+                isPrunable = true;
+        }
+
+        FlushCurrent();
+        return result;
+    }
+
+    public async Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct)
+    {
+        var wd = _workingDirectory ?? Directory.GetCurrentDirectory();
+        var psi = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = wd,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        psi.ArgumentList.Add("worktree");
+        psi.ArgumentList.Add("remove");
+        if (force)
+            psi.ArgumentList.Add("--force");
+        psi.ArgumentList.Add(path);
+
+        using var proc = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start git process");
+        var stderr = await proc.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
+        await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+        if (proc.ExitCode != 0)
+            return new WorktreeRemoveResult(false, stderr.Trim());
+        return new WorktreeRemoveResult(true, null);
     }
 }
 
