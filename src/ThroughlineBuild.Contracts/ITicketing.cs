@@ -50,7 +50,7 @@ public interface ITicketing
 
     /// <summary>
     /// Compute client-side rollup and transition the parent ticket if warranted.
-    /// Never throws; failures are surfaced in RollupResult.FailureReason.
+    /// Internal errors are caught and surfaced in RollupResult.FailureReason; this method never throws.
     /// </summary>
     Task<RollupResult> RollupParentAsync(string id, CancellationToken ct);
 
