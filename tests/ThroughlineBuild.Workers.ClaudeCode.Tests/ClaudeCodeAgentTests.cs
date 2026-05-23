@@ -253,3 +253,60 @@ public class ClaudeCodeAgentConfigureEnvironmentTests
         Assert.Equal("explicit-key", psi.Environment["ANTHROPIC_API_KEY"]);
     }
 }
+
+public class ClaudeCodeAgentLlmUsageTests
+{
+    [Fact]
+    public void BuildLlmUsageMetadata_UsagePresent_ReturnsPopulatedPayload()
+    {
+        var usage = new ClaudeCodeUsage(
+            InputTokens: 10,
+            OutputTokens: 20,
+            CacheReadInputTokens: 5,
+            CacheCreationInputTokens: 3
+        );
+        var envelope = new ClaudeCodeJsonEnvelope(
+            Type: "result",
+            Subtype: "success",
+            IsError: false,
+            Result: "some result",
+            Usage: usage
+        );
+        var wallClockMs = 1234L;
+
+        var metadata = ClaudeCodeAgent.BuildLlmUsageMetadata(envelope, wallClockMs);
+
+        Assert.Equal(6, metadata.Count);
+        Assert.Null(metadata["model"]);
+        Assert.Equal(10, metadata["input_tokens"]);
+        Assert.Equal(20, metadata["output_tokens"]);
+        Assert.Equal(5, metadata["cache_read_tokens"]);
+        Assert.Equal(3, metadata["cache_create_tokens"]);
+        Assert.Equal(1234L, metadata["wall_clock_ms"]);
+        Assert.False(metadata.ContainsKey("partial"));
+    }
+
+    [Fact]
+    public void BuildLlmUsageMetadata_UsageAbsent_ReturnsZerosWithPartialFlag()
+    {
+        var envelope = new ClaudeCodeJsonEnvelope(
+            Type: "result",
+            Subtype: "success",
+            IsError: false,
+            Result: "some result",
+            Usage: null
+        );
+        var wallClockMs = 5678L;
+
+        var metadata = ClaudeCodeAgent.BuildLlmUsageMetadata(envelope, wallClockMs);
+
+        Assert.Equal(7, metadata.Count);
+        Assert.Null(metadata["model"]);
+        Assert.Equal(0, metadata["input_tokens"]);
+        Assert.Equal(0, metadata["output_tokens"]);
+        Assert.Null(metadata["cache_read_tokens"]);
+        Assert.Null(metadata["cache_create_tokens"]);
+        Assert.Equal(5678L, metadata["wall_clock_ms"]);
+        Assert.True((bool)metadata["partial"]);
+    }
+}

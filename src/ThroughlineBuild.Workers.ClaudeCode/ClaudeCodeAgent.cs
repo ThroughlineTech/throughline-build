@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -50,6 +51,8 @@ public class ClaudeCodeAgent : IWorkerAgent
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(options.Timeout);
 
+        var stopwatch = Stopwatch.StartNew();
+
         var process = new Process { StartInfo = psi };
         process.OutputDataReceived += (_, e) => { if (e.Data != null) stdoutBuilder.AppendLine(e.Data); };
         process.ErrorDataReceived += (_, e) => { if (e.Data != null) stderrBuilder.AppendLine(e.Data); };
@@ -65,6 +68,7 @@ public class ClaudeCodeAgent : IWorkerAgent
         try
         {
             await process.WaitForExitAsync(cts.Token);
+            stopwatch.Stop();
         }
         catch (OperationCanceledException)
         {
@@ -76,14 +80,14 @@ public class ClaudeCodeAgent : IWorkerAgent
         var stdout = stdoutBuilder.ToString();
         var stderr = stderrBuilder.ToString();
 
-        return ParseStdoutEnvelope(stdout, process.ExitCode, stderr);
+        return ParseStdoutEnvelope(stdout, process.ExitCode, stderr, stopwatch.ElapsedMilliseconds);
     }
 
     // Parses the Claude Code JSON envelope from stdout, extracts the inner result text,
     // and routes it through WorkerResultParser. Extracted as an internal static method
     // so envelope-parsing logic can be unit-tested without spawning a real process
     // (mirrors the ConfigureEnvironment pattern; InternalsVisibleTo allows test access).
-    internal static WorkerResult ParseStdoutEnvelope(string stdout, int exitCode, string stderr)
+    internal static WorkerResult ParseStdoutEnvelope(string stdout, int exitCode, string stderr, long wallClockMs = 0)
     {
         ClaudeCodeJsonEnvelope? envelope;
         try
@@ -119,7 +123,12 @@ public class ClaudeCodeAgent : IWorkerAgent
         // Route the inner result text through the existing WORKER_RESULT marker parser.
         var parsed = WorkerResultParser.TryParse(envelope.Result);
         if (parsed != null)
-            return parsed;
+        {
+            // Merge llm_usage metadata on success path
+            var mergedMetadata = new Dictionary<string, object>(parsed.Metadata);
+            mergedMetadata["llm_usage"] = BuildLlmUsageMetadata(envelope, wallClockMs);
+            return parsed with { Metadata = mergedMetadata };
+        }
 
         if (exitCode != 0)
             return new WorkerResult(Status.Failed, "Process exited with non-zero code", Array.Empty<string>(),
@@ -127,6 +136,35 @@ public class ClaudeCodeAgent : IWorkerAgent
 
         return new WorkerResult(Status.Escalate, "No WORKER_RESULT found in output", Array.Empty<string>(),
             $"Envelope result did not contain a WORKER_RESULT block. Stderr: {stderr}", new Dictionary<string, object>());
+    }
+
+    // Builds the llm_usage metadata dictionary from the Claude Code JSON envelope.
+    // Returns a dictionary with snake_case keys including model, token counts, cache fields, and wall_clock_ms.
+    internal static Dictionary<string, object> BuildLlmUsageMetadata(ClaudeCodeJsonEnvelope envelope, long wallClockMs)
+    {
+        var metadata = new Dictionary<string, object>
+        {
+            { "model", null! },
+            { "wall_clock_ms", wallClockMs }
+        };
+
+        if (envelope.Usage is not null)
+        {
+            metadata["input_tokens"] = envelope.Usage.InputTokens ?? 0;
+            metadata["output_tokens"] = envelope.Usage.OutputTokens ?? 0;
+            metadata["cache_read_tokens"] = (object?)envelope.Usage.CacheReadInputTokens ?? null!;
+            metadata["cache_create_tokens"] = (object?)envelope.Usage.CacheCreationInputTokens ?? null!;
+        }
+        else
+        {
+            metadata["input_tokens"] = 0;
+            metadata["output_tokens"] = 0;
+            metadata["cache_read_tokens"] = null!;
+            metadata["cache_create_tokens"] = null!;
+            metadata["partial"] = true;
+        }
+
+        return metadata;
     }
 
     internal static void ConfigureEnvironment(ProcessStartInfo psi, WorkerOptions options)
