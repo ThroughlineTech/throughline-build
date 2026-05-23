@@ -14,6 +14,7 @@
     <ProjectReference Include="..\ThroughlineBuild.Contracts\ThroughlineBuild.Contracts.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.Briefs\ThroughlineBuild.Briefs.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.Commands\ThroughlineBuild.Commands.csproj" />
+    <ProjectReference Include="..\ThroughlineBuild.Git\ThroughlineBuild.Git.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.Phases\ThroughlineBuild.Phases.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.Plane\ThroughlineBuild.Plane.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.Anthropic\ThroughlineBuild.Anthropic.csproj" />

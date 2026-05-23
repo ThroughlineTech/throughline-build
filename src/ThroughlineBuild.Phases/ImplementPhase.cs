@@ -2,6 +2,7 @@ using System.Text.Json;
 using ThroughlineBuild.Briefs;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Git;
 using ThroughlineBuild.Helpers;
 
 namespace ThroughlineBuild.Phases;

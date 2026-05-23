@@ -4,6 +4,7 @@ using ThroughlineBuild.Cli;
 using ThroughlineBuild.Commands;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.EventLog;
+using ThroughlineBuild.Git;
 using ThroughlineBuild.Helpers;
 using ThroughlineBuild.JudgmentSlots;
 using ThroughlineBuild.Phases;
