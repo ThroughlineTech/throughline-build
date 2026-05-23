@@ -117,7 +117,25 @@ Exit codes:
             decrufter,
             cwd2));
     }
-    // registry.Register("defer", new DeferTicketCommand(...));
+    if (verb == "defer")
+    {
+        if (string.IsNullOrEmpty(secrets2.AnthropicApiKey))
+        {
+            Console.Error.WriteLine("Secret error: anthropic api key required for defer (reason translation)");
+            return 3;
+        }
+        var anthropicClient = new AnthropicClient(http2, new AnthropicOptions { ApiKey = secrets2.AnthropicApiKey });
+        var translator = new ReasonTranslator(anthropicClient);
+        var gitClient = new ProcessGitClient(cwd2);
+        var decrufter = new WorktreeDecrufter(gitClient);
+        registry.Register("defer", new DeferCommand(
+            ticketing2,
+            eventSink2,
+            gitClient,
+            translator,
+            decrufter,
+            cwd2));
+    }
     // registry.Register("reopen", new ReopenTicketCommand(...));
 
     if (verb == "amend" || verb == "close" || verb == "defer" || verb == "reopen")
@@ -132,8 +150,8 @@ Exit codes:
         var verbTicketId = args[1];
         var extraArgs = new Dictionary<string, string>(StringComparer.Ordinal);
         int parseStart = 2;
-        // For 'close', accept reason as first positional arg after ticket-id.
-        if (verb == "close" && args.Length >= 3 && !args[2].StartsWith("--"))
+        // For 'close' and 'defer', accept reason as first positional arg after ticket-id.
+        if ((verb == "close" || verb == "defer") && args.Length >= 3 && !args[2].StartsWith("--"))
         {
             extraArgs["reason"] = args[2];
             parseStart = 3;
