@@ -140,6 +140,92 @@ public class ClaudeCodeAgentNameTests
     }
 }
 
+public class ClaudeCodeAgentEnvelopeParserTests
+{
+    // A minimal valid envelope JSON whose result contains a WORKER_RESULT block.
+    private static string MakeEnvelope(string result) =>
+        $"{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":{System.Text.Json.JsonSerializer.Serialize(result)},\"usage\":{{\"input_tokens\":3,\"output_tokens\":5,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}}";
+
+    private const string ValidWorkerResultBlock =
+        "WORKER_RESULT\n" +
+        "{\"Status\":\"Ok\",\"Summary\":\"done\",\"FilesChanged\":[\"foo.cs\"],\"FailureReason\":null,\"Metadata\":{}}\n";
+
+    [Fact]
+    public void EnvelopeParser_ValidJson_RoutesResultToWorkerResultParser()
+    {
+        var stdout = MakeEnvelope(ValidWorkerResultBlock);
+
+        var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 0, stderr: "");
+
+        Assert.NotNull(result);
+        Assert.Equal(Status.Ok, result.Status);
+        Assert.Equal("done", result.Summary);
+        Assert.Equal(new[] { "foo.cs" }, result.FilesChanged);
+    }
+
+    [Fact]
+    public void EnvelopeParser_MalformedJson_ReturnsEscalate()
+    {
+        var stdout = "this is not valid json at all";
+
+        var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 0, stderr: "");
+
+        Assert.Equal(Status.Escalate, result.Status);
+        Assert.NotNull(result.FailureReason);
+        Assert.Contains("Failed to parse Claude Code JSON envelope", result.FailureReason);
+    }
+
+    [Fact]
+    public void EnvelopeParser_MissingResultField_ReturnsEscalate()
+    {
+        // result field is absent (null) - envelope with is_error:false but no result
+        var stdout = "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":null}";
+
+        var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 0, stderr: "");
+
+        Assert.Equal(Status.Escalate, result.Status);
+        Assert.NotNull(result.FailureReason);
+        Assert.Contains("result field", result.FailureReason);
+    }
+
+    [Fact]
+    public void EnvelopeParser_IsErrorTrue_ReturnsEscalate()
+    {
+        var stdout = "{\"type\":\"result\",\"subtype\":\"error\",\"is_error\":true,\"result\":null}";
+
+        var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 1, stderr: "some error");
+
+        Assert.Equal(Status.Escalate, result.Status);
+        Assert.NotNull(result.FailureReason);
+        Assert.Contains("is_error=true", result.FailureReason);
+    }
+
+    [Fact]
+    public void EnvelopeParser_ValidEnvelope_NoWorkerResultMarker_ReturnsEscalate()
+    {
+        // Valid envelope but inner result has no WORKER_RESULT block
+        var stdout = MakeEnvelope("Hello, this is a plain response with no marker.");
+
+        var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 0, stderr: "");
+
+        Assert.Equal(Status.Escalate, result.Status);
+        Assert.NotNull(result.FailureReason);
+        Assert.Contains("WORKER_RESULT", result.FailureReason);
+    }
+
+    [Fact]
+    public void EnvelopeParser_NonZeroExitCodeAfterNoMarker_ReturnsFailed()
+    {
+        // Valid envelope parse, no WORKER_RESULT, but exit code is non-zero -> Failed
+        var stdout = MakeEnvelope("some text without marker");
+
+        var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 1, stderr: "crash");
+
+        Assert.Equal(Status.Failed, result.Status);
+        Assert.Contains("1", result.FailureReason);
+    }
+}
+
 public class ClaudeCodeAgentConfigureEnvironmentTests
 {
     [Fact]

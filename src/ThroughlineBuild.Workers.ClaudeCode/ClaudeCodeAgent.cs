@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 
@@ -22,8 +23,9 @@ public class ClaudeCodeAgent : IWorkerAgent
         var briefPath = Path.Combine(buildDir, "brief.md");
         await File.WriteAllTextAsync(briefPath, brief.Instruction, ct);
 
-        // Build args - brief is delivered via stdin
-        var args = new List<string> { "--print" };
+        // Build args - brief is delivered via stdin.
+        // --output-format json must immediately follow --print (claude --help: "only works with --print").
+        var args = new List<string> { "--print", "--output-format", "json" };
         if (options.AllowedTools is { Count: > 0 })
             args.AddRange(new[] { "--allowedTools", string.Join(",", options.AllowedTools) });
         foreach (var extra in _options.ExtraArgs)
@@ -74,16 +76,57 @@ public class ClaudeCodeAgent : IWorkerAgent
         var stdout = stdoutBuilder.ToString();
         var stderr = stderrBuilder.ToString();
 
-        var result = WorkerResultParser.TryParse(stdout);
-        if (result != null)
-            return result;
+        return ParseStdoutEnvelope(stdout, process.ExitCode, stderr);
+    }
 
-        if (process.ExitCode != 0)
+    // Parses the Claude Code JSON envelope from stdout, extracts the inner result text,
+    // and routes it through WorkerResultParser. Extracted as an internal static method
+    // so envelope-parsing logic can be unit-tested without spawning a real process
+    // (mirrors the ConfigureEnvironment pattern; InternalsVisibleTo allows test access).
+    internal static WorkerResult ParseStdoutEnvelope(string stdout, int exitCode, string stderr)
+    {
+        ClaudeCodeJsonEnvelope? envelope;
+        try
+        {
+            envelope = JsonSerializer.Deserialize(stdout.Trim(), ClaudeCodeJsonContext.Default.ClaudeCodeJsonEnvelope);
+        }
+        catch (JsonException ex)
+        {
+            var head = stdout.Length > 200 ? stdout[..200] : stdout;
+            return new WorkerResult(Status.Escalate, "Failed to parse Claude Code JSON envelope", Array.Empty<string>(),
+                $"Failed to parse Claude Code JSON envelope: {ex.Message}. Stdout head: {head}", new Dictionary<string, object>());
+        }
+
+        if (envelope is null)
+        {
+            var head = stdout.Length > 200 ? stdout[..200] : stdout;
+            return new WorkerResult(Status.Escalate, "Claude Code JSON envelope was null after deserialization", Array.Empty<string>(),
+                $"Deserialized envelope was null. Stdout head: {head}", new Dictionary<string, object>());
+        }
+
+        if (envelope.IsError)
+        {
+            return new WorkerResult(Status.Escalate, "Claude Code reported is_error=true", Array.Empty<string>(),
+                $"Claude Code envelope has is_error=true. Subtype: {envelope.Subtype}. Stderr: {stderr}", new Dictionary<string, object>());
+        }
+
+        if (envelope.Result is null)
+        {
+            return new WorkerResult(Status.Escalate, "Claude Code JSON envelope missing result field", Array.Empty<string>(),
+                $"Envelope result field is null. Subtype: {envelope.Subtype}. Stderr: {stderr}", new Dictionary<string, object>());
+        }
+
+        // Route the inner result text through the existing WORKER_RESULT marker parser.
+        var parsed = WorkerResultParser.TryParse(envelope.Result);
+        if (parsed != null)
+            return parsed;
+
+        if (exitCode != 0)
             return new WorkerResult(Status.Failed, "Process exited with non-zero code", Array.Empty<string>(),
-                $"Exit code {process.ExitCode}. Stderr: {stderr}", new Dictionary<string, object>());
+                $"Exit code {exitCode}. Stderr: {stderr}", new Dictionary<string, object>());
 
         return new WorkerResult(Status.Escalate, "No WORKER_RESULT found in output", Array.Empty<string>(),
-            $"Stdout did not contain a WORKER_RESULT block. Stderr: {stderr}", new Dictionary<string, object>());
+            $"Envelope result did not contain a WORKER_RESULT block. Stderr: {stderr}", new Dictionary<string, object>());
     }
 
     internal static void ConfigureEnvironment(ProcessStartInfo psi, WorkerOptions options)
