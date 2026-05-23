@@ -201,7 +201,7 @@ public sealed class ProcessGitClient : IGitClient
     }
 }
 
-public class PlanPhase
+public class PlanPhase : IWorkflowPhase
 {
     private readonly ITicketing _ticketing;
     private readonly IWorkerAgent _worker;
@@ -222,6 +222,8 @@ public class PlanPhase
         _options = options;
         _git = gitClient ?? new ProcessGitClient();
     }
+
+    public Phase Phase => Phase.Plan;
 
     public async Task<PlanResult> RunAsync(string ticketId, string workingDirectory, CancellationToken ct)
     {
@@ -306,6 +308,20 @@ public class PlanPhase
         }, ct).ConfigureAwait(false);
 
         return new PlanResult(true, ticketId, riskLabel, sizeLabel, plannedAtSha, null);
+    }
+
+    async Task<PhaseResult> IWorkflowPhase.RunAsync(string ticketId, string workingDirectory, CancellationToken ct)
+    {
+        var planResult = await RunAsync(ticketId, workingDirectory, ct).ConfigureAwait(false);
+        var outputs = planResult.Success
+            ? new Dictionary<string, string>
+            {
+                ["risk_label"] = planResult.RiskLabel!,
+                ["size_label"] = planResult.SizeLabel!,
+                ["planned_at_sha"] = planResult.PlannedAtSha!
+            } as IReadOnlyDictionary<string, string>
+            : new Dictionary<string, string>() as IReadOnlyDictionary<string, string>;
+        return new PhaseResult(planResult.Success, planResult.TicketId, Phase.Plan, planResult.FailureReason, outputs);
     }
 
     private async Task EmitAsync(EventKind kind, string ticketId, IReadOnlyDictionary<string, object> data, CancellationToken ct)
