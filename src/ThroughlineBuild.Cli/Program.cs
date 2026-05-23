@@ -1,5 +1,7 @@
 using System.Net.Http;
 using ThroughlineBuild.Cli;
+using ThroughlineBuild.Commands;
+using ThroughlineBuild.Contracts;
 using ThroughlineBuild.EventLog;
 using ThroughlineBuild.Phases;
 using ThroughlineBuild.Plane;
@@ -13,13 +15,17 @@ static async Task<int> RunAsync(string[] args)
 build - Throughline Build
 
 Usage:
-  build plan <ticket-id>    Run the plan phase for a ticket
-  build --help              Show this help
+  build plan <ticket-id>      Run the plan phase for a ticket
+  build amend <ticket-id>     Amend an existing ticket
+  build close <ticket-id>     Close a ticket
+  build defer <ticket-id>     Defer a ticket
+  build reopen <ticket-id>    Reopen a previously closed or deferred ticket
+  build --help                Show this help
 
 Exit codes:
   0  Success
-  1  Phase failure
-  2  Config error
+  1  Phase or command failure
+  2  Config error or unknown verb
   3  Missing secret (env var not set)
 """;
 
@@ -29,9 +35,67 @@ Exit codes:
         return 0;
     }
 
-    if (args[0] != "plan")
+    var verb = args[0];
+
+    // Build the ticket-command registry. B05 wires the dispatch path; concrete
+    // commands (amend/close/defer/reopen) get registered here as they land in
+    // subsequent briefs (B06-B09).
+    var registry = new TicketCommandRegistry();
+    // registry.Register("amend", new AmendTicketCommand(...));
+    // registry.Register("close", new CloseTicketCommand(...));
+    // registry.Register("defer", new DeferTicketCommand(...));
+    // registry.Register("reopen", new ReopenTicketCommand(...));
+
+    if (verb == "amend" || verb == "close" || verb == "defer" || verb == "reopen")
     {
-        Console.Error.WriteLine($"Unknown subcommand: {args[0]}");
+        if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]))
+        {
+            Console.Error.WriteLine($"Error: ticket-id is required");
+            Console.Error.WriteLine($"Usage: build {verb} <ticket-id>");
+            return 2;
+        }
+
+        var verbTicketId = args[1];
+        var extraArgs = new Dictionary<string, string>(StringComparer.Ordinal);
+        for (int i = 2; i + 1 < args.Length; i += 2)
+        {
+            var key = args[i];
+            if (key.StartsWith("--"))
+                key = key.Substring(2);
+            extraArgs[key] = args[i + 1];
+        }
+        var ctx = new TicketCommandContext(verbTicketId, extraArgs);
+
+        if (!registry.TryGet(verb, out var cmd) || cmd is null)
+        {
+            Console.Error.WriteLine($"Verb '{verb}' is not yet implemented.");
+            return 1;
+        }
+
+        try
+        {
+            using var verbCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+            var verbResult = await cmd.ExecuteAsync(ctx, verbCts.Token);
+            if (!verbResult.Success)
+            {
+                Console.Error.WriteLine($"Command '{verb}' failed: {verbResult.Message}");
+                return 1;
+            }
+            if (!string.IsNullOrEmpty(verbResult.Message))
+                Console.WriteLine(verbResult.Message);
+            return 0;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+    }
+
+    if (verb != "plan")
+    {
+        Console.Error.WriteLine($"Unknown subcommand: {verb}");
         Console.Error.WriteLine(Usage);
         return 2;
     }

@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using ThroughlineBuild.Phases;
+using ThroughlineBuild.Contracts;
 
 namespace ThroughlineBuild.Helpers;
 
