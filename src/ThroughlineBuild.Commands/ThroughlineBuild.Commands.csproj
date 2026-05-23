@@ -8,5 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\ThroughlineBuild.Contracts\ThroughlineBuild.Contracts.csproj" />
+    <ProjectReference Include="..\ThroughlineBuild.Helpers\ThroughlineBuild.Helpers.csproj" />
+    <ProjectReference Include="..\ThroughlineBuild.JudgmentSlots\ThroughlineBuild.JudgmentSlots.csproj" />
   </ItemGroup>
 </Project>

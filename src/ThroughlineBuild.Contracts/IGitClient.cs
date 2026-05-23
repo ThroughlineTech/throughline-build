@@ -14,4 +14,5 @@ public interface IGitClient
     Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct);
     Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct);
     Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct);
+    Task<IReadOnlyList<string>> GetBranchesNotMergedAsync(string pattern, string baseBranch, CancellationToken ct);
 }
