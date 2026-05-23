@@ -87,7 +87,8 @@ Exit codes:
         BaseUrl = config.Ticketing.PlaneBaseUrl,
         ApiToken = secrets.PlaneApiToken,
         WorkspaceSlug = config.Ticketing.PlaneWorkspaceSlug,
-        ProjectId = config.Ticketing.PlaneProjectId
+        ProjectId = config.Ticketing.PlaneProjectId,
+        ProjectIdentifier = config.Ticketing.PlaneProjectIdentifier
     });
     var worker = new ClaudeCodeAgent(new ClaudeCodeOptions
     {

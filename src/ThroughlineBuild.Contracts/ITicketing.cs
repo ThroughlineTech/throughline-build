@@ -47,6 +47,12 @@ public interface ITicketing
     /// Fetch all relations for a ticket.
     /// </summary>
     Task<IReadOnlyList<Relation>> GetRelationsAsync(string id, CancellationToken ct);
+
+    /// <summary>
+    /// Compute client-side rollup and transition the parent ticket if warranted.
+    /// Never throws; failures are surfaced in RollupResult.FailureReason.
+    /// </summary>
+    Task<RollupResult> RollupParentAsync(string id, CancellationToken ct);
 }
 
 /// <summary>
@@ -57,3 +63,8 @@ public record BackendCapabilities(
     bool TypedLabels,
     bool RichHtmlComments,
     bool Attachments);
+
+/// <summary>
+/// Result returned by RollupParentAsync.
+/// </summary>
+public record RollupResult(bool ParentTransitioned, string? NewParentState, string? FailureReason);

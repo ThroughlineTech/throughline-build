@@ -333,4 +333,119 @@ public sealed class PlaneTicketingClient : ITicketing
                 .AsReadOnly();
         }, ct).ConfigureAwait(false);
     }
+
+    public async Task<RollupResult> RollupParentAsync(string id, CancellationToken ct)
+    {
+        try
+        {
+            var seq = ParseSequenceId(id);
+            var childIssue = await FindIssueAsync(seq, ct).ConfigureAwait(false);
+
+            if (childIssue.ParentId is null)
+                return new RollupResult(false, null, null);
+
+            var parentId = childIssue.ParentId;
+
+            // Load state cache now for both child-state-name lookup and desired-state-UUID resolution
+            var statesByName = await GetStatesByNameAsync(ct).ConfigureAwait(false);
+            var statesById = statesByName.ToDictionary(kvp => kvp.Value, kvp => kvp.Key);
+            var childStateName = statesById.GetValueOrDefault(childIssue.StateId, string.Empty);
+
+            // GET parent with expand=state
+            var parentExpanded = await GetJsonAsync<PlaneIssueExpanded>(
+                $"{IssuesBase}{parentId}/?expand=state", PlaneJsonContext.Default, ct).ConfigureAwait(false);
+            var currentParentStateName = ExtractStateName(parentExpanded.State);
+
+            // GET siblings with parent filter and expand=state
+            var siblingsResult = await GetJsonAsync<PlaneIssueExpandedList>(
+                $"{IssuesBase}?per_page=100&parent={parentId}&expand=state", PlaneJsonContext.Default, ct).ConfigureAwait(false);
+
+            // Apply ranked rules to determine desired state
+            var desired = ApplyRollupRules(siblingsResult.Results);
+            if (desired is null)
+                return new RollupResult(false, null, null);
+
+            var currentRank = StateRank(currentParentStateName);
+            var desiredRank = StateRank(desired);
+
+            if (desiredRank <= currentRank)
+                return new RollupResult(false, null, null);
+
+            // Resolve desired state name -> UUID
+            if (!statesByName.TryGetValue(desired, out var desiredStateId))
+                return new RollupResult(false, null, $"State '{desired}' not found in Plane project");
+
+            // PATCH parent state
+            await PatchJsonAsync(
+                $"{IssuesBase}{parentId}/",
+                new TransitionRequest(desiredStateId),
+                PlaneJsonContext.Default,
+                ct).ConfigureAwait(false);
+
+            // POST comment: [rollup] marker is load-bearing
+            var commentHtml = $"<p>[rollup] {_options.ProjectIdentifier}-{childIssue.SequenceId} -> {childStateName}; parent -> {desired}</p>";
+            await PostJsonAsync(
+                $"{IssuesBase}{parentId}/comments/",
+                new CreateCommentRequest(commentHtml),
+                PlaneJsonContext.Default,
+                ct).ConfigureAwait(false);
+
+            return new RollupResult(true, desired, null);
+        }
+        catch (Exception ex)
+        {
+            return new RollupResult(false, null, ex.Message);
+        }
+    }
+
+    // ------------------------------------------------------------------ rollup helpers
+
+    private static string ExtractStateName(JsonElement stateElement)
+    {
+        if (stateElement.ValueKind == JsonValueKind.Object)
+        {
+            if (stateElement.TryGetProperty("name", out var nameEl) && nameEl.ValueKind == JsonValueKind.String)
+                return nameEl.GetString() ?? string.Empty;
+        }
+        return string.Empty;
+    }
+
+    private static int StateRank(string stateName) =>
+        stateName switch
+        {
+            "Backlog"     => 0,
+            "Ready"       => 1,
+            "In Progress" => 2,
+            "In Review"   => 3,
+            "Done"        => 4,
+            "Cancelled"   => 5,
+            _             => -1
+        };
+
+    private static string? ApplyRollupRules(List<PlaneIssueExpanded> siblings)
+    {
+        if (siblings.Count == 0)
+            return null;
+
+        var stateNames = siblings.Select(s => ExtractStateName(s.State)).ToList();
+        var nonCancelled = stateNames.Where(n => n != "Cancelled").ToList();
+
+        // Rule 1: all non-Cancelled are Done -> "Done"
+        if (nonCancelled.Count > 0 && nonCancelled.All(n => n == "Done"))
+            return "Done";
+
+        // Rule 2: all non-Cancelled are in (In Review, Done) -> "In Review"
+        if (nonCancelled.Count > 0 && nonCancelled.All(n => n == "In Review" || n == "Done"))
+            return "In Review";
+
+        // Rule 3: any child in (In Progress, In Review, Done) -> "In Progress"
+        if (stateNames.Any(n => n == "In Progress" || n == "In Review" || n == "Done"))
+            return "In Progress";
+
+        // Rule 4: all children Cancelled, no Done -> "Cancelled"
+        if (stateNames.All(n => n == "Cancelled") && !stateNames.Contains("Done"))
+            return "Cancelled";
+
+        return null;
+    }
 }

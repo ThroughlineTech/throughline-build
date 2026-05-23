@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace ThroughlineBuild.Plane;
@@ -52,6 +53,23 @@ public record PlaneIssueList(
     [property: JsonPropertyName("results")] List<PlaneIssue> Results
 );
 
+// Expanded DTOs - used for ?expand=state requests (state is an object, not a UUID string)
+internal record PlaneStateExpansion(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("name")] string Name
+);
+
+internal record PlaneIssueExpanded(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("sequence_id")] int SequenceId,
+    [property: JsonPropertyName("parent")] string? ParentId,
+    [property: JsonPropertyName("state")] JsonElement State  // defensive: string UUID or object
+);
+
+internal record PlaneIssueExpandedList(
+    [property: JsonPropertyName("results")] List<PlaneIssueExpanded> Results
+);
+
 // Request body types
 public record TransitionRequest(
     [property: JsonPropertyName("state")] string StateId
@@ -78,6 +96,9 @@ public record ApplyLabelsRequest(
 [JsonSerializable(typeof(PlaneComment))]
 [JsonSerializable(typeof(PlaneRelationItem))]
 [JsonSerializable(typeof(PlaneRelationList))]
+[JsonSerializable(typeof(PlaneStateExpansion))]
+[JsonSerializable(typeof(PlaneIssueExpanded))]
+[JsonSerializable(typeof(PlaneIssueExpandedList))]
 [JsonSerializable(typeof(TransitionRequest))]
 [JsonSerializable(typeof(AppendDescriptionRequest))]
 [JsonSerializable(typeof(CreateCommentRequest))]

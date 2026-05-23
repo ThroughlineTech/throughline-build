@@ -106,6 +106,9 @@ public class ITicketingStubTests
                 return Task.FromResult((IReadOnlyList<Relation>)Array.Empty<Relation>());
             return Task.FromResult((IReadOnlyList<Relation>)relations);
         }
+
+        public Task<RollupResult> RollupParentAsync(string id, CancellationToken ct)
+            => Task.FromResult(new RollupResult(false, null, null));
     }
 
     [Fact]

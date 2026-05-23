@@ -6,4 +6,5 @@ public class PlaneClientOptions
     public string ApiToken { get; init; } = string.Empty;
     public string WorkspaceSlug { get; init; } = string.Empty;
     public string ProjectId { get; init; } = string.Empty;
+    public string ProjectIdentifier { get; init; } = string.Empty;
 }

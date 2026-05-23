@@ -130,6 +130,9 @@ public class PlanPhaseUsageTests
 
         public Task<IReadOnlyList<Relation>> GetRelationsAsync(string id, CancellationToken ct) =>
             Task.FromResult((IReadOnlyList<Relation>)Array.Empty<Relation>());
+
+        public Task<RollupResult> RollupParentAsync(string id, CancellationToken ct) =>
+            Task.FromResult(new RollupResult(false, null, null));
     }
 
     private sealed class FakeWorkerAgent : IWorkerAgent

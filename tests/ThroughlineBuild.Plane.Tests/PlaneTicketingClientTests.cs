@@ -385,3 +385,150 @@ public class PlaneApiExceptionTests
         Assert.Contains("422", ex.Message);
     }
 }
+
+// ---------------------------------------------------------------------------
+// RollupParentAsync test data helpers
+// ---------------------------------------------------------------------------
+internal static class RollupTestData
+{
+    public const string ParentUuid = "pppppppp-0000-0000-0000-000000000001";
+    public const string ChildUuid = "aaaaaaaa-0000-0000-0000-000000000002";
+    public const string InProgressStateUuid = "bbbbbbbb-0000-0000-0000-000000000002";
+
+    // Child issue list with parent set
+    public static string ChildIssueListJson() =>
+        $$"""
+        {
+          "results": [
+            {
+              "id": "{{ChildUuid}}",
+              "sequence_id": 25,
+              "name": "child-ticket",
+              "description_html": "<p>desc</p>",
+              "state": "{{InProgressStateUuid}}",
+              "label_ids": [],
+              "parent": "{{ParentUuid}}",
+              "type": null
+            }
+          ]
+        }
+        """;
+
+    // State list (same as TestData but with In Review added)
+    public static string FullStateListJson() =>
+        $$"""
+        {
+          "results": [
+            { "id": "{{TestData.StateUuid}}", "name": "Backlog", "group": "backlog" },
+            { "id": "{{InProgressStateUuid}}", "name": "In Progress", "group": "started" },
+            { "id": "bbbbbbbb-0000-0000-0000-000000000003", "name": "Done", "group": "completed" },
+            { "id": "bbbbbbbb-0000-0000-0000-000000000004", "name": "In Review", "group": "unstarted" },
+            { "id": "bbbbbbbb-0000-0000-0000-000000000005", "name": "Cancelled", "group": "cancelled" }
+          ]
+        }
+        """;
+
+    // Parent with expand=state returning state as object (Backlog)
+    public static string ParentExpandedJson() =>
+        $$"""
+        {
+          "id": "{{ParentUuid}}",
+          "sequence_id": 10,
+          "parent": null,
+          "state": { "id": "{{TestData.StateUuid}}", "name": "Backlog" }
+        }
+        """;
+
+    // Siblings list with one child in "In Progress"
+    public static string SiblingsInProgressJson() =>
+        $$"""
+        {
+          "results": [
+            {
+              "id": "{{ChildUuid}}",
+              "sequence_id": 25,
+              "parent": "{{ParentUuid}}",
+              "state": { "id": "{{InProgressStateUuid}}", "name": "In Progress" }
+            }
+          ]
+        }
+        """;
+
+    public static string PatchParentOkJson() =>
+        $$"""{"id":"{{ParentUuid}}","sequence_id":10,"name":"parent-ticket","description_html":"<p>desc</p>","state":"{{InProgressStateUuid}}","label_ids":[],"parent":null,"type":null}""";
+
+    public static string CommentOkJson() =>
+        """{"id":"dddddddd-0000-0000-0000-000000000002","comment_html":"<p>[rollup]</p>"}""";
+}
+
+// ---------------------------------------------------------------------------
+// RollupParentAsync tests
+// ---------------------------------------------------------------------------
+public class RollupParentAsyncTests
+{
+    [Fact]
+    public async Task HappyPath_ParentTransitioned()
+    {
+        var handler = new FakeMessageHandler();
+        // 1. issues list (child with parent set)
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.ChildIssueListJson()));
+        // 2. states cache
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.FullStateListJson()));
+        // 3. parent expanded (state = Backlog object)
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.ParentExpandedJson()));
+        // 4. siblings list (one child In Progress)
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.SiblingsInProgressJson()));
+        // 5. PATCH parent state
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.PatchParentOkJson()));
+        // 6. POST comment
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.CommentOkJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var result = await client.RollupParentAsync("TLB-25", CancellationToken.None);
+
+        Assert.True(result.ParentTransitioned);
+        Assert.Equal("In Progress", result.NewParentState);
+        Assert.Null(result.FailureReason);
+
+        var patchReqs = handler.Requests.Where(r => r.Method == HttpMethod.Patch).ToList();
+        Assert.NotEmpty(patchReqs);
+    }
+
+    [Fact]
+    public async Task NoParent_ReturnsNoOp()
+    {
+        var handler = new FakeMessageHandler();
+        // child issue has parent=null (TestData.IssueListJson default)
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var result = await client.RollupParentAsync("TLB-24", CancellationToken.None);
+
+        Assert.False(result.ParentTransitioned);
+        Assert.Null(result.NewParentState);
+        Assert.Null(result.FailureReason);
+
+        var patchReqs = handler.Requests.Where(r => r.Method == HttpMethod.Patch).ToList();
+        Assert.Empty(patchReqs);
+    }
+
+    [Fact]
+    public async Task ApiError_DoesNotThrow()
+    {
+        var handler = new FakeMessageHandler();
+        // first GET (resolve child issues list) returns 500; enqueue extras for any Polly retries
+        handler.Enqueue(FakeMessageHandler.ErrorJson(500, "internal server error"));
+        handler.Enqueue(FakeMessageHandler.ErrorJson(500, "internal server error"));
+        handler.Enqueue(FakeMessageHandler.ErrorJson(500, "internal server error"));
+        handler.Enqueue(FakeMessageHandler.ErrorJson(500, "internal server error"));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        // must not throw
+        var result = await client.RollupParentAsync("TLB-24", CancellationToken.None);
+
+        Assert.False(result.ParentTransitioned);
+        Assert.NotNull(result.FailureReason);
+        Assert.NotEmpty(result.FailureReason);
+    }
+}
