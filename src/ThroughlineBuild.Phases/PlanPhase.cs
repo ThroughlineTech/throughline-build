@@ -104,6 +104,8 @@ public class PlanPhase
         var workerOptions = new WorkerOptions(_options.WorkerTimeout, _options.WorkerAllowedTools);
         var workerResult = await _worker.ExecuteAsync(brief, workingDirectory, workerOptions, ct).ConfigureAwait(false);
 
+        await _ticketing.TransitionAsync(ticketId, TicketState.Planning, ct).ConfigureAwait(false);
+
         await EmitAsync(EventKind.VerifierVerdict, ticketId, new Dictionary<string, object>
         {
             ["status"] = workerResult.Status.ToString()
@@ -112,6 +114,15 @@ public class PlanPhase
         if (workerResult.Status != Status.Ok)
             return new PlanResult(false, ticketId, null, null, null,
                 workerResult.FailureReason ?? workerResult.Status.ToString());
+
+        if (workerResult.Metadata.TryGetValue("llm_usage", out var usageObj))
+        {
+            var llmData = FlattenLlmUsage(usageObj);
+            if (llmData is not null)
+            {
+                await EmitAsync(EventKind.LlmCall, ticketId, llmData, ct).ConfigureAwait(false);
+            }
+        }
 
         var (planHtml, riskLabel, sizeLabel, plannedAtSha) = TryExtractMetadata(workerResult.Metadata);
         if (planHtml is null || riskLabel is null || sizeLabel is null || plannedAtSha is null)
@@ -155,6 +166,53 @@ public class PlanPhase
             ticketId,
             Phase.Plan,
             data), ct).ConfigureAwait(false);
+    }
+
+    private static IReadOnlyDictionary<string, object>? FlattenLlmUsage(object usageObj)
+    {
+        var result = new Dictionary<string, object>();
+
+        // Handle IDictionary path (from unit tests or direct construction)
+        if (usageObj is IDictionary<string, object?> dict)
+        {
+            foreach (var kvp in dict)
+            {
+                if (kvp.Value is not null)
+                {
+                    result[kvp.Key] = UnwrapJsonElement(kvp.Value);
+                }
+            }
+            return result;
+        }
+
+        // Handle JsonElement path (from envelope round-trip)
+        if (usageObj is JsonElement je && je.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in je.EnumerateObject())
+            {
+                result[prop.Name] = UnwrapJsonElement(prop.Value);
+            }
+            return result;
+        }
+
+        // Neither dictionary nor JsonElement object - skip silently
+        return null;
+    }
+
+    private static object UnwrapJsonElement(object value)
+    {
+        if (value is not JsonElement je)
+            return value;
+
+        return je.ValueKind switch
+        {
+            JsonValueKind.String => je.GetString() ?? "",
+            JsonValueKind.Number => je.TryGetInt32(out var intVal) ? intVal : je.GetInt64(),
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Null => (object?)null ?? "",
+            _ => value // Return as-is for Object, Array, etc.
+        };
     }
 
     private static (string? planHtml, string? riskLabel, string? sizeLabel, string? plannedAtSha)
