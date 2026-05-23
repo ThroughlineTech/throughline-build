@@ -18,12 +18,12 @@ static async Task<int> RunAsync(string[] args)
 build - Throughline Build
 
 Usage:
-  build plan <ticket-id>      Run the plan phase for a ticket
-  build amend <ticket-id>     Amend an existing ticket
-  build close <ticket-id>     Close a ticket
-  build defer <ticket-id>     Defer a ticket
-  build reopen <ticket-id>    Reopen a previously closed or deferred ticket
-  build --help                Show this help
+  build plan <ticket-id>                                  Run the plan phase for a ticket
+  build amend <ticket-id> [--size S|M|L] [--note "..."]   Amend an existing ticket (at least one flag required)
+  build close <ticket-id> <reason>                        Close a ticket (reason required)
+  build defer <ticket-id> <reason>                        Defer a ticket (reason required)
+  build reopen <ticket-id> [reason]                       Reopen a previously closed or deferred ticket (reason optional)
+  build --help                                            Show this help
 
 Exit codes:
   0  Success
