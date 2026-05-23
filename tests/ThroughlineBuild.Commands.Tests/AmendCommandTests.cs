@@ -45,6 +45,8 @@ public class AmendCommandTests
         Assert.Contains("size:m", applied);
         Assert.DoesNotContain("size:s", applied);
         Assert.Empty(ticketing.AppendDescriptions);
+        Assert.Single(events.Events);
+        Assert.Equal(EventKind.TicketWrite, events.Events[0].Kind);
     }
 
     [Fact]
@@ -65,6 +67,8 @@ public class AmendCommandTests
         Assert.Contains(today, html);
         Assert.Contains("rationale text", html);
         Assert.Empty(ticketing.ApplyLabels);
+        Assert.Single(events.Events);
+        Assert.Equal(EventKind.TicketWrite, events.Events[0].Kind);
     }
 
     [Fact]
@@ -90,6 +94,8 @@ public class AmendCommandTests
         // Both calls are tracked with a sequence counter in FakeTicketing.
         Assert.True(ticketing.ApplyLabels[0].sequence < ticketing.AppendDescriptions[0].sequence,
             "ApplyLabels must be called before AppendDescriptions");
+        Assert.Equal(2, events.Events.Count);
+        Assert.All(events.Events, e => Assert.Equal(EventKind.TicketWrite, e.Kind));
     }
 
     [Fact]
@@ -106,8 +112,30 @@ public class AmendCommandTests
         Assert.False(result.Success);
         Assert.NotNull(result.Message);
         Assert.Contains("Cancelled or Done", result.Message);
+        Assert.Contains("reopen first", result.Message);
         Assert.Empty(ticketing.ApplyLabels);
         Assert.Empty(ticketing.AppendDescriptions);
+        Assert.Empty(events.Events);
+    }
+
+    [Fact]
+    public async Task Terminal_Cancelled_rejected_no_writes()
+    {
+        var ticket = MakeTicket(state: TicketState.Cancelled);
+        var ticketing = new FakeTicketing(ticket);
+        var events = new FakeEventSink();
+        var cmd = new AmendCommand(ticketing, events);
+
+        var ctx = MakeCtx(args: new Dictionary<string, string> { ["size"] = "M" });
+        var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.Message);
+        Assert.Contains("Cancelled or Done", result.Message);
+        Assert.Contains("reopen first", result.Message);
+        Assert.Empty(ticketing.ApplyLabels);
+        Assert.Empty(ticketing.AppendDescriptions);
+        Assert.Empty(events.Events);
     }
 
     [Fact]
@@ -124,6 +152,7 @@ public class AmendCommandTests
         Assert.False(result.Success);
         Assert.NotNull(result.Message);
         Assert.Contains("at least one", result.Message);
+        Assert.Empty(events.Events);
     }
 
     [Fact]
@@ -140,6 +169,7 @@ public class AmendCommandTests
         Assert.False(result.Success);
         Assert.Empty(ticketing.ApplyLabels);
         Assert.Empty(ticketing.AppendDescriptions);
+        Assert.Empty(events.Events);
     }
 
     // ---------- Fakes ----------
