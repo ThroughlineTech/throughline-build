@@ -1,8 +1,15 @@
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Helpers;
+using Xunit;
 
 namespace ThroughlineBuild.Commands.Tests;
+
+// Tests that redirect Console.Error via Console.SetError must not run in parallel
+// with each other (Console.SetError mutates global state). Placing them in this
+// shared collection forces xUnit to serialize them.
+[CollectionDefinition("CommandConsoleTests")]
+public sealed class CommandConsoleTestsCollection { }
 
 // Shared fake implementations used by CloseCommandTests and DeferCommandTests.
 

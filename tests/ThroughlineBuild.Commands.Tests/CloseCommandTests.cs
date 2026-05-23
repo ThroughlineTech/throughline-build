@@ -7,6 +7,7 @@ using Xunit;
 
 namespace ThroughlineBuild.Commands.Tests;
 
+[Collection("CommandConsoleTests")]
 public class CloseCommandTests
 {
     private static Ticket MakeTicket(
