@@ -287,6 +287,9 @@ public class CloseCommandTests
                 throw new InvalidOperationException("simulated rollup failure");
             return Task.FromResult(new RollupResult(false, null, null));
         }
+
+        public Task<IReadOnlyList<TicketComment>> GetCommentsAsync(string id, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<TicketComment>)Array.Empty<TicketComment>());
     }
 
     private sealed class FakeEventSink : IEventSink

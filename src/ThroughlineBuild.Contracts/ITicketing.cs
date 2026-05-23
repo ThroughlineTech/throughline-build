@@ -53,7 +53,17 @@ public interface ITicketing
     /// Never throws; failures are surfaced in RollupResult.FailureReason.
     /// </summary>
     Task<RollupResult> RollupParentAsync(string id, CancellationToken ct);
+
+    /// <summary>
+    /// Fetch all comments on a ticket. Returns empty list on 404 or empty result.
+    /// </summary>
+    Task<IReadOnlyList<TicketComment>> GetCommentsAsync(string id, CancellationToken ct);
 }
+
+/// <summary>
+/// A single comment on a ticket.
+/// </summary>
+public record TicketComment(string Id, string Body, DateTimeOffset CreatedAt);
 
 /// <summary>
 /// Describes optional capabilities supported by a ticketing backend.

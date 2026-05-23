@@ -39,6 +39,16 @@ public record PlaneComment(
     [property: JsonPropertyName("comment_html")] string CommentHtml
 );
 
+public record PlaneCommentListItem(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("comment_html")] string? CommentHtml,
+    [property: JsonPropertyName("created_at")] DateTimeOffset CreatedAt
+);
+
+public record PlaneCommentList(
+    [property: JsonPropertyName("results")] List<PlaneCommentListItem> Results
+);
+
 public record PlaneRelationItem(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("relation_type")] string RelationType,
@@ -94,6 +104,9 @@ public record ApplyLabelsRequest(
 [JsonSerializable(typeof(PlaneLabel))]
 [JsonSerializable(typeof(PlaneLabelList))]
 [JsonSerializable(typeof(PlaneComment))]
+[JsonSerializable(typeof(PlaneCommentListItem))]
+[JsonSerializable(typeof(PlaneCommentList))]
+[JsonSerializable(typeof(List<PlaneCommentListItem>))]
 [JsonSerializable(typeof(PlaneRelationItem))]
 [JsonSerializable(typeof(PlaneRelationList))]
 [JsonSerializable(typeof(PlaneStateExpansion))]
