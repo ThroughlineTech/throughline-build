@@ -9,6 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="..\ThroughlineBuild.Contracts\ThroughlineBuild.Contracts.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.Briefs\ThroughlineBuild.Briefs.csproj" />
+    <ProjectReference Include="..\ThroughlineBuild.Helpers\ThroughlineBuild.Helpers.csproj" />
   </ItemGroup>
   <ItemGroup>
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
