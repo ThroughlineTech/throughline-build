@@ -98,57 +98,11 @@ Exit codes:
     var registry = new TicketCommandRegistry();
     registry.Register("amend", new AmendCommand(ticketing2, eventSink2));
 
-    if (verb == "close")
+    var wireUpError = WireUpConditionalCommands(verb, registry, secrets2, http2, ticketing2, eventSink2, cwd2);
+    if (wireUpError is not null)
     {
-        if (string.IsNullOrEmpty(secrets2.AnthropicApiKey))
-        {
-            Console.Error.WriteLine("Secret error: anthropic api key required for close (reason translation)");
-            return 3;
-        }
-        var anthropicClient = new AnthropicClient(http2, new AnthropicOptions { ApiKey = secrets2.AnthropicApiKey });
-        var translator = new ReasonTranslator(anthropicClient);
-        var gitClient = new ProcessGitClient(cwd2);
-        var decrufter = new WorktreeDecrufter(gitClient);
-        registry.Register("close", new CloseCommand(
-            ticketing2,
-            eventSink2,
-            gitClient,
-            translator,
-            decrufter,
-            cwd2));
-    }
-    if (verb == "defer")
-    {
-        if (string.IsNullOrEmpty(secrets2.AnthropicApiKey))
-        {
-            Console.Error.WriteLine("Secret error: anthropic api key required for defer (reason translation)");
-            return 3;
-        }
-        var anthropicClient = new AnthropicClient(http2, new AnthropicOptions { ApiKey = secrets2.AnthropicApiKey });
-        var translator = new ReasonTranslator(anthropicClient);
-        var gitClient = new ProcessGitClient(cwd2);
-        var decrufter = new WorktreeDecrufter(gitClient);
-        registry.Register("defer", new DeferCommand(
-            ticketing2,
-            eventSink2,
-            gitClient,
-            translator,
-            decrufter,
-            cwd2));
-    }
-    if (verb == "reopen")
-    {
-        if (string.IsNullOrEmpty(secrets2.AnthropicApiKey))
-        {
-            Console.Error.WriteLine("Secret error: anthropic api key required for reopen (reason translation)");
-            return 3;
-        }
-        var anthropicClient = new AnthropicClient(http2, new AnthropicOptions { ApiKey = secrets2.AnthropicApiKey });
-        var translator = new ReasonTranslator(anthropicClient);
-        registry.Register("reopen", new ReopenCommand(
-            ticketing2,
-            eventSink2,
-            translator));
+        Console.Error.WriteLine($"Secret error: {wireUpError}");
+        return 3;
     }
 
     if (verb == "amend" || verb == "close" || verb == "defer" || verb == "reopen")
@@ -308,4 +262,61 @@ Exit codes:
 
     Console.WriteLine($"Plan complete: {result.TicketId} risk={result.RiskLabel} size={result.SizeLabel}");
     return 0;
+}
+
+static string? WireUpConditionalCommands(
+    string verb,
+    TicketCommandRegistry registry,
+    BuildSecrets secrets,
+    HttpClient http,
+    ITicketing ticketing,
+    IEventSink eventSink,
+    string mainWorktreePath)
+{
+    // Only process verbs that require heavy-dep wiring
+    if (verb != "close" && verb != "defer" && verb != "reopen")
+        return null;
+
+    // All three verbs require anthropic api key for reason translation
+    if (string.IsNullOrEmpty(secrets.AnthropicApiKey))
+    {
+        return "anthropic api key required for close/defer/reopen (reason translation)";
+    }
+
+    var anthropicClient = new AnthropicClient(http, new AnthropicOptions { ApiKey = secrets.AnthropicApiKey });
+    var translator = new ReasonTranslator(anthropicClient);
+
+    if (verb == "close")
+    {
+        var gitClient = new ProcessGitClient(mainWorktreePath);
+        var decrufter = new WorktreeDecrufter(gitClient);
+        registry.Register("close", new CloseCommand(
+            ticketing,
+            eventSink,
+            gitClient,
+            translator,
+            decrufter,
+            mainWorktreePath));
+    }
+    else if (verb == "defer")
+    {
+        var gitClient = new ProcessGitClient(mainWorktreePath);
+        var decrufter = new WorktreeDecrufter(gitClient);
+        registry.Register("defer", new DeferCommand(
+            ticketing,
+            eventSink,
+            gitClient,
+            translator,
+            decrufter,
+            mainWorktreePath));
+    }
+    else if (verb == "reopen")
+    {
+        registry.Register("reopen", new ReopenCommand(
+            ticketing,
+            eventSink,
+            translator));
+    }
+
+    return null;
 }
