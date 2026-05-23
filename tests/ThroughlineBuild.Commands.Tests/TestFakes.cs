@@ -35,6 +35,11 @@ internal sealed class FakeTicketing : ITicketing
     // (not used directly on this fake; left for symmetry).
     public int ListWorktreeCallsViaGit { get; set; }
 
+    // Existing comments returned by GetCommentsAsync (settable by tests).
+    public List<TicketComment> ExistingComments { get; set; } = new();
+    public int AppendDescriptionCalls { get; private set; }
+    public int ApplyLabelsCalls { get; private set; }
+
     public FakeTicketing(Ticket ticket) { _ticket = ticket; }
 
     public BackendCapabilities Capabilities => new BackendCapabilities(true, true, true, false);
@@ -51,8 +56,11 @@ internal sealed class FakeTicketing : ITicketing
         return Task.CompletedTask;
     }
 
-    public Task AppendDescriptionAsync(string id, string html, CancellationToken ct) =>
-        Task.CompletedTask;
+    public Task AppendDescriptionAsync(string id, string html, CancellationToken ct)
+    {
+        AppendDescriptionCalls++;
+        return Task.CompletedTask;
+    }
 
     public Task<string> CreateCommentAsync(string id, string html, CancellationToken ct)
     {
@@ -60,8 +68,11 @@ internal sealed class FakeTicketing : ITicketing
         return Task.FromResult($"comment-{Comments.Count}");
     }
 
-    public Task ApplyLabelsAsync(string id, IEnumerable<string> labels, CancellationToken ct) =>
-        Task.CompletedTask;
+    public Task ApplyLabelsAsync(string id, IEnumerable<string> labels, CancellationToken ct)
+    {
+        ApplyLabelsCalls++;
+        return Task.CompletedTask;
+    }
 
     public Task<IReadOnlyList<Relation>> GetRelationsAsync(string id, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<Relation>>(Array.Empty<Relation>());
@@ -73,6 +84,9 @@ internal sealed class FakeTicketing : ITicketing
             throw new InvalidOperationException("simulated rollup failure");
         return Task.FromResult(new RollupResult(false, null, null));
     }
+
+    public Task<IReadOnlyList<TicketComment>> GetCommentsAsync(string id, CancellationToken ct) =>
+        Task.FromResult((IReadOnlyList<TicketComment>)ExistingComments);
 }
 
 internal sealed class FakeEventSink : IEventSink

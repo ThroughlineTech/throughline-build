@@ -136,7 +136,20 @@ Exit codes:
             decrufter,
             cwd2));
     }
-    // registry.Register("reopen", new ReopenTicketCommand(...));
+    if (verb == "reopen")
+    {
+        if (string.IsNullOrEmpty(secrets2.AnthropicApiKey))
+        {
+            Console.Error.WriteLine("Secret error: anthropic api key required for reopen (reason translation)");
+            return 3;
+        }
+        var anthropicClient = new AnthropicClient(http2, new AnthropicOptions { ApiKey = secrets2.AnthropicApiKey });
+        var translator = new ReasonTranslator(anthropicClient);
+        registry.Register("reopen", new ReopenCommand(
+            ticketing2,
+            eventSink2,
+            translator));
+    }
 
     if (verb == "amend" || verb == "close" || verb == "defer" || verb == "reopen")
     {
@@ -150,8 +163,9 @@ Exit codes:
         var verbTicketId = args[1];
         var extraArgs = new Dictionary<string, string>(StringComparer.Ordinal);
         int parseStart = 2;
-        // For 'close' and 'defer', accept reason as first positional arg after ticket-id.
-        if ((verb == "close" || verb == "defer") && args.Length >= 3 && !args[2].StartsWith("--"))
+        // For 'close', 'defer', and 'reopen', accept reason as first positional
+        // arg after ticket-id (reason is optional for reopen, required for the others).
+        if ((verb == "close" || verb == "defer" || verb == "reopen") && args.Length >= 3 && !args[2].StartsWith("--"))
         {
             extraArgs["reason"] = args[2];
             parseStart = 3;

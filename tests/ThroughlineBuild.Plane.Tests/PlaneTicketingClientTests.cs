@@ -326,6 +326,67 @@ public class CreateCommentAsyncTests
     }
 }
 
+public class GetCommentsAsyncTests
+{
+    private const string CommentUuid1 = "dddddddd-0000-0000-0000-000000000010";
+    private const string CommentUuid2 = "dddddddd-0000-0000-0000-000000000011";
+
+    private static string CommentsListJson() =>
+        $$"""
+        {
+          "results": [
+            {
+              "id": "{{CommentUuid1}}",
+              "comment_html": "<p>first comment</p>",
+              "created_at": "2025-01-01T00:00:00Z"
+            },
+            {
+              "id": "{{CommentUuid2}}",
+              "comment_html": "<p><strong>deferred:</strong> later</p>",
+              "created_at": "2025-01-02T00:00:00Z"
+            }
+          ]
+        }
+        """;
+
+    private static string EmptyCommentsListJson() =>
+        """{"results":[]}""";
+
+    [Fact]
+    public async Task GetCommentsAsync_ReturnsMappedComments()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson())); // issue lookup
+        handler.Enqueue(FakeMessageHandler.OkJson(CommentsListJson()));        // comments
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var comments = await client.GetCommentsAsync("TLB-24", CancellationToken.None);
+
+        Assert.Equal(2, comments.Count);
+        Assert.Equal(CommentUuid1, comments[0].Id);
+        Assert.Equal("<p>first comment</p>", comments[0].Body);
+        Assert.Equal(CommentUuid2, comments[1].Id);
+        Assert.Contains("deferred:", comments[1].Body);
+
+        var getReq = handler.Requests[1];
+        Assert.Equal(HttpMethod.Get, getReq.Method);
+        Assert.Contains("comments", getReq.RequestUri!.ToString());
+    }
+
+    [Fact]
+    public async Task GetCommentsAsync_ReturnsEmptyOnEmptyResults()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(EmptyCommentsListJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var comments = await client.GetCommentsAsync("TLB-24", CancellationToken.None);
+
+        Assert.Empty(comments);
+    }
+}
+
 public class ApplyLabelsAsyncTests
 {
     [Fact]

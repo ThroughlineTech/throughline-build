@@ -334,6 +334,32 @@ public sealed class PlaneTicketingClient : ITicketing
         }, ct).ConfigureAwait(false);
     }
 
+    public async Task<IReadOnlyList<TicketComment>> GetCommentsAsync(string id, CancellationToken ct)
+    {
+        return await _pipeline.ExecuteAsync(async token =>
+        {
+            try
+            {
+                var seq = ParseSequenceId(id);
+                var issue = await FindIssueAsync(seq, token).ConfigureAwait(false);
+
+                var list = await GetJsonAsync<PlaneCommentList>(
+                    $"{IssuesBase}{issue.Id}/comments/", PlaneJsonContext.Default, token).ConfigureAwait(false);
+
+                if (list.Results is null || list.Results.Count == 0)
+                    return (IReadOnlyList<TicketComment>)Array.Empty<TicketComment>();
+
+                return (IReadOnlyList<TicketComment>)list.Results
+                    .Select(c => new TicketComment(c.Id, c.CommentHtml ?? string.Empty, c.CreatedAt))
+                    .ToList();
+            }
+            catch (PlaneApiException ex) when (ex.Status == 404)
+            {
+                return (IReadOnlyList<TicketComment>)Array.Empty<TicketComment>();
+            }
+        }, ct).ConfigureAwait(false);
+    }
+
     public async Task<RollupResult> RollupParentAsync(string id, CancellationToken ct)
     {
         try
