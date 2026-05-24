@@ -341,3 +341,122 @@ public class ImplementPhaseTests
             Task.FromResult(new GitOpResult(true, null));
     }
 }
+
+public class ImplementPhaseDebugCaptureTests
+{
+    private const string MainSha = "0123456789abcdef0123456789abcdef01234567";
+    private const string CommitSha = "ffffffffffffffffffffffffffffffffffffffff";
+
+    private static Ticket MakeTicket() => new Ticket(
+        Id: "TLB-1", Title: "Test ticket", Type: "feature", State: TicketState.Ready,
+        Size: Size.S, Risk: Risk.Low, DescriptionHtml: "<p>plan</p>",
+        Relations: Array.Empty<Relation>(), Labels: Array.Empty<string>(), ParentId: null);
+
+    private static WorkerResult OkWorkerResult() => new WorkerResult(
+        Status.Ok, "implemented", new[] { "src/Foo.cs" }, null,
+        new Dictionary<string, object> { ["commit_sha"] = CommitSha });
+
+    [Fact]
+    public async Task RunAsync_DebugCaptureDirectorySet_ForwardedToWorkerOptions()
+    {
+        const string captureDir = "/tmp/impl-debug-capture-test";
+        var ticketing = new FakeTicketing(MakeTicket());
+        var worker = new CapturingWorkerAgent(OkWorkerResult());
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha);
+        var options = new BuildOptions("session-dbg", "claude-code", TimeSpan.FromMinutes(5),
+            DebugCaptureDirectory: captureDir);
+        var phase = new ImplementPhase(ticketing, worker, events, options, git);
+
+        await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.NotNull(worker.LastOptions);
+        Assert.Equal(captureDir, worker.LastOptions!.DebugCaptureDirectory);
+    }
+
+    [Fact]
+    public async Task RunAsync_DebugCaptureDirectoryNull_WorkerOptionsHasNullDirectory()
+    {
+        var ticketing = new FakeTicketing(MakeTicket());
+        var worker = new CapturingWorkerAgent(OkWorkerResult());
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha);
+        var options = new BuildOptions("session-1", "claude-code", TimeSpan.FromMinutes(5));
+        var phase = new ImplementPhase(ticketing, worker, events, options, git);
+
+        await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.NotNull(worker.LastOptions);
+        Assert.Null(worker.LastOptions!.DebugCaptureDirectory);
+    }
+
+    private sealed class CapturingWorkerAgent : IWorkerAgent
+    {
+        private readonly WorkerResult _result;
+        public WorkerOptions? LastOptions { get; private set; }
+        public CapturingWorkerAgent(WorkerResult result) { _result = result; }
+        public string Name => "capturing-fake";
+        public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
+        {
+            LastOptions = options;
+            return Task.FromResult(_result);
+        }
+    }
+
+    private sealed class FakeTicketing : ITicketing
+    {
+        private readonly Ticket _ticket;
+        public FakeTicketing(Ticket ticket) { _ticket = ticket; }
+        public BackendCapabilities Capabilities => new BackendCapabilities(true, true, true, false);
+        public Task<Ticket> GetAsync(string id, CancellationToken ct) => Task.FromResult(_ticket);
+        public Task<IReadOnlyList<Ticket>> GetBatchAsync(IEnumerable<string> ids, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<Ticket>)new[] { _ticket });
+        public Task TransitionAsync(string id, TicketState newState, CancellationToken ct) => Task.CompletedTask;
+        public Task AppendDescriptionAsync(string id, string html, CancellationToken ct) => Task.CompletedTask;
+        public Task<string> CreateCommentAsync(string id, string html, CancellationToken ct) => Task.FromResult("c-1");
+        public Task ApplyLabelsAsync(string id, IEnumerable<string> labels, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<Relation>> GetRelationsAsync(string id, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<Relation>)Array.Empty<Relation>());
+        public Task<RollupResult> RollupParentAsync(string id, CancellationToken ct) =>
+            Task.FromResult(new RollupResult(false, null, null));
+        public Task<IReadOnlyList<TicketComment>> GetCommentsAsync(string id, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<TicketComment>)Array.Empty<TicketComment>());
+    }
+
+    private sealed class FakeEventSink : IEventSink
+    {
+        public Task EmitAsync(WorkflowEvent ev, CancellationToken ct) => Task.CompletedTask;
+        public Task FlushAsync(CancellationToken ct) => Task.CompletedTask;
+    }
+
+    private sealed class FakeGitClient : IGitClient
+    {
+        private readonly string _mainSha;
+        private readonly string _headSha;
+        public FakeGitClient(string mainSha, string headSha) { _mainSha = mainSha; _headSha = headSha; }
+        public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(_mainSha);
+        public Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<WorktreeInfo>>(Array.Empty<WorktreeInfo>());
+        public Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct) =>
+            Task.FromResult(new WorktreeRemoveResult(true, null));
+        public Task<IReadOnlyList<string>> GetBranchesNotMergedAsync(string pattern, string baseBranch, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
+        public Task<WorktreeCreateResult> CreateWorktreeAsync(string worktreePath, string newBranch, string fromRef, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
+        public Task<string> HeadShaAsync(string worktreePath, CancellationToken ct) =>
+            Task.FromResult(_headSha);
+        public Task<GitDiff> DiffAsync(string fromRef, string toRef, string mainWorktreePath, bool includePatchContent, CancellationToken ct) =>
+            Task.FromResult(new GitDiff(fromRef, toRef, Array.Empty<DiffEntry>()));
+        public Task<GitOpResult> FetchAsync(string remote, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+        public Task<RebaseResult> RebaseAsync(string ontoRef, string featureWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new RebaseResult(true, false, Array.Empty<string>(), null));
+        public Task<GitOpResult> RebaseAbortAsync(string featureWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+        public Task<GitOpResult> FastForwardMergeAsync(string mergeRef, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+        public Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+    }
+}
