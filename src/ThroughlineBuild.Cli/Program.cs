@@ -9,6 +9,7 @@ using ThroughlineBuild.Helpers;
 using ThroughlineBuild.JudgmentSlots;
 using ThroughlineBuild.Phases;
 using ThroughlineBuild.Plane;
+using ThroughlineBuild.Verification;
 using ThroughlineBuild.Workers.ClaudeCode;
 
 return await RunAsync(args);
@@ -25,7 +26,7 @@ static async Task<int> RunAsync(string[] args)
 
     // Arg validation for phase verbs happens BEFORE config load so a missing id
     // surfaces a usage error (exit 2) rather than a config-not-found error.
-    if (verb == "plan" || verb == "implement" || verb == "review")
+    if (verb == "plan" || verb == "implement" || verb == "review" || verb == "ship")
     {
         if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]))
         {
@@ -150,7 +151,7 @@ static async Task<int> RunAsync(string[] args)
         }
     }
 
-    if (verb != "plan" && verb != "implement" && verb != "review")
+    if (verb != "plan" && verb != "implement" && verb != "review" && verb != "ship")
     {
         Console.Error.WriteLine($"Unknown subcommand: {verb}");
         Console.Error.WriteLine(CliUsage.UsageText);
@@ -243,6 +244,71 @@ static async Task<int> RunAsync(string[] args)
 
         Console.WriteLine($"Implement complete: {result.TicketId} commit={result.CommitSha} branch={result.BranchName}");
         return 0;
+    }
+    else if (verb == "ship")
+    {
+        var shipOptions = new ShipOptions(
+            RegressionChecks: config2.Ship.RegressionChecks,
+            Remote: config2.Ship.Remote,
+            BaseBranch: config2.Ship.BaseBranch,
+            DeleteFeatureBranch: config2.Ship.DeleteFeatureBranch);
+        var gitClient = new ProcessGitClient(cwd);
+        var checksRunner = new AutomatedChecksRunner();
+        var phase = new ShipPhase(ticketing, eventSink, buildOptions, shipOptions, gitClient: gitClient, checksRunner: checksRunner);
+        ShipResult result;
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+            result = await phase.RunAsync(ticketId, cwd, cts.Token);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            Console.Error.WriteLine($"Ticket not found: {ex.Message}");
+            return 2;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+
+        if (result.Success)
+        {
+            // Derive branch name from the deterministic worktree layout.
+            // Fetch the ticket to get its title for slug computation.
+            string branchName;
+            try
+            {
+                using var fetchCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                var ticket = await ticketing.GetAsync(ticketId, fetchCts.Token);
+                var layout = PhaseWorktreeLayout.Compute(ticketId, ticket.Title, cwd);
+                branchName = layout.BranchName;
+            }
+            catch
+            {
+                branchName = "(unknown)";
+            }
+            Console.WriteLine($"Ship complete: {result.TicketId} merged={result.MergedSha} branch={branchName}");
+            return 0;
+        }
+
+        // Map FailedAt to exit code: gate failures -> 1, infrastructure failures -> 4.
+        var failedAt = result.FailedAt;
+        var stageName = failedAt?.ToString().ToLowerInvariant() ?? "unknown";
+        Console.Error.WriteLine($"Ship blocked at {stageName}: {result.FailureReason}");
+
+        return failedAt switch
+        {
+            ShipFailureStage.Rebase => 1,
+            ShipFailureStage.ConflictMarkerScan => 1,
+            ShipFailureStage.RegressionChecks => 1,
+            ShipFailureStage.StateCheck => 4,
+            ShipFailureStage.Fetch => 4,
+            ShipFailureStage.FastForwardMerge => 4,
+            ShipFailureStage.Decruft => 0,  // decruft failure is post-success non-fatal
+            _ => 1
+        };
     }
     else // review
     {

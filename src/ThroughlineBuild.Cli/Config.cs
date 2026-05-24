@@ -30,12 +30,19 @@ public record ReviewConfig(
     IReadOnlyList<string> VerifierAllowedTools,
     IReadOnlyList<CheckSpec> Checks);
 
+public record ShipConfig(
+    string Remote,
+    string BaseBranch,
+    bool DeleteFeatureBranch,
+    IReadOnlyList<CheckSpec> RegressionChecks);
+
 public record BuildConfig(
     TicketingConfig Ticketing,
     LlmConfig Llm,
     WorkersConfig Workers,
     EventsConfig Events,
-    ReviewConfig Review);
+    ReviewConfig Review,
+    ShipConfig Ship);
 
 public record BuildSecrets(string PlaneApiToken, string? AnthropicApiKey);
 
@@ -86,8 +93,9 @@ public static class BuildConfigLoader
         var workers = ReadWorkersSection(root);
         var events = ReadEventsSection(root);
         var review = ReadReviewSection(root);
+        var ship = ReadShipSection(root);
 
-        return new BuildConfig(ticketing, llm, workers, events, review);
+        return new BuildConfig(ticketing, llm, workers, events, review, ship);
     }
 
     public static BuildSecrets ResolveSecrets(BuildConfig config)
@@ -227,5 +235,46 @@ public static class BuildConfigLoader
             VerifierTimeoutMinutes: timeoutMinutes,
             VerifierAllowedTools: allowedTools,
             Checks: checks.AsReadOnly());
+    }
+
+    private static ShipConfig ReadShipSection(TomlTable root)
+    {
+        if (!root.TryGetValue("ship", out var val) || val is not TomlTable t)
+        {
+            return new ShipConfig(
+                Remote: "origin",
+                BaseBranch: "main",
+                DeleteFeatureBranch: true,
+                RegressionChecks: Array.Empty<CheckSpec>());
+        }
+
+        var remote = OptionalString(t, "remote", "origin");
+        var baseBranch = OptionalString(t, "base_branch", "main");
+        var deleteFeatureBranch = true;
+        if (t.TryGetValue("delete_feature_branch", out var dfbVal) && dfbVal is bool dfb)
+            deleteFeatureBranch = dfb;
+
+        var checks = new List<CheckSpec>();
+        if (t.TryGetValue("regression_checks", out var checksVal) && checksVal is TomlTableArray checksArr)
+        {
+            foreach (var entry in checksArr)
+            {
+                var name = RequireString(entry, "ship.regression_checks", "name");
+                var executable = RequireString(entry, "ship.regression_checks", "executable");
+                var arguments = OptionalStringList(entry, "arguments", Array.Empty<string>());
+                var timeoutMins = OptionalInt(entry, "timeout_minutes", 5);
+                checks.Add(new CheckSpec(
+                    Name: name,
+                    Executable: executable,
+                    Arguments: arguments,
+                    Timeout: TimeSpan.FromMinutes(timeoutMins)));
+            }
+        }
+
+        return new ShipConfig(
+            Remote: remote,
+            BaseBranch: baseBranch,
+            DeleteFeatureBranch: deleteFeatureBranch,
+            RegressionChecks: checks.AsReadOnly());
     }
 }

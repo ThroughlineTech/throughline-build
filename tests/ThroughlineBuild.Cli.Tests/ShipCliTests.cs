@@ -7,13 +7,20 @@ using Xunit;
 
 namespace ThroughlineBuild.Cli.Tests;
 
-public class ReviewCliTests
+public class ShipCliTests
 {
     [Fact]
-    public void UsageText_ContainsReviewVerb()
+    public void UsageText_ContainsShipVerb()
     {
-        Assert.Contains("review", CliUsage.UsageText);
-        Assert.Contains("build review <ticket-id>", CliUsage.UsageText);
+        Assert.Contains("ship", CliUsage.UsageText);
+        Assert.Contains("build ship <ticket-id>", CliUsage.UsageText);
+    }
+
+    [Fact]
+    public void UsageText_DocumentsNoPushConvention()
+    {
+        // The ship verb help line must document the local-only / no-push convention.
+        Assert.Contains("no push", CliUsage.UsageText);
     }
 
     [Fact]
@@ -27,45 +34,37 @@ public class ReviewCliTests
     }
 
     [Fact]
-    public void UsageText_DocumentsReviewOnSameStyleAsPlan()
-    {
-        // Both verbs take a ticket-id and no other required flags.
-        var planLine = "build plan <ticket-id>";
-        var reviewLine = "build review <ticket-id>";
-        Assert.Contains(planLine, CliUsage.UsageText);
-        Assert.Contains(reviewLine, CliUsage.UsageText);
-    }
-
-    [Fact]
-    public void ReviewPhase_AcceptsExpectedDependencyShape()
+    public void ShipPhase_AcceptsExpectedDependencyShape()
     {
         var ticketing = new StubTicketing();
-        var worker = new StubWorker();
         var events = new StubSink();
         var options = new BuildOptions("sid", "claude-code", TimeSpan.FromMinutes(5));
-        var workerOptions = new WorkerOptions(TimeSpan.FromMinutes(15), new List<string> { "Read", "Grep", "Glob" }.AsReadOnly());
-        var reviewOptions = new ReviewOptions(Array.Empty<CheckSpec>(), workerOptions);
+        var shipOptions = new ShipOptions(
+            RegressionChecks: Array.Empty<CheckSpec>(),
+            Remote: "origin",
+            BaseBranch: "main",
+            DeleteFeatureBranch: true);
 
-        var phase = new ReviewPhase(ticketing, worker, events, options, reviewOptions);
+        var phase = new ShipPhase(ticketing, events, options, shipOptions);
 
-        Assert.Equal(Phase.Review, phase.Phase);
+        Assert.Equal(Phase.Ship, phase.Phase);
     }
 
     [Fact]
-    public async Task BuildBinary_ReviewWithoutTicketId_ExitsTwo()
+    public async Task BuildBinary_ShipWithoutTicketId_ExitsTwo()
     {
         var exe = LocateBuildExecutable();
         if (exe is null) return;
 
-        var (exitCode, _, stderr) = await RunProcess(exe, new[] { "review" });
+        var (exitCode, _, stderr) = await RunProcess(exe, new[] { "ship" });
 
         Assert.Equal(2, exitCode);
         Assert.Contains("ticket-id is required", stderr);
-        Assert.Contains("build review <ticket-id>", stderr);
+        Assert.Contains("build ship <ticket-id>", stderr);
     }
 
     [Fact]
-    public async Task BuildBinary_HelpFlag_OutputContainsReviewVerb()
+    public async Task BuildBinary_HelpFlag_OutputContainsShipVerb()
     {
         var exe = LocateBuildExecutable();
         if (exe is null) return;
@@ -73,7 +72,34 @@ public class ReviewCliTests
         var (exitCode, stdout, _) = await RunProcess(exe, new[] { "--help" });
 
         Assert.Equal(0, exitCode);
-        Assert.Contains("build review <ticket-id>", stdout);
+        Assert.Contains("build ship <ticket-id>", stdout);
+    }
+
+    [Fact]
+    public void ConfigExampleFile_ContainsShipSection()
+    {
+        var examplePath = FindConfigExampleFile();
+        Assert.NotNull(examplePath);
+
+        var content = File.ReadAllText(examplePath!);
+        Assert.Contains("[ship]", content);
+        Assert.Contains("[[ship.regression_checks]]", content);
+        // Must include the no-push comment per the brief.
+        Assert.Contains("no push", content);
+    }
+
+    private static string? FindConfigExampleFile()
+    {
+        var here = AppContext.BaseDirectory;
+        var dir = new DirectoryInfo(here);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "throughline-build.sln")))
+        {
+            dir = dir.Parent;
+        }
+        if (dir is null) return null;
+
+        var candidate = Path.Combine(dir.FullName, ".build", "config.toml.example");
+        return File.Exists(candidate) ? candidate : null;
     }
 
     private static string? LocateBuildExecutable()
@@ -122,13 +148,6 @@ public class ReviewCliTests
         public Task<IReadOnlyList<Relation>> GetRelationsAsync(string id, CancellationToken ct) => throw new NotImplementedException();
         public Task<RollupResult> RollupParentAsync(string id, CancellationToken ct) => throw new NotImplementedException();
         public Task<IReadOnlyList<TicketComment>> GetCommentsAsync(string id, CancellationToken ct) => throw new NotImplementedException();
-    }
-
-    private sealed class StubWorker : IWorkerAgent
-    {
-        public string Name => "stub";
-        public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct) =>
-            throw new NotImplementedException();
     }
 
     private sealed class StubSink : IEventSink
