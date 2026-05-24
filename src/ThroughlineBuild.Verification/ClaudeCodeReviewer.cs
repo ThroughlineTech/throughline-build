@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ThroughlineBuild.Briefs;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 
@@ -33,20 +34,25 @@ public sealed class ClaudeCodeReviewer : IVerifier
     }
 
     /// <summary>
-    /// Dispatches the review worker using the supplied brief and maps the resulting
-    /// WORKER_RESULT metadata into a typed Verdict.
+    /// Builds a review brief via ReviewBriefBuilder and dispatches the worker against the main worktree.
+    /// Maps the resulting WORKER_RESULT metadata into a typed Verdict.
     /// </summary>
-    /// <param name="brief">The review brief built by the caller (ReviewPhase).</param>
-    /// <param name="diff">The git diff being reviewed (informational; included in the brief by the caller).</param>
-    /// <param name="implementerResult">The implementer worker result (informational; included in the brief by the caller).</param>
+    /// <param name="implementerBrief">The implementer brief (retained on the public surface; not forwarded to the worker in v1).</param>
+    /// <param name="diff">The git diff being reviewed.</param>
+    /// <param name="implementerResult">The implementer worker result.</param>
     /// <param name="ct">Cancellation token.</param>
     public async Task<Verdict> VerifyAsync(
-        Brief brief,
+        Brief implementerBrief,
         GitDiff diff,
         WorkerResult implementerResult,
         CancellationToken ct)
     {
-        var workerResult = await _worker.ExecuteAsync(brief, _workingDirectory, _workerOptions, ct)
+        // implementerBrief is on the public surface for future use; not forwarded in v1
+        _ = implementerBrief;
+
+        var reviewBrief = ReviewBriefBuilder.Build(_ticket, diff, implementerResult, _checkResults);
+
+        var workerResult = await _worker.ExecuteAsync(reviewBrief, _workingDirectory, _workerOptions, ct)
             .ConfigureAwait(false);
 
         if (workerResult.Status != Status.Ok)

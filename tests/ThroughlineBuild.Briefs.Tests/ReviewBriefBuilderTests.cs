@@ -1,7 +1,6 @@
 using ThroughlineBuild.Briefs;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
-using ThroughlineBuild.Verification;
 using Xunit;
 
 namespace ThroughlineBuild.Briefs.Tests;

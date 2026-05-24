@@ -1,4 +1,4 @@
-namespace ThroughlineBuild.Verification;
+namespace ThroughlineBuild.Contracts;
 
 public record CheckSpec(
     string Name,           // e.g. "build", "test", "lint"

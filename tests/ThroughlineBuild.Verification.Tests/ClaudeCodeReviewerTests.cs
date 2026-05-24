@@ -93,6 +93,10 @@ public class ClaudeCodeReviewerTests
             workingDir);
     }
 
+    // Implementer brief passed in as the first param to VerifyAsync (retained on public surface; not forwarded)
+    private static Brief BuildImplementerBrief() =>
+        new Brief("TLB-99", Phase.Implement, "implementer instruction", Array.Empty<string>(), Array.Empty<string>(), new Dictionary<string, string>());
+
     // -------------------------------------------------------------------------
     // Test 1: Pass verdict with rationale and empty checks_failed
     // -------------------------------------------------------------------------
@@ -109,7 +113,7 @@ public class ClaudeCodeReviewerTests
         var reviewer = BuildReviewer(agent);
 
         var verdict = await reviewer.VerifyAsync(
-            new Brief("TLB-99", Phase.Review, "inst", Array.Empty<string>(), Array.Empty<string>(), new Dictionary<string, string>()),
+            BuildImplementerBrief(),
             BuildDiff(),
             BuildImplementerResult(),
             CancellationToken.None);
@@ -135,7 +139,7 @@ public class ClaudeCodeReviewerTests
         var reviewer = BuildReviewer(agent);
 
         var verdict = await reviewer.VerifyAsync(
-            new Brief("TLB-99", Phase.Review, "inst", Array.Empty<string>(), Array.Empty<string>(), new Dictionary<string, string>()),
+            BuildImplementerBrief(),
             BuildDiff(),
             BuildImplementerResult(),
             CancellationToken.None);
@@ -161,7 +165,7 @@ public class ClaudeCodeReviewerTests
         var reviewer = BuildReviewer(agent);
 
         var verdict = await reviewer.VerifyAsync(
-            new Brief("TLB-99", Phase.Review, "inst", Array.Empty<string>(), Array.Empty<string>(), new Dictionary<string, string>()),
+            BuildImplementerBrief(),
             BuildDiff(),
             BuildImplementerResult(),
             CancellationToken.None);
@@ -186,7 +190,7 @@ public class ClaudeCodeReviewerTests
         var reviewer = BuildReviewer(agent);
 
         var verdict = await reviewer.VerifyAsync(
-            new Brief("TLB-99", Phase.Review, "inst", Array.Empty<string>(), Array.Empty<string>(), new Dictionary<string, string>()),
+            BuildImplementerBrief(),
             BuildDiff(),
             BuildImplementerResult(),
             CancellationToken.None);
@@ -211,7 +215,7 @@ public class ClaudeCodeReviewerTests
         var reviewer = BuildReviewer(agent);
 
         var verdict = await reviewer.VerifyAsync(
-            new Brief("TLB-99", Phase.Review, "inst", Array.Empty<string>(), Array.Empty<string>(), new Dictionary<string, string>()),
+            BuildImplementerBrief(),
             BuildDiff(),
             BuildImplementerResult(),
             CancellationToken.None);
@@ -237,7 +241,7 @@ public class ClaudeCodeReviewerTests
         var reviewer = BuildReviewer(agent);
 
         var verdict = await reviewer.VerifyAsync(
-            new Brief("TLB-99", Phase.Review, "inst", Array.Empty<string>(), Array.Empty<string>(), new Dictionary<string, string>()),
+            BuildImplementerBrief(),
             BuildDiff(),
             BuildImplementerResult(),
             CancellationToken.None);
@@ -264,7 +268,7 @@ public class ClaudeCodeReviewerTests
         var reviewer = BuildReviewer(agent);
 
         var verdict = await reviewer.VerifyAsync(
-            new Brief("TLB-99", Phase.Review, "inst", Array.Empty<string>(), Array.Empty<string>(), new Dictionary<string, string>()),
+            BuildImplementerBrief(),
             BuildDiff(),
             BuildImplementerResult(),
             CancellationToken.None);
@@ -293,7 +297,7 @@ public class ClaudeCodeReviewerTests
         var reviewer = BuildReviewer(agent);
 
         var verdict = await reviewer.VerifyAsync(
-            new Brief("TLB-99", Phase.Review, "inst", Array.Empty<string>(), Array.Empty<string>(), new Dictionary<string, string>()),
+            BuildImplementerBrief(),
             BuildDiff(),
             BuildImplementerResult(),
             CancellationToken.None);
@@ -319,7 +323,7 @@ public class ClaudeCodeReviewerTests
         var reviewer = BuildReviewer(agent, workingDir: expectedDir);
 
         await reviewer.VerifyAsync(
-            new Brief("TLB-99", Phase.Review, "inst", Array.Empty<string>(), Array.Empty<string>(), new Dictionary<string, string>()),
+            BuildImplementerBrief(),
             BuildDiff(),
             BuildImplementerResult(),
             CancellationToken.None);
@@ -350,7 +354,7 @@ public class ClaudeCodeReviewerTests
         var reviewer = BuildReviewer(agent, options: options);
 
         await reviewer.VerifyAsync(
-            new Brief("TLB-99", Phase.Review, "inst", Array.Empty<string>(), Array.Empty<string>(), new Dictionary<string, string>()),
+            BuildImplementerBrief(),
             BuildDiff(),
             BuildImplementerResult(),
             CancellationToken.None);
@@ -358,5 +362,50 @@ public class ClaudeCodeReviewerTests
         Assert.Same(options, agent.CapturedOptions);
         Assert.Equal(TimeSpan.FromMinutes(10), agent.CapturedOptions!.Timeout);
         Assert.Equal(allowedTools, agent.CapturedOptions.AllowedTools);
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 11: VerifyAsync builds a review brief via ReviewBriefBuilder (Phase.Review)
+    // The worker receives a brief with Phase.Review, not the implementer brief's phase.
+    // The brief instruction contains the verdict/rationale/checks_failed literals.
+    // -------------------------------------------------------------------------
+    [Fact]
+    public async Task VerifyAsync_BuildsReviewBriefViaReviewBriefBuilder()
+    {
+        var metadata = new Dictionary<string, object>
+        {
+            ["verdict"] = "Pass",
+            ["rationale"] = "ok",
+            ["checks_failed"] = new List<string>()
+        };
+        var agent = new StubWorkerAgent(OkResultWithMetadata(metadata));
+        var reviewer = BuildReviewer(agent);
+
+        // Implementer brief has Phase.Implement - worker must NOT receive it directly
+        var implementerBrief = BuildImplementerBrief();
+
+        await reviewer.VerifyAsync(
+            implementerBrief,
+            BuildDiff(),
+            BuildImplementerResult(),
+            CancellationToken.None);
+
+        var captured = agent.CapturedBrief;
+        Assert.NotNull(captured);
+
+        // Worker received a review-phase brief
+        Assert.Equal(Phase.Review, captured!.Phase);
+
+        // TicketId matches (both derive from the same ticket)
+        Assert.Equal(implementerBrief.TicketId, captured.TicketId);
+
+        // The brief phase differs from the implementer brief phase
+        Assert.NotEqual(implementerBrief.Phase, captured.Phase);
+
+        // The instruction contains the WORKER_RESULT envelope literals from ReviewBriefBuilder
+        Assert.Contains("WORKER_RESULT", captured.Instruction);
+        Assert.Contains("verdict", captured.Instruction);
+        Assert.Contains("rationale", captured.Instruction);
+        Assert.Contains("checks_failed", captured.Instruction);
     }
 }
