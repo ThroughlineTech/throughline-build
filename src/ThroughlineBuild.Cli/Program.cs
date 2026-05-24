@@ -25,7 +25,7 @@ static async Task<int> RunAsync(string[] args)
 
     // Arg validation for phase verbs happens BEFORE config load so a missing id
     // surfaces a usage error (exit 2) rather than a config-not-found error.
-    if (verb == "plan" || verb == "implement")
+    if (verb == "plan" || verb == "implement" || verb == "review")
     {
         if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]))
         {
@@ -150,7 +150,7 @@ static async Task<int> RunAsync(string[] args)
         }
     }
 
-    if (verb != "plan" && verb != "implement")
+    if (verb != "plan" && verb != "implement" && verb != "review")
     {
         Console.Error.WriteLine($"Unknown subcommand: {verb}");
         Console.Error.WriteLine(CliUsage.UsageText);
@@ -214,7 +214,7 @@ static async Task<int> RunAsync(string[] args)
         Console.WriteLine($"Plan complete: {result.TicketId} risk={result.RiskLabel} size={result.SizeLabel}");
         return 0;
     }
-    else // implement
+    else if (verb == "implement")
     {
         var phase = new ImplementPhase(ticketing, worker, eventSink, buildOptions);
         ImplementResult result;
@@ -243,6 +243,43 @@ static async Task<int> RunAsync(string[] args)
 
         Console.WriteLine($"Implement complete: {result.TicketId} commit={result.CommitSha} branch={result.BranchName}");
         return 0;
+    }
+    else // review
+    {
+        var verifierWorkerOptions = new WorkerOptions(
+            TimeSpan.FromMinutes(config2.Review.VerifierTimeoutMinutes),
+            config2.Review.VerifierAllowedTools);
+        var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
+        var phase = new ReviewPhase(ticketing, worker, eventSink, buildOptions, reviewOptions);
+        ReviewResult result;
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+            result = await phase.RunAsync(ticketId, cwd, cts.Token);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            Console.Error.WriteLine($"Ticket not found: {ex.Message}");
+            return 2;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+
+        if (!result.Success)
+        {
+            Console.Error.WriteLine($"Review phase failed: {result.FailureReason}");
+            return 4;
+        }
+
+        Console.WriteLine($"Review complete: {result.TicketId} verdict={result.Verdict}");
+        if (!string.IsNullOrEmpty(result.VerdictRationale))
+            Console.WriteLine($"  rationale: {result.VerdictRationale}");
+
+        return result.Verdict == ThroughlineBuild.Contracts.Models.VerdictKind.Pass ? 0 : 1;
     }
 }
 

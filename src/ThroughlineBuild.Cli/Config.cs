@@ -1,5 +1,6 @@
 using Tomlyn;
 using Tomlyn.Model;
+using ThroughlineBuild.Contracts;
 
 namespace ThroughlineBuild.Cli;
 
@@ -24,11 +25,17 @@ public record WorkersConfig(
 
 public record EventsConfig(string LogDirectory);
 
+public record ReviewConfig(
+    int VerifierTimeoutMinutes,
+    IReadOnlyList<string> VerifierAllowedTools,
+    IReadOnlyList<CheckSpec> Checks);
+
 public record BuildConfig(
     TicketingConfig Ticketing,
     LlmConfig Llm,
     WorkersConfig Workers,
-    EventsConfig Events);
+    EventsConfig Events,
+    ReviewConfig Review);
 
 public record BuildSecrets(string PlaneApiToken, string? AnthropicApiKey);
 
@@ -78,8 +85,9 @@ public static class BuildConfigLoader
         var llm = ReadLlmSection(root);
         var workers = ReadWorkersSection(root);
         var events = ReadEventsSection(root);
+        var review = ReadReviewSection(root);
 
-        return new BuildConfig(ticketing, llm, workers, events);
+        return new BuildConfig(ticketing, llm, workers, events, review);
     }
 
     public static BuildSecrets ResolveSecrets(BuildConfig config)
@@ -130,6 +138,19 @@ public static class BuildConfigLoader
         return defaultValue;
     }
 
+    private static IReadOnlyList<string> OptionalStringList(TomlTable section, string key, IReadOnlyList<string> defaultValue)
+    {
+        if (!section.TryGetValue(key, out var val) || val is not TomlArray arr)
+            return defaultValue;
+        var result = new List<string>(arr.Count);
+        foreach (var item in arr)
+        {
+            if (item is string s)
+                result.Add(s);
+        }
+        return result.AsReadOnly();
+    }
+
     private static TicketingConfig ReadTicketingSection(TomlTable root)
     {
         var t = RequireSection(root, "ticketing");
@@ -167,5 +188,44 @@ public static class BuildConfigLoader
         var t = RequireSection(root, "events");
         return new EventsConfig(
             LogDirectory: RequireString(t, "events", "log_directory"));
+    }
+
+    private static readonly IReadOnlyList<string> DefaultVerifierAllowedTools =
+        new List<string> { "Read", "Grep", "Glob" }.AsReadOnly();
+
+    private static ReviewConfig ReadReviewSection(TomlTable root)
+    {
+        if (!root.TryGetValue("review", out var val) || val is not TomlTable t)
+        {
+            return new ReviewConfig(
+                VerifierTimeoutMinutes: 15,
+                VerifierAllowedTools: DefaultVerifierAllowedTools,
+                Checks: Array.Empty<CheckSpec>());
+        }
+
+        var timeoutMinutes = OptionalInt(t, "verifier_timeout_minutes", 15);
+        var allowedTools = OptionalStringList(t, "verifier_allowed_tools", DefaultVerifierAllowedTools);
+
+        var checks = new List<CheckSpec>();
+        if (t.TryGetValue("checks", out var checksVal) && checksVal is TomlTableArray checksArr)
+        {
+            foreach (var entry in checksArr)
+            {
+                var name = RequireString(entry, "review.checks", "name");
+                var executable = RequireString(entry, "review.checks", "executable");
+                var arguments = OptionalStringList(entry, "arguments", Array.Empty<string>());
+                var timeoutMins = OptionalInt(entry, "timeout_minutes", 5);
+                checks.Add(new CheckSpec(
+                    Name: name,
+                    Executable: executable,
+                    Arguments: arguments,
+                    Timeout: TimeSpan.FromMinutes(timeoutMins)));
+            }
+        }
+
+        return new ReviewConfig(
+            VerifierTimeoutMinutes: timeoutMinutes,
+            VerifierAllowedTools: allowedTools,
+            Checks: checks.AsReadOnly());
     }
 }
