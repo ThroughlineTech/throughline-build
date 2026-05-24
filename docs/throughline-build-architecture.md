@@ -135,6 +135,8 @@ Single .NET 8 AOT executable, named `build` on disk. Entry point: `build <phase>
 
 Implements the Agile phases as typed transitions. Per-phase preconditions and gates are typed predicates that compose. Transitions go through the state machine; there are no side-channel state writes. The state machine has its own unit tests and is the canonical reference for "what can happen next" at any point.
 
+`IWorkflowPhase` (see Section 6) is the shared contract implemented by `PlanPhase`, `ImplementPhase`, and `ReviewPhase`. Each phase exposes a `Phase` property identifying which workflow step it represents. Internally each phase's `RunAsync` returns a typed result (`PlanResult`, `ImplementResult`, `ReviewResult`); the phase also implements the explicit interface method `IWorkflowPhase.RunAsync`, which converts that typed result into a `PhaseResult` record (see Section 6) for generic dispatch by the state machine. Callers that need the typed result call the phase directly; the state machine uses the `IWorkflowPhase` surface.
+
 ### 5.3 Ticketing Backend
 
 ITicketing interface (Section 6). PlaneTicketingClient is the full implementation. GitHubTicketingClient is a partial adapter with explicit capability flags: no typed relations, no rich HTML comments, emulated label semantics. The state machine queries `Capabilities` to decide whether a feature is available; phases that require absent capabilities fail loudly at config time, not at runtime.
@@ -149,15 +151,23 @@ IWorkerAgent interface. ClaudeCodeAgent, CodexAgent, GeminiAgent are the initial
 
 ### 5.6 Helpers
 
-Pure functions, no I/O where avoidable. Slug, drift, doc-only, wave-compute, conflict-marker scan, ASCII check, tree-clean, marker-comment parser. Each is unit-tested in isolation with fixtures. These are direct algorithm ports from the current bash scripts where the algorithm is sound; the shell-script-as-discrete-file ceremony does not survive the port.
+Pure functions, no I/O where avoidable. Slug, drift, doc-only, wave-compute, conflict-marker scan, ASCII check, tree-clean, marker-comment parser, `PhaseWorktreeLayout` (computes the branch name and worktree path from a ticket ID and title). Each is unit-tested in isolation with fixtures. These are direct algorithm ports from the current bash scripts where the algorithm is sound; the shell-script-as-discrete-file ceremony does not survive the port.
+
+**Verification helpers.** `AutomatedChecksRunner` lives in `ThroughlineBuild.Verification` - a separate classlib with no project references. It accepts a list of `CheckSpec` records (each naming an executable and argument list with a per-spec timeout) and runs them sequentially in a given working directory, capturing stdout/stderr tails (~4 KB each) and wall time into `CheckResult` records. The runner enforces per-spec timeouts by killing the process tree on expiry and supports an opt-in stop-on-first-failure mode (default: run all specs). `ThroughlineBuild.Verification` is distinct from `ThroughlineBuild.Helpers`; the helpers are pure functions while the verification runner spawns child processes.
 
 ### 5.7 Brief Constructor
 
-Pure function: `(Ticket, RepoState, Phase) -> Brief`. The Brief is a typed object that gets serialized to markdown at the worker boundary. Per-phase templates compose typed inputs into a minimal prompt; there are no giant static prompt files loaded into context. Briefs are constructed from the ticket's actual current state, not from prose that describes the workflow's general shape.
+Brief construction is per-phase, not a single generic function. Each phase has a dedicated static class:
+
+- `PlanBriefBuilder.Build(Ticket, RepoState)` - returns a `Brief` for the plan phase.
+- `ImplementBriefBuilder.Build(Ticket, RepoState, string branchName, string worktreePath)` - returns a `Brief` for the implement phase (worktree coordinates are passed as flat strings, not a record).
+- `ReviewBriefBuilder.Build(Ticket, GitDiff, IReadOnlyList<CheckResult>)` - returns a `Brief` for the review phase. It takes the diff and automated check results rather than `RepoState`, because by review time the worker has already committed and the relevant state is the diff plus check outcomes.
+
+All three return `Brief`. The Brief is a typed object that gets serialized to markdown at the worker boundary. Per-phase templates compose typed inputs into a minimal prompt; there are no giant static prompt files loaded into context. Briefs are constructed from the ticket's actual current state.
 
 ### 5.8 Verifier
 
-Independent process invoked after a worker completes. Receives only the Brief, the GitDiff, and the WorkerResult. No shared context with the implementer. This is a deliberate upgrade over the current chain, where the orchestrator-LLM passes shared context to the reviewer subagent and contaminates the verdict. The Verifier can be a different vendor than the implementer (cross-vendor verification). Returns a typed Verdict.
+`ClaudeCodeReviewer` is the first concrete `IVerifier`. It receives the implementer's `Brief`, the `GitDiff`, and the `WorkerResult` - none of which come from shared in-memory context with the implementer. `ReviewPhase` reconstructs the implementer brief from the ticket and git state at review time and passes it to the verifier; there is no live channel between the implementation run and the review run. This is a deliberate upgrade over the current chain where the orchestrator LLM passes shared context to the reviewer and contaminates the verdict. Cross-vendor verification (running a Gemini or OpenAI verifier against a Claude implementation) is supported by the `IVerifier` interface and deferred to v1.1. Returns a typed `Verdict`.
 
 ### 5.9 Event Log
 
@@ -218,6 +228,30 @@ public record WorkflowEvent(
     string TicketId,
     Phase Phase,
     IReadOnlyDictionary<string, object> Data);
+
+// PhaseResult: generic output from any IWorkflowPhase (see "Workflow phase" section below).
+public record PhaseResult(
+    bool Success,
+    string TicketId,
+    Phase Phase,
+    string? FailureReason,
+    IReadOnlyDictionary<string, string> Outputs);
+
+// GitDiff and DiffEntry: returned by IGitClient.DiffAsync and passed to IVerifier.VerifyAsync.
+public record GitDiff(
+    string FromRef,
+    string ToRef,
+    IReadOnlyList<DiffEntry> Entries);
+
+public record DiffEntry(
+    string Path,
+    DiffKind Kind,
+    string? OldPath,
+    int LinesAdded,
+    int LinesRemoved,
+    string? PatchContent);  // capped at ~100 KB per file
+
+public enum DiffKind { Added, Modified, Deleted, Renamed }
 ```
 
 ### Ticketing backend
@@ -281,6 +315,50 @@ public interface IWorkerAgent
 
 Each implementation knows the vendor CLI's invocation pattern, allowed-tools flags, output parsing. Adding a new vendor is one new class implementing this interface.
 
+### Git client
+
+```csharp
+public interface IGitClient
+{
+    // Resolve a refspec to its SHA (e.g. "HEAD", "origin/main").
+    Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct);
+
+    // List all worktrees registered with the main repo.
+    Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct);
+
+    // Remove a worktree by path.
+    Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct);
+
+    // List branches not yet merged into baseBranch, filtered by pattern.
+    Task<IReadOnlyList<string>> GetBranchesNotMergedAsync(string pattern, string baseBranch, CancellationToken ct);
+
+    // Create a new worktree at worktreePath on a new branch cut from fromRef.
+    Task<WorktreeCreateResult> CreateWorktreeAsync(string worktreePath, string newBranch, string fromRef, string mainWorktreePath, CancellationToken ct);
+
+    // Return the HEAD SHA of the worktree at worktreePath. Empty string on failure.
+    Task<string> HeadShaAsync(string worktreePath, CancellationToken ct);
+
+    // Compute the diff between fromRef and toRef using three-dot range syntax
+    // (<fromRef>...<toRef>) - changes on the feature branch since divergence from fromRef.
+    // includePatchContent: if true, PatchContent is populated per DiffEntry (capped ~100 KB).
+    Task<GitDiff> DiffAsync(string fromRef, string toRef, string mainWorktreePath, bool includePatchContent, CancellationToken ct);
+}
+```
+
+`ProcessGitClient` is the only concrete implementation. `DiffAsync` is added by TLB-85 (op-08).
+
+### Workflow phase
+
+```csharp
+public interface IWorkflowPhase
+{
+    Phase Phase { get; }
+    Task<PhaseResult> RunAsync(string ticketId, string workingDirectory, CancellationToken ct);
+}
+```
+
+`PlanPhase`, `ImplementPhase`, and `ReviewPhase` each implement `IWorkflowPhase` via explicit interface implementation. The phase also exposes a typed `RunAsync` overload (`Task<PlanResult>`, etc.) for callers that need the richer result. `PhaseResult.Outputs` carries phase-specific key/value pairs (e.g., `commit_sha`, `branch`, `worktree_path` for the implement phase).
+
 ### Verifier
 
 ```csharp
@@ -294,7 +372,29 @@ public interface IVerifier
 }
 ```
 
-Separate from IWorkerAgent so verification can run against a different vendor with no shared context. The default verifier wraps an IWorkerAgent in review mode; alternative implementations can use deterministic checks plus a small LLM judgment call.
+Separate from IWorkerAgent so verification can run against a different vendor with no shared context. `ClaudeCodeReviewer` is the first concrete implementation. Cross-vendor verification is deferred to v1.1.
+
+### Verification types (ThroughlineBuild.Verification)
+
+```csharp
+// Describes a shell command to run as part of automated checks.
+public record CheckSpec(
+    string Name,
+    string Executable,
+    IReadOnlyList<string> Arguments,
+    TimeSpan Timeout);
+
+// Captures the outcome of running one CheckSpec.
+public record CheckResult(
+    string Name,
+    bool Passed,
+    int ExitCode,
+    string StdoutTail,   // up to ~4 KB
+    string StderrTail,   // up to ~4 KB
+    TimeSpan Elapsed);
+```
+
+`AutomatedChecksRunner.RunAsync(specs, workingDirectory, ct)` executes specs sequentially. On timeout it kills the process tree. Default: run all specs; opt-in stop-on-first-failure mode also available. Lives in `ThroughlineBuild.Verification` (added by TLB-86, op-08).
 
 ### Event sink
 
