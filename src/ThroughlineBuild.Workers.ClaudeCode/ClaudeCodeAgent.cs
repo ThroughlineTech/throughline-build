@@ -134,13 +134,19 @@ public class ClaudeCodeAgent : IWorkerAgent
         }
 
         // Route the inner result text through the existing WORKER_RESULT marker parser.
-        var parsed = WorkerResultParser.TryParse(envelope.Result);
-        if (parsed != null)
+        var outcome = WorkerResultParser.TryParse(envelope.Result);
+        if (outcome.Result != null)
         {
             // Merge llm_usage metadata on success path
-            var mergedMetadata = new Dictionary<string, object>(parsed.Metadata);
+            var mergedMetadata = new Dictionary<string, object>(outcome.Result.Metadata);
             mergedMetadata["llm_usage"] = BuildLlmUsageMetadata(envelope, wallClockMs);
-            return parsed with { Metadata = mergedMetadata };
+            return outcome.Result with { Metadata = mergedMetadata };
+        }
+
+        if (outcome.DeserializeErrorType != null)
+        {
+            return new WorkerResult(Status.Escalate, "Failed to deserialize WORKER_RESULT JSON", Array.Empty<string>(),
+                $"Failed to deserialize WORKER_RESULT JSON: {outcome.DeserializeErrorType}: {outcome.DeserializeErrorMessage}", new Dictionary<string, object>());
         }
 
         if (exitCode != 0)

@@ -18,80 +18,86 @@ public class WorkerResultParserTests
             "{\"Status\":\"Ok\",\"Summary\":\"done\",\"FilesChanged\":[\"foo.cs\"],\"FailureReason\":null,\"Metadata\":{}}\n" +
             "```\n";
 
-        var result = WorkerResultParser.TryParse(stdout);
+        var outcome = WorkerResultParser.TryParse(stdout);
 
-        Assert.NotNull(result);
-        Assert.Equal(Status.Ok, result.Status);
-        Assert.Equal("done", result.Summary);
-        Assert.Equal(new[] { "foo.cs" }, result.FilesChanged);
-        Assert.Null(result.FailureReason);
+        Assert.NotNull(outcome.Result);
+        Assert.Equal(Status.Ok, outcome.Result.Status);
+        Assert.Equal("done", outcome.Result.Summary);
+        Assert.Equal(new[] { "foo.cs" }, outcome.Result.FilesChanged);
+        Assert.Null(outcome.Result.FailureReason);
     }
 
     [Fact]
-    public void TryParse_NoMarker_ReturnsNull()
+    public void TryParse_NoMarker_ReturnsMarkerMissing()
     {
         var stdout = "Some output\nwithout any marker\n";
 
-        var result = WorkerResultParser.TryParse(stdout);
+        var outcome = WorkerResultParser.TryParse(stdout);
 
-        Assert.Null(result);
+        Assert.Null(outcome.Result);
+        Assert.Null(outcome.DeserializeErrorType);
+        Assert.Null(outcome.DeserializeErrorMessage);
     }
 
     [Fact]
-    public void TryParse_MalformedJson_ReturnsNull()
+    public void TryParse_MalformedJson_ReturnsDeserializeFailedWithAttribution()
     {
         var stdout =
             "WORKER_RESULT\n" +
             "this is not valid json\n";
 
-        var result = WorkerResultParser.TryParse(stdout);
+        var outcome = WorkerResultParser.TryParse(stdout);
 
-        Assert.Null(result);
+        Assert.Null(outcome.Result);
+        Assert.NotNull(outcome.DeserializeErrorType);
+        Assert.Equal("JsonException", outcome.DeserializeErrorType);
+        Assert.NotNull(outcome.DeserializeErrorMessage);
     }
 
     [Fact]
-    public void TryParse_EmptyStdout_ReturnsNull()
+    public void TryParse_EmptyStdout_ReturnsMarkerMissing()
     {
-        var result = WorkerResultParser.TryParse(string.Empty);
+        var outcome = WorkerResultParser.TryParse(string.Empty);
 
-        Assert.Null(result);
+        Assert.Null(outcome.Result);
+        Assert.Null(outcome.DeserializeErrorType);
     }
 
     [Fact]
-    public void TryParse_MarkerWithNoFollowingLine_ReturnsNull()
+    public void TryParse_MarkerWithNoFollowingLine_ReturnsMarkerMissing()
     {
-        // Marker is the last line with nothing after it
         var stdout = "WORKER_RESULT";
 
-        var result = WorkerResultParser.TryParse(stdout);
+        var outcome = WorkerResultParser.TryParse(stdout);
 
-        Assert.Null(result);
+        Assert.Null(outcome.Result);
+        Assert.Null(outcome.DeserializeErrorType);
     }
 
     [Fact]
-    public void TryParse_MarkerWithWhitespaceOnlyFollowingLines_ReturnsNull()
+    public void TryParse_MarkerWithWhitespaceOnlyFollowingLines_ReturnsMarkerMissing()
     {
         var stdout = "WORKER_RESULT\n   \n   \n";
 
-        var result = WorkerResultParser.TryParse(stdout);
+        var outcome = WorkerResultParser.TryParse(stdout);
 
-        Assert.Null(result);
+        Assert.Null(outcome.Result);
+        Assert.Null(outcome.DeserializeErrorType);
     }
 
     [Fact]
     public void TryParse_MarkerWithLeadingWhitespace_ReturnsResult()
     {
-        // Marker line has surrounding whitespace - should still match via Trim()
         var stdout =
             "  WORKER_RESULT  \n" +
             "{\"Status\":\"Failed\",\"Summary\":\"oops\",\"FilesChanged\":[],\"FailureReason\":\"bad\",\"Metadata\":{}}\n";
 
-        var result = WorkerResultParser.TryParse(stdout);
+        var outcome = WorkerResultParser.TryParse(stdout);
 
-        Assert.NotNull(result);
-        Assert.Equal(Status.Failed, result.Status);
-        Assert.Equal("oops", result.Summary);
-        Assert.Equal("bad", result.FailureReason);
+        Assert.NotNull(outcome.Result);
+        Assert.Equal(Status.Failed, outcome.Result.Status);
+        Assert.Equal("oops", outcome.Result.Summary);
+        Assert.Equal("bad", outcome.Result.FailureReason);
     }
 
     [Fact]
@@ -101,10 +107,10 @@ public class WorkerResultParserTests
             "WORKER_RESULT\n" +
             "{\"Status\":\"NeedsRework\",\"Summary\":\"try again\",\"FilesChanged\":[],\"FailureReason\":\"partial\",\"Metadata\":{}}\n";
 
-        var result = WorkerResultParser.TryParse(stdout);
+        var outcome = WorkerResultParser.TryParse(stdout);
 
-        Assert.NotNull(result);
-        Assert.Equal(Status.NeedsRework, result.Status);
+        Assert.NotNull(outcome.Result);
+        Assert.Equal(Status.NeedsRework, outcome.Result.Status);
     }
 
     [Fact]
@@ -114,10 +120,10 @@ public class WorkerResultParserTests
             "WORKER_RESULT\n" +
             "{\"Status\":\"Escalate\",\"Summary\":\"need help\",\"FilesChanged\":[],\"FailureReason\":\"unclear\",\"Metadata\":{}}\n";
 
-        var result = WorkerResultParser.TryParse(stdout);
+        var outcome = WorkerResultParser.TryParse(stdout);
 
-        Assert.NotNull(result);
-        Assert.Equal(Status.Escalate, result.Status);
+        Assert.NotNull(outcome.Result);
+        Assert.Equal(Status.Escalate, outcome.Result.Status);
     }
 }
 
@@ -216,13 +222,25 @@ public class ClaudeCodeAgentEnvelopeParserTests
     [Fact]
     public void EnvelopeParser_NonZeroExitCodeAfterNoMarker_ReturnsFailed()
     {
-        // Valid envelope parse, no WORKER_RESULT, but exit code is non-zero -> Failed
         var stdout = MakeEnvelope("some text without marker");
 
         var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 1, stderr: "crash");
 
         Assert.Equal(Status.Failed, result.Status);
         Assert.Contains("1", result.FailureReason);
+    }
+
+    [Fact]
+    public void EnvelopeParser_MalformedWorkerResultJson_ReturnsEscalateWithDeserializeAttribution()
+    {
+        var stdout = MakeEnvelope("WORKER_RESULT\nthis is not valid json");
+
+        var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 0, stderr: "");
+
+        Assert.Equal(Status.Escalate, result.Status);
+        Assert.NotNull(result.FailureReason);
+        Assert.Contains("Failed to deserialize WORKER_RESULT JSON", result.FailureReason);
+        Assert.Contains("JsonException", result.FailureReason);
     }
 }
 
@@ -451,12 +469,12 @@ public class WorkerResultParserAotRegressionTests
             "\"Metadata\":{\"plan_html\":\"<p>x</p>\",\"risk_label\":\"low\"," +
             "\"size_label\":\"S\",\"planned_at_sha\":\"deadbeef\"}}\n";
 
-        var result = WorkerResultParser.TryParse(stdout);
+        var outcome = WorkerResultParser.TryParse(stdout);
 
-        Assert.NotNull(result);
-        Assert.Equal(Status.Ok, result.Status);
-        Assert.True(result.Metadata.ContainsKey("plan_html"));
-        Assert.True(result.Metadata.ContainsKey("risk_label"));
+        Assert.NotNull(outcome.Result);
+        Assert.Equal(Status.Ok, outcome.Result.Status);
+        Assert.True(outcome.Result.Metadata.ContainsKey("plan_html"));
+        Assert.True(outcome.Result.Metadata.ContainsKey("risk_label"));
     }
 }
 
