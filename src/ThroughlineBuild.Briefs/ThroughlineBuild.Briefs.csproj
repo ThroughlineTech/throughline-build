@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\ThroughlineBuild.Contracts\ThroughlineBuild.Contracts.csproj" />
+    <ProjectReference Include="..\ThroughlineBuild.Verification\ThroughlineBuild.Verification.csproj" />
   </ItemGroup>
   <ItemGroup>
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
