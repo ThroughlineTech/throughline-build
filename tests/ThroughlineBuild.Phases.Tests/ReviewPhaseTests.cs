@@ -274,6 +274,96 @@ public class ReviewPhaseTests
         Assert.Equal("0", result.Outputs["checks_failed_count"]);
     }
 
+    [Fact]
+    public async Task RunAsync_VerifierWorkerReportsLlmUsage_EmitsOneLlmCallEvent()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        ticketing.SeedComment($"<p>[implemented_at: {ImplementedSha}]</p>");
+
+        // Create worker metadata with both verdict and llm_usage
+        var llmUsageMetadata = new Dictionary<string, object>
+        {
+            ["model"] = "claude-opus",
+            ["input_tokens"] = 1500,
+            ["output_tokens"] = 500,
+            ["cache_read_tokens"] = 200,
+            ["cache_create_tokens"] = 100,
+            ["wall_clock_ms"] = 2500
+        };
+        var workerMetadata = new Dictionary<string, object>
+        {
+            ["verdict"] = "Pass",
+            ["rationale"] = "looks good",
+            ["checks_failed"] = new List<string>(),
+            ["llm_usage"] = llmUsageMetadata
+        };
+
+        var worker = new FakeWorkerAgent(workerMetadata);
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, includeWorktreeMatching: true);
+
+        // DO NOT use verifierOverride so ReviewPhase constructs a real ClaudeCodeReviewer
+        var verifierWorker = new FakeWorkerAgent(workerMetadata);
+        var reviewOptions = new ReviewOptions(
+            Checks: Array.Empty<CheckSpec>(),
+            VerifierWorkerOptions: new WorkerOptions(TimeSpan.FromMinutes(5), null, null));
+
+        var phase = new ReviewPhase(ticketing, verifierWorker, events, MakeBuildOptions(), reviewOptions, git);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(VerdictKind.Pass, result.Verdict);
+
+        // Assert exactly one LlmCall event with expected Data keys
+        var llmCallEvents = events.Events.Where(e => e.Kind == EventKind.LlmCall).ToList();
+        Assert.Single(llmCallEvents);
+
+        var llmCallData = llmCallEvents[0].Data;
+        Assert.Equal("claude-opus", llmCallData["model"].ToString());
+        Assert.Equal(1500, Convert.ToInt32(llmCallData["input_tokens"]));
+        Assert.Equal(500, Convert.ToInt32(llmCallData["output_tokens"]));
+        Assert.Equal(200, Convert.ToInt32(llmCallData["cache_read_tokens"]));
+        Assert.Equal(100, Convert.ToInt32(llmCallData["cache_create_tokens"]));
+        Assert.Equal(2500, Convert.ToInt32(llmCallData["wall_clock_ms"]));
+    }
+
+    [Fact]
+    public async Task RunAsync_VerifierWorkerHasNoLlmUsage_NoLlmCallEventEmitted()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        ticketing.SeedComment($"<p>[implemented_at: {ImplementedSha}]</p>");
+
+        // Create worker metadata with verdict but NO llm_usage
+        var workerMetadata = new Dictionary<string, object>
+        {
+            ["verdict"] = "Pass",
+            ["rationale"] = "looks good",
+            ["checks_failed"] = new List<string>()
+        };
+
+        var worker = new FakeWorkerAgent(workerMetadata);
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, includeWorktreeMatching: true);
+
+        // DO NOT use verifierOverride so ReviewPhase constructs a real ClaudeCodeReviewer
+        var verifierWorker = new FakeWorkerAgent(workerMetadata);
+        var reviewOptions = new ReviewOptions(
+            Checks: Array.Empty<CheckSpec>(),
+            VerifierWorkerOptions: new WorkerOptions(TimeSpan.FromMinutes(5), null, null));
+
+        var phase = new ReviewPhase(ticketing, verifierWorker, events, MakeBuildOptions(), reviewOptions, git);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(VerdictKind.Pass, result.Verdict);
+
+        // Assert zero LlmCall events
+        var llmCallEvents = events.Events.Where(e => e.Kind == EventKind.LlmCall).ToList();
+        Assert.Empty(llmCallEvents);
+    }
+
     private sealed class FakeTicketing : ITicketing
     {
         private readonly Ticket _ticket;
@@ -312,10 +402,18 @@ public class ReviewPhaseTests
 
     private sealed class FakeWorkerAgent : IWorkerAgent
     {
+        private readonly IReadOnlyDictionary<string, object>? _metadata;
+
         public string Name => "fake-verifier";
+
+        public FakeWorkerAgent(IReadOnlyDictionary<string, object>? metadata = null)
+        {
+            _metadata = metadata;
+        }
+
         public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct) =>
             Task.FromResult(new WorkerResult(Status.Ok, "noop", Array.Empty<string>(), null,
-                new Dictionary<string, object>()));
+                _metadata ?? new Dictionary<string, object>()));
     }
 
     private sealed class FakeEventSink : IEventSink

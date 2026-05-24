@@ -5,6 +5,7 @@ using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Git;
 using ThroughlineBuild.Helpers;
 using ThroughlineBuild.Verification;
+using static ThroughlineBuild.Helpers.LlmUsageFlattener;
 
 namespace ThroughlineBuild.Phases;
 
@@ -159,9 +160,15 @@ public class ReviewPhase : IWorkflowPhase
             ["checks_failed_count"] = verdict.ChecksFailed.Count
         }, ct).ConfigureAwait(false);
 
-        // Step 12: LlmCall emission deferred in v1 - IVerifier.VerifyAsync returns Verdict, not WorkerResult,
-        // so the verifier worker's llm_usage metadata never reaches this phase through the seam. Helpers
-        // extracted to LlmUsageFlattener in Helpers; a follow-up will surface the underlying WorkerResult.
+        // Step 12: LlmCall event if verifier worker reported usage
+        if (_verifierOverride is null && verifier is ClaudeCodeReviewer ccr && ccr.LastWorkerResult is { } verifierResult && verifierResult.Metadata.TryGetValue("llm_usage", out var usageObj))
+        {
+            var llmData = Flatten(usageObj);
+            if (llmData is not null)
+            {
+                await EmitAsync(EventKind.LlmCall, ticketId, llmData, ct).ConfigureAwait(false);
+            }
+        }
 
         // Step 13: Apply verdict
         string commentHtml;

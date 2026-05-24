@@ -19,6 +19,8 @@ public sealed class ClaudeCodeReviewer : IVerifier
     private readonly WorkerOptions _workerOptions;
     private readonly string _workingDirectory;
 
+    public WorkerResult? LastWorkerResult { get; private set; }
+
     public ClaudeCodeReviewer(
         IWorkerAgent worker,
         Ticket ticket,
@@ -54,6 +56,8 @@ public sealed class ClaudeCodeReviewer : IVerifier
 
         var workerResult = await _worker.ExecuteAsync(reviewBrief, _workingDirectory, _workerOptions, ct)
             .ConfigureAwait(false);
+
+        LastWorkerResult = workerResult;
 
         if (workerResult.Status != Status.Ok)
         {

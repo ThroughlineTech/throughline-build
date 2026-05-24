@@ -408,4 +408,31 @@ public class ClaudeCodeReviewerTests
         Assert.Contains("rationale", captured.Instruction);
         Assert.Contains("checks_failed", captured.Instruction);
     }
+
+    // -------------------------------------------------------------------------
+    // Test 12: LastWorkerResult is populated after VerifyAsync
+    // -------------------------------------------------------------------------
+    [Fact]
+    public async Task LastWorkerResult_PopulatedAfterVerifyAsync()
+    {
+        var metadata = new Dictionary<string, object>
+        {
+            ["verdict"] = "Pass",
+            ["rationale"] = "ok",
+            ["checks_failed"] = new List<string>()
+        };
+        var agent = new StubWorkerAgent(OkResultWithMetadata(metadata));
+        var reviewer = BuildReviewer(agent);
+
+        var verdict = await reviewer.VerifyAsync(
+            BuildImplementerBrief(),
+            BuildDiff(),
+            BuildImplementerResult(),
+            CancellationToken.None);
+
+        Assert.NotNull(reviewer.LastWorkerResult);
+        // Verify it matches the stub agent's returned result
+        Assert.Equal(Status.Ok, reviewer.LastWorkerResult.Status);
+        Assert.Equal("review complete", reviewer.LastWorkerResult.Summary);
+    }
 }

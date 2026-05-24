@@ -107,13 +107,14 @@ If the ticket's `[planned_at: <sha>]` marker disagrees with the current `origin/
 
 ## Happy-path Review example
 
-A successful `build review <ticket>` against a ticket in `InReview` emits a `WorkerSpawn` (with `role: "verifier"`), then a `VerifierVerdict` carrying `kind` and `checks_failed_count`, then a `TicketWrite` for the `reviewed:` comment. The `Rework` path additionally emits a `StateTransition` from `InReview` back to `InProgress`; `Pass` and `Fail` leave the ticket in `InReview`. An `LlmCall` line is reserved for when the verifier worker's `llm_usage` metadata is surfaced through the `IVerifier` seam (deferred in v1; the line is therefore absent in current Review runs).
+A successful `build review <ticket>` against a ticket in `InReview` emits a `WorkerSpawn` (with `role: "verifier"`), then a `VerifierVerdict` carrying `kind` and `checks_failed_count`. When the verifier worker reports `llm_usage` metadata, an `LlmCall` line is emitted. Then a `TicketWrite` for the `reviewed:` comment. The `Rework` path additionally emits a `StateTransition` from `InReview` back to `InProgress`; `Pass` and `Fail` leave the ticket in `InReview`.
 
 Pass (verdict `Pass`, ticket stays in `InReview`):
 
 ```jsonl
 {"SessionId":"<sid>","Timestamp":"...","Kind":2,"TicketId":"TLB-34","Phase":2,"Data":{"worker":"claude-code","role":"verifier"}}
 {"SessionId":"<sid>","Timestamp":"...","Kind":3,"TicketId":"TLB-34","Phase":2,"Data":{"kind":"Pass","checks_failed_count":0}}
+{"SessionId":"<sid>","Timestamp":"...","Kind":1,"TicketId":"TLB-34","Phase":2,"Data":{"model":"claude-opus","input_tokens":1234,"output_tokens":567,"cache_read_tokens":0,"cache_create_tokens":0,"wall_clock_ms":2500}}
 {"SessionId":"<sid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":2,"Data":{"action":"create_comment"}}
 ```
 
@@ -122,6 +123,7 @@ Rework (verdict `Rework`, ticket transitions back to `InProgress`):
 ```jsonl
 {"SessionId":"<sid>","Timestamp":"...","Kind":2,"TicketId":"TLB-34","Phase":2,"Data":{"worker":"claude-code","role":"verifier"}}
 {"SessionId":"<sid>","Timestamp":"...","Kind":3,"TicketId":"TLB-34","Phase":2,"Data":{"kind":"Rework","checks_failed_count":2}}
+{"SessionId":"<sid>","Timestamp":"...","Kind":1,"TicketId":"TLB-34","Phase":2,"Data":{"model":"claude-opus","input_tokens":1234,"output_tokens":567,"cache_read_tokens":0,"cache_create_tokens":0,"wall_clock_ms":2500}}
 {"SessionId":"<sid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":2,"Data":{"action":"create_comment"}}
 {"SessionId":"<sid>","Timestamp":"...","Kind":0,"TicketId":"TLB-34","Phase":2,"Data":{"from":"InReview","to":"InProgress"}}
 ```
@@ -131,6 +133,7 @@ Fail (verdict `Fail`, ticket stays in `InReview`):
 ```jsonl
 {"SessionId":"<sid>","Timestamp":"...","Kind":2,"TicketId":"TLB-34","Phase":2,"Data":{"worker":"claude-code","role":"verifier"}}
 {"SessionId":"<sid>","Timestamp":"...","Kind":3,"TicketId":"TLB-34","Phase":2,"Data":{"kind":"Fail","checks_failed_count":0}}
+{"SessionId":"<sid>","Timestamp":"...","Kind":1,"TicketId":"TLB-34","Phase":2,"Data":{"model":"claude-opus","input_tokens":1234,"output_tokens":567,"cache_read_tokens":0,"cache_create_tokens":0,"wall_clock_ms":2500}}
 {"SessionId":"<sid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":2,"Data":{"action":"create_comment"}}
 ```
 
