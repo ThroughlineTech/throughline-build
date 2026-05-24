@@ -463,6 +463,171 @@ public sealed class ProcessGitClient : IGitClient
         return sb.Length == 0 ? null : sb.ToString();
     }
 
+    public async Task<GitOpResult> FetchAsync(string remote, string mainWorktreePath, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = mainWorktreePath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        psi.ArgumentList.Add("fetch");
+        psi.ArgumentList.Add(remote);
+
+        using var proc = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start git process");
+        var stderr = await proc.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
+        await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+        if (proc.ExitCode != 0)
+            return new GitOpResult(false, stderr.Trim());
+        return new GitOpResult(true, null);
+    }
+
+    public async Task<RebaseResult> RebaseAsync(string ontoRef, string featureWorktreePath, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = featureWorktreePath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        psi.ArgumentList.Add("rebase");
+        psi.ArgumentList.Add(ontoRef);
+
+        using var proc = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start git process");
+        var stdout = await proc.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+        var stderr = await proc.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
+        await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+
+        if (proc.ExitCode == 0)
+            return new RebaseResult(true, false, Array.Empty<string>(), null);
+
+        // Non-zero: check for unmerged paths (conflicts)
+        var conflictingPaths = await GetUnmergedPathsAsync(featureWorktreePath, ct).ConfigureAwait(false);
+        bool hadConflicts = conflictingPaths.Count > 0;
+        return new RebaseResult(false, hadConflicts, conflictingPaths, stderr.Trim());
+    }
+
+    private static async Task<IReadOnlyList<string>> GetUnmergedPathsAsync(string workingDirectory, CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = workingDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("diff");
+            psi.ArgumentList.Add("--name-only");
+            psi.ArgumentList.Add("--diff-filter=U");
+
+            using var proc = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start git process");
+            var stdout = await proc.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+
+            var paths = new List<string>();
+            foreach (var rawLine in stdout.Split('\n'))
+            {
+                var line = rawLine.TrimEnd('\r').Trim();
+                if (line.Length > 0)
+                    paths.Add(line);
+            }
+            return paths;
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+    public async Task<GitOpResult> RebaseAbortAsync(string featureWorktreePath, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = featureWorktreePath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        psi.ArgumentList.Add("rebase");
+        psi.ArgumentList.Add("--abort");
+
+        using var proc = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start git process");
+        var stderr = await proc.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
+        await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+
+        if (proc.ExitCode == 0)
+            return new GitOpResult(true, null);
+
+        // Treat "no rebase in progress" as success (idempotent)
+        var stderrTrimmed = stderr.Trim();
+        if (stderrTrimmed.Contains("no rebase in progress", StringComparison.OrdinalIgnoreCase))
+            return new GitOpResult(true, null);
+
+        return new GitOpResult(false, stderrTrimmed);
+    }
+
+    public async Task<GitOpResult> FastForwardMergeAsync(string mergeRef, string mainWorktreePath, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = mainWorktreePath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        psi.ArgumentList.Add("merge");
+        psi.ArgumentList.Add("--ff-only");
+        psi.ArgumentList.Add(mergeRef);
+
+        using var proc = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start git process");
+        var stderr = await proc.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
+        await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+
+        if (proc.ExitCode == 0)
+            return new GitOpResult(true, null);
+
+        return new GitOpResult(false, "main is not at the feature branch's parent; rebase first");
+    }
+
+    public async Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = mainWorktreePath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        psi.ArgumentList.Add("branch");
+        psi.ArgumentList.Add(force ? "-D" : "-d");
+        psi.ArgumentList.Add(branch);
+
+        using var proc = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start git process");
+        var stderr = await proc.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
+        await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+
+        if (proc.ExitCode == 0)
+            return new GitOpResult(true, null);
+
+        return new GitOpResult(false, stderr.Trim());
+    }
+
     private static async Task<string> RunGitAsync(
         string workingDirectory,
         string[] args,
