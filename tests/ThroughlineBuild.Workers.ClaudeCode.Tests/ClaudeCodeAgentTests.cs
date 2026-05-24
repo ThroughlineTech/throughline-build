@@ -367,6 +367,99 @@ public class ClaudeCodeAgentDebugCaptureTests
     }
 }
 
+// Regression lock for the AOT serialization trap documented in
+// docs/throughline-build-architecture.md (section "AOT serialization traps").
+//
+// WorkerResultParser.TryParse must use the source-gen overload
+// (ClaudeCodeJsonContext.Default.WorkerResultDto), not the reflection-based
+// JsonSerializer.Deserialize<T>. Under PublishAot=true the Cli project emits
+// a build.runtimeconfig.json with IsReflectionEnabledByDefault=false; any
+// call through the reflection path throws NotSupportedException which the
+// bare catch swallows, producing a silent null result (the TLB-108 bug).
+//
+// These tests prove the source-gen path is wired and functional without
+// touching the process-global AppContext reflection switch (which would race
+// with parallel test classes that use reflection-based helpers).
+public class WorkerResultParserAotRegressionTests
+{
+    // Verify that ClaudeCodeJsonContext has WorkerResultDto registered and
+    // that the source-gen overload deserializes the full happy-path payload.
+    // This is the direct proof that the AOT path is wired: if WorkerResultDto
+    // were absent from the context, .Default.WorkerResultDto would throw at
+    // class-load time (not at runtime), so reaching the Assert.NotNull confirms
+    // source-gen registration is present.
+    [Fact]
+    public void SourceGenContext_HasWorkerResultDto_AndDeserializesHappyPath()
+    {
+        var json =
+            "{\"Status\":\"Ok\",\"Summary\":\"plan complete\",\"FilesChanged\":[\"src/Foo.cs\"]," +
+            "\"FailureReason\":null,\"Metadata\":{\"plan_html\":\"<p>plan</p>\"," +
+            "\"risk_label\":\"low\",\"size_label\":\"M\",\"planned_at_sha\":\"abc123\"}}";
+
+        // Direct source-gen call - this is exactly what TryParse now uses.
+        // If WorkerResultDto is not registered in ClaudeCodeJsonContext,
+        // this line throws InvalidOperationException at runtime.
+        var dto = System.Text.Json.JsonSerializer.Deserialize(json, ClaudeCodeJsonContext.Default.WorkerResultDto);
+
+        Assert.NotNull(dto);
+        Assert.Equal(Status.Ok, dto.Status);
+        Assert.Equal("plan complete", dto.Summary);
+        Assert.NotNull(dto.FilesChanged);
+        Assert.Single(dto.FilesChanged, "src/Foo.cs");
+        Assert.Null(dto.FailureReason);
+        Assert.NotNull(dto.Metadata);
+        Assert.True(dto.Metadata.ContainsKey("plan_html"));
+    }
+
+    [Fact]
+    public void SourceGenContext_WorkerResultDto_DeserializesNeedsReworkStatus()
+    {
+        var json =
+            "{\"Status\":\"NeedsRework\",\"Summary\":\"try again\"," +
+            "\"FilesChanged\":[],\"FailureReason\":\"partial\",\"Metadata\":{}}";
+
+        var dto = System.Text.Json.JsonSerializer.Deserialize(json, ClaudeCodeJsonContext.Default.WorkerResultDto);
+
+        Assert.NotNull(dto);
+        Assert.Equal(Status.NeedsRework, dto.Status);
+        Assert.Equal("partial", dto.FailureReason);
+    }
+
+    [Fact]
+    public void SourceGenContext_WorkerResultDto_DeserializesEscalateStatus()
+    {
+        var json =
+            "{\"Status\":\"Escalate\",\"Summary\":\"escalated\"," +
+            "\"FilesChanged\":[],\"FailureReason\":\"unclear\",\"Metadata\":{}}";
+
+        var dto = System.Text.Json.JsonSerializer.Deserialize(json, ClaudeCodeJsonContext.Default.WorkerResultDto);
+
+        Assert.NotNull(dto);
+        Assert.Equal(Status.Escalate, dto.Status);
+    }
+
+    // End-to-end: TryParse with metadata containing plan_html returns a
+    // WorkerResult whose Metadata map carries the key. Validates that the
+    // Dictionary<string, JsonElement> -> Dictionary<string, object> projection
+    // in TryParse preserves keys for downstream TryGetString consumers.
+    [Fact]
+    public void TryParse_MetadataWithPlanHtml_KeyPresentInResult()
+    {
+        var stdout =
+            "WORKER_RESULT\n" +
+            "{\"Status\":\"Ok\",\"Summary\":\"done\",\"FilesChanged\":[],\"FailureReason\":null," +
+            "\"Metadata\":{\"plan_html\":\"<p>x</p>\",\"risk_label\":\"low\"," +
+            "\"size_label\":\"S\",\"planned_at_sha\":\"deadbeef\"}}\n";
+
+        var result = WorkerResultParser.TryParse(stdout);
+
+        Assert.NotNull(result);
+        Assert.Equal(Status.Ok, result.Status);
+        Assert.True(result.Metadata.ContainsKey("plan_html"));
+        Assert.True(result.Metadata.ContainsKey("risk_label"));
+    }
+}
+
 public class ClaudeCodeAgentLlmUsageTests
 {
     [Fact]

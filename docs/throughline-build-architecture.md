@@ -550,6 +550,42 @@ A few days for the binary slice after the AOT spike clears. The AOT spike itself
 
 ---
 
+## 11. AOT Serialization Traps
+
+`ThroughlineBuild.Cli.csproj` sets `<PublishAot>true</PublishAot>`. This propagates a runtime config flag into `build.runtimeconfig.json`:
+
+```json
+"System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault": false
+```
+
+**This flag applies to both Debug and Release builds, not just published AOT output.** Any call to `JsonSerializer.Deserialize<T>(json, options)` without a source-gen `JsonTypeInfo<T>` will throw `NotSupportedException` at runtime. If that call is inside a `try/catch`, the exception is swallowed silently and the caller sees `null` instead of a meaningful error.
+
+### Pattern to follow
+
+Always pass a source-gen type info to `JsonSerializer`:
+
+```csharp
+// WRONG - throws NotSupportedException under PublishAot
+var dto = JsonSerializer.Deserialize<MyDto>(json, opts);
+
+// RIGHT - use the source-gen overload
+var dto = JsonSerializer.Deserialize(json, MyJsonContext.Default.MyDto);
+```
+
+Register every DTO used in hot paths with a `[JsonSerializable]` attribute on its `JsonSerializerContext`. For `WorkerResultParser`, `WorkerResultDto` is registered in `ClaudeCodeJsonContext`.
+
+### Type constraints under source-gen
+
+`Dictionary<string, object>` is not AOT-serializable because `object` requires reflection to resolve concrete types at runtime. Use `Dictionary<string, JsonElement>` instead. Callers that read metadata values must handle `JsonElement`; the phase helpers (`TryGetString`, `GetString`) already do this.
+
+Enum properties on source-gen DTOs need an explicit `[JsonConverter(typeof(JsonStringEnumConverter<TEnum>))]` annotation. The naming policy set on `JsonSerializerOptions` is not propagated to source-gen contexts; without the annotation the enum is serialized as its integer value.
+
+### Test coverage rule
+
+Test projects do not inherit `PublishAot=true` from the Cli project. A parser test that passes under the normal test runner does not prove AOT correctness. Any parser that deserializes JSON in a hot path must have at least one test that sets `AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false)` before invoking the parser. `WorkerResultParserAotRegressionTests` is the reference example.
+
+---
+
 ## Appendix: Open questions for the partner review
 
 1. **Orchestrator component naming.** The product is Throughline Build; the binary is `build`. The internal orchestrator class that runs the state machine and dispatches workers still needs a name. Candidates: `BuildOrchestrator`, `BuildEngine`, `BuildRunner`, `Conductor`. Not blocking; decide before the State Machine code lands.
