@@ -13,7 +13,7 @@ public class AutomatedChecksRunner
         _stopOnFirstFailure = stopOnFirstFailure;
     }
 
-    public async Task<IReadOnlyList<CheckResult>> RunAsync(
+    public virtual async Task<IReadOnlyList<CheckResult>> RunAsync(
         IReadOnlyList<CheckSpec> specs,
         string workingDirectory,
         CancellationToken ct)

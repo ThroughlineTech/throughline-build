@@ -1,0 +1,552 @@
+using ThroughlineBuild.Contracts;
+using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Helpers;
+using ThroughlineBuild.Phases;
+using ThroughlineBuild.Verification;
+using Xunit;
+
+namespace ThroughlineBuild.Phases.Tests;
+
+public class ShipPhaseTests
+{
+    private const string TicketId = "TLB-1";
+    private const string TicketTitle = "Test ticket";
+    private const string BranchName = "ticket/tlb-1-test-ticket";
+    private const string MergedSha = "0123456789abcdef0123456789abcdef01234567";
+
+    private static Ticket MakeTicket(TicketState state) => new Ticket(
+        Id: TicketId,
+        Title: TicketTitle,
+        Type: "feature",
+        State: state,
+        Size: Size.S,
+        Risk: Risk.Low,
+        DescriptionHtml: "<p>plan</p>",
+        Relations: Array.Empty<Relation>(),
+        Labels: Array.Empty<string>(),
+        ParentId: null);
+
+    private static BuildOptions MakeBuildOptions() => new BuildOptions(
+        SessionId: "session-1",
+        WorkerName: "claude-code",
+        WorkerTimeout: TimeSpan.FromMinutes(5),
+        WorkerAllowedTools: null);
+
+    private static ShipOptions MakeShipOptions(
+        IReadOnlyList<CheckSpec>? checks = null,
+        bool deleteFeatureBranch = true) => new ShipOptions(
+            RegressionChecks: checks ?? Array.Empty<CheckSpec>(),
+            Remote: "origin",
+            BaseBranch: "main",
+            DeleteFeatureBranch: deleteFeatureBranch);
+
+    private static string MakeWorkingDir() => Directory.GetCurrentDirectory();
+
+    private static ConflictMarkerScannerFn EmptyScanner() =>
+        (paths, ct) => Task.FromResult<IReadOnlyList<ConflictMarkerHit>>(Array.Empty<ConflictMarkerHit>());
+
+    private static ConflictMarkerScannerFn HitsScanner(IReadOnlyList<ConflictMarkerHit> hits) =>
+        (paths, ct) => Task.FromResult(hits);
+
+    [Fact]
+    public async Task RunAsync_HappyPath_SuccessShipsTicket()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var decrufter = new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git);
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: decrufter);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Null(result.FailureReason);
+        Assert.Null(result.FailedAt);
+        Assert.Equal(MergedSha, result.MergedSha);
+
+        Assert.Single(ticketing.Transitions);
+        Assert.Equal(TicketState.Done, ticketing.Transitions[0].state);
+
+        Assert.Single(ticketing.Comments);
+        Assert.Contains("[shipped_at: ", ticketing.Comments[0].html);
+        Assert.Contains(MergedSha, ticketing.Comments[0].html);
+
+        var writeEvents = events.Events.Where(e => e.Kind == EventKind.TicketWrite).ToList();
+        // create_comment + decruft + delete_branch
+        Assert.Equal(3, writeEvents.Count);
+        Assert.Equal("create_comment", writeEvents[0].Data["action"].ToString());
+        Assert.Equal("decruft", writeEvents[1].Data["action"].ToString());
+        Assert.Equal("complete", writeEvents[1].Data["halted_at"].ToString());
+        Assert.Equal("delete_branch", writeEvents[2].Data["action"].ToString());
+
+        var stateTransitions = events.Events.Where(e => e.Kind == EventKind.StateTransition).ToList();
+        Assert.Single(stateTransitions);
+        Assert.Equal("InReview", stateTransitions[0].Data["from"].ToString());
+        Assert.Equal("Done", stateTransitions[0].Data["to"].ToString());
+
+        Assert.True(git.DeleteBranchCalls.Count == 1);
+        Assert.Equal(BranchName, git.DeleteBranchCalls[0].branch);
+        Assert.False(git.DeleteBranchCalls[0].force);
+    }
+
+    [Fact]
+    public async Task RunAsync_TicketNotInReview_FailsCleanlyNoSideEffects()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.Ready));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ShipFailureStage.StateCheck, result.FailedAt);
+        Assert.Contains("InReview", result.FailureReason ?? "");
+        Assert.Empty(ticketing.Transitions);
+        Assert.Empty(ticketing.Comments);
+        Assert.Empty(events.Events);
+        Assert.Equal(0, git.FetchCallCount);
+        Assert.Equal(0, git.RebaseCallCount);
+    }
+
+    [Fact]
+    public async Task RunAsync_WorktreeMissing_FailsCleanlyNoSideEffects()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: false);
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ShipFailureStage.StateCheck, result.FailedAt);
+        Assert.Contains("feature worktree not found", result.FailureReason ?? "");
+        Assert.Empty(ticketing.Transitions);
+        Assert.Empty(ticketing.Comments);
+        Assert.Empty(events.Events);
+        Assert.Equal(0, git.FetchCallCount);
+    }
+
+    [Fact]
+    public async Task RunAsync_FetchFails_FailsCleanlyNoStateChange()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true)
+        {
+            FetchResult = new GitOpResult(false, "network down")
+        };
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ShipFailureStage.Fetch, result.FailedAt);
+        Assert.Contains("network down", result.FailureReason ?? "");
+        Assert.Empty(ticketing.Transitions);
+        Assert.Empty(ticketing.Comments);
+        Assert.Equal(0, git.RebaseCallCount);
+    }
+
+    [Fact]
+    public async Task RunAsync_RebaseConflicts_AbortsAndPostsShipBlockedNoStateChange()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true)
+        {
+            RebaseResult = new RebaseResult(false, true, new[] { "src/A.cs", "src/B.cs" }, "conflicts")
+        };
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ShipFailureStage.Rebase, result.FailedAt);
+        Assert.Equal(1, git.RebaseAbortCallCount);
+        Assert.Empty(ticketing.Transitions);
+        Assert.Single(ticketing.Comments);
+        Assert.Contains("ship_blocked:", ticketing.Comments[0].html);
+        Assert.Contains("rebase conflicts in: src/A.cs, src/B.cs", ticketing.Comments[0].html);
+
+        var gates = events.Events.Where(e => e.Kind == EventKind.GateFailure).ToList();
+        Assert.Single(gates);
+        Assert.Equal("rebase_conflicts", gates[0].Data["kind"].ToString());
+        var paths = (IReadOnlyList<string>)gates[0].Data["conflicting_paths"];
+        Assert.Equal(2, paths.Count);
+        Assert.Contains("src/A.cs", paths);
+        Assert.Contains("src/B.cs", paths);
+
+        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.StateTransition));
+    }
+
+    [Fact]
+    public async Task RunAsync_RebaseAlreadyUpToDate_ProceedsNormally()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        // Simulates "already up to date": Success true, HadConflicts false (the existing FakeGitClient default)
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(MergedSha, result.MergedSha);
+        Assert.Single(ticketing.Transitions);
+        Assert.Equal(TicketState.Done, ticketing.Transitions[0].state);
+    }
+
+    [Fact]
+    public async Task RunAsync_ConflictMarkersDetected_PostsShipBlockedNoStateChange()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var hits = new List<ConflictMarkerHit>
+        {
+            new ConflictMarkerHit("/abs/src/A.cs", 12, "start"),
+            new ConflictMarkerHit("/abs/src/A.cs", 18, "end"),
+            new ConflictMarkerHit("/abs/src/B.cs", 5, "separator")
+        };
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: HitsScanner(hits),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ShipFailureStage.ConflictMarkerScan, result.FailedAt);
+        Assert.Empty(ticketing.Transitions);
+        Assert.Single(ticketing.Comments);
+        Assert.Contains("ship_blocked:", ticketing.Comments[0].html);
+        Assert.Contains("conflict markers detected in:", ticketing.Comments[0].html);
+
+        var gates = events.Events.Where(e => e.Kind == EventKind.GateFailure).ToList();
+        Assert.Single(gates);
+        Assert.Equal("conflict_markers", gates[0].Data["kind"].ToString());
+        var markerFiles = (IReadOnlyList<string>)gates[0].Data["marker_files"];
+        Assert.Equal(2, markerFiles.Count);
+        Assert.Contains("/abs/src/A.cs", markerFiles);
+        Assert.Contains("/abs/src/B.cs", markerFiles);
+
+        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.StateTransition));
+    }
+
+    [Fact]
+    public async Task RunAsync_RegressionChecksFail_PostsShipBlockedNoStateChange()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var checks = new List<CheckResult>
+        {
+            new CheckResult("build", true, 0, "", "", TimeSpan.Zero),
+            new CheckResult("test", false, 1, "", "boom", TimeSpan.Zero),
+            new CheckResult("lint", false, 2, "", "style", TimeSpan.Zero)
+        };
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(checks),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ShipFailureStage.RegressionChecks, result.FailedAt);
+        Assert.Empty(ticketing.Transitions);
+        Assert.Single(ticketing.Comments);
+        Assert.Contains("ship_blocked:", ticketing.Comments[0].html);
+        Assert.Contains("regression checks failed: test, lint", ticketing.Comments[0].html);
+
+        var gates = events.Events.Where(e => e.Kind == EventKind.GateFailure).ToList();
+        Assert.Single(gates);
+        Assert.Equal("regression_checks", gates[0].Data["kind"].ToString());
+        var checksFailed = (IReadOnlyList<string>)gates[0].Data["checks_failed"];
+        Assert.Equal(new[] { "test", "lint" }, checksFailed);
+
+        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.StateTransition));
+    }
+
+    [Fact]
+    public async Task RunAsync_FastForwardMergeFails_FailsCleanlyWithReason()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true)
+        {
+            FastForwardResult = new GitOpResult(false, "main worktree is on branch 'feature/xyz', not 'main'")
+        };
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ShipFailureStage.FastForwardMerge, result.FailedAt);
+        Assert.Contains("feature/xyz", result.FailureReason ?? "");
+        Assert.Empty(ticketing.Transitions);
+        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.StateTransition));
+    }
+
+    [Fact]
+    public async Task RunAsync_HappyPathDeleteFeatureBranchFalse_DoesNotDeleteBranch()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(),
+            MakeShipOptions(deleteFeatureBranch: false),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Empty(git.DeleteBranchCalls);
+        var writeEvents = events.Events.Where(e => e.Kind == EventKind.TicketWrite).ToList();
+        Assert.Equal(2, writeEvents.Count); // create_comment + decruft only
+        Assert.DoesNotContain(writeEvents, w => w.Data.TryGetValue("action", out var a) && a.ToString() == "delete_branch");
+    }
+
+    [Fact]
+    public async Task RunAsync_DecruftFailsPostDone_DonePreservedDecruftFailureLogged()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var decrufter = new FakeDecrufter(
+            new DecruftResult(DecruftStep.DirectoryDelete,
+                new Dictionary<DecruftStep, DecruftStepOutcome>()),
+            git);
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: decrufter);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(MergedSha, result.MergedSha);
+        Assert.Single(ticketing.Transitions);
+        Assert.Equal(TicketState.Done, ticketing.Transitions[0].state);
+
+        var decruftEvent = events.Events.First(e =>
+            e.Kind == EventKind.TicketWrite &&
+            e.Data.TryGetValue("action", out var a) && a.ToString() == "decruft");
+        Assert.Equal("DirectoryDelete", decruftEvent.Data["halted_at"].ToString());
+    }
+
+    [Fact]
+    public async Task InterfaceRunAsync_HappyPath_ReturnsPhaseResultWithThreeOutputs()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        IWorkflowPhase iface = phase;
+        var result = await iface.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(Phase.Ship, result.Phase);
+        Assert.Equal(TicketId, result.TicketId);
+        Assert.Null(result.FailureReason);
+        Assert.Equal(3, result.Outputs.Count);
+        Assert.Equal(MergedSha, result.Outputs["merged_sha"]);
+        Assert.Equal(BranchName, result.Outputs["branch"]);
+        var expectedWtPath = PhaseWorktreeLayout.Compute(TicketId, TicketTitle, MakeWorkingDir()).WorktreePath;
+        Assert.Equal(expectedWtPath, result.Outputs["worktree_path"]);
+    }
+
+    [Fact]
+    public async Task InterfaceRunAsync_StateCheckFailure_ReturnsPhaseResultWithEmptyOutputs()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.Ready));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        IWorkflowPhase iface = phase;
+        var result = await iface.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(Phase.Ship, result.Phase);
+        Assert.Empty(result.Outputs);
+        Assert.NotNull(result.FailureReason);
+    }
+
+    // ---------- Fakes ----------
+
+    private sealed class FakeTicketing : ITicketing
+    {
+        private readonly Ticket _ticket;
+        public List<(string id, TicketState state)> Transitions { get; } = new();
+        public List<(string id, string html)> Comments { get; } = new();
+
+        public FakeTicketing(Ticket ticket) { _ticket = ticket; }
+
+        public BackendCapabilities Capabilities => new BackendCapabilities(true, true, true, false);
+        public Task<Ticket> GetAsync(string id, CancellationToken ct) => Task.FromResult(_ticket);
+        public Task<IReadOnlyList<Ticket>> GetBatchAsync(IEnumerable<string> ids, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<Ticket>)new[] { _ticket });
+        public Task TransitionAsync(string id, TicketState newState, CancellationToken ct)
+        {
+            Transitions.Add((id, newState));
+            return Task.CompletedTask;
+        }
+        public Task AppendDescriptionAsync(string id, string html, CancellationToken ct) => Task.CompletedTask;
+        public Task<string> CreateCommentAsync(string id, string html, CancellationToken ct)
+        {
+            Comments.Add((id, html));
+            return Task.FromResult("comment-1");
+        }
+        public Task ApplyLabelsAsync(string id, IEnumerable<string> labels, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<Relation>> GetRelationsAsync(string id, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<Relation>)Array.Empty<Relation>());
+        public Task<RollupResult> RollupParentAsync(string id, CancellationToken ct) =>
+            Task.FromResult(new RollupResult(false, null, null));
+        public Task<IReadOnlyList<TicketComment>> GetCommentsAsync(string id, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<TicketComment>)Array.Empty<TicketComment>());
+    }
+
+    private sealed class FakeEventSink : IEventSink
+    {
+        public List<WorkflowEvent> Events { get; } = new();
+        public Task EmitAsync(WorkflowEvent ev, CancellationToken ct)
+        {
+            Events.Add(ev);
+            return Task.CompletedTask;
+        }
+        public Task FlushAsync(CancellationToken ct) => Task.CompletedTask;
+    }
+
+    private sealed class FakeGitClient : IGitClient
+    {
+        private readonly bool _includeWorktreeMatching;
+        public GitOpResult FetchResult { get; set; } = new GitOpResult(true, null);
+        public RebaseResult RebaseResult { get; set; } = new RebaseResult(true, false, Array.Empty<string>(), null);
+        public GitOpResult RebaseAbortResult { get; set; } = new GitOpResult(true, null);
+        public GitOpResult FastForwardResult { get; set; } = new GitOpResult(true, null);
+        public GitOpResult DeleteBranchResult { get; set; } = new GitOpResult(true, null);
+
+        public int FetchCallCount { get; private set; }
+        public int RebaseCallCount { get; private set; }
+        public int RebaseAbortCallCount { get; private set; }
+        public int FastForwardCallCount { get; private set; }
+        public List<(string branch, bool force)> DeleteBranchCalls { get; } = new();
+
+        public FakeGitClient(bool includeWorktreeMatching)
+        {
+            _includeWorktreeMatching = includeWorktreeMatching;
+        }
+
+        public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(MergedSha);
+
+        public Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct)
+        {
+            if (!_includeWorktreeMatching)
+                return Task.FromResult<IReadOnlyList<WorktreeInfo>>(Array.Empty<WorktreeInfo>());
+            return Task.FromResult<IReadOnlyList<WorktreeInfo>>(new[]
+            {
+                new WorktreeInfo("/some/worktree/path", BranchName, "deadbeef", false, false)
+            });
+        }
+
+        public Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct) =>
+            Task.FromResult(new WorktreeRemoveResult(true, null));
+
+        public Task<IReadOnlyList<string>> GetBranchesNotMergedAsync(string pattern, string baseBranch, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
+
+        public Task<WorktreeCreateResult> CreateWorktreeAsync(string worktreePath, string newBranch, string fromRef, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
+
+        public Task<string> HeadShaAsync(string worktreePath, CancellationToken ct) =>
+            Task.FromResult(MergedSha);
+
+        public Task<GitDiff> DiffAsync(string fromRef, string toRef, string mainWorktreePath, bool includePatchContent, CancellationToken ct) =>
+            Task.FromResult(new GitDiff(fromRef, toRef, new[]
+            {
+                new DiffEntry("src/Foo.cs", DiffKind.Modified, null, 5, 2, null)
+            }));
+
+        public Task<GitOpResult> FetchAsync(string remote, string mainWorktreePath, CancellationToken ct)
+        {
+            FetchCallCount++;
+            return Task.FromResult(FetchResult);
+        }
+
+        public Task<RebaseResult> RebaseAsync(string ontoRef, string featureWorktreePath, CancellationToken ct)
+        {
+            RebaseCallCount++;
+            return Task.FromResult(RebaseResult);
+        }
+
+        public Task<GitOpResult> RebaseAbortAsync(string featureWorktreePath, CancellationToken ct)
+        {
+            RebaseAbortCallCount++;
+            return Task.FromResult(RebaseAbortResult);
+        }
+
+        public Task<GitOpResult> FastForwardMergeAsync(string mergeRef, string mainWorktreePath, CancellationToken ct)
+        {
+            FastForwardCallCount++;
+            return Task.FromResult(FastForwardResult);
+        }
+
+        public Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct)
+        {
+            DeleteBranchCalls.Add((branch, force));
+            return Task.FromResult(DeleteBranchResult);
+        }
+    }
+
+    private sealed class FakeChecksRunner : AutomatedChecksRunner
+    {
+        private readonly IReadOnlyList<CheckResult> _results;
+        public FakeChecksRunner(IReadOnlyList<CheckResult> results) { _results = results; }
+        public override Task<IReadOnlyList<CheckResult>> RunAsync(
+            IReadOnlyList<CheckSpec> specs, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(_results);
+    }
+
+    private sealed class FakeDecrufter : WorktreeDecrufter
+    {
+        private readonly DecruftResult _result;
+        public FakeDecrufter(DecruftResult result, IGitClient git) : base(git) { _result = result; }
+        public override Task<DecruftResult> DecruftAsync(
+            string worktreePath, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(_result);
+    }
+}

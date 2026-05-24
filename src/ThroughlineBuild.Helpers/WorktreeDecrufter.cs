@@ -41,7 +41,7 @@ internal sealed class DefaultProcessKiller : IProcessKiller
     }
 }
 
-public sealed class WorktreeDecrufter
+public class WorktreeDecrufter
 {
     private readonly IGitClient _git;
     private readonly IProcessKiller _killer;
@@ -52,7 +52,7 @@ public sealed class WorktreeDecrufter
         _killer = killer ?? new DefaultProcessKiller();
     }
 
-    public async Task<DecruftResult> DecruftAsync(
+    public virtual async Task<DecruftResult> DecruftAsync(
         string worktreePath,
         string mainWorktreePath,
         CancellationToken ct)
