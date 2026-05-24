@@ -133,7 +133,7 @@ public class ImplementPhase : IWorkflowPhase
         // Step 13: LlmCall event if usage present
         if (workerResult.Metadata.TryGetValue("llm_usage", out var usageObj))
         {
-            var llmData = FlattenLlmUsage(usageObj);
+            var llmData = LlmUsageFlattener.FlattenLlmUsage(usageObj);
             if (llmData is not null)
             {
                 await EmitAsync(EventKind.LlmCall, ticketId, llmData, ct).ConfigureAwait(false);
@@ -204,49 +204,6 @@ public class ImplementPhase : IWorkflowPhase
             data), ct).ConfigureAwait(false);
     }
 
-    private static IReadOnlyDictionary<string, object>? FlattenLlmUsage(object usageObj)
-    {
-        var result = new Dictionary<string, object>();
-
-        if (usageObj is IDictionary<string, object?> dict)
-        {
-            foreach (var kvp in dict)
-            {
-                if (kvp.Value is not null)
-                {
-                    result[kvp.Key] = UnwrapJsonElement(kvp.Value);
-                }
-            }
-            return result;
-        }
-
-        if (usageObj is JsonElement je && je.ValueKind == JsonValueKind.Object)
-        {
-            foreach (var prop in je.EnumerateObject())
-            {
-                result[prop.Name] = UnwrapJsonElement(prop.Value);
-            }
-            return result;
-        }
-
-        return null;
-    }
-
-    private static object UnwrapJsonElement(object value)
-    {
-        if (value is not JsonElement je)
-            return value;
-
-        return je.ValueKind switch
-        {
-            JsonValueKind.String => je.GetString() ?? "",
-            JsonValueKind.Number => je.TryGetInt32(out var intVal) ? intVal : je.GetInt64(),
-            JsonValueKind.True => true,
-            JsonValueKind.False => false,
-            JsonValueKind.Null => (object?)null ?? "",
-            _ => value
-        };
-    }
 
     private static string? TryGetString(IReadOnlyDictionary<string, object> metadata, string key)
     {
