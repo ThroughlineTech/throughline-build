@@ -65,11 +65,11 @@ From `Phase` at [src/ThroughlineBuild.Contracts/Models/Phase.cs:3](../src/Throug
 
 | Kind              | Keys              | Example |
 |-------------------|-------------------|---------|
-| `WorkerSpawn`     | `worker`          | `{"worker": "claude-code"}` |
-| `VerifierVerdict` | `status`          | `{"status": "Ok"}`, `{"status": "Failed"}` |
+| `WorkerSpawn`     | `worker`, optional `role` | `{"worker": "claude-code"}` (Plan/Implement phases omit `role`); `{"worker": "claude-code", "role": "verifier"}` (Review phase sets `role` to distinguish verifier spawns from implementer spawns in chained runs) |
+| `VerifierVerdict` | Plan/Implement: `status`. Review: `kind`, `checks_failed_count` | Plan/Implement: `{"status": "Ok"}`, `{"status": "Failed"}`. Review: `{"kind": "Pass", "checks_failed_count": 0}`, `{"kind": "Rework", "checks_failed_count": 2}`, `{"kind": "Fail", "checks_failed_count": 0}` (`kind` is one of `Pass`, `Rework`, `Fail`) |
 | `LlmCall`         | `model`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_create_tokens`, `wall_clock_ms`, optional `partial` | `{"model": "claude-opus", "input_tokens": 1234, "output_tokens": 567, "cache_read_tokens": 0, "cache_create_tokens": 0, "wall_clock_ms": 2500}` |
 | `TicketWrite`     | `action`          | `{"action": "append_description"}`, `{"action": "apply_labels"}`, `{"action": "create_comment"}` |
-| `StateTransition` | `from`, `to`      | `{"from": "Backlog", "to": "Ready"}`, `{"from": "Ready", "to": "InProgress"}`, `{"from": "InProgress", "to": "InReview"}` |
+| `StateTransition` | `from`, `to`      | `{"from": "Backlog", "to": "Ready"}`, `{"from": "Ready", "to": "InProgress"}`, `{"from": "InProgress", "to": "InReview"}`, `{"from": "InReview", "to": "InProgress"}` (Review-phase Rework path) |
 | `GateFailure`     | `kind`, kind-specific extras | `{"kind": "drift_warning", "planned_at_sha": "...", "main_sha": "..."}` (ImplementPhase emits this when the `[planned_at: <sha>]` marker on a ticket disagrees with current `origin/main`; the phase logs the warning and proceeds without gating) |
 
 New emit sites should follow this style: short, lowercase, snake_case keys; values are strings or primitives.
@@ -104,6 +104,35 @@ A successful `build implement <ticket>` against a ticket in `Ready` produces eve
 ```
 
 If the ticket's `[planned_at: <sha>]` marker disagrees with the current `origin/main`, a `GateFailure` line with `kind = "drift_warning"` is emitted before the state transition to `InProgress`; ImplementPhase logs the warning and proceeds without gating.
+
+## Happy-path Review example
+
+A successful `build review <ticket>` against a ticket in `InReview` emits a `WorkerSpawn` (with `role: "verifier"`), then a `VerifierVerdict` carrying `kind` and `checks_failed_count`, then a `TicketWrite` for the `reviewed:` comment. The `Rework` path additionally emits a `StateTransition` from `InReview` back to `InProgress`; `Pass` and `Fail` leave the ticket in `InReview`. An `LlmCall` line is reserved for when the verifier worker's `llm_usage` metadata is surfaced through the `IVerifier` seam (deferred in v1; the line is therefore absent in current Review runs).
+
+Pass (verdict `Pass`, ticket stays in `InReview`):
+
+```jsonl
+{"SessionId":"<sid>","Timestamp":"...","Kind":2,"TicketId":"TLB-34","Phase":2,"Data":{"worker":"claude-code","role":"verifier"}}
+{"SessionId":"<sid>","Timestamp":"...","Kind":3,"TicketId":"TLB-34","Phase":2,"Data":{"kind":"Pass","checks_failed_count":0}}
+{"SessionId":"<sid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":2,"Data":{"action":"create_comment"}}
+```
+
+Rework (verdict `Rework`, ticket transitions back to `InProgress`):
+
+```jsonl
+{"SessionId":"<sid>","Timestamp":"...","Kind":2,"TicketId":"TLB-34","Phase":2,"Data":{"worker":"claude-code","role":"verifier"}}
+{"SessionId":"<sid>","Timestamp":"...","Kind":3,"TicketId":"TLB-34","Phase":2,"Data":{"kind":"Rework","checks_failed_count":2}}
+{"SessionId":"<sid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":2,"Data":{"action":"create_comment"}}
+{"SessionId":"<sid>","Timestamp":"...","Kind":0,"TicketId":"TLB-34","Phase":2,"Data":{"from":"InReview","to":"InProgress"}}
+```
+
+Fail (verdict `Fail`, ticket stays in `InReview`):
+
+```jsonl
+{"SessionId":"<sid>","Timestamp":"...","Kind":2,"TicketId":"TLB-34","Phase":2,"Data":{"worker":"claude-code","role":"verifier"}}
+{"SessionId":"<sid>","Timestamp":"...","Kind":3,"TicketId":"TLB-34","Phase":2,"Data":{"kind":"Fail","checks_failed_count":0}}
+{"SessionId":"<sid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":2,"Data":{"action":"create_comment"}}
+```
 
 ## Worker-failure example
 
