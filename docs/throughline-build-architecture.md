@@ -135,7 +135,7 @@ Single .NET 8 AOT executable, named `build` on disk. Entry point: `build <phase>
 
 Implements the Agile phases as typed transitions. Per-phase preconditions and gates are typed predicates that compose. Transitions go through the state machine; there are no side-channel state writes. The state machine has its own unit tests and is the canonical reference for "what can happen next" at any point.
 
-`IWorkflowPhase` (see Section 6) is the shared contract implemented by `PlanPhase`, `ImplementPhase`, and `ReviewPhase`. Each phase exposes a `Phase` property identifying which workflow step it represents. Internally each phase's `RunAsync` returns a typed result (`PlanResult`, `ImplementResult`, `ReviewResult`); the phase also implements the explicit interface method `IWorkflowPhase.RunAsync`, which converts that typed result into a `PhaseResult` record (see Section 6) for generic dispatch by the state machine. Callers that need the typed result call the phase directly; the state machine uses the `IWorkflowPhase` surface.
+`IWorkflowPhase` (see Section 6) is the shared contract implemented by `PlanPhase`, `ImplementPhase`, `ReviewPhase`, and `ShipPhase`. Each phase exposes a `Phase` property identifying which workflow step it represents. Internally each phase's `RunAsync` returns a typed result (`PlanResult`, `ImplementResult`, `ReviewResult`, `ShipResult`); the phase also implements the explicit interface method `IWorkflowPhase.RunAsync`, which converts that typed result into a `PhaseResult` record (see Section 6) for generic dispatch by the state machine. Callers that need the typed result call the phase directly; the state machine uses the `IWorkflowPhase` surface.
 
 ### 5.3 Ticketing Backend
 
@@ -151,9 +151,9 @@ IWorkerAgent interface. ClaudeCodeAgent, CodexAgent, GeminiAgent are the initial
 
 ### 5.6 Helpers
 
-Pure functions, no I/O where avoidable. Slug, drift, doc-only, wave-compute, conflict-marker scan, ASCII check, tree-clean, marker-comment parser, `PhaseWorktreeLayout` (computes the branch name and worktree path from a ticket ID and title). Each is unit-tested in isolation with fixtures. These are direct algorithm ports from the current bash scripts where the algorithm is sound; the shell-script-as-discrete-file ceremony does not survive the port.
+Pure functions, no I/O where avoidable. Slug, drift, doc-only, wave-compute, conflict-marker scan, ASCII check, tree-clean, marker-comment parser, `PhaseWorktreeLayout` (computes the branch name and worktree path from a ticket ID and title), `ConflictMarkerScanner`, and `LlmUsageFlattener` (extracted from per-phase copies in op-09 to support the third concrete `IWorkflowPhase` landing). Each is unit-tested in isolation with fixtures. These are direct algorithm ports from the current bash scripts where the algorithm is sound; the shell-script-as-discrete-file ceremony does not survive the port.
 
-**Verification helpers.** `AutomatedChecksRunner` lives in `ThroughlineBuild.Verification` - a separate classlib with no project references. It accepts a list of `CheckSpec` records (each naming an executable and argument list with a per-spec timeout) and runs them sequentially in a given working directory, capturing stdout/stderr tails (~4 KB each) and wall time into `CheckResult` records. The runner enforces per-spec timeouts by killing the process tree on expiry and supports an opt-in stop-on-first-failure mode (default: run all specs). `ThroughlineBuild.Verification` is distinct from `ThroughlineBuild.Helpers`; the helpers are pure functions while the verification runner spawns child processes.
+**Verification helpers.** `CheckSpec` and `CheckResult` records live in `ThroughlineBuild.Contracts` alongside `IVerifier`. `AutomatedChecksRunner` lives in `ThroughlineBuild.Verification` - a separate classlib with no project references. It accepts a list of `CheckSpec` records (each naming an executable and argument list with a per-spec timeout) and runs them sequentially in a given working directory, capturing stdout/stderr tails (~4 KB each) and wall time into `CheckResult` records. The runner enforces per-spec timeouts by killing the process tree on expiry and supports an opt-in stop-on-first-failure mode (default: run all specs). `ThroughlineBuild.Verification` is distinct from `ThroughlineBuild.Helpers`; the helpers are pure functions while the verification runner spawns child processes.
 
 ### 5.7 Brief Constructor
 
@@ -167,15 +167,21 @@ All three return `Brief`. The Brief is a typed object that gets serialized to ma
 
 ### 5.8 Verifier
 
-`ClaudeCodeReviewer` is the first concrete `IVerifier`. It receives the implementer's `Brief`, the `GitDiff`, and the `WorkerResult` - none of which come from shared in-memory context with the implementer. `ReviewPhase` reconstructs the implementer brief from the ticket and git state at review time and passes it to the verifier; there is no live channel between the implementation run and the review run. This is a deliberate upgrade over the current chain where the orchestrator LLM passes shared context to the reviewer and contaminates the verdict. Cross-vendor verification (running a Gemini or OpenAI verifier against a Claude implementation) is supported by the `IVerifier` interface and deferred to v1.1. Returns a typed `Verdict`.
+`ClaudeCodeReviewer` is the first concrete `IVerifier`. It receives the implementer's `Brief`, the `GitDiff`, and the `WorkerResult` - none of which come from shared in-memory context with the implementer. `ReviewPhase` reconstructs the implementer brief from the ticket and git state at review time and passes it to the verifier; there is no live channel between the implementation run and the review run. This is a deliberate upgrade over the current chain where the orchestrator LLM passes shared context to the reviewer and contaminates the verdict. `ClaudeCodeReviewer` exposes `LastWorkerResult` so `ReviewPhase` can type-check the concrete verifier at the end of `RunAsync` and emit an `LlmCall` event when the worker's `WorkerResult.Metadata` carries an `llm_usage` entry; cross-vendor verification (Gemini or OpenAI verifier against a Claude implementation) is supported by the interface but deferred to v1.1. Returns a typed `Verdict`.
 
-### 5.9 Event Log
+### 5.9 Ship
+
+`ShipPhase` is the fourth concrete `IWorkflowPhase`. It is deterministic: no LLM contact, no brief construction, no worker dispatch. The canonical step sequence is fetch -> rebase -> conflict-marker scan -> regression checks via `AutomatedChecksRunner` -> fast-forward merge to local main -> mark `shipped_at` -> transition Done. Each step is gated with a preflight sanity check. `ShipPhase` constructs its own list of `CheckSpec` entries and orchestrates the verifier's `AutomatedChecksRunner`. Critically, **v1 is local-merge-only with no `git push origin main`** - all rebase and merge operations stay in the worktree. This matches the `/ticket-chain --ship` convention and preserves the never-force-push-to-main rule. After the merge lands and the ticket transitions Done, a separate `WorktreeDecrufter` step (outside `ShipPhase`) removes the feature branch from the main worktree and prunes the temporary worktree, leaving the merged main checkout ready for the next ticket. Post-ship cleanup is decoupled from the ship phase itself so a failed ship leaves the worktree and feature branch available for inspection and manual recovery.
+
+### 5.10 Event Log
 
 Append-only JSONL written per invocation to `.build/events/<session-id>.jsonl`. Every state transition, every LLM call, every worker spawn, every verifier outcome captured with inputs, outputs, model used, tokens consumed, wall time. Replayable: a recorded chain can be re-run against a different model or agent and compared. This is the substrate for both debugging and dogfooding-style evaluation.
 
 ---
 
 ## 6. Interfaces & Contracts
+
+Project dependency graph: `Contracts` (leaf) <- `Briefs` <- `Verification` <- `Phases` <- `Cli`; `Helpers` and `Git` are parallel branches rooted at `Contracts`.
 
 ### Core data types
 
@@ -342,10 +348,33 @@ public interface IGitClient
     // (<fromRef>...<toRef>) - changes on the feature branch since divergence from fromRef.
     // includePatchContent: if true, PatchContent is populated per DiffEntry (capped ~100 KB).
     Task<GitDiff> DiffAsync(string fromRef, string toRef, string mainWorktreePath, bool includePatchContent, CancellationToken ct);
+
+    // Fetch from remote.
+    Task<GitOpResult> FetchAsync(string remote, string mainWorktreePath, CancellationToken ct);
+
+    // Rebase the feature branch onto ontoRef.
+    Task<RebaseResult> RebaseAsync(string ontoRef, string featureWorktreePath, CancellationToken ct);
+
+    // Abort an in-progress rebase.
+    Task<GitOpResult> RebaseAbortAsync(string featureWorktreePath, CancellationToken ct);
+
+    // Fast-forward merge of mergeRef into main worktree's current branch.
+    Task<GitOpResult> FastForwardMergeAsync(string mergeRef, string mainWorktreePath, CancellationToken ct);
+
+    // Delete a branch, with optional force flag.
+    Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct);
 }
+
+public record GitOpResult(bool Success, string? FailureReason);
+
+public record RebaseResult(
+    bool Success,
+    bool HadConflicts,
+    IReadOnlyList<string> ConflictingPaths,
+    string? FailureReason);
 ```
 
-`ProcessGitClient` is the only concrete implementation. `DiffAsync` is added by TLB-85 (op-08).
+`ProcessGitClient` is the only concrete implementation. `DiffAsync` is added by TLB-85 (op-08); fetch, rebase, rebase-abort, fast-forward-merge, and branch-delete methods plus `GitOpResult` and `RebaseResult` are added by op-09.
 
 ### Workflow phase
 
@@ -357,7 +386,7 @@ public interface IWorkflowPhase
 }
 ```
 
-`PlanPhase`, `ImplementPhase`, and `ReviewPhase` each implement `IWorkflowPhase` via explicit interface implementation. The phase also exposes a typed `RunAsync` overload (`Task<PlanResult>`, etc.) for callers that need the richer result. `PhaseResult.Outputs` carries phase-specific key/value pairs (e.g., `commit_sha`, `branch`, `worktree_path` for the implement phase).
+`PlanPhase`, `ImplementPhase`, `ReviewPhase`, and `ShipPhase` each implement `IWorkflowPhase` via explicit interface implementation. The phase also exposes a typed `RunAsync` overload (`Task<PlanResult>`, etc.) for callers that need the richer result. `PhaseResult.Outputs` carries phase-specific key/value pairs (e.g., `commit_sha`, `branch`, `worktree_path` for the implement phase). `ShipPhase` accepts a `ConflictMarkerScannerFn` delegate in its constructor to allow callers to inject conflict detection logic.
 
 ### Verifier
 
@@ -374,7 +403,7 @@ public interface IVerifier
 
 Separate from IWorkerAgent so verification can run against a different vendor with no shared context. `ClaudeCodeReviewer` is the first concrete implementation. Cross-vendor verification is deferred to v1.1.
 
-### Verification types (ThroughlineBuild.Verification)
+### Verification types
 
 ```csharp
 // Describes a shell command to run as part of automated checks.
@@ -394,7 +423,7 @@ public record CheckResult(
     TimeSpan Elapsed);
 ```
 
-`AutomatedChecksRunner.RunAsync(specs, workingDirectory, ct)` executes specs sequentially. On timeout it kills the process tree. Default: run all specs; opt-in stop-on-first-failure mode also available. Lives in `ThroughlineBuild.Verification` (added by TLB-86, op-08).
+`CheckSpec` and `CheckResult` live in `ThroughlineBuild.Contracts`. `AutomatedChecksRunner.RunAsync(specs, workingDirectory, ct)` executes specs sequentially in `ThroughlineBuild.Verification`. On timeout it kills the process tree. Default: run all specs; opt-in stop-on-first-failure mode also available.
 
 ### Event sink
 
