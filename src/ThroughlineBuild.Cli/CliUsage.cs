@@ -9,6 +9,7 @@ Usage:
   build plan <ticket-id>                                  Run the plan phase for a ticket
   build implement <ticket-id>                             Run the implement phase for a ticket
   build review <ticket-id>                                Run the review phase for a ticket
+  build ship <ticket-id>                                  Ship a reviewed ticket (local fast-forward merge; no push to remote)
   build amend <ticket-id> [--size S|M|L] [--note "..."]   Amend an existing ticket (at least one flag required)
   build close <ticket-id> <reason>                        Close a ticket (reason required)
   build defer <ticket-id> <reason>                        Defer a ticket (reason required)
@@ -20,6 +21,6 @@ Exit codes:
   1  Phase or command failure
   2  Config error or unknown verb
   3  Missing secret (env var not set)
-  4  Review phase failure (non-verdict)
+  4  Phase infrastructure failure (review verifier crash, ship worktree missing, git unavailable)
 """;
 }

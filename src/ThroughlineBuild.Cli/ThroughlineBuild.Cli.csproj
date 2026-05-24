@@ -21,6 +21,7 @@
     <ProjectReference Include="..\ThroughlineBuild.Workers.ClaudeCode\ThroughlineBuild.Workers.ClaudeCode.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.EventLog\ThroughlineBuild.EventLog.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.Helpers\ThroughlineBuild.Helpers.csproj" />
+    <ProjectReference Include="..\ThroughlineBuild.Verification\ThroughlineBuild.Verification.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Tomlyn" Version="0.16.0" />
