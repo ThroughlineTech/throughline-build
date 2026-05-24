@@ -378,5 +378,20 @@ public class ReviewPhaseTests
             {
                 new DiffEntry("src/Foo.cs", DiffKind.Modified, null, 5, 2, includePatchContent ? "@@ patch @@" : null)
             }));
+
+        public Task<GitOpResult> FetchAsync(string remote, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+
+        public Task<RebaseResult> RebaseAsync(string ontoRef, string featureWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new RebaseResult(true, false, Array.Empty<string>(), null));
+
+        public Task<GitOpResult> RebaseAbortAsync(string featureWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+
+        public Task<GitOpResult> FastForwardMergeAsync(string mergeRef, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+
+        public Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
     }
 }

@@ -161,5 +161,20 @@ public class PlanPhaseInterfaceTests
 
         public Task<GitDiff> DiffAsync(string fromRef, string toRef, string mainWorktreePath, bool includePatchContent, CancellationToken ct) =>
             Task.FromResult(new GitDiff(fromRef, toRef, Array.Empty<DiffEntry>()));
+
+        public Task<GitOpResult> FetchAsync(string remote, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+
+        public Task<RebaseResult> RebaseAsync(string ontoRef, string featureWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new RebaseResult(true, false, Array.Empty<string>(), null));
+
+        public Task<GitOpResult> RebaseAbortAsync(string featureWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+
+        public Task<GitOpResult> FastForwardMergeAsync(string mergeRef, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+
+        public Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
     }
 }
