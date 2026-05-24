@@ -205,7 +205,9 @@ static async Task<int> RunAsync(string[] args)
         SessionId: sessionId,
         WorkerName: config2.Workers.DefaultAgent,
         WorkerTimeout: TimeSpan.FromMinutes(config2.Workers.TimeoutMinutes),
-        DebugCaptureDirectory: debugCaptureDir);
+        DebugCaptureDirectory: debugCaptureDir,
+        LiveStdoutSink: debugMode ? Console.Out : null,
+        LiveStderrSink: debugMode ? Console.Error : null);
 
     if (verb == "plan")
     {
@@ -345,7 +347,9 @@ static async Task<int> RunAsync(string[] args)
         var verifierWorkerOptions = new WorkerOptions(
             TimeSpan.FromMinutes(config2.Review.VerifierTimeoutMinutes),
             config2.Review.VerifierAllowedTools,
-            DebugCaptureDirectory: debugCaptureDir);
+            DebugCaptureDirectory: debugCaptureDir,
+            LiveStdoutSink: debugMode ? Console.Out : null,
+            LiveStderrSink: debugMode ? Console.Error : null);
         var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
         var phase = new ReviewPhase(ticketing, worker, eventSink, buildOptions, reviewOptions);
         ReviewResult result;
