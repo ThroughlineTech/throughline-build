@@ -5,7 +5,7 @@ namespace ThroughlineBuild.Workers.ClaudeCode;
 
 internal static class WorkerResultParser
 {
-    internal static WorkerResult? TryParse(string stdout)
+    internal static WorkerResultParseOutcome TryParse(string stdout)
     {
         // Scan for "WORKER_RESULT" marker line, then read next non-empty line as JSON.
         // Uses the source-gen overload (ClaudeCodeJsonContext) so deserialization works
@@ -24,27 +24,42 @@ internal static class WorkerResultParser
                     try
                     {
                         var dto = JsonSerializer.Deserialize(json, ClaudeCodeJsonContext.Default.WorkerResultDto);
-                        if (dto is null) return null;
+                        if (dto is null) return WorkerResultParseOutcome.DeserializeFailed("JsonElement", "Deserialization returned null");
                         IReadOnlyList<string> files = dto.FilesChanged ?? new List<string>();
-                        // Metadata values are JsonElement; downstream TryGetString helpers already handle
-                        // both string and JsonElement, so no further unwrapping is needed here.
                         IReadOnlyDictionary<string, object> meta = dto.Metadata is not null
                             ? dto.Metadata.ToDictionary(kvp => kvp.Key, kvp => (object)kvp.Value)
                             : new Dictionary<string, object>();
-                        return new WorkerResult(
+                        var result = new WorkerResult(
                             dto.Status,
                             dto.Summary ?? string.Empty,
                             files,
                             dto.FailureReason,
                             meta);
+                        return WorkerResultParseOutcome.Success(result);
                     }
-                    catch
+                    catch (JsonException ex)
                     {
-                        return null;
+                        return WorkerResultParseOutcome.DeserializeFailed(ex.GetType().Name, ex.Message);
+                    }
+                    catch (NotSupportedException ex)
+                    {
+                        return WorkerResultParseOutcome.DeserializeFailed(ex.GetType().Name, ex.Message);
                     }
                 }
             }
         }
-        return null;
+        return WorkerResultParseOutcome.MarkerMissing();
     }
+}
+
+internal readonly record struct WorkerResultParseOutcome(WorkerResult? Result, string? DeserializeErrorType, string? DeserializeErrorMessage)
+{
+    internal static WorkerResultParseOutcome Success(WorkerResult result) =>
+        new(Result: result, DeserializeErrorType: null, DeserializeErrorMessage: null);
+
+    internal static WorkerResultParseOutcome MarkerMissing() =>
+        new(Result: null, DeserializeErrorType: null, DeserializeErrorMessage: null);
+
+    internal static WorkerResultParseOutcome DeserializeFailed(string errorType, string errorMessage) =>
+        new(Result: null, DeserializeErrorType: errorType, DeserializeErrorMessage: errorMessage);
 }
