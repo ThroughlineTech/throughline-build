@@ -1,20 +1,17 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using ThroughlineBuild.Contracts.Models;
 
 namespace ThroughlineBuild.Workers.ClaudeCode;
 
 internal static class WorkerResultParser
 {
-    private static readonly JsonSerializerOptions s_opts = new JsonSerializerOptions
-    {
-        PropertyNameCaseInsensitive = true,
-        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
-    };
-
     internal static WorkerResult? TryParse(string stdout)
     {
-        // Scan for "WORKER_RESULT" marker line, then read next non-empty line as JSON
+        // Scan for "WORKER_RESULT" marker line, then read next non-empty line as JSON.
+        // Uses the source-gen overload (ClaudeCodeJsonContext) so deserialization works
+        // under PublishAot=true where reflection-based JsonSerializer.Deserialize<T>
+        // throws NotSupportedException. See docs/throughline-build-architecture.md,
+        // section "AOT serialization traps".
         var lines = stdout.Split('\n');
         for (int i = 0; i < lines.Length - 1; i++)
         {
@@ -26,10 +23,14 @@ internal static class WorkerResultParser
                     if (string.IsNullOrEmpty(json)) continue;
                     try
                     {
-                        var dto = JsonSerializer.Deserialize<WorkerResultDto>(json, s_opts);
+                        var dto = JsonSerializer.Deserialize(json, ClaudeCodeJsonContext.Default.WorkerResultDto);
                         if (dto is null) return null;
                         IReadOnlyList<string> files = dto.FilesChanged ?? new List<string>();
-                        IReadOnlyDictionary<string, object> meta = dto.Metadata ?? new Dictionary<string, object>();
+                        // Metadata values are JsonElement; downstream TryGetString helpers already handle
+                        // both string and JsonElement, so no further unwrapping is needed here.
+                        IReadOnlyDictionary<string, object> meta = dto.Metadata is not null
+                            ? dto.Metadata.ToDictionary(kvp => kvp.Key, kvp => (object)kvp.Value)
+                            : new Dictionary<string, object>();
                         return new WorkerResult(
                             dto.Status,
                             dto.Summary ?? string.Empty,
@@ -45,15 +46,5 @@ internal static class WorkerResultParser
             }
         }
         return null;
-    }
-
-    // Plain DTO with concrete types to avoid interface deserialization issues
-    private sealed class WorkerResultDto
-    {
-        public Status Status { get; set; }
-        public string? Summary { get; set; }
-        public List<string>? FilesChanged { get; set; }
-        public string? FailureReason { get; set; }
-        public Dictionary<string, object>? Metadata { get; set; }
     }
 }

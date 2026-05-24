@@ -1,4 +1,6 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
+using ThroughlineBuild.Contracts.Models;
 
 namespace ThroughlineBuild.Workers.ClaudeCode;
 
@@ -31,8 +33,30 @@ public record WorkerResultDebugDto(
     IReadOnlyList<string> FilesChanged,
     string? FailureReason);
 
+// DTO for deserializing the WORKER_RESULT JSON block emitted by agent workers.
+// File-scoped so it can be registered with ClaudeCodeJsonContext for source-gen.
+// AOT trap: Dictionary<string, object> is not AOT-serializable; use
+// Dictionary<string, JsonElement> instead. Callers that read metadata values
+// should handle JsonElement (the phases already do via their TryGetString helpers).
+internal sealed class WorkerResultDto
+{
+    // [JsonConverter] is required here: source-gen does not inherit the
+    // CamelCase enum policy from JsonSerializerOptions; it must be wired
+    // per-property. JsonStringEnumConverter<T> performs case-insensitive
+    // matching on read, so PascalCase worker output ("Ok", "NeedsRework",
+    // "Failed", "Escalate") and camelCase output are both accepted.
+    [JsonConverter(typeof(JsonStringEnumConverter<Status>))]
+    public Status Status { get; set; }
+    public string? Summary { get; set; }
+    public List<string>? FilesChanged { get; set; }
+    public string? FailureReason { get; set; }
+    public Dictionary<string, JsonElement>? Metadata { get; set; }
+}
+
 [JsonSerializable(typeof(ClaudeCodeJsonEnvelope))]
 [JsonSerializable(typeof(ClaudeCodeUsage))]
+[JsonSerializable(typeof(WorkerResultDto))]
+[JsonSerializable(typeof(Dictionary<string, JsonElement>))]
 internal partial class ClaudeCodeJsonContext : JsonSerializerContext { }
 
 [JsonSerializable(typeof(WorkerResultDebugDto))]
