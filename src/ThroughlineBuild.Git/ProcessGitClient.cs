@@ -251,4 +251,244 @@ public sealed class ProcessGitClient : IGitClient
             return string.Empty;
         }
     }
+
+    public async Task<GitDiff> DiffAsync(
+        string fromRef,
+        string toRef,
+        string mainWorktreePath,
+        bool includePatchContent,
+        CancellationToken ct)
+    {
+        // Step 1: git diff --name-status fromRef...toRef
+        var nameStatusOutput = await RunGitAsync(
+            mainWorktreePath,
+            new[] { "diff", "--name-status", $"{fromRef}...{toRef}" },
+            ct).ConfigureAwait(false);
+
+        var nameStatusEntries = ParseNameStatus(nameStatusOutput);
+        if (nameStatusEntries.Count == 0)
+            return new GitDiff(fromRef, toRef, Array.Empty<DiffEntry>());
+
+        // Step 2: git diff --numstat fromRef...toRef
+        var numstatOutput = await RunGitAsync(
+            mainWorktreePath,
+            new[] { "diff", "--numstat", $"{fromRef}...{toRef}" },
+            ct).ConfigureAwait(false);
+
+        var numstatMap = ParseNumstat(numstatOutput);
+
+        // Step 3: build entries, optionally fetching patch content
+        var entries = new List<DiffEntry>(nameStatusEntries.Count);
+        foreach (var (path, kind, oldPath) in nameStatusEntries)
+        {
+            numstatMap.TryGetValue(path, out var counts);
+            string? patchContent = null;
+            if (includePatchContent)
+            {
+                patchContent = await FetchPatchAsync(
+                    mainWorktreePath, fromRef, toRef, path, oldPath, ct).ConfigureAwait(false);
+            }
+            entries.Add(new DiffEntry(
+                path,
+                kind,
+                oldPath,
+                counts.Added,
+                counts.Removed,
+                patchContent));
+        }
+
+        return new GitDiff(fromRef, toRef, entries);
+    }
+
+    private static List<(string Path, DiffKind Kind, string? OldPath)> ParseNameStatus(string output)
+    {
+        var result = new List<(string, DiffKind, string?)>();
+        foreach (var rawLine in output.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r');
+            if (line.Length == 0) continue;
+
+            var parts = line.Split('\t');
+            if (parts.Length < 2) continue;
+
+            var statusCode = parts[0];
+            DiffKind kind;
+            string path;
+            string? oldPath = null;
+
+            if (statusCode.StartsWith("R"))
+            {
+                kind = DiffKind.Renamed;
+                if (parts.Length >= 3)
+                {
+                    oldPath = parts[1];
+                    path = parts[2];
+                }
+                else
+                {
+                    // Unexpected format; skip
+                    continue;
+                }
+            }
+            else
+            {
+                path = parts[1];
+                kind = statusCode switch
+                {
+                    "A" => DiffKind.Added,
+                    "D" => DiffKind.Deleted,
+                    _ => DiffKind.Modified
+                };
+            }
+
+            result.Add((path, kind, oldPath));
+        }
+        return result;
+    }
+
+    // Returns a dictionary keyed by the "new" path (or only path for non-renames).
+    // For renames git --numstat emits either:
+    //   added  removed  {old => new}
+    // or in older git versions:
+    //   added  removed  old  new
+    // We normalise both forms to the new path as the key.
+    private static Dictionary<string, (int Added, int Removed)> ParseNumstat(string output)
+    {
+        var result = new Dictionary<string, (int Added, int Removed)>(StringComparer.Ordinal);
+        foreach (var rawLine in output.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r');
+            if (line.Length == 0) continue;
+
+            var parts = line.Split('\t');
+            if (parts.Length < 3) continue;
+
+            var addedStr = parts[0];
+            var removedStr = parts[1];
+
+            int added = addedStr == "-" ? 0 : (int.TryParse(addedStr, out var a) ? a : 0);
+            int removed = removedStr == "-" ? 0 : (int.TryParse(removedStr, out var r) ? r : 0);
+
+            if (parts.Length == 3)
+            {
+                // Standard or curly-brace rename form: "{old => new}" or just "path"
+                var pathField = parts[2];
+                if (pathField.Contains('{') && pathField.Contains("=>"))
+                {
+                    // Parse {old => new} form embedded in a path like "dir/{old => new}"
+                    var key = ResolveCurlyBraceRename(pathField);
+                    result[key] = (added, removed);
+                }
+                else
+                {
+                    result[pathField] = (added, removed);
+                }
+            }
+            else if (parts.Length >= 4)
+            {
+                // Old-style rename: added  removed  oldpath  newpath
+                result[parts[3]] = (added, removed);
+            }
+        }
+        return result;
+    }
+
+    // Resolves a curly-brace rename like "dir/{old => new}/file" or "{old => new}"
+    // to the "new" path.
+    private static string ResolveCurlyBraceRename(string path)
+    {
+        var openBrace = path.IndexOf('{');
+        var closeBrace = path.IndexOf('}');
+        if (openBrace < 0 || closeBrace < 0 || closeBrace <= openBrace)
+            return path;
+
+        var prefix = path.Substring(0, openBrace);
+        var suffix = path.Substring(closeBrace + 1);
+        var inner = path.Substring(openBrace + 1, closeBrace - openBrace - 1);
+        var arrow = inner.IndexOf("=>", StringComparison.Ordinal);
+        if (arrow < 0)
+            return path;
+
+        var newPart = inner.Substring(arrow + 2).Trim();
+        return (prefix + newPart + suffix).Replace("//", "/").TrimEnd('/');
+    }
+
+    // Fetches the patch for a single file. Returns null if the patch exceeds 100 KB.
+    private static async Task<string?> FetchPatchAsync(
+        string mainWorktreePath,
+        string fromRef,
+        string toRef,
+        string newPath,
+        string? oldPath,
+        CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = mainWorktreePath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        psi.ArgumentList.Add("diff");
+        psi.ArgumentList.Add($"{fromRef}...{toRef}");
+        psi.ArgumentList.Add("--");
+        psi.ArgumentList.Add(newPath);
+
+        using var proc = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start git process");
+
+        const int PatchSizeCap = 102400;
+        var buffer = new char[4096];
+        var sb = new System.Text.StringBuilder();
+        bool capped = false;
+
+        using var reader = proc.StandardOutput;
+        int read;
+        while ((read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0)
+        {
+            if (!capped)
+            {
+                sb.Append(buffer, 0, read);
+                if (sb.Length > PatchSizeCap)
+                    capped = true;
+            }
+        }
+
+        await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+
+        if (capped)
+            return null;
+
+        return sb.Length == 0 ? null : sb.ToString();
+    }
+
+    private static async Task<string> RunGitAsync(
+        string workingDirectory,
+        string[] args,
+        CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var proc = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start git process");
+        var stdout = await proc.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+        await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+        if (proc.ExitCode != 0)
+        {
+            var stderr = await proc.StandardError.ReadToEndAsync().ConfigureAwait(false);
+            throw new InvalidOperationException(
+                $"git {string.Join(" ", args)} failed (exit {proc.ExitCode}): {stderr.Trim()}");
+        }
+        return stdout;
+    }
 }
