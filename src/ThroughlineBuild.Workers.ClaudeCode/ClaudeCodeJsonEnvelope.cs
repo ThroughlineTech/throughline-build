@@ -22,6 +22,20 @@ public record ClaudeCodeUsage(
     [property: JsonPropertyName("cache_creation_input_tokens")] int? CacheCreationInputTokens
 );
 
+// Diagnostic DTO for --debug capture: serializes the core WorkerResult fields
+// excluding Metadata (IReadOnlyDictionary<string, object>) which is not AOT-serializable.
+// Captured to worker-result.json under the debug capture directory.
+public record WorkerResultDebugDto(
+    string Status,
+    string Summary,
+    IReadOnlyList<string> FilesChanged,
+    string? FailureReason);
+
 [JsonSerializable(typeof(ClaudeCodeJsonEnvelope))]
 [JsonSerializable(typeof(ClaudeCodeUsage))]
 internal partial class ClaudeCodeJsonContext : JsonSerializerContext { }
+
+[JsonSerializable(typeof(WorkerResultDebugDto))]
+[JsonSerializable(typeof(IReadOnlyList<string>))]
+[JsonSerializable(typeof(List<string>))]
+internal partial class DebugCaptureJsonContext : JsonSerializerContext { }

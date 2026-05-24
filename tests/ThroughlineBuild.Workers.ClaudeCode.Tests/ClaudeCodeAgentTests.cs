@@ -254,6 +254,119 @@ public class ClaudeCodeAgentConfigureEnvironmentTests
     }
 }
 
+public class ClaudeCodeAgentDebugCaptureTests
+{
+    private static WorkerResult MakeOkResult(string? failureReason = null) => new WorkerResult(
+        Status.Ok, "done", new[] { "foo.cs" }, failureReason,
+        new Dictionary<string, object>());
+
+    private static WorkerResult MakeEscalateResult(string failureReason) => new WorkerResult(
+        Status.Escalate, "No WORKER_RESULT found in output", Array.Empty<string>(), failureReason,
+        new Dictionary<string, object>());
+
+    private static ClaudeCodeJsonEnvelope MakeEnvelope(string? result) => new ClaudeCodeJsonEnvelope(
+        Type: "result", Subtype: "success", IsError: false, Result: result, Usage: null);
+
+    [Fact]
+    public void WriteDebugCapture_HappyPath_WritesFiveFiles()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "tlb105-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var envelope = MakeEnvelope("inner result text");
+            var result = MakeOkResult();
+
+            ClaudeCodeAgent.WriteDebugCapture(dir, "brief content", "stdout content", "stderr content", envelope, result);
+
+            Assert.True(File.Exists(Path.Combine(dir, "worker-stdin.txt")));
+            Assert.True(File.Exists(Path.Combine(dir, "worker-stdout.txt")));
+            Assert.True(File.Exists(Path.Combine(dir, "worker-stderr.txt")));
+            Assert.True(File.Exists(Path.Combine(dir, "envelope-result.txt")));
+            Assert.True(File.Exists(Path.Combine(dir, "worker-result.json")));
+            Assert.False(File.Exists(Path.Combine(dir, "parse-error.txt")));
+        }
+        finally { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public void WriteDebugCapture_HappyPath_FileContentsMatchInputs()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "tlb105-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var envelope = MakeEnvelope("inner result text");
+            var result = MakeOkResult();
+
+            ClaudeCodeAgent.WriteDebugCapture(dir, "the brief", "the stdout", "the stderr", envelope, result);
+
+            Assert.Equal("the brief", File.ReadAllText(Path.Combine(dir, "worker-stdin.txt"), System.Text.Encoding.UTF8));
+            Assert.Equal("the stdout", File.ReadAllText(Path.Combine(dir, "worker-stdout.txt"), System.Text.Encoding.UTF8));
+            Assert.Equal("the stderr", File.ReadAllText(Path.Combine(dir, "worker-stderr.txt"), System.Text.Encoding.UTF8));
+            Assert.Equal("inner result text", File.ReadAllText(Path.Combine(dir, "envelope-result.txt"), System.Text.Encoding.UTF8));
+
+            var resultJson = File.ReadAllText(Path.Combine(dir, "worker-result.json"), System.Text.Encoding.UTF8);
+            Assert.Contains("Ok", resultJson);
+            Assert.Contains("done", resultJson);
+        }
+        finally { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public void WriteDebugCapture_EnvelopeNull_WritesParseErrorInsteadOfEnvelopeResult()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "tlb105-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var result = MakeEscalateResult("Envelope result did not contain a WORKER_RESULT block. Stderr: ");
+
+            ClaudeCodeAgent.WriteDebugCapture(dir, "brief", "stdout", "stderr", null, result);
+
+            Assert.True(File.Exists(Path.Combine(dir, "parse-error.txt")));
+            Assert.False(File.Exists(Path.Combine(dir, "envelope-result.txt")));
+
+            var parseError = File.ReadAllText(Path.Combine(dir, "parse-error.txt"), System.Text.Encoding.UTF8);
+            Assert.Contains("WORKER_RESULT", parseError);
+        }
+        finally { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public void WriteDebugCapture_EnvelopeResultFieldNull_WritesParseError()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "tlb105-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var envelope = MakeEnvelope(null);  // result field is null
+            var result = MakeEscalateResult("Envelope result field is null. Subtype: success. Stderr: ");
+
+            ClaudeCodeAgent.WriteDebugCapture(dir, "brief", "stdout", "stderr", envelope, result);
+
+            Assert.True(File.Exists(Path.Combine(dir, "parse-error.txt")));
+            Assert.False(File.Exists(Path.Combine(dir, "envelope-result.txt")));
+        }
+        finally { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public void WriteDebugCapture_IdempotentRerun_DoesNotThrow()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "tlb105-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var envelope = MakeEnvelope("result");
+            var result = MakeOkResult();
+
+            // First call creates directory and files
+            ClaudeCodeAgent.WriteDebugCapture(dir, "brief", "stdout", "stderr", envelope, result);
+            // Second call must overwrite without throwing
+            ClaudeCodeAgent.WriteDebugCapture(dir, "brief2", "stdout2", "stderr2", envelope, result);
+
+            Assert.Equal("brief2", File.ReadAllText(Path.Combine(dir, "worker-stdin.txt"), System.Text.Encoding.UTF8));
+        }
+        finally { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+    }
+}
+
 public class ClaudeCodeAgentLlmUsageTests
 {
     [Fact]

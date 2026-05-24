@@ -80,7 +80,20 @@ public class ClaudeCodeAgent : IWorkerAgent
         var stdout = stdoutBuilder.ToString();
         var stderr = stderrBuilder.ToString();
 
-        return ParseStdoutEnvelope(stdout, process.ExitCode, stderr, stopwatch.ElapsedMilliseconds);
+        var result = ParseStdoutEnvelope(stdout, process.ExitCode, stderr, stopwatch.ElapsedMilliseconds);
+
+        if (options.DebugCaptureDirectory is not null)
+        {
+            ClaudeCodeJsonEnvelope? envelope = null;
+            try
+            {
+                envelope = JsonSerializer.Deserialize(stdout.Trim(), ClaudeCodeJsonContext.Default.ClaudeCodeJsonEnvelope);
+            }
+            catch { }
+            WriteDebugCapture(options.DebugCaptureDirectory, brief.Instruction, stdout, stderr, envelope, result);
+        }
+
+        return result;
     }
 
     // Parses the Claude Code JSON envelope from stdout, extracts the inner result text,
@@ -175,5 +188,47 @@ public class ClaudeCodeAgent : IWorkerAgent
         if (options.EnvironmentVariables != null)
             foreach (var (k, v) in options.EnvironmentVariables)
                 psi.Environment[k] = v;
+    }
+
+    // Writes raw worker inputs/outputs to a debug capture directory for post-mortem diagnosis.
+    // Files written:
+    //   worker-stdin.txt   - the brief instruction sent to the subprocess
+    //   worker-stdout.txt  - complete raw stdout from the subprocess
+    //   worker-stderr.txt  - complete raw stderr from the subprocess
+    //   envelope-result.txt - the inner result field from the JSON envelope (when envelope is non-null)
+    //   worker-result.json  - JSON serialization of the final WorkerResult
+    //   parse-error.txt     - failure reason when envelope is null or result field absent (parse-failure path)
+    // Directory is created idempotently. File writes use UTF-8 with BOM to preserve any non-ASCII bytes.
+    internal static void WriteDebugCapture(
+        string directory,
+        string briefInstruction,
+        string stdout,
+        string stderr,
+        ClaudeCodeJsonEnvelope? envelope,
+        WorkerResult result)
+    {
+        Directory.CreateDirectory(directory);
+
+        File.WriteAllText(Path.Combine(directory, "worker-stdin.txt"), briefInstruction, System.Text.Encoding.UTF8);
+        File.WriteAllText(Path.Combine(directory, "worker-stdout.txt"), stdout, System.Text.Encoding.UTF8);
+        File.WriteAllText(Path.Combine(directory, "worker-stderr.txt"), stderr, System.Text.Encoding.UTF8);
+
+        if (envelope?.Result is not null)
+        {
+            File.WriteAllText(Path.Combine(directory, "envelope-result.txt"), envelope.Result, System.Text.Encoding.UTF8);
+        }
+        else
+        {
+            // Parse-failure path: envelope absent or result field missing - preserve the failure reason
+            var parseErrorText = result.FailureReason ?? result.Summary;
+            File.WriteAllText(Path.Combine(directory, "parse-error.txt"), parseErrorText, System.Text.Encoding.UTF8);
+        }
+
+        // Serialize WorkerResult core fields to JSON for diagnostic purposes.
+        // Excludes Metadata (IReadOnlyDictionary<string, object>) to keep AOT serialization safe.
+        var dto = new WorkerResultDebugDto(result.Status.ToString(), result.Summary,
+            result.FilesChanged, result.FailureReason);
+        var resultJson = JsonSerializer.Serialize(dto, DebugCaptureJsonContext.Default.WorkerResultDebugDto);
+        File.WriteAllText(Path.Combine(directory, "worker-result.json"), resultJson, System.Text.Encoding.UTF8);
     }
 }

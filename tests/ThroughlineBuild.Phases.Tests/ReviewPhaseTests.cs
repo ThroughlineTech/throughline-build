@@ -435,6 +435,20 @@ public class ReviewPhaseTests
             Task.FromResult(_verdict);
     }
 
+    private sealed class CapturingWorkerAgent : IWorkerAgent
+    {
+        private readonly IReadOnlyDictionary<string, object>? _metadata;
+        public WorkerOptions? LastOptions { get; private set; }
+        public string Name => "capturing-fake-verifier";
+        public CapturingWorkerAgent(IReadOnlyDictionary<string, object>? metadata = null) { _metadata = metadata; }
+        public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
+        {
+            LastOptions = options;
+            return Task.FromResult(new WorkerResult(Status.Ok, "noop", Array.Empty<string>(), null,
+                _metadata ?? new Dictionary<string, object>()));
+        }
+    }
+
     private sealed class FakeGitClient : IGitClient
     {
         private readonly string _mainSha;
@@ -489,6 +503,163 @@ public class ReviewPhaseTests
         public Task<GitOpResult> FastForwardMergeAsync(string mergeRef, string mainWorktreePath, CancellationToken ct) =>
             Task.FromResult(new GitOpResult(true, null));
 
+        public Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+    }
+}
+
+public class ReviewPhaseDebugCaptureTests
+{
+    private const string MainSha = "0123456789abcdef0123456789abcdef01234567";
+    private const string ImplementedSha = "ffffffffffffffffffffffffffffffffffffffff";
+    private const string TicketId = "TLB-1";
+    private const string TicketTitle = "Test ticket";
+    private const string BranchName = "ticket/tlb-1-test-ticket";
+
+    private static Ticket MakeTicket() => new Ticket(
+        Id: TicketId, Title: TicketTitle, Type: "feature", State: TicketState.InReview,
+        Size: Size.S, Risk: Risk.Low, DescriptionHtml: "<p>plan</p>",
+        Relations: Array.Empty<Relation>(), Labels: Array.Empty<string>(), ParentId: null);
+
+    private static IReadOnlyDictionary<string, object> VerifierMetadata() => new Dictionary<string, object>
+    {
+        ["verdict"] = "Pass",
+        ["rationale"] = "looks good",
+        ["checks_failed"] = new List<string>()
+    };
+
+    [Fact]
+    public async Task RunAsync_VerifierWorkerOptionsDebugCaptureSet_WorkerReceivesThatDirectory()
+    {
+        const string captureDir = "/tmp/review-debug-capture-test";
+        var ticketing = new FakeTicketing(MakeTicket());
+        ticketing.SeedComment($"<p>[implemented_at: {ImplementedSha}]</p>");
+
+        var verifierWorker = new CapturingWorkerAgent(VerifierMetadata());
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, includeWorktreeMatching: true);
+
+        var reviewOptions = new ReviewOptions(
+            Checks: Array.Empty<CheckSpec>(),
+            VerifierWorkerOptions: new WorkerOptions(TimeSpan.FromMinutes(5), null,
+                DebugCaptureDirectory: captureDir));
+        var buildOptions = new BuildOptions("session-rev-dbg", "claude-code", TimeSpan.FromMinutes(5));
+        var phase = new ReviewPhase(ticketing, verifierWorker, events, buildOptions, reviewOptions, git);
+
+        var result = await phase.RunAsync(TicketId, Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(verifierWorker.LastOptions);
+        Assert.Equal(captureDir, verifierWorker.LastOptions!.DebugCaptureDirectory);
+    }
+
+    [Fact]
+    public async Task RunAsync_VerifierWorkerOptionsDebugCaptureNull_WorkerReceivesNullDirectory()
+    {
+        var ticketing = new FakeTicketing(MakeTicket());
+        ticketing.SeedComment($"<p>[implemented_at: {ImplementedSha}]</p>");
+
+        var verifierWorker = new CapturingWorkerAgent(VerifierMetadata());
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, includeWorktreeMatching: true);
+
+        var reviewOptions = new ReviewOptions(
+            Checks: Array.Empty<CheckSpec>(),
+            VerifierWorkerOptions: new WorkerOptions(TimeSpan.FromMinutes(5), null));
+        var buildOptions = new BuildOptions("session-rev-1", "claude-code", TimeSpan.FromMinutes(5));
+        var phase = new ReviewPhase(ticketing, verifierWorker, events, buildOptions, reviewOptions, git);
+
+        var result = await phase.RunAsync(TicketId, Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(verifierWorker.LastOptions);
+        Assert.Null(verifierWorker.LastOptions!.DebugCaptureDirectory);
+    }
+
+    private sealed class CapturingWorkerAgent : IWorkerAgent
+    {
+        private readonly IReadOnlyDictionary<string, object>? _metadata;
+        public WorkerOptions? LastOptions { get; private set; }
+        public string Name => "capturing-fake-verifier";
+        public CapturingWorkerAgent(IReadOnlyDictionary<string, object>? metadata = null) { _metadata = metadata; }
+        public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
+        {
+            LastOptions = options;
+            return Task.FromResult(new WorkerResult(Status.Ok, "noop", Array.Empty<string>(), null,
+                _metadata ?? new Dictionary<string, object>()));
+        }
+    }
+
+    private sealed class FakeTicketing : ITicketing
+    {
+        private readonly Ticket _ticket;
+        private readonly List<TicketComment> _seededComments = new();
+        public FakeTicketing(Ticket ticket) { _ticket = ticket; }
+        public void SeedComment(string html) =>
+            _seededComments.Add(new TicketComment(Guid.NewGuid().ToString(), html, DateTimeOffset.UtcNow));
+        public BackendCapabilities Capabilities => new BackendCapabilities(true, true, true, false);
+        public Task<Ticket> GetAsync(string id, CancellationToken ct) => Task.FromResult(_ticket);
+        public Task<IReadOnlyList<Ticket>> GetBatchAsync(IEnumerable<string> ids, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<Ticket>)new[] { _ticket });
+        public Task TransitionAsync(string id, TicketState newState, CancellationToken ct) => Task.CompletedTask;
+        public Task AppendDescriptionAsync(string id, string html, CancellationToken ct) => Task.CompletedTask;
+        public Task<string> CreateCommentAsync(string id, string html, CancellationToken ct) => Task.FromResult("c-1");
+        public Task ApplyLabelsAsync(string id, IEnumerable<string> labels, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<Relation>> GetRelationsAsync(string id, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<Relation>)Array.Empty<Relation>());
+        public Task<RollupResult> RollupParentAsync(string id, CancellationToken ct) =>
+            Task.FromResult(new RollupResult(false, null, null));
+        public Task<IReadOnlyList<TicketComment>> GetCommentsAsync(string id, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<TicketComment>)_seededComments);
+    }
+
+    private sealed class FakeEventSink : IEventSink
+    {
+        public Task EmitAsync(WorkflowEvent ev, CancellationToken ct) => Task.CompletedTask;
+        public Task FlushAsync(CancellationToken ct) => Task.CompletedTask;
+    }
+
+    private sealed class FakeGitClient : IGitClient
+    {
+        private readonly string _mainSha;
+        private readonly bool _includeWorktreeMatching;
+        public FakeGitClient(string mainSha, bool includeWorktreeMatching)
+        {
+            _mainSha = mainSha;
+            _includeWorktreeMatching = includeWorktreeMatching;
+        }
+        public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(_mainSha);
+        public Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct)
+        {
+            if (!_includeWorktreeMatching)
+                return Task.FromResult<IReadOnlyList<WorktreeInfo>>(Array.Empty<WorktreeInfo>());
+            return Task.FromResult<IReadOnlyList<WorktreeInfo>>(new[]
+            {
+                new WorktreeInfo("/some/worktree/path", BranchName, "deadbeef", false, false)
+            });
+        }
+        public Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct) =>
+            Task.FromResult(new WorktreeRemoveResult(true, null));
+        public Task<IReadOnlyList<string>> GetBranchesNotMergedAsync(string pattern, string baseBranch, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
+        public Task<WorktreeCreateResult> CreateWorktreeAsync(string worktreePath, string newBranch, string fromRef, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
+        public Task<string> HeadShaAsync(string worktreePath, CancellationToken ct) =>
+            Task.FromResult("deadbeef");
+        public Task<GitDiff> DiffAsync(string fromRef, string toRef, string mainWorktreePath, bool includePatchContent, CancellationToken ct) =>
+            Task.FromResult(new GitDiff(fromRef, toRef, new[]
+            {
+                new DiffEntry("src/Foo.cs", DiffKind.Modified, null, 5, 2, includePatchContent ? "@@ patch @@" : null)
+            }));
+        public Task<GitOpResult> FetchAsync(string remote, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+        public Task<RebaseResult> RebaseAsync(string ontoRef, string featureWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new RebaseResult(true, false, Array.Empty<string>(), null));
+        public Task<GitOpResult> RebaseAbortAsync(string featureWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+        public Task<GitOpResult> FastForwardMergeAsync(string mergeRef, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
         public Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct) =>
             Task.FromResult(new GitOpResult(true, null));
     }

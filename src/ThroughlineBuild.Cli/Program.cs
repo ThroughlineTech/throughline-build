@@ -22,6 +22,20 @@ static async Task<int> RunAsync(string[] args)
         return 0;
     }
 
+    // Pre-pass: strip --debug from args before any positional parser sees it.
+    // --debug is a bare bool flag (no value); the existing key/value parser expects pairs
+    // and would mangle subsequent args if --debug were left in.
+    bool debugMode = false;
+    var filteredArgs = new List<string>(args.Length);
+    foreach (var a in args)
+    {
+        if (a == "--debug")
+            debugMode = true;
+        else
+            filteredArgs.Add(a);
+    }
+    args = filteredArgs.ToArray();
+
     var verb = args[0];
 
     // Arg validation for phase verbs happens BEFORE config load so a missing id
@@ -162,6 +176,13 @@ static async Task<int> RunAsync(string[] args)
     var cwd = Directory.GetCurrentDirectory();
 
     var sessionId = Guid.NewGuid().ToString("N");
+
+    // --debug: capture worker stdin/stdout/stderr/envelope into .build/sessions/<session-id>/
+    // The same session-id is shared with the JSONL event sink so the two sinks correlate.
+    string? debugCaptureDir = debugMode
+        ? Path.Combine(cwd, ".build", "sessions", sessionId)
+        : null;
+
     var http = new HttpClient();
     var ticketing = new PlaneTicketingClient(http, new PlaneClientOptions
     {
@@ -183,7 +204,8 @@ static async Task<int> RunAsync(string[] args)
     var buildOptions = new BuildOptions(
         SessionId: sessionId,
         WorkerName: config2.Workers.DefaultAgent,
-        WorkerTimeout: TimeSpan.FromMinutes(config2.Workers.TimeoutMinutes));
+        WorkerTimeout: TimeSpan.FromMinutes(config2.Workers.TimeoutMinutes),
+        DebugCaptureDirectory: debugCaptureDir);
 
     if (verb == "plan")
     {
@@ -209,10 +231,14 @@ static async Task<int> RunAsync(string[] args)
         if (!result.Success)
         {
             Console.Error.WriteLine($"Plan phase failed: {result.FailureReason}");
+            if (debugCaptureDir is not null)
+                Console.WriteLine($"Debug capture: .build/sessions/{sessionId}/");
             return 1;
         }
 
         Console.WriteLine($"Plan complete: {result.TicketId} risk={result.RiskLabel} size={result.SizeLabel}");
+        if (debugCaptureDir is not null)
+            Console.WriteLine($"Debug capture: .build/sessions/{sessionId}/");
         return 0;
     }
     else if (verb == "implement")
@@ -239,10 +265,14 @@ static async Task<int> RunAsync(string[] args)
         if (!result.Success)
         {
             Console.Error.WriteLine($"Implement phase failed: {result.FailureReason}");
+            if (debugCaptureDir is not null)
+                Console.WriteLine($"Debug capture: .build/sessions/{sessionId}/");
             return 1;
         }
 
         Console.WriteLine($"Implement complete: {result.TicketId} commit={result.CommitSha} branch={result.BranchName}");
+        if (debugCaptureDir is not null)
+            Console.WriteLine($"Debug capture: .build/sessions/{sessionId}/");
         return 0;
     }
     else if (verb == "ship")
@@ -314,7 +344,8 @@ static async Task<int> RunAsync(string[] args)
     {
         var verifierWorkerOptions = new WorkerOptions(
             TimeSpan.FromMinutes(config2.Review.VerifierTimeoutMinutes),
-            config2.Review.VerifierAllowedTools);
+            config2.Review.VerifierAllowedTools,
+            DebugCaptureDirectory: debugCaptureDir);
         var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
         var phase = new ReviewPhase(ticketing, worker, eventSink, buildOptions, reviewOptions);
         ReviewResult result;
@@ -338,12 +369,16 @@ static async Task<int> RunAsync(string[] args)
         if (!result.Success)
         {
             Console.Error.WriteLine($"Review phase failed: {result.FailureReason}");
+            if (debugCaptureDir is not null)
+                Console.WriteLine($"Debug capture: .build/sessions/{sessionId}/");
             return 4;
         }
 
         Console.WriteLine($"Review complete: {result.TicketId} verdict={result.Verdict}");
         if (!string.IsNullOrEmpty(result.VerdictRationale))
             Console.WriteLine($"  rationale: {result.VerdictRationale}");
+        if (debugCaptureDir is not null)
+            Console.WriteLine($"Debug capture: .build/sessions/{sessionId}/");
 
         return result.Verdict == ThroughlineBuild.Contracts.Models.VerdictKind.Pass ? 0 : 1;
     }

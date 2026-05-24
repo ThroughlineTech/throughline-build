@@ -6,15 +6,20 @@ public static class CliUsage
 build - Throughline Build
 
 Usage:
-  build plan <ticket-id>                                  Run the plan phase for a ticket
-  build implement <ticket-id>                             Run the implement phase for a ticket
-  build review <ticket-id>                                Run the review phase for a ticket
-  build ship <ticket-id>                                  Ship a reviewed ticket (local fast-forward merge; no push to remote)
+  build plan <ticket-id> [--debug]                        Run the plan phase for a ticket
+  build implement <ticket-id> [--debug]                   Run the implement phase for a ticket
+  build review <ticket-id> [--debug]                      Run the review phase for a ticket
+  build ship <ticket-id> [--debug]                        Ship a reviewed ticket (local fast-forward merge; no push to remote); --debug accepted but is a no-op (ship has no worker subprocess)
   build amend <ticket-id> [--size S|M|L] [--note "..."]   Amend an existing ticket (at least one flag required)
   build close <ticket-id> <reason>                        Close a ticket (reason required)
   build defer <ticket-id> <reason>                        Defer a ticket (reason required)
   build reopen <ticket-id> [reason]                       Reopen a previously closed or deferred ticket (reason optional)
   build --help                                            Show this help
+
+Flags:
+  --debug   Capture worker stdin, raw stdout, stderr, and envelope into .build/sessions/<session-id>/
+            Writes: worker-stdin.txt, worker-stdout.txt, worker-stderr.txt, envelope-result.txt (or parse-error.txt on failure), worker-result.json
+            No-op for ship (ship has no worker subprocess).
 
 Exit codes:
   0  Success

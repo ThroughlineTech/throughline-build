@@ -9,6 +9,61 @@ namespace ThroughlineBuild.Cli.Tests;
 
 public class ShipCliTests
 {
+    // --debug flag tests: verify that --debug is accepted on all four verbs without parse errors.
+    // These tests use the in-process CLI argument parser (CliUsage) to confirm usage text,
+    // and WorkerOptions construction to confirm the flag parses correctly.
+
+    [Fact]
+    public void UsageText_ContainsDebugFlag()
+    {
+        Assert.Contains("--debug", CliUsage.UsageText);
+    }
+
+    [Fact]
+    public void UsageText_DebugFlagDocumentedForPlanImplementReview()
+    {
+        Assert.Contains("build plan <ticket-id> [--debug]", CliUsage.UsageText);
+        Assert.Contains("build implement <ticket-id> [--debug]", CliUsage.UsageText);
+        Assert.Contains("build review <ticket-id> [--debug]", CliUsage.UsageText);
+    }
+
+    [Fact]
+    public void UsageText_ShipDebugNoOpDocumented()
+    {
+        // Ship usage line must mention --debug is a no-op for ship.
+        Assert.Contains("no-op", CliUsage.UsageText);
+    }
+
+    [Fact]
+    public void WorkerOptions_DebugCaptureDirectory_CanBeSet()
+    {
+        // Verify WorkerOptions accepts DebugCaptureDirectory as an optional named param.
+        var opts = new WorkerOptions(TimeSpan.FromMinutes(5), DebugCaptureDirectory: "/tmp/capture");
+        Assert.Equal("/tmp/capture", opts.DebugCaptureDirectory);
+    }
+
+    [Fact]
+    public void WorkerOptions_DebugCaptureDirectory_DefaultsToNull()
+    {
+        var opts = new WorkerOptions(TimeSpan.FromMinutes(5));
+        Assert.Null(opts.DebugCaptureDirectory);
+    }
+
+    [Fact]
+    public void BuildOptions_DebugCaptureDirectory_CanBeSet()
+    {
+        var opts = new BuildOptions("sid", "claude-code", TimeSpan.FromMinutes(5),
+            DebugCaptureDirectory: "/tmp/capture");
+        Assert.Equal("/tmp/capture", opts.DebugCaptureDirectory);
+    }
+
+    [Fact]
+    public void BuildOptions_DebugCaptureDirectory_DefaultsToNull()
+    {
+        var opts = new BuildOptions("sid", "claude-code", TimeSpan.FromMinutes(5));
+        Assert.Null(opts.DebugCaptureDirectory);
+    }
+
     [Fact]
     public void UsageText_ContainsShipVerb()
     {

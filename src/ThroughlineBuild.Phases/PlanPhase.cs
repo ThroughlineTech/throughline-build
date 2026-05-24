@@ -11,7 +11,8 @@ public record BuildOptions(
     string SessionId,
     string WorkerName,
     TimeSpan WorkerTimeout,
-    IReadOnlyList<string>? WorkerAllowedTools = null);
+    IReadOnlyList<string>? WorkerAllowedTools = null,
+    string? DebugCaptureDirectory = null);
 
 public record PlanResult(
     bool Success,
@@ -74,7 +75,8 @@ public class PlanPhase : IWorkflowPhase
             ["worker"] = _options.WorkerName
         }, ct).ConfigureAwait(false);
 
-        var workerOptions = new WorkerOptions(_options.WorkerTimeout, _options.WorkerAllowedTools);
+        var workerOptions = new WorkerOptions(_options.WorkerTimeout, _options.WorkerAllowedTools,
+            DebugCaptureDirectory: _options.DebugCaptureDirectory);
         var workerResult = await _worker.ExecuteAsync(brief, workingDirectory, workerOptions, ct).ConfigureAwait(false);
 
         await _ticketing.TransitionAsync(ticketId, TicketState.Planning, ct).ConfigureAwait(false);
