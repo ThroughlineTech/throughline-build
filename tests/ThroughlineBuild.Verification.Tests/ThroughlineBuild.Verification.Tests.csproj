@@ -16,5 +16,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\ThroughlineBuild.Verification\ThroughlineBuild.Verification.csproj" />
+    <ProjectReference Include="..\..\src\ThroughlineBuild.Contracts\ThroughlineBuild.Contracts.csproj" />
   </ItemGroup>
 </Project>

@@ -1,3 +1,4 @@
+using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Verification;
 using Xunit;
 
