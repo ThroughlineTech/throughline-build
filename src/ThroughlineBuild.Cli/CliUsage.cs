@@ -17,7 +17,9 @@ Usage:
   build --help                                            Show this help
 
 Flags:
-  --debug   Capture worker stdin, raw stdout, stderr, and envelope into .build/sessions/<session-id>/
+  --debug   Stream worker stdout/stderr to the orchestrator console in real time, and capture all worker
+            artifacts to .build/sessions/<session-id>/. Stdout lines are prefixed "worker> "; stderr
+            lines are prefixed "worker! ". Use 2>&1 | tee log.txt to capture both streams.
             Writes: worker-stdin.txt, worker-stdout.txt, worker-stderr.txt, envelope-result.txt (or parse-error.txt on failure), worker-result.json
             No-op for ship (ship has no worker subprocess).
 

@@ -478,6 +478,48 @@ public class WorkerResultParserAotRegressionTests
     }
 }
 
+public class ClaudeCodeAgentLiveStreamTests
+{
+    [Fact]
+    public void WriteWorkerLine_NullSink_NoOp()
+    {
+        // Calling with a null sink must not throw and must not write to the sentinel.
+        var sentinel = new System.IO.StringWriter();
+
+        // Call with null sink - sentinel must remain empty
+        ClaudeCodeAgent.WriteWorkerLine(null, "worker> ", "some line");
+
+        Assert.Equal(string.Empty, sentinel.ToString());
+    }
+
+    [Fact]
+    public void WriteWorkerLine_NonNullSink_WritesPrefixedLine()
+    {
+        var sink = new System.IO.StringWriter();
+
+        ClaudeCodeAgent.WriteWorkerLine(sink, "worker> ", "hello world");
+
+        var written = sink.ToString();
+        Assert.Contains("worker> hello world", written);
+    }
+
+    [Fact]
+    public void WriteWorkerLine_RespectsPrefix_StdoutVsStderr()
+    {
+        var stdoutSink = new System.IO.StringWriter();
+        var stderrSink = new System.IO.StringWriter();
+
+        ClaudeCodeAgent.WriteWorkerLine(stdoutSink, "worker> ", "stdout line");
+        ClaudeCodeAgent.WriteWorkerLine(stderrSink, "worker! ", "stderr line");
+
+        Assert.Contains("worker> stdout line", stdoutSink.ToString());
+        Assert.Contains("worker! stderr line", stderrSink.ToString());
+        // Cross-check: stdout sink has no "!" prefix, stderr sink has no ">" prefix
+        Assert.DoesNotContain("worker! ", stdoutSink.ToString());
+        Assert.DoesNotContain("worker> ", stderrSink.ToString());
+    }
+}
+
 public class ClaudeCodeAgentLlmUsageTests
 {
     [Fact]

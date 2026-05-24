@@ -122,7 +122,9 @@ public class ImplementPhase : IWorkflowPhase
 
         // Step 11: Execute worker inside the worktree
         var workerOptions = new WorkerOptions(_options.WorkerTimeout, _options.WorkerAllowedTools,
-            DebugCaptureDirectory: _options.DebugCaptureDirectory);
+            DebugCaptureDirectory: _options.DebugCaptureDirectory,
+            LiveStdoutSink: _options.LiveStdoutSink,
+            LiveStderrSink: _options.LiveStderrSink);
         var workerResult = await _worker.ExecuteAsync(brief, worktreeNames.WorktreePath, workerOptions, ct).ConfigureAwait(false);
 
         // Step 12: Emit VerifierVerdict

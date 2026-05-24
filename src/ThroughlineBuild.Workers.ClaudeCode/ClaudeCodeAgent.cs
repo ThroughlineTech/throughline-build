@@ -54,8 +54,22 @@ public class ClaudeCodeAgent : IWorkerAgent
         var stopwatch = Stopwatch.StartNew();
 
         var process = new Process { StartInfo = psi };
-        process.OutputDataReceived += (_, e) => { if (e.Data != null) stdoutBuilder.AppendLine(e.Data); };
-        process.ErrorDataReceived += (_, e) => { if (e.Data != null) stderrBuilder.AppendLine(e.Data); };
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data != null)
+            {
+                stdoutBuilder.AppendLine(e.Data);
+                WriteWorkerLine(options.LiveStdoutSink, "worker> ", e.Data);
+            }
+        };
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data != null)
+            {
+                stderrBuilder.AppendLine(e.Data);
+                WriteWorkerLine(options.LiveStderrSink, "worker! ", e.Data);
+            }
+        };
 
         process.Start();
         process.BeginOutputReadLine();
@@ -236,5 +250,14 @@ public class ClaudeCodeAgent : IWorkerAgent
             result.FilesChanged, result.FailureReason);
         var resultJson = JsonSerializer.Serialize(dto, DebugCaptureJsonContext.Default.WorkerResultDebugDto);
         File.WriteAllText(Path.Combine(directory, "worker-result.json"), resultJson, System.Text.Encoding.UTF8);
+    }
+
+    // Writes a prefixed line to the sink when the sink is non-null, otherwise no-ops.
+    // Used to tee worker stdout/stderr lines to an optional live stream without touching
+    // the StringBuilder accumulators that feed the parse pipeline.
+    internal static void WriteWorkerLine(System.IO.TextWriter? sink, string prefix, string line)
+    {
+        if (sink is null) return;
+        sink.WriteLine(prefix + line);
     }
 }

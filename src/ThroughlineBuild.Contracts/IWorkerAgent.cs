@@ -30,8 +30,12 @@ public interface IWorkerAgent
 /// <param name="AllowedTools">Optional list of tool names the worker is allowed to use. Null means all tools are allowed.</param>
 /// <param name="EnvironmentVariables">Optional dictionary of environment variables to set for the execution. Null means no additional environment variables.</param>
 /// <param name="DebugCaptureDirectory">Optional directory path for debug capture. When non-null, the worker writes raw stdin, stdout, stderr, envelope result, and final WorkerResult into this directory. Null means no debug capture (default behavior).</param>
+/// <param name="LiveStdoutSink">Optional TextWriter to receive worker stdout lines as they arrive, prefixed with "worker> ". When non-null, each stdout line is tee'd to this writer in addition to being accumulated for parsing. Null means no live streaming (default behavior).</param>
+/// <param name="LiveStderrSink">Optional TextWriter to receive worker stderr lines as they arrive, prefixed with "worker! ". When non-null, each stderr line is tee'd to this writer in addition to being accumulated for parsing. Null means no live streaming (default behavior).</param>
 public record WorkerOptions(
     TimeSpan Timeout,
     IReadOnlyList<string>? AllowedTools = null,
     IReadOnlyDictionary<string, string>? EnvironmentVariables = null,
-    string? DebugCaptureDirectory = null);
+    string? DebugCaptureDirectory = null,
+    System.IO.TextWriter? LiveStdoutSink = null,
+    System.IO.TextWriter? LiveStderrSink = null);
