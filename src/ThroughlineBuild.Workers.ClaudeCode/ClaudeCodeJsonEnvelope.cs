@@ -40,16 +40,27 @@ public record WorkerResultDebugDto(
 // should handle JsonElement (the phases already do via their TryGetString helpers).
 internal sealed class WorkerResultDto
 {
+    // JsonPropertyName tags are required because source-gen does not apply
+    // a default naming policy and is case-sensitive: real worker output uses
+    // camelCase keys ("status", "summary", "filesChanged", "failureReason",
+    // "metadata"), so without these tags every field deserialized to its
+    // default value (Status -> Ok, Metadata -> null).
+    //
     // [JsonConverter] is required here: source-gen does not inherit the
     // CamelCase enum policy from JsonSerializerOptions; it must be wired
     // per-property. JsonStringEnumConverter<T> performs case-insensitive
     // matching on read, so PascalCase worker output ("Ok", "NeedsRework",
     // "Failed", "Escalate") and camelCase output are both accepted.
+    [JsonPropertyName("status")]
     [JsonConverter(typeof(JsonStringEnumConverter<Status>))]
     public Status Status { get; set; }
+    [JsonPropertyName("summary")]
     public string? Summary { get; set; }
+    [JsonPropertyName("filesChanged")]
     public List<string>? FilesChanged { get; set; }
+    [JsonPropertyName("failureReason")]
     public string? FailureReason { get; set; }
+    [JsonPropertyName("metadata")]
     public Dictionary<string, JsonElement>? Metadata { get; set; }
 }
 

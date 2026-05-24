@@ -243,7 +243,14 @@ public sealed class PlaneTicketingClient : ITicketing
 
             var statesByName = await GetStatesByNameAsync(token).ConfigureAwait(false);
             if (!statesByName.TryGetValue(stateName, out var stateId))
-                throw new InvalidOperationException($"State '{stateName}' not found in Plane project");
+            {
+                // Plane project doesn't have this state installed. Warn and leave the
+                // ticket where it is; a subsequent TransitionAsync to a state that
+                // does exist will still proceed normally.
+                Console.Error.WriteLine(
+                    $"Warning: Plane project has no '{stateName}' state; leaving {id} in its current state.");
+                return;
+            }
 
             await PatchJsonAsync(
                 $"{IssuesBase}{issue.Id}/",

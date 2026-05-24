@@ -15,7 +15,7 @@ public class WorkerResultParserTests
             "Some preamble\n" +
             "```json\n" +
             "WORKER_RESULT\n" +
-            "{\"Status\":\"Ok\",\"Summary\":\"done\",\"FilesChanged\":[\"foo.cs\"],\"FailureReason\":null,\"Metadata\":{}}\n" +
+            "{\"status\":\"Ok\",\"summary\":\"done\",\"filesChanged\":[\"foo.cs\"],\"failureReason\":null,\"metadata\":{}}\n" +
             "```\n";
 
         var outcome = WorkerResultParser.TryParse(stdout);
@@ -90,7 +90,7 @@ public class WorkerResultParserTests
     {
         var stdout =
             "  WORKER_RESULT  \n" +
-            "{\"Status\":\"Failed\",\"Summary\":\"oops\",\"FilesChanged\":[],\"FailureReason\":\"bad\",\"Metadata\":{}}\n";
+            "{\"status\":\"Failed\",\"summary\":\"oops\",\"filesChanged\":[],\"failureReason\":\"bad\",\"metadata\":{}}\n";
 
         var outcome = WorkerResultParser.TryParse(stdout);
 
@@ -105,7 +105,7 @@ public class WorkerResultParserTests
     {
         var stdout =
             "WORKER_RESULT\n" +
-            "{\"Status\":\"NeedsRework\",\"Summary\":\"try again\",\"FilesChanged\":[],\"FailureReason\":\"partial\",\"Metadata\":{}}\n";
+            "{\"status\":\"NeedsRework\",\"summary\":\"try again\",\"filesChanged\":[],\"failureReason\":\"partial\",\"metadata\":{}}\n";
 
         var outcome = WorkerResultParser.TryParse(stdout);
 
@@ -118,7 +118,7 @@ public class WorkerResultParserTests
     {
         var stdout =
             "WORKER_RESULT\n" +
-            "{\"Status\":\"Escalate\",\"Summary\":\"need help\",\"FilesChanged\":[],\"FailureReason\":\"unclear\",\"Metadata\":{}}\n";
+            "{\"status\":\"Escalate\",\"summary\":\"need help\",\"filesChanged\":[],\"failureReason\":\"unclear\",\"metadata\":{}}\n";
 
         var outcome = WorkerResultParser.TryParse(stdout);
 
@@ -154,7 +154,7 @@ public class ClaudeCodeAgentEnvelopeParserTests
 
     private const string ValidWorkerResultBlock =
         "WORKER_RESULT\n" +
-        "{\"Status\":\"Ok\",\"Summary\":\"done\",\"FilesChanged\":[\"foo.cs\"],\"FailureReason\":null,\"Metadata\":{}}\n";
+        "{\"status\":\"Ok\",\"summary\":\"done\",\"filesChanged\":[\"foo.cs\"],\"failureReason\":null,\"metadata\":{}}\n";
 
     [Fact]
     public void EnvelopeParser_ValidJson_RoutesResultToWorkerResultParser()
@@ -410,8 +410,8 @@ public class WorkerResultParserAotRegressionTests
     public void SourceGenContext_HasWorkerResultDto_AndDeserializesHappyPath()
     {
         var json =
-            "{\"Status\":\"Ok\",\"Summary\":\"plan complete\",\"FilesChanged\":[\"src/Foo.cs\"]," +
-            "\"FailureReason\":null,\"Metadata\":{\"plan_html\":\"<p>plan</p>\"," +
+            "{\"status\":\"Ok\",\"summary\":\"plan complete\",\"filesChanged\":[\"src/Foo.cs\"]," +
+            "\"failureReason\":null,\"metadata\":{\"plan_html\":\"<p>plan</p>\"," +
             "\"risk_label\":\"low\",\"size_label\":\"M\",\"planned_at_sha\":\"abc123\"}}";
 
         // Direct source-gen call - this is exactly what TryParse now uses.
@@ -433,8 +433,8 @@ public class WorkerResultParserAotRegressionTests
     public void SourceGenContext_WorkerResultDto_DeserializesNeedsReworkStatus()
     {
         var json =
-            "{\"Status\":\"NeedsRework\",\"Summary\":\"try again\"," +
-            "\"FilesChanged\":[],\"FailureReason\":\"partial\",\"Metadata\":{}}";
+            "{\"status\":\"NeedsRework\",\"summary\":\"try again\"," +
+            "\"filesChanged\":[],\"failureReason\":\"partial\",\"metadata\":{}}";
 
         var dto = System.Text.Json.JsonSerializer.Deserialize(json, ClaudeCodeJsonContext.Default.WorkerResultDto);
 
@@ -447,8 +447,8 @@ public class WorkerResultParserAotRegressionTests
     public void SourceGenContext_WorkerResultDto_DeserializesEscalateStatus()
     {
         var json =
-            "{\"Status\":\"Escalate\",\"Summary\":\"escalated\"," +
-            "\"FilesChanged\":[],\"FailureReason\":\"unclear\",\"Metadata\":{}}";
+            "{\"status\":\"Escalate\",\"summary\":\"escalated\"," +
+            "\"filesChanged\":[],\"failureReason\":\"unclear\",\"metadata\":{}}";
 
         var dto = System.Text.Json.JsonSerializer.Deserialize(json, ClaudeCodeJsonContext.Default.WorkerResultDto);
 
@@ -465,8 +465,8 @@ public class WorkerResultParserAotRegressionTests
     {
         var stdout =
             "WORKER_RESULT\n" +
-            "{\"Status\":\"Ok\",\"Summary\":\"done\",\"FilesChanged\":[],\"FailureReason\":null," +
-            "\"Metadata\":{\"plan_html\":\"<p>x</p>\",\"risk_label\":\"low\"," +
+            "{\"status\":\"Ok\",\"summary\":\"done\",\"filesChanged\":[],\"failureReason\":null," +
+            "\"metadata\":{\"plan_html\":\"<p>x</p>\",\"risk_label\":\"low\"," +
             "\"size_label\":\"S\",\"planned_at_sha\":\"deadbeef\"}}\n";
 
         var outcome = WorkerResultParser.TryParse(stdout);
