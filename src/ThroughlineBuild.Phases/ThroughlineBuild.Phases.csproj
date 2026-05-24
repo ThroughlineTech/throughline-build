@@ -11,6 +11,7 @@
     <ProjectReference Include="..\ThroughlineBuild.Briefs\ThroughlineBuild.Briefs.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.Git\ThroughlineBuild.Git.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.Helpers\ThroughlineBuild.Helpers.csproj" />
+    <ProjectReference Include="..\ThroughlineBuild.Verification\ThroughlineBuild.Verification.csproj" />
   </ItemGroup>
   <ItemGroup>
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
