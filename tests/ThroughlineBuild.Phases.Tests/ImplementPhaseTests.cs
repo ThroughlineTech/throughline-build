@@ -321,5 +321,8 @@ public class ImplementPhaseTests
 
         public Task<string> HeadShaAsync(string worktreePath, CancellationToken ct) =>
             Task.FromResult(_headSha);
+
+        public Task<GitDiff> DiffAsync(string fromRef, string toRef, string mainWorktreePath, bool includePatchContent, CancellationToken ct) =>
+            Task.FromResult(new GitDiff(fromRef, toRef, Array.Empty<DiffEntry>()));
     }
 }

@@ -212,5 +212,8 @@ public class PlanPhaseTests
             Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
         public Task<string> HeadShaAsync(string worktreePath, CancellationToken ct) =>
             Task.FromResult("0000000000000000000000000000000000000000");
+
+        public Task<GitDiff> DiffAsync(string fromRef, string toRef, string mainWorktreePath, bool includePatchContent, CancellationToken ct) =>
+            Task.FromResult(new GitDiff(fromRef, toRef, Array.Empty<DiffEntry>()));
     }
 }
