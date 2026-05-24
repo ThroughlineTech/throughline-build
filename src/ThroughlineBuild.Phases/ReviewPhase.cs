@@ -88,11 +88,12 @@ public class ReviewPhase : IWorkflowPhase
             return new ReviewResult(false, ticketId, null, null, Array.Empty<string>(),
                 $"feature worktree not found at {worktreeNames.WorktreePath}");
 
-        // Step 4: Get current main SHA
+        // Step 4: Resolve base ref (origin/main with fallback to local main) and its SHA
+        string baseRef;
         string mainSha;
         try
         {
-            mainSha = await _git.RevParseAsync("origin/main", workingDirectory, ct).ConfigureAwait(false);
+            (baseRef, mainSha) = await BaseRefResolver.ResolveAsync(_git, workingDirectory, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -124,7 +125,7 @@ public class ReviewPhase : IWorkflowPhase
                 "no implemented_at marker found - ticket reached InReview without an implement marker, ReviewPhase cannot reconstruct implementer state");
 
         // Step 6b: Compute diff and synthesize implementer WorkerResult
-        var diff = await _git.DiffAsync("origin/main", worktreeNames.BranchName, workingDirectory, includePatchContent: true, ct).ConfigureAwait(false);
+        var diff = await _git.DiffAsync(baseRef, worktreeNames.BranchName, workingDirectory, includePatchContent: true, ct).ConfigureAwait(false);
         var implementerResult = new WorkerResult(
             Status.Ok,
             $"Reconstructed from implemented_at: {implementerCommitSha} ({diff.Entries.Count} files changed)",

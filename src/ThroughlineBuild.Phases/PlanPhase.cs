@@ -58,7 +58,7 @@ public class PlanPhase : IWorkflowPhase
         string mainSha;
         try
         {
-            mainSha = await _git.RevParseAsync("origin/main", workingDirectory, ct).ConfigureAwait(false);
+            (_, mainSha) = await BaseRefResolver.ResolveAsync(_git, workingDirectory, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

@@ -48,11 +48,12 @@ public class ImplementPhase : IWorkflowPhase
         if (ticket.State != TicketState.Ready)
             return new ImplementResult(false, ticketId, null, null, null, "ticket not in Ready state");
 
-        // Step 3: Get current main SHA
+        // Step 3: Resolve base ref (origin/main with fallback to local main) and its SHA
+        string baseRef;
         string mainSha;
         try
         {
-            mainSha = await _git.RevParseAsync("origin/main", workingDirectory, ct).ConfigureAwait(false);
+            (baseRef, mainSha) = await BaseRefResolver.ResolveAsync(_git, workingDirectory, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -99,7 +100,7 @@ public class ImplementPhase : IWorkflowPhase
         var createResult = await _git.CreateWorktreeAsync(
             worktreeNames.WorktreePath,
             worktreeNames.BranchName,
-            "origin/main",
+            baseRef,
             workingDirectory,
             ct).ConfigureAwait(false);
         if (!createResult.Success)

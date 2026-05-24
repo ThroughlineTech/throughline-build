@@ -179,9 +179,13 @@ static async Task<int> RunAsync(string[] args)
 
     // --debug: capture worker stdin/stdout/stderr/envelope into .build/sessions/<session-id>/
     // The same session-id is shared with the JSONL event sink so the two sinks correlate.
+    // Create the dir eagerly so the "Debug capture:" line at exit always points somewhere
+    // real, even when the phase fails before the worker spawns (e.g. early git errors).
     string? debugCaptureDir = debugMode
         ? Path.Combine(cwd, ".build", "sessions", sessionId)
         : null;
+    if (debugCaptureDir is not null)
+        Directory.CreateDirectory(debugCaptureDir);
 
     var http = new HttpClient();
     var ticketing = new PlaneTicketingClient(http, new PlaneClientOptions
