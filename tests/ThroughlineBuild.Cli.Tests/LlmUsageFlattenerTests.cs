@@ -18,7 +18,7 @@ public class LlmUsageFlattenerTests
         };
 
         // Act
-        var result = LlmUsageFlattener.FlattenLlmUsage(input);
+        var result = LlmUsageFlattener.Flatten(input);
 
         // Assert
         Assert.NotNull(result);
@@ -37,7 +37,7 @@ public class LlmUsageFlattenerTests
         var jsonElement = doc.RootElement;
 
         // Act
-        var result = LlmUsageFlattener.FlattenLlmUsage(jsonElement);
+        var result = LlmUsageFlattener.Flatten(jsonElement);
 
         // Assert
         Assert.NotNull(result);
@@ -49,106 +49,80 @@ public class LlmUsageFlattenerTests
     }
 
     [Fact]
-    public void UnwrapJsonElement_WithStringValue_ReturnsString()
+    public void Flatten_WithJsonElementStringValues_UnwrapsStrings()
     {
         // Arrange
-        var json = "\"test string\"";
+        var json = "{\"field1\": \"test string\", \"field2\": \"another string\"}";
         using var doc = JsonDocument.Parse(json);
         var jsonElement = doc.RootElement;
 
         // Act
-        var result = LlmUsageFlattener.UnwrapJsonElement(jsonElement);
+        var result = LlmUsageFlattener.Flatten(jsonElement);
 
         // Assert
-        Assert.IsType<string>(result);
-        Assert.Equal("test string", result);
+        Assert.NotNull(result);
+        Assert.Equal(2, result.Count);
+        Assert.IsType<string>(result["field1"]);
+        Assert.Equal("test string", result["field1"]);
+        Assert.Equal("another string", result["field2"]);
     }
 
     [Fact]
-    public void UnwrapJsonElement_WithInt32Value_ReturnsIntOrLong()
+    public void Flatten_WithJsonElementNumberValues_UnwrapsNumbers()
     {
         // Arrange
-        using var doc = JsonDocument.Parse("42");
+        var json = "{\"int_field\": 42, \"long_field\": 9223372036854775807}";
+        using var doc = JsonDocument.Parse(json);
         var jsonElement = doc.RootElement;
 
         // Act
-        var result = LlmUsageFlattener.UnwrapJsonElement(jsonElement);
+        var result = LlmUsageFlattener.Flatten(jsonElement);
 
         // Assert
-        Assert.True(result is int or long);
-        Assert.Equal(42L, Convert.ToInt64(result));
+        Assert.NotNull(result);
+        Assert.Equal(2, result.Count);
+        Assert.True(result["int_field"] is int or long);
+        Assert.Equal(42L, Convert.ToInt64(result["int_field"]));
+        Assert.True(result["long_field"] is int or long);
+        Assert.Equal(9223372036854775807L, Convert.ToInt64(result["long_field"]));
     }
 
     [Fact]
-    public void UnwrapJsonElement_WithInt64Value_ReturnsLong()
+    public void Flatten_WithJsonElementBoolValues_UnwrapsBooleans()
     {
         // Arrange
-        using var doc = JsonDocument.Parse("9223372036854775807");
+        var json = "{\"true_field\": true, \"false_field\": false}";
+        using var doc = JsonDocument.Parse(json);
         var jsonElement = doc.RootElement;
 
         // Act
-        var result = LlmUsageFlattener.UnwrapJsonElement(jsonElement);
+        var result = LlmUsageFlattener.Flatten(jsonElement);
 
         // Assert
-        Assert.IsType<long>(result);
-        Assert.Equal(9223372036854775807L, (long)result);
+        Assert.NotNull(result);
+        Assert.Equal(2, result.Count);
+        Assert.IsType<bool>(result["true_field"]);
+        Assert.True((bool)result["true_field"]);
+        Assert.IsType<bool>(result["false_field"]);
+        Assert.False((bool)result["false_field"]);
     }
 
     [Fact]
-    public void UnwrapJsonElement_WithTrueValue_ReturnsTrue()
+    public void Flatten_WithJsonElementNullValues_UnwrapsNullAsEmptyString()
     {
         // Arrange
-        using var doc = JsonDocument.Parse("true");
+        var json = "{\"null_field\": null, \"real_field\": \"value\"}";
+        using var doc = JsonDocument.Parse(json);
         var jsonElement = doc.RootElement;
 
         // Act
-        var result = LlmUsageFlattener.UnwrapJsonElement(jsonElement);
+        var result = LlmUsageFlattener.Flatten(jsonElement);
 
         // Assert
-        Assert.IsType<bool>(result);
-        Assert.True((bool)result);
-    }
-
-    [Fact]
-    public void UnwrapJsonElement_WithFalseValue_ReturnsFalse()
-    {
-        // Arrange
-        using var doc = JsonDocument.Parse("false");
-        var jsonElement = doc.RootElement;
-
-        // Act
-        var result = LlmUsageFlattener.UnwrapJsonElement(jsonElement);
-
-        // Assert
-        Assert.IsType<bool>(result);
-        Assert.False((bool)result);
-    }
-
-    [Fact]
-    public void UnwrapJsonElement_WithNullValue_ReturnsEmptyString()
-    {
-        // Arrange
-        using var doc = JsonDocument.Parse("null");
-        var jsonElement = doc.RootElement;
-
-        // Act
-        var result = LlmUsageFlattener.UnwrapJsonElement(jsonElement);
-
-        // Assert
-        Assert.Equal("", result);
-    }
-
-    [Fact]
-    public void UnwrapJsonElement_WithNonJsonElementValue_ReturnsValueAsIs()
-    {
-        // Arrange
-        var value = "direct string";
-
-        // Act
-        var result = LlmUsageFlattener.UnwrapJsonElement(value);
-
-        // Assert
-        Assert.Equal("direct string", result);
+        Assert.NotNull(result);
+        Assert.Equal(2, result.Count);
+        Assert.Equal("", result["null_field"]);
+        Assert.Equal("value", result["real_field"]);
     }
 
     [Fact]
@@ -158,7 +132,7 @@ public class LlmUsageFlattenerTests
         var input = "just a string";
 
         // Act
-        var result = LlmUsageFlattener.FlattenLlmUsage(input);
+        var result = LlmUsageFlattener.Flatten(input);
 
         // Assert
         Assert.Null(result);
@@ -173,7 +147,7 @@ public class LlmUsageFlattenerTests
         var jsonElement = doc.RootElement;
 
         // Act
-        var result = LlmUsageFlattener.FlattenLlmUsage(jsonElement);
+        var result = LlmUsageFlattener.Flatten(jsonElement);
 
         // Assert
         Assert.Null(result);
@@ -191,7 +165,7 @@ public class LlmUsageFlattenerTests
         };
 
         // Act
-        var result = LlmUsageFlattener.FlattenLlmUsage(input);
+        var result = LlmUsageFlattener.Flatten(input);
 
         // Assert
         Assert.NotNull(result);
@@ -208,7 +182,7 @@ public class LlmUsageFlattenerTests
         var input = new Dictionary<string, object?>();
 
         // Act
-        var result = LlmUsageFlattener.FlattenLlmUsage(input);
+        var result = LlmUsageFlattener.Flatten(input);
 
         // Assert
         Assert.NotNull(result);
@@ -228,7 +202,7 @@ public class LlmUsageFlattenerTests
         };
 
         // Act
-        var result = LlmUsageFlattener.FlattenLlmUsage(input);
+        var result = LlmUsageFlattener.Flatten(input);
 
         // Assert
         Assert.NotNull(result);

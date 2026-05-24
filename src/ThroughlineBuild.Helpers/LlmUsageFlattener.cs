@@ -4,7 +4,7 @@ namespace ThroughlineBuild.Helpers;
 
 public static class LlmUsageFlattener
 {
-    public static IReadOnlyDictionary<string, object>? FlattenLlmUsage(object usageObj)
+    public static IReadOnlyDictionary<string, object>? Flatten(object usageObj)
     {
         var result = new Dictionary<string, object>();
 
@@ -35,7 +35,7 @@ public static class LlmUsageFlattener
         return null;
     }
 
-    public static object UnwrapJsonElement(object value)
+    private static object UnwrapJsonElement(object value)
     {
         if (value is not JsonElement je)
             return value;

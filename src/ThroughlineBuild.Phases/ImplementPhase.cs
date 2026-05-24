@@ -133,7 +133,7 @@ public class ImplementPhase : IWorkflowPhase
         // Step 13: LlmCall event if usage present
         if (workerResult.Metadata.TryGetValue("llm_usage", out var usageObj))
         {
-            var llmData = LlmUsageFlattener.FlattenLlmUsage(usageObj);
+            var llmData = LlmUsageFlattener.Flatten(usageObj);
             if (llmData is not null)
             {
                 await EmitAsync(EventKind.LlmCall, ticketId, llmData, ct).ConfigureAwait(false);
