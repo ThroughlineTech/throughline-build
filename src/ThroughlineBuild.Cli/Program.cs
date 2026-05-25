@@ -198,7 +198,8 @@ static async Task<int> RunAsync(string[] args)
     });
     var worker = new ClaudeCodeAgent(new ClaudeCodeOptions
     {
-        ExecutablePath = config2.Workers.ClaudeCodeExecutable
+        ExecutablePath = config2.Workers.ClaudeCodeExecutable,
+        MaxOutputTokens = config2.Workers.MaxOutputTokens
     });
     await using var eventSink = new JsonlEventSink(new EventLogOptions
     {

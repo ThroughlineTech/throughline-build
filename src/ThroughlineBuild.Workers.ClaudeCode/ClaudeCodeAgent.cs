@@ -200,11 +200,15 @@ public class ClaudeCodeAgent : IWorkerAgent
         return metadata;
     }
 
-    internal static void ConfigureEnvironment(ProcessStartInfo psi, WorkerOptions options)
+    internal void ConfigureEnvironment(ProcessStartInfo psi, WorkerOptions options)
     {
         // Ensure Claude Code uses OAuth auth rather than API-key auth; worker LLM cost
         // flows to the user's subscription, not to per-token API billing.
         psi.Environment.Remove("ANTHROPIC_API_KEY");
+        // Pin max output tokens if configured; do this before the user-supplied
+        // EnvironmentVariables loop so an explicit user override still wins.
+        if (_options.MaxOutputTokens is int n)
+            psi.Environment["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = n.ToString(System.Globalization.CultureInfo.InvariantCulture);
         if (options.EnvironmentVariables != null)
             foreach (var (k, v) in options.EnvironmentVariables)
                 psi.Environment[k] = v;

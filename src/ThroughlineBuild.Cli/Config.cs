@@ -22,7 +22,8 @@ public record LlmConfig(
 public record WorkersConfig(
     string DefaultAgent,
     string ClaudeCodeExecutable,
-    int TimeoutMinutes);
+    int TimeoutMinutes,
+    int MaxOutputTokens);
 
 public record EventsConfig(string LogDirectory);
 
@@ -191,7 +192,8 @@ public static class BuildConfigLoader
         return new WorkersConfig(
             DefaultAgent: RequireString(t, "workers", "default_agent"),
             ClaudeCodeExecutable: RequireString(t, "workers", "claude_code_executable"),
-            TimeoutMinutes: OptionalInt(t, "timeout_minutes", 30));
+            TimeoutMinutes: OptionalInt(t, "timeout_minutes", 30),
+            MaxOutputTokens: OptionalInt(t, "max_output_tokens", 32000));
     }
 
     private static EventsConfig ReadEventsSection(TomlTable root)
