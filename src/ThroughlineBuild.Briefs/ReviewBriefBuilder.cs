@@ -24,7 +24,7 @@ public static class ReviewBriefBuilder
 
         var workerResultJson =
             "{\"status\":\"Ok\",\"summary\":\"Review for " + ticket.Id + "\"," +
-            "\"filesChanged\":[],\"failureReason\":null," +
+            "\"files_changed\":[],\"failure_reason\":null," +
             "\"metadata\":{\"verdict\":\"Pass|Rework|Fail\"," +
             "\"rationale\":\"<your rationale here>\"," +
             "\"checks_failed\":[\"check_name_if_applicable\"]}}";

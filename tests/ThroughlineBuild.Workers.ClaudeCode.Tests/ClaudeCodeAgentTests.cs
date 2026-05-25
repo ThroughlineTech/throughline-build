@@ -13,10 +13,8 @@ public class WorkerResultParserTests
     {
         var stdout =
             "Some preamble\n" +
-            "```json\n" +
             "WORKER_RESULT\n" +
-            "{\"status\":\"Ok\",\"summary\":\"done\",\"filesChanged\":[\"foo.cs\"],\"failureReason\":null,\"metadata\":{}}\n" +
-            "```\n";
+            "{\"status\":\"Ok\",\"summary\":\"done\",\"files_changed\":[\"foo.cs\"],\"failure_reason\":null,\"metadata\":{}}\n";
 
         var outcome = WorkerResultParser.TryParse(stdout);
 
@@ -25,6 +23,31 @@ public class WorkerResultParserTests
         Assert.Equal("done", outcome.Result.Summary);
         Assert.Equal(new[] { "foo.cs" }, outcome.Result.FilesChanged);
         Assert.Null(outcome.Result.FailureReason);
+    }
+
+    [Fact]
+    public void TryParse_PrettyPrintedMultiLineJson_ReturnsResult()
+    {
+        var stdout =
+            "WORKER_RESULT\n" +
+            "{\n" +
+            "  \"status\": \"Ok\",\n" +
+            "  \"summary\": \"plan complete\",\n" +
+            "  \"files_changed\": [],\n" +
+            "  \"failure_reason\": null,\n" +
+            "  \"metadata\": {\n" +
+            "    \"plan_html\": \"<p>plan</p>\",\n" +
+            "    \"risk_label\": \"low\",\n" +
+            "    \"size_label\": \"S\"\n" +
+            "  }\n" +
+            "}\n";
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.NotNull(outcome.Result);
+        Assert.Equal(Status.Ok, outcome.Result.Status);
+        Assert.Equal("plan complete", outcome.Result.Summary);
+        Assert.True(outcome.Result.Metadata.ContainsKey("plan_html"));
     }
 
     [Fact]
@@ -64,25 +87,25 @@ public class WorkerResultParserTests
     }
 
     [Fact]
-    public void TryParse_MarkerWithNoFollowingLine_ReturnsMarkerMissing()
+    public void TryParse_MarkerWithNoFollowingContent_ReturnsDeserializeFailed()
     {
         var stdout = "WORKER_RESULT";
 
         var outcome = WorkerResultParser.TryParse(stdout);
 
         Assert.Null(outcome.Result);
-        Assert.Null(outcome.DeserializeErrorType);
+        Assert.NotNull(outcome.DeserializeErrorType);
     }
 
     [Fact]
-    public void TryParse_MarkerWithWhitespaceOnlyFollowingLines_ReturnsMarkerMissing()
+    public void TryParse_MarkerWithWhitespaceOnlyFollowingLines_ReturnsDeserializeFailed()
     {
         var stdout = "WORKER_RESULT\n   \n   \n";
 
         var outcome = WorkerResultParser.TryParse(stdout);
 
         Assert.Null(outcome.Result);
-        Assert.Null(outcome.DeserializeErrorType);
+        Assert.NotNull(outcome.DeserializeErrorType);
     }
 
     [Fact]
@@ -90,7 +113,7 @@ public class WorkerResultParserTests
     {
         var stdout =
             "  WORKER_RESULT  \n" +
-            "{\"status\":\"Failed\",\"summary\":\"oops\",\"filesChanged\":[],\"failureReason\":\"bad\",\"metadata\":{}}\n";
+            "{\"status\":\"Failed\",\"summary\":\"oops\",\"files_changed\":[],\"failure_reason\":\"bad\",\"metadata\":{}}\n";
 
         var outcome = WorkerResultParser.TryParse(stdout);
 
@@ -105,7 +128,7 @@ public class WorkerResultParserTests
     {
         var stdout =
             "WORKER_RESULT\n" +
-            "{\"status\":\"NeedsRework\",\"summary\":\"try again\",\"filesChanged\":[],\"failureReason\":\"partial\",\"metadata\":{}}\n";
+            "{\"status\":\"NeedsRework\",\"summary\":\"try again\",\"files_changed\":[],\"failure_reason\":\"partial\",\"metadata\":{}}\n";
 
         var outcome = WorkerResultParser.TryParse(stdout);
 
@@ -118,12 +141,54 @@ public class WorkerResultParserTests
     {
         var stdout =
             "WORKER_RESULT\n" +
-            "{\"status\":\"Escalate\",\"summary\":\"need help\",\"filesChanged\":[],\"failureReason\":\"unclear\",\"metadata\":{}}\n";
+            "{\"status\":\"Escalate\",\"summary\":\"need help\",\"files_changed\":[],\"failure_reason\":\"unclear\",\"metadata\":{}}\n";
 
         var outcome = WorkerResultParser.TryParse(stdout);
 
         Assert.NotNull(outcome.Result);
         Assert.Equal(Status.Escalate, outcome.Result.Status);
+    }
+
+    [Fact]
+    public void TryParse_MissingStatusField_ReturnsValidationError()
+    {
+        var stdout =
+            "WORKER_RESULT\n" +
+            "{\"summary\":\"done\",\"files_changed\":[],\"failure_reason\":null,\"metadata\":{}}\n";
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.Null(outcome.Result);
+        Assert.Equal("ValidationError", outcome.DeserializeErrorType);
+        Assert.Contains("status", outcome.DeserializeErrorMessage);
+    }
+
+    [Fact]
+    public void TryParse_EmptySummary_ReturnsValidationError()
+    {
+        var stdout =
+            "WORKER_RESULT\n" +
+            "{\"status\":\"Ok\",\"summary\":\"\",\"files_changed\":[],\"failure_reason\":null,\"metadata\":{}}\n";
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.Null(outcome.Result);
+        Assert.Equal("ValidationError", outcome.DeserializeErrorType);
+        Assert.Contains("summary", outcome.DeserializeErrorMessage);
+    }
+
+    [Fact]
+    public void TryParse_MissingSummaryField_ReturnsValidationError()
+    {
+        var stdout =
+            "WORKER_RESULT\n" +
+            "{\"status\":\"Ok\",\"files_changed\":[],\"failure_reason\":null,\"metadata\":{}}\n";
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.Null(outcome.Result);
+        Assert.Equal("ValidationError", outcome.DeserializeErrorType);
+        Assert.Contains("summary", outcome.DeserializeErrorMessage);
     }
 }
 
@@ -154,7 +219,7 @@ public class ClaudeCodeAgentEnvelopeParserTests
 
     private const string ValidWorkerResultBlock =
         "WORKER_RESULT\n" +
-        "{\"status\":\"Ok\",\"summary\":\"done\",\"filesChanged\":[\"foo.cs\"],\"failureReason\":null,\"metadata\":{}}\n";
+        "{\"status\":\"Ok\",\"summary\":\"done\",\"files_changed\":[\"foo.cs\"],\"failure_reason\":null,\"metadata\":{}}\n";
 
     [Fact]
     public void EnvelopeParser_ValidJson_RoutesResultToWorkerResultParser()
@@ -410,8 +475,8 @@ public class WorkerResultParserAotRegressionTests
     public void SourceGenContext_HasWorkerResultDto_AndDeserializesHappyPath()
     {
         var json =
-            "{\"status\":\"Ok\",\"summary\":\"plan complete\",\"filesChanged\":[\"src/Foo.cs\"]," +
-            "\"failureReason\":null,\"metadata\":{\"plan_html\":\"<p>plan</p>\"," +
+            "{\"status\":\"Ok\",\"summary\":\"plan complete\",\"files_changed\":[\"src/Foo.cs\"]," +
+            "\"failure_reason\":null,\"metadata\":{\"plan_html\":\"<p>plan</p>\"," +
             "\"risk_label\":\"low\",\"size_label\":\"M\",\"planned_at_sha\":\"abc123\"}}";
 
         // Direct source-gen call - this is exactly what TryParse now uses.
@@ -434,7 +499,7 @@ public class WorkerResultParserAotRegressionTests
     {
         var json =
             "{\"status\":\"NeedsRework\",\"summary\":\"try again\"," +
-            "\"filesChanged\":[],\"failureReason\":\"partial\",\"metadata\":{}}";
+            "\"files_changed\":[],\"failure_reason\":\"partial\",\"metadata\":{}}";
 
         var dto = System.Text.Json.JsonSerializer.Deserialize(json, ClaudeCodeJsonContext.Default.WorkerResultDto);
 
@@ -448,7 +513,7 @@ public class WorkerResultParserAotRegressionTests
     {
         var json =
             "{\"status\":\"Escalate\",\"summary\":\"escalated\"," +
-            "\"filesChanged\":[],\"failureReason\":\"unclear\",\"metadata\":{}}";
+            "\"files_changed\":[],\"failure_reason\":\"unclear\",\"metadata\":{}}";
 
         var dto = System.Text.Json.JsonSerializer.Deserialize(json, ClaudeCodeJsonContext.Default.WorkerResultDto);
 
@@ -465,7 +530,7 @@ public class WorkerResultParserAotRegressionTests
     {
         var stdout =
             "WORKER_RESULT\n" +
-            "{\"status\":\"Ok\",\"summary\":\"done\",\"filesChanged\":[],\"failureReason\":null," +
+            "{\"status\":\"Ok\",\"summary\":\"done\",\"files_changed\":[],\"failure_reason\":null," +
             "\"metadata\":{\"plan_html\":\"<p>x</p>\",\"risk_label\":\"low\"," +
             "\"size_label\":\"S\",\"planned_at_sha\":\"deadbeef\"}}\n";
 

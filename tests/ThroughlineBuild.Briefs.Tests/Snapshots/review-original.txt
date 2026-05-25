@@ -38,7 +38,7 @@ Test 'X' failed: expected Y got Z
 Emit exactly one WORKER_RESULT block at the end of your response:
 
 WORKER_RESULT
-{"status":"Ok","summary":"Review for TLB-SNAP","filesChanged":[],"failureReason":null,"metadata":{"verdict":"Pass|Rework|Fail","rationale":"<your rationale here>","checks_failed":["check_name_if_applicable"]}}
+{"status":"Ok","summary":"Review for TLB-SNAP","files_changed":[],"failure_reason":null,"metadata":{"verdict":"Pass|Rework|Fail","rationale":"<your rationale here>","checks_failed":["check_name_if_applicable"]}}
 
 ## Verdict guidance
 Choose verdict from:

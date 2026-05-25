@@ -14,7 +14,7 @@ public static class ImplementBriefBuilder
 
         var workerResultJson =
             $"{{\"status\":\"Ok\",\"summary\":\"Implemented {ticket.Id}\"," +
-            $"\"filesChanged\":[\"path/relative/to/worktree\"],\"failureReason\":null," +
+            $"\"files_changed\":[\"path/relative/to/worktree\"],\"failure_reason\":null," +
             $"\"metadata\":{{\"commit_sha\":\"<HEAD SHA of feature branch after all commits>\"," +
             $"\"files_changed\":[\"path/relative/to/worktree\"]}}}}";
 
