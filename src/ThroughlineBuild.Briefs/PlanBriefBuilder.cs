@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using ThroughlineBuild.Contracts.Models;
 
 namespace ThroughlineBuild.Briefs;
@@ -11,31 +10,23 @@ public static class PlanBriefBuilder
     {
         var proj = project ?? ProjectContext.Empty;
 
-        var relations = ticket.Relations.Count > 0
-            ? string.Join("\n", ticket.Relations.Select(r => $"- {r.Kind}: {r.TargetId}"))
-            : "(none)";
-
         var topLevelEntries = repo.TopLevelEntries.Count > 0
-            ? string.Join("\n", repo.TopLevelEntries.Select(e => $"- {e}"))
+            ? string.Join(", ", repo.TopLevelEntries)
             : "(empty)";
 
-        var workerResultJson =
-            $"{{\"status\":\"Ok\",\"summary\":\"Plan for {ticket.Id}\",\"filesChanged\":[],\"failureReason\":null," +
-            $"\"metadata\":{{\"plan_html\":\"<your HTML plan here>\",\"risk_label\":\"low|medium|high\"," +
-            $"\"size_label\":\"S|M|L\",\"planned_at_sha\":\"{repo.MainSha}\"}}}}";
+        var projectNotesSection = string.IsNullOrEmpty(proj.Notes)
+            ? string.Empty
+            : $"## Project notes\n\n{proj.Notes}\n";
 
         var vars = new Dictionary<string, string>
         {
             ["ticket_id"] = ticket.Id,
             ["title"] = ticket.Title,
             ["type"] = ticket.Type,
-            ["size"] = ticket.Size.ToString(),
-            ["risk"] = ticket.Risk.ToString(),
-            ["description"] = StripHtml(ticket.DescriptionHtml),
-            ["relations"] = relations,
+            ["description_html"] = ticket.DescriptionHtml,
             ["top_level_entries"] = topLevelEntries,
-            ["worker_result_json"] = workerResultJson,
-            ["main_sha"] = repo.MainSha
+            ["main_sha"] = repo.MainSha,
+            ["project_notes_section"] = projectNotesSection
         };
 
         var instruction = TemplateLoader.Load("plan.md").Substitute(vars);
@@ -59,11 +50,5 @@ public static class PlanBriefBuilder
                 ["project_plane_project_url"] = proj.PlaneProjectUrl,
                 ["project_notes"] = proj.Notes
             });
-    }
-
-    private static string StripHtml(string html)
-    {
-        var stripped = Regex.Replace(html, "<[^>]+>", "");
-        return System.Net.WebUtility.HtmlDecode(stripped);
     }
 }
