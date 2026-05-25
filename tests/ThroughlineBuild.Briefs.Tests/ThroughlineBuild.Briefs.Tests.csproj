@@ -17,4 +17,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\ThroughlineBuild.Briefs\ThroughlineBuild.Briefs.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Templates\*.md" />
+  </ItemGroup>
 </Project>
