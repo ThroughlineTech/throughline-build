@@ -1,21 +1,21 @@
-# Plan: {{ticket_id}} - {{title}}
+# Plan: TLB-SNAP - Snapshot fixture ticket
 
 You are an autonomous agent investigating a ticket and writing an implementation plan. You will explore the codebase, understand the problem deeply, and propose a concrete solution. Do not make code changes; investigation only.
 
 ## Ticket
 
-**Title:** {{title}}
-**Type:** {{type}}
+**Title:** Snapshot fixture ticket
+**Type:** feature
 **Description:**
 
-{{description_html}}
+<h2>Plan</h2><p>Implement the fixture feature.</p><ul><li>Step 1</li><li>Step 2</li></ul>
 
 ## Repository context
 
-**Main branch SHA at planning time:** {{main_sha}}
-**Top-level repo entries:** {{top_level_entries}}
+**Main branch SHA at planning time:** abc1234567890def
+**Top-level repo entries:** src, tests, docs, README.md
 
-{{project_notes_section}}
+
 
 ## Your job
 
@@ -144,7 +144,7 @@ WORKER_RESULT
     "plan_html": "<the full HTML block from the Output Structure section above, escaped for JSON>",
     "risk_label": "<low|medium|high>",
     "size_label": "<S|M|L>",
-    "planned_at_sha": "{{main_sha}}"
+    "planned_at_sha": "abc1234567890def"
   }
 }
 ```

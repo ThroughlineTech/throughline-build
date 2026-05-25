@@ -10,8 +10,8 @@ public class TemplateLoaderTests
     {
         var content = TemplateLoader.Load("plan.md");
 
-        Assert.Contains("# Plan Phase Brief", content);
         Assert.Contains("{{ticket_id}}", content);
+        Assert.Contains("{{title}}", content);
     }
 
     [Fact]

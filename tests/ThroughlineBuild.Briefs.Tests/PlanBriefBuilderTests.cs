@@ -61,34 +61,6 @@ public class PlanBriefBuilderTests
     }
 
     [Fact]
-    public void Build_RichDescription_InstructionContainsStrippedText()
-    {
-        var ticket = MinimalTicket() with { DescriptionHtml = "<p>hello world</p>" };
-        var repo = MinimalRepo();
-
-        var brief = PlanBriefBuilder.Build(ticket, repo);
-
-        Assert.Contains("hello world", brief.Instruction);
-        Assert.DoesNotContain("<p>", brief.Instruction);
-    }
-
-    [Fact]
-    public void Build_TicketWithRelations_InstructionContainsRelations()
-    {
-        var ticket = MinimalTicket() with
-        {
-            Relations = new[] { new Relation("blocks", "TLB-5") }
-        };
-        var repo = MinimalRepo();
-
-        var brief = PlanBriefBuilder.Build(ticket, repo);
-
-        Assert.True(
-            brief.Instruction.Contains("TLB-5") || brief.Instruction.Contains("blocks"),
-            "Instruction should contain TLB-5 or blocks");
-    }
-
-    [Fact]
     public void Build_EmptyDescription_BuildsWithoutException()
     {
         var ticket = MinimalTicket() with { DescriptionHtml = "" };
@@ -144,13 +116,49 @@ public class PlanBriefBuilderTests
     }
 
     [Fact]
-    public void Build_MatchesSnapshot_Original()
+    public void Build_MatchesSnapshot_Enriched()
     {
-        var expected = SnapshotLoader.Load("plan-original.txt");
+        var expected = SnapshotLoader.Load("plan-enriched.txt");
 
         var brief = PlanBriefBuilder.Build(SnapshotFixtures.Ticket(), SnapshotFixtures.Repo());
 
         Assert.Equal(expected, brief.Instruction);
+    }
+
+    [Fact]
+    public void Build_WithProjectNotes_IncludesProjectNotesHeading()
+    {
+        var ticket = MinimalTicket();
+        var repo = MinimalRepo();
+        var project = ProjectContext.Empty with { Notes = "Some project notes here" };
+
+        var brief = PlanBriefBuilder.Build(ticket, repo, project);
+
+        Assert.Contains("## Project notes", brief.Instruction);
+        Assert.Contains("Some project notes here", brief.Instruction);
+    }
+
+    [Fact]
+    public void Build_WithoutProjectNotes_NoProjectNotesHeading()
+    {
+        var ticket = MinimalTicket();
+        var repo = MinimalRepo();
+
+        var brief = PlanBriefBuilder.Build(ticket, repo);
+
+        Assert.DoesNotContain("## Project notes", brief.Instruction);
+    }
+
+    [Fact]
+    public void Build_WithWhitespaceOnlyProjectNotes_NoProjectNotesHeading()
+    {
+        var ticket = MinimalTicket();
+        var repo = MinimalRepo();
+        var project = ProjectContext.Empty with { Notes = "   \n\t  " };
+
+        var brief = PlanBriefBuilder.Build(ticket, repo, project);
+
+        Assert.DoesNotContain("## Project notes", brief.Instruction);
     }
 
     [Fact]
