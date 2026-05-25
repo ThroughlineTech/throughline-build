@@ -7,8 +7,9 @@ public record RepoState(string MainSha, IReadOnlyList<string> TopLevelEntries);
 
 public static class PlanBriefBuilder
 {
-    public static Brief Build(Ticket ticket, RepoState repo)
+    public static Brief Build(Ticket ticket, RepoState repo, ProjectContext? project = null)
     {
+        var proj = project ?? ProjectContext.Empty;
         var strippedDescription = StripHtml(ticket.DescriptionHtml);
 
         var relations = ticket.Relations.Count > 0
@@ -53,7 +54,19 @@ public static class PlanBriefBuilder
             instruction,
             Array.Empty<string>(),
             Array.Empty<string>(),
-            new Dictionary<string, string> { ["main_sha"] = repo.MainSha });
+            new Dictionary<string, string>
+            {
+                ["main_sha"] = repo.MainSha,
+                ["project_language"] = proj.Language,
+                ["project_framework"] = proj.Framework,
+                ["project_package_manager"] = proj.PackageManager,
+                ["project_build_command"] = proj.BuildCommand,
+                ["project_test_command"] = proj.TestCommand,
+                ["project_install_command"] = proj.InstallCommand,
+                ["project_dev_command"] = proj.DevCommand,
+                ["project_plane_project_url"] = proj.PlaneProjectUrl,
+                ["project_notes"] = proj.Notes
+            });
     }
 
     private static string StripHtml(string html)

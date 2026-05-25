@@ -18,6 +18,7 @@ public sealed class ClaudeCodeReviewer : IVerifier
     private readonly IReadOnlyList<CheckResult> _checkResults;
     private readonly WorkerOptions _workerOptions;
     private readonly string _workingDirectory;
+    private readonly ProjectContext _project;
 
     public WorkerResult? LastWorkerResult { get; private set; }
 
@@ -26,13 +27,15 @@ public sealed class ClaudeCodeReviewer : IVerifier
         Ticket ticket,
         IReadOnlyList<CheckResult> checkResults,
         WorkerOptions workerOptions,
-        string workingDirectory)
+        string workingDirectory,
+        ProjectContext? project = null)
     {
         _worker = worker;
         _ticket = ticket;
         _checkResults = checkResults;
         _workerOptions = workerOptions;
         _workingDirectory = workingDirectory;
+        _project = project ?? ProjectContext.Empty;
     }
 
     /// <summary>
@@ -52,7 +55,7 @@ public sealed class ClaudeCodeReviewer : IVerifier
         // implementerBrief is on the public surface for future use; not forwarded in v1
         _ = implementerBrief;
 
-        var reviewBrief = ReviewBriefBuilder.Build(_ticket, diff, implementerResult, _checkResults);
+        var reviewBrief = ReviewBriefBuilder.Build(_ticket, diff, implementerResult, _checkResults, _project);
 
         var workerResult = await _worker.ExecuteAsync(reviewBrief, _workingDirectory, _workerOptions, ct)
             .ConfigureAwait(false);

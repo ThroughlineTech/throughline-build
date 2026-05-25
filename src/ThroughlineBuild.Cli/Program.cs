@@ -215,7 +215,7 @@ static async Task<int> RunAsync(string[] args)
 
     if (verb == "plan")
     {
-        var phase = new PlanPhase(ticketing, worker, eventSink, buildOptions);
+        var phase = new PlanPhase(ticketing, worker, eventSink, buildOptions, project: config2.Project);
         PlanResult result;
         try
         {
@@ -249,7 +249,7 @@ static async Task<int> RunAsync(string[] args)
     }
     else if (verb == "implement")
     {
-        var phase = new ImplementPhase(ticketing, worker, eventSink, buildOptions);
+        var phase = new ImplementPhase(ticketing, worker, eventSink, buildOptions, project: config2.Project);
         ImplementResult result;
         try
         {
@@ -355,7 +355,7 @@ static async Task<int> RunAsync(string[] args)
             LiveStdoutSink: debugMode ? Console.Out : null,
             LiveStderrSink: debugMode ? Console.Error : null);
         var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
-        var phase = new ReviewPhase(ticketing, worker, eventSink, buildOptions, reviewOptions);
+        var phase = new ReviewPhase(ticketing, worker, eventSink, buildOptions, reviewOptions, project: config2.Project);
         ReviewResult result;
         try
         {
