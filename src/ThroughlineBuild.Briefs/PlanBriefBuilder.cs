@@ -14,7 +14,7 @@ public static class PlanBriefBuilder
             ? string.Join(", ", repo.TopLevelEntries)
             : "(empty)";
 
-        var projectNotesSection = string.IsNullOrEmpty(proj.Notes)
+        var projectNotesSection = string.IsNullOrWhiteSpace(proj.Notes)
             ? string.Empty
             : $"## Project notes\n\n{proj.Notes}\n";
 

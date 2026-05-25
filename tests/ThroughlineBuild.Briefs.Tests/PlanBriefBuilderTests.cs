@@ -126,6 +126,42 @@ public class PlanBriefBuilderTests
     }
 
     [Fact]
+    public void Build_WithProjectNotes_IncludesProjectNotesHeading()
+    {
+        var ticket = MinimalTicket();
+        var repo = MinimalRepo();
+        var project = ProjectContext.Empty with { Notes = "Some project notes here" };
+
+        var brief = PlanBriefBuilder.Build(ticket, repo, project);
+
+        Assert.Contains("## Project notes", brief.Instruction);
+        Assert.Contains("Some project notes here", brief.Instruction);
+    }
+
+    [Fact]
+    public void Build_WithoutProjectNotes_NoProjectNotesHeading()
+    {
+        var ticket = MinimalTicket();
+        var repo = MinimalRepo();
+
+        var brief = PlanBriefBuilder.Build(ticket, repo);
+
+        Assert.DoesNotContain("## Project notes", brief.Instruction);
+    }
+
+    [Fact]
+    public void Build_WithWhitespaceOnlyProjectNotes_NoProjectNotesHeading()
+    {
+        var ticket = MinimalTicket();
+        var repo = MinimalRepo();
+        var project = ProjectContext.Empty with { Notes = "   \n\t  " };
+
+        var brief = PlanBriefBuilder.Build(ticket, repo, project);
+
+        Assert.DoesNotContain("## Project notes", brief.Instruction);
+    }
+
+    [Fact]
     public void Build_TemplateLoadable_NameIsRegistered()
     {
         var ex = Record.Exception(() => TemplateLoader.Load("plan.md"));
