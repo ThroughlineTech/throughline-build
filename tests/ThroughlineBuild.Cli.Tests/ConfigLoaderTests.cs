@@ -158,6 +158,22 @@ log_directory = ".build/events"
     }
 
     [Fact]
+    public void Load_WorkersSectionWithoutMaxOutputTokens_DefaultsTo32000()
+    {
+        var path = WriteToml(ValidToml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            Assert.Equal(32000, config.Workers.MaxOutputTokens);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void ResolveSecrets_AnthropicKeyMissing_DoesNotThrow()
     {
         var path = WriteToml(ValidToml);

@@ -4,4 +4,5 @@ public class ClaudeCodeOptions
 {
     public string ExecutablePath { get; init; } = "claude";
     public IReadOnlyList<string> ExtraArgs { get; init; } = Array.Empty<string>();
+    public int? MaxOutputTokens { get; init; } = null;
 }

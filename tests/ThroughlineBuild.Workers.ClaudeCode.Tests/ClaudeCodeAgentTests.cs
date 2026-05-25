@@ -317,7 +317,7 @@ public class ClaudeCodeAgentConfigureEnvironmentTests
         var psi = new ProcessStartInfo("echo") { UseShellExecute = false };
         psi.Environment["ANTHROPIC_API_KEY"] = "parent-key";
 
-        ClaudeCodeAgent.ConfigureEnvironment(psi, new WorkerOptions(TimeSpan.FromSeconds(30)));
+        new ClaudeCodeAgent().ConfigureEnvironment(psi, new WorkerOptions(TimeSpan.FromSeconds(30)));
 
         Assert.False(psi.Environment.ContainsKey("ANTHROPIC_API_KEY"));
     }
@@ -331,9 +331,45 @@ public class ClaudeCodeAgentConfigureEnvironmentTests
         var options = new WorkerOptions(
             TimeSpan.FromSeconds(30),
             EnvironmentVariables: new Dictionary<string, string> { ["ANTHROPIC_API_KEY"] = "explicit-key" });
-        ClaudeCodeAgent.ConfigureEnvironment(psi, options);
+        new ClaudeCodeAgent().ConfigureEnvironment(psi, options);
 
         Assert.Equal("explicit-key", psi.Environment["ANTHROPIC_API_KEY"]);
+    }
+
+    [Fact]
+    public void ConfigureEnvironment_MaxOutputTokensSet_SetsEnvVar()
+    {
+        var psi = new ProcessStartInfo("echo") { UseShellExecute = false };
+        var agent = new ClaudeCodeAgent(new ClaudeCodeOptions { MaxOutputTokens = 32000 });
+
+        agent.ConfigureEnvironment(psi, new WorkerOptions(TimeSpan.FromSeconds(30)));
+
+        Assert.Equal("32000", psi.Environment["CLAUDE_CODE_MAX_OUTPUT_TOKENS"]);
+    }
+
+    [Fact]
+    public void ConfigureEnvironment_MaxOutputTokensNull_LeavesEnvUnchanged()
+    {
+        var psi = new ProcessStartInfo("echo") { UseShellExecute = false };
+        var agent = new ClaudeCodeAgent(new ClaudeCodeOptions { MaxOutputTokens = null });
+
+        agent.ConfigureEnvironment(psi, new WorkerOptions(TimeSpan.FromSeconds(30)));
+
+        Assert.False(psi.Environment.ContainsKey("CLAUDE_CODE_MAX_OUTPUT_TOKENS"));
+    }
+
+    [Fact]
+    public void ConfigureEnvironment_UserOverrideWins_WhenBothPresent()
+    {
+        var psi = new ProcessStartInfo("echo") { UseShellExecute = false };
+        var agent = new ClaudeCodeAgent(new ClaudeCodeOptions { MaxOutputTokens = 32000 });
+        var options = new WorkerOptions(
+            TimeSpan.FromSeconds(30),
+            EnvironmentVariables: new Dictionary<string, string> { ["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = "16384" });
+
+        agent.ConfigureEnvironment(psi, options);
+
+        Assert.Equal("16384", psi.Environment["CLAUDE_CODE_MAX_OUTPUT_TOKENS"]);
     }
 }
 
