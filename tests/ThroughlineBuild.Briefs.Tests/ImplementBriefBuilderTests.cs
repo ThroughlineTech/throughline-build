@@ -152,4 +152,26 @@ public class ImplementBriefBuilderTests
         Assert.True(brief.Instruction.Length < 6000,
             $"Instruction length {brief.Instruction.Length} exceeded soft cap (~6000 chars) on minimal ticket");
     }
+
+    [Fact]
+    public void Build_MatchesSnapshot_Original()
+    {
+        var expected = SnapshotLoader.Load("implement-original.txt");
+
+        var brief = ImplementBriefBuilder.Build(
+            SnapshotFixtures.Ticket(),
+            SnapshotFixtures.Repo(),
+            SnapshotFixtures.FixtureBranch,
+            SnapshotFixtures.FixtureWorktree);
+
+        Assert.Equal(expected, brief.Instruction);
+    }
+
+    [Fact]
+    public void Build_TemplateLoadable_NameIsRegistered()
+    {
+        var ex = Record.Exception(() => TemplateLoader.Load("implement.md"));
+
+        Assert.Null(ex);
+    }
 }

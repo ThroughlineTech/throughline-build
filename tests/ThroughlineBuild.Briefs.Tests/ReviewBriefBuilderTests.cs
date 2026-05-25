@@ -311,4 +311,26 @@ public class ReviewBriefBuilderTests
 
         Assert.Empty(brief.AllowedWrites);
     }
+
+    [Fact]
+    public void Build_MatchesSnapshot_Original()
+    {
+        var expected = SnapshotLoader.Load("review-original.txt");
+
+        var brief = ReviewBriefBuilder.Build(
+            SnapshotFixtures.Ticket(),
+            SnapshotFixtures.Diff(),
+            SnapshotFixtures.ImplementerResult(),
+            SnapshotFixtures.Checks());
+
+        Assert.Equal(expected, brief.Instruction);
+    }
+
+    [Fact]
+    public void Build_TemplateLoadable_NameIsRegistered()
+    {
+        var ex = Record.Exception(() => TemplateLoader.Load("review.md"));
+
+        Assert.Null(ex);
+    }
 }

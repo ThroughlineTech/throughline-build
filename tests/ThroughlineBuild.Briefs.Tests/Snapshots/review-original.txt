@@ -1,0 +1,49 @@
+# Review Phase Brief
+
+You are a reviewing agent. Your job is to assess the implementation against the ticket requirements and automated checks.
+
+## Ticket
+- Id: TLB-SNAP
+- Title: Snapshot fixture ticket
+- Type: feature
+- Size: M
+- Risk: Medium
+
+## Plan (from ticket description)
+<h2>Plan</h2><p>Implement the fixture feature.</p><ul><li>Step 1</li><li>Step 2</li></ul>
+
+## Implementer summary
+Fixture implementer summary.
+
+## Changed files
+- Added src/Feature.cs (+42/-0)
+- Renamed src/Old.cs (+1/-1) (was: src/Older.cs)
+
+## Patch content
+```diff
+@@ -0,0 +1,3 @@
++namespace Feature;
++public class Feature {}
++// stub
+```
+
+## Automated checks
+- build: PASS (exit 0, elapsed 1.5s)
+- tests: FAIL (exit 1, elapsed 1.5s)
+```
+Test 'X' failed: expected Y got Z
+```
+
+## Required output
+Emit exactly one WORKER_RESULT block at the end of your response:
+
+WORKER_RESULT
+{"status":"Ok","summary":"Review for TLB-SNAP","filesChanged":[],"failureReason":null,"metadata":{"verdict":"Pass|Rework|Fail","rationale":"<your rationale here>","checks_failed":["check_name_if_applicable"]}}
+
+## Verdict guidance
+Choose verdict from:
+- Pass: implementation meets the plan, all checks pass
+- Rework: implementation has issues but is salvageable with changes
+- Fail: implementation does not meet requirements or is fundamentally broken
+
+The checks_failed array should list names of specific automated checks that failed, if any.

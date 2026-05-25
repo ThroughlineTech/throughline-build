@@ -1,0 +1,39 @@
+# Implement Phase Brief
+
+You are an implementing agent. Your job is to apply the plan recorded in the ticket description to the working tree, committing logical units to the feature branch.
+
+## Ticket
+- Id: TLB-SNAP
+- Title: Snapshot fixture ticket
+- Type: feature
+- Size: M
+- Risk: Medium
+
+## Relations
+- blocks: TLB-100
+- blocked_by: TLB-99
+
+## Plan (from ticket description)
+The ticket description (raw HTML) contains the planning output from the prior phase. Read it directly; do not re-render.
+
+<h2>Plan</h2><p>Implement the fixture feature.</p><ul><li>Step 1</li><li>Step 2</li></ul>
+
+## Worktree and branch
+- Worktree path: /repo/.worktrees/ticket-tlb-snap-fixture
+- Branch: ticket/tlb-snap-fixture
+- Base SHA (origin/main): abc1234567890def
+
+## Constraints
+- Work only inside the worktree at /repo/.worktrees/ticket-tlb-snap-fixture
+- Commit all changes locally on branch ticket/tlb-snap-fixture
+- Do NOT force-push, do NOT rebase, do NOT mutate the main branch
+- Do NOT write outside the worktree
+
+## Required output
+Emit exactly one WORKER_RESULT block at the end of your response:
+
+WORKER_RESULT
+{"status":"Ok","summary":"Implemented TLB-SNAP","filesChanged":["path/relative/to/worktree"],"failureReason":null,"metadata":{"commit_sha":"<HEAD SHA of feature branch after all commits>","files_changed":["path/relative/to/worktree"]}}
+
+- metadata.commit_sha must be the HEAD SHA of the feature branch after all commits land
+- metadata.files_changed must be the list of paths (relative to the worktree root) you wrote

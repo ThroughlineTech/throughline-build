@@ -142,4 +142,22 @@ public class PlanBriefBuilderTests
 
         Assert.Equal("TLB-99", brief.TicketId);
     }
+
+    [Fact]
+    public void Build_MatchesSnapshot_Original()
+    {
+        var expected = SnapshotLoader.Load("plan-original.txt");
+
+        var brief = PlanBriefBuilder.Build(SnapshotFixtures.Ticket(), SnapshotFixtures.Repo());
+
+        Assert.Equal(expected, brief.Instruction);
+    }
+
+    [Fact]
+    public void Build_TemplateLoadable_NameIsRegistered()
+    {
+        var ex = Record.Exception(() => TemplateLoader.Load("plan.md"));
+
+        Assert.Null(ex);
+    }
 }
