@@ -1,5 +1,6 @@
 using Tomlyn;
 using Tomlyn.Model;
+using ThroughlineBuild.Briefs;
 using ThroughlineBuild.Contracts;
 
 namespace ThroughlineBuild.Cli;
@@ -42,7 +43,8 @@ public record BuildConfig(
     WorkersConfig Workers,
     EventsConfig Events,
     ReviewConfig Review,
-    ShipConfig Ship);
+    ShipConfig Ship,
+    ProjectContext Project);
 
 public record BuildSecrets(string PlaneApiToken, string? AnthropicApiKey);
 
@@ -94,8 +96,9 @@ public static class BuildConfigLoader
         var events = ReadEventsSection(root);
         var review = ReadReviewSection(root);
         var ship = ReadShipSection(root);
+        var project = ReadProjectSection(root, path);
 
-        return new BuildConfig(ticketing, llm, workers, events, review, ship);
+        return new BuildConfig(ticketing, llm, workers, events, review, ship, project);
     }
 
     public static BuildSecrets ResolveSecrets(BuildConfig config)
@@ -276,5 +279,56 @@ public static class BuildConfigLoader
             BaseBranch: baseBranch,
             DeleteFeatureBranch: deleteFeatureBranch,
             RegressionChecks: checks.AsReadOnly());
+    }
+
+    private static ProjectContext ReadProjectSection(TomlTable root, string configPath)
+    {
+        if (!root.TryGetValue("project", out var val) || val is not TomlTable t)
+            return ProjectContext.Empty;
+
+        var language = OptionalString(t, "language", string.Empty);
+        var framework = OptionalString(t, "framework", string.Empty);
+        var packageManager = OptionalString(t, "package_manager", string.Empty);
+        var buildCommand = OptionalString(t, "build_command", string.Empty);
+        var testCommand = OptionalString(t, "test_command", string.Empty);
+        var installCommand = OptionalString(t, "install_command", string.Empty);
+        var devCommand = OptionalString(t, "dev_command", string.Empty);
+        var planeProjectUrl = OptionalString(t, "plane_project_url", string.Empty);
+
+        var notes = string.Empty;
+        var notesFile = OptionalString(t, "notes_file", string.Empty);
+        if (!string.IsNullOrEmpty(notesFile))
+        {
+            string resolved = Path.IsPathRooted(notesFile)
+                ? notesFile
+                : Path.Combine(Path.GetDirectoryName(configPath) ?? string.Empty, notesFile);
+
+            if (File.Exists(resolved))
+            {
+                try
+                {
+                    notes = File.ReadAllText(resolved);
+                }
+                catch (IOException ex)
+                {
+                    Console.Error.WriteLine($"Warning: project.notes_file '{resolved}' could not be read ({ex.Message}) - proceeding with empty Notes");
+                }
+            }
+            else
+            {
+                Console.Error.WriteLine($"Warning: project.notes_file '{resolved}' not found - proceeding with empty Notes");
+            }
+        }
+
+        return new ProjectContext(
+            Language: language,
+            Framework: framework,
+            PackageManager: packageManager,
+            BuildCommand: buildCommand,
+            TestCommand: testCommand,
+            InstallCommand: installCommand,
+            DevCommand: devCommand,
+            PlaneProjectUrl: planeProjectUrl,
+            Notes: notes);
     }
 }

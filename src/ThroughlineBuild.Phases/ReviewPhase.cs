@@ -31,6 +31,7 @@ public class ReviewPhase : IWorkflowPhase
     private readonly IGitClient _git;
     private readonly IVerifier? _verifierOverride;
     private readonly AutomatedChecksRunner? _checksRunner;
+    private readonly ProjectContext _project;
 
     public ReviewPhase(
         ITicketing ticketing,
@@ -40,7 +41,8 @@ public class ReviewPhase : IWorkflowPhase
         ReviewOptions reviewOptions,
         IGitClient? gitClient = null,
         IVerifier? verifierOverride = null,
-        AutomatedChecksRunner? checksRunner = null)
+        AutomatedChecksRunner? checksRunner = null,
+        ProjectContext? project = null)
     {
         _ticketing = ticketing;
         _verifierWorker = verifierWorker;
@@ -50,6 +52,7 @@ public class ReviewPhase : IWorkflowPhase
         _git = gitClient ?? new ProcessGitClient();
         _verifierOverride = verifierOverride;
         _checksRunner = checksRunner;
+        _project = project ?? ProjectContext.Empty;
     }
 
     public Phase Phase => Phase.Review;
@@ -104,7 +107,7 @@ public class ReviewPhase : IWorkflowPhase
         // Step 5: Build RepoState and implementer brief
         var topLevelEntries = Directory.EnumerateFileSystemEntries(workingDirectory).ToList().AsReadOnly();
         var repoState = new RepoState(mainSha, topLevelEntries);
-        var implementerBrief = ImplementBriefBuilder.Build(ticket, repoState, worktreeNames.BranchName, worktreeNames.WorktreePath);
+        var implementerBrief = ImplementBriefBuilder.Build(ticket, repoState, worktreeNames.BranchName, worktreeNames.WorktreePath, _project);
 
         // Step 6a: Reconstruct implementer commit SHA from [implemented_at: <sha>] marker
         var comments = await _ticketing.GetCommentsAsync(ticketId, ct).ConfigureAwait(false);
@@ -142,7 +145,7 @@ public class ReviewPhase : IWorkflowPhase
 
         // Step 8: Construct verifier
         var verifier = _verifierOverride
-            ?? new ClaudeCodeReviewer(_verifierWorker, ticket, checkResults, _reviewOptions.VerifierWorkerOptions, workingDirectory);
+            ?? new ClaudeCodeReviewer(_verifierWorker, ticket, checkResults, _reviewOptions.VerifierWorkerOptions, workingDirectory, _project);
 
         // Step 9: Emit WorkerSpawn (role = verifier)
         await EmitAsync(EventKind.WorkerSpawn, ticketId, new Dictionary<string, object>

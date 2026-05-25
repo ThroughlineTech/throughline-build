@@ -31,19 +31,22 @@ public class PlanPhase : IWorkflowPhase
     private readonly IEventSink _events;
     private readonly BuildOptions _options;
     private readonly IGitClient _git;
+    private readonly ProjectContext _project;
 
     public PlanPhase(
         ITicketing ticketing,
         IWorkerAgent worker,
         IEventSink events,
         BuildOptions options,
-        IGitClient? gitClient = null)
+        IGitClient? gitClient = null,
+        ProjectContext? project = null)
     {
         _ticketing = ticketing;
         _worker = worker;
         _events = events;
         _options = options;
         _git = gitClient ?? new ProcessGitClient();
+        _project = project ?? ProjectContext.Empty;
     }
 
     public Phase Phase => Phase.Plan;
@@ -70,7 +73,7 @@ public class PlanPhase : IWorkflowPhase
             .AsReadOnly();
 
         var repoState = new RepoState(mainSha, topLevelEntries);
-        var brief = PlanBriefBuilder.Build(ticket, repoState);
+        var brief = PlanBriefBuilder.Build(ticket, repoState, _project);
 
         await EmitAsync(EventKind.WorkerSpawn, ticketId, new Dictionary<string, object>
         {

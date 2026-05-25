@@ -22,19 +22,22 @@ public class ImplementPhase : IWorkflowPhase
     private readonly IEventSink _events;
     private readonly BuildOptions _options;
     private readonly IGitClient _git;
+    private readonly ProjectContext _project;
 
     public ImplementPhase(
         ITicketing ticketing,
         IWorkerAgent worker,
         IEventSink events,
         BuildOptions options,
-        IGitClient? gitClient = null)
+        IGitClient? gitClient = null,
+        ProjectContext? project = null)
     {
         _ticketing = ticketing;
         _worker = worker;
         _events = events;
         _options = options;
         _git = gitClient ?? new ProcessGitClient();
+        _project = project ?? ProjectContext.Empty;
     }
 
     public Phase Phase => Phase.Implement;
@@ -94,7 +97,7 @@ public class ImplementPhase : IWorkflowPhase
         var repoState = new RepoState(mainSha, topLevelEntries);
 
         // Step 7: Build brief
-        var brief = ImplementBriefBuilder.Build(ticket, repoState, worktreeNames.BranchName, worktreeNames.WorktreePath);
+        var brief = ImplementBriefBuilder.Build(ticket, repoState, worktreeNames.BranchName, worktreeNames.WorktreePath, _project);
 
         // Step 8: Create worktree
         var createResult = await _git.CreateWorktreeAsync(

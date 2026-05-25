@@ -14,8 +14,10 @@ public static class ReviewBriefBuilder
         Ticket ticket,
         GitDiff diff,
         WorkerResult implementerResult,
-        IReadOnlyList<CheckResult> checkResults)
+        IReadOnlyList<CheckResult> checkResults,
+        ProjectContext? project = null)
     {
+        var proj = project ?? ProjectContext.Empty;
         var sb = new StringBuilder();
 
         // Header
@@ -177,7 +179,16 @@ public static class ReviewBriefBuilder
         {
             ["feature_branch"] = diff.ToRef,
             ["base_ref"] = diff.FromRef,
-            ["files_changed_count"] = diff.Entries.Count.ToString(CultureInfo.InvariantCulture)
+            ["files_changed_count"] = diff.Entries.Count.ToString(CultureInfo.InvariantCulture),
+            ["project_language"] = proj.Language,
+            ["project_framework"] = proj.Framework,
+            ["project_package_manager"] = proj.PackageManager,
+            ["project_build_command"] = proj.BuildCommand,
+            ["project_test_command"] = proj.TestCommand,
+            ["project_install_command"] = proj.InstallCommand,
+            ["project_dev_command"] = proj.DevCommand,
+            ["project_plane_project_url"] = proj.PlaneProjectUrl,
+            ["project_notes"] = proj.Notes
         };
 
         return new Brief(
