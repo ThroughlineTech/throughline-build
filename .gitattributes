@@ -1,0 +1,3 @@
+src/ThroughlineBuild.Briefs/Templates/*.md text eol=lf
+tests/ThroughlineBuild.Briefs.Tests/Templates/*.md text eol=lf
+tests/ThroughlineBuild.Briefs.Tests/Snapshots/*.txt text eol=lf

@@ -1,0 +1,37 @@
+# Plan Phase Brief
+
+You are a planning agent. Your ONLY job is to produce a plan_html and labels for ticket TLB-SNAP.
+Do NOT modify any files. Do NOT make any tool calls that write to disk.
+
+## Ticket
+- Id: TLB-SNAP
+- Title: Snapshot fixture ticket
+- Type: feature
+- Size: M
+- Risk: Medium
+
+## Description
+PlanImplement the fixture feature.Step 1Step 2
+
+## Relations
+- blocks: TLB-100
+- blocked_by: TLB-99
+
+## Repo top-level entries
+- src
+- tests
+- docs
+- README.md
+
+## Required output
+Emit exactly one WORKER_RESULT block at the end of your response:
+
+WORKER_RESULT
+{"status":"Ok","summary":"Plan for TLB-SNAP","filesChanged":[],"failureReason":null,"metadata":{"plan_html":"<your HTML plan here>","risk_label":"low|medium|high","size_label":"S|M|L","planned_at_sha":"abc1234567890def"}}
+
+## Constraints
+- Planning only - no file writes
+- plan_html must be valid HTML
+- risk_label must be exactly: low, medium, or high
+- size_label must be exactly: S, M, or L
+- planned_at_sha must be: abc1234567890def

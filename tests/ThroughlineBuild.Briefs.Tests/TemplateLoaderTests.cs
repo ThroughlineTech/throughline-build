@@ -8,10 +8,10 @@ public class TemplateLoaderTests
     [Fact]
     public void Load_KnownTemplate_ReturnsContent()
     {
-        var content = TemplateLoader.Load("fixture.md");
+        var content = TemplateLoader.Load("plan.md");
 
-        Assert.Contains("Hello", content);
-        Assert.Contains("{{name}}", content);
+        Assert.Contains("# Plan Phase Brief", content);
+        Assert.Contains("{{ticket_id}}", content);
     }
 
     [Fact]
@@ -21,14 +21,16 @@ public class TemplateLoaderTests
             () => TemplateLoader.Load("does-not-exist.md"));
 
         Assert.Contains("does-not-exist.md", ex.Message);
-        Assert.Contains("fixture.md", ex.Message);
+        Assert.Contains("plan.md", ex.Message);
+        Assert.Contains("implement.md", ex.Message);
+        Assert.Contains("review.md", ex.Message);
     }
 
     [Fact]
     public void Load_CalledTwice_ReturnsSameContent()
     {
-        var first = TemplateLoader.Load("fixture.md");
-        var second = TemplateLoader.Load("fixture.md");
+        var first = TemplateLoader.Load("plan.md");
+        var second = TemplateLoader.Load("plan.md");
 
         Assert.Equal(first, second);
     }

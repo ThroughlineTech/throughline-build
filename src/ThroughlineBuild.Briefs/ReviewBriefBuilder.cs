@@ -18,163 +18,44 @@ public static class ReviewBriefBuilder
         ProjectContext? project = null)
     {
         var proj = project ?? ProjectContext.Empty;
-        var sb = new StringBuilder();
 
-        // Header
-        sb.AppendLine("# Review Phase Brief");
-        sb.AppendLine();
-        sb.AppendLine("You are a reviewing agent. Your job is to assess the implementation against the ticket requirements and automated checks.");
-        sb.AppendLine();
+        var changedFilesSection = BuildChangedFilesSection(diff);
+        var automatedChecksSection = BuildAutomatedChecksSection(checkResults);
 
-        // Ticket block
-        sb.AppendLine("## Ticket");
-        sb.AppendLine($"- Id: {ticket.Id}");
-        sb.AppendLine($"- Title: {ticket.Title}");
-        sb.AppendLine($"- Type: {ticket.Type}");
-        sb.AppendLine($"- Size: {ticket.Size}");
-        sb.AppendLine($"- Risk: {ticket.Risk}");
-        sb.AppendLine();
-
-        // Plan section (ticket description HTML verbatim)
-        sb.AppendLine("## Plan (from ticket description)");
-        sb.AppendLine(ticket.DescriptionHtml);
-        sb.AppendLine();
-
-        // Implementer summary
-        sb.AppendLine("## Implementer summary");
-        sb.AppendLine(implementerResult.Summary);
-        sb.AppendLine();
-
-        // Changed files section
-        sb.AppendLine("## Changed files");
-        if (diff.Entries.Count == 0)
-        {
-            sb.AppendLine("(no files changed)");
-            sb.AppendLine();
-            sb.AppendLine("Please confirm there is nothing to review.");
-            sb.AppendLine();
-        }
-        else
-        {
-            foreach (var entry in diff.Entries)
-            {
-                var kindStr = entry.Kind switch
-                {
-                    DiffKind.Added => "Added",
-                    DiffKind.Modified => "Modified",
-                    DiffKind.Deleted => "Deleted",
-                    DiffKind.Renamed => "Renamed",
-                    _ => "Unknown"
-                };
-
-                var fileLine = $"- {kindStr} {entry.Path} (+{entry.LinesAdded}/-{entry.LinesRemoved})";
-                if (entry.Kind == DiffKind.Renamed && entry.OldPath != null)
-                {
-                    fileLine += $" (was: {entry.OldPath})";
-                }
-                sb.AppendLine(fileLine);
-            }
-            sb.AppendLine();
-        }
-
-        // Patch content section
-        sb.AppendLine("## Patch content");
-        if (diff.Entries.Count > 0)
-        {
-            var entriesWithPatches = diff.Entries.Where(e => e.PatchContent != null).ToList();
-            int remainingBudget = InstructionBudgetBytes - sb.Length;
-            int patchesAdded = 0;
-
-            if (entriesWithPatches.Count > 0)
-            {
-                int perFileBudget = Math.Max(remainingBudget / entriesWithPatches.Count, 2048);
-
-                foreach (var entry in entriesWithPatches)
-                {
-                    if (sb.Length >= InstructionBudgetBytes)
-                    {
-                        sb.AppendLine($"- {entry.Path}: patch omitted (budget exhausted)");
-                        continue;
-                    }
-
-                    var patchContent = entry.PatchContent!;
-                    sb.AppendLine($"```diff");
-
-                    if (patchContent.Length <= perFileBudget)
-                    {
-                        sb.AppendLine(patchContent);
-                    }
-                    else
-                    {
-                        var truncated = patchContent.Substring(0, perFileBudget);
-                        sb.AppendLine(truncated);
-                        int remainingChars = patchContent.Length - perFileBudget;
-                        sb.AppendLine($"... [truncated: {remainingChars} more chars]");
-                    }
-
-                    sb.AppendLine("```");
-                    sb.AppendLine();
-                    patchesAdded++;
-                }
-            }
-        }
-        else
-        {
-            sb.AppendLine("(no patches)");
-            sb.AppendLine();
-        }
-
-        // Automated checks section
-        sb.AppendLine("## Automated checks");
-        if (checkResults.Count == 0)
-        {
-            sb.AppendLine("(no automated checks configured)");
-        }
-        else
-        {
-            foreach (var check in checkResults)
-            {
-                var status = check.Passed ? "PASS" : "FAIL";
-                sb.AppendLine($"- {check.Name}: {status} (exit {check.ExitCode}, elapsed {check.Elapsed.TotalSeconds:F1}s)");
-
-                if (!check.Passed && !string.IsNullOrEmpty(check.StderrTail))
-                {
-                    var stdErr = check.StderrTail;
-                    if (stdErr.Length > StderrTailBudgetPerFailure)
-                    {
-                        stdErr = stdErr.Substring(stdErr.Length - StderrTailBudgetPerFailure);
-                    }
-                    sb.AppendLine("```");
-                    sb.AppendLine(stdErr);
-                    sb.AppendLine("```");
-                }
-            }
-        }
-        sb.AppendLine();
-
-        // WORKER_RESULT envelope and verdict guidance
-        sb.AppendLine("## Required output");
-        sb.AppendLine("Emit exactly one WORKER_RESULT block at the end of your response:");
-        sb.AppendLine();
-        sb.AppendLine("WORKER_RESULT");
         var workerResultJson =
             "{\"status\":\"Ok\",\"summary\":\"Review for " + ticket.Id + "\"," +
             "\"filesChanged\":[],\"failureReason\":null," +
             "\"metadata\":{\"verdict\":\"Pass|Rework|Fail\"," +
             "\"rationale\":\"<your rationale here>\"," +
             "\"checks_failed\":[\"check_name_if_applicable\"]}}";
-        sb.AppendLine(workerResultJson);
-        sb.AppendLine();
 
-        sb.AppendLine("## Verdict guidance");
-        sb.AppendLine("Choose verdict from:");
-        sb.AppendLine("- Pass: implementation meets the plan, all checks pass");
-        sb.AppendLine("- Rework: implementation has issues but is salvageable with changes");
-        sb.AppendLine("- Fail: implementation does not meet requirements or is fundamentally broken");
-        sb.AppendLine();
-        sb.AppendLine("The checks_failed array should list names of specific automated checks that failed, if any.");
+        var template = TemplateLoader.Load("review.md");
 
-        // Build context dictionary
+        var vars = new Dictionary<string, string>
+        {
+            ["ticket_id"] = ticket.Id,
+            ["title"] = ticket.Title,
+            ["type"] = ticket.Type,
+            ["size"] = ticket.Size.ToString(),
+            ["risk"] = ticket.Risk.ToString(),
+            ["description_html"] = ticket.DescriptionHtml,
+            ["implementer_summary"] = implementerResult.Summary,
+            ["changed_files_section"] = changedFilesSection,
+            ["patch_content_section"] = "",
+            ["automated_checks_section"] = automatedChecksSection,
+            ["worker_result_json"] = workerResultJson
+        };
+
+        // Budget for the patch body is derived from the substituted template with patch_content_section
+        // initially empty. This mirrors the original sb.Length-based budget semantically: total instruction
+        // length is bounded by InstructionBudgetBytes.
+        var lengthWithoutPatch = template.Substitute(vars).Length;
+        int remainingBudget = InstructionBudgetBytes - lengthWithoutPatch;
+
+        vars["patch_content_section"] = BuildPatchContentSection(diff, remainingBudget);
+
+        var instruction = template.Substitute(vars);
+
         var context = new Dictionary<string, string>
         {
             ["feature_branch"] = diff.ToRef,
@@ -194,9 +75,129 @@ public static class ReviewBriefBuilder
         return new Brief(
             ticket.Id,
             Phase.Review,
-            sb.ToString(),
+            instruction,
             Array.Empty<string>(),
             Array.Empty<string>(),
             context);
+    }
+
+    private static string BuildChangedFilesSection(GitDiff diff)
+    {
+        var sb = new StringBuilder();
+        sb.Append("## Changed files\n");
+        if (diff.Entries.Count == 0)
+        {
+            sb.Append("(no files changed)\n");
+            sb.Append("\n");
+            sb.Append("Please confirm there is nothing to review.\n");
+            sb.Append("\n");
+        }
+        else
+        {
+            foreach (var entry in diff.Entries)
+            {
+                var kindStr = entry.Kind switch
+                {
+                    DiffKind.Added => "Added",
+                    DiffKind.Modified => "Modified",
+                    DiffKind.Deleted => "Deleted",
+                    DiffKind.Renamed => "Renamed",
+                    _ => "Unknown"
+                };
+
+                var fileLine = $"- {kindStr} {entry.Path} (+{entry.LinesAdded}/-{entry.LinesRemoved})";
+                if (entry.Kind == DiffKind.Renamed && entry.OldPath != null)
+                {
+                    fileLine += $" (was: {entry.OldPath})";
+                }
+                sb.Append(fileLine);
+                sb.Append('\n');
+            }
+            sb.Append('\n');
+        }
+        return sb.ToString();
+    }
+
+    private static string BuildPatchContentSection(GitDiff diff, int remainingBudget)
+    {
+        var sb = new StringBuilder();
+        sb.Append("## Patch content\n");
+        if (diff.Entries.Count > 0)
+        {
+            var entriesWithPatches = diff.Entries.Where(e => e.PatchContent != null).ToList();
+
+            if (entriesWithPatches.Count > 0)
+            {
+                int perFileBudget = Math.Max(remainingBudget / entriesWithPatches.Count, 2048);
+
+                foreach (var entry in entriesWithPatches)
+                {
+                    if (sb.Length >= remainingBudget)
+                    {
+                        sb.Append($"- {entry.Path}: patch omitted (budget exhausted)\n");
+                        continue;
+                    }
+
+                    var patchContent = entry.PatchContent!;
+                    sb.Append("```diff\n");
+
+                    if (patchContent.Length <= perFileBudget)
+                    {
+                        sb.Append(patchContent);
+                        sb.Append('\n');
+                    }
+                    else
+                    {
+                        var truncated = patchContent.Substring(0, perFileBudget);
+                        sb.Append(truncated);
+                        sb.Append('\n');
+                        int remainingChars = patchContent.Length - perFileBudget;
+                        sb.Append($"... [truncated: {remainingChars} more chars]\n");
+                    }
+
+                    sb.Append("```\n");
+                    sb.Append('\n');
+                }
+            }
+        }
+        else
+        {
+            sb.Append("(no patches)\n");
+            sb.Append('\n');
+        }
+        return sb.ToString();
+    }
+
+    private static string BuildAutomatedChecksSection(IReadOnlyList<CheckResult> checkResults)
+    {
+        var sb = new StringBuilder();
+        sb.Append("## Automated checks\n");
+        if (checkResults.Count == 0)
+        {
+            sb.Append("(no automated checks configured)\n");
+        }
+        else
+        {
+            foreach (var check in checkResults)
+            {
+                var status = check.Passed ? "PASS" : "FAIL";
+                sb.Append($"- {check.Name}: {status} (exit {check.ExitCode}, elapsed {check.Elapsed.TotalSeconds.ToString("F1", CultureInfo.InvariantCulture)}s)\n");
+
+                if (!check.Passed && !string.IsNullOrEmpty(check.StderrTail))
+                {
+                    var stdErr = check.StderrTail;
+                    if (stdErr.Length > StderrTailBudgetPerFailure)
+                    {
+                        stdErr = stdErr.Substring(stdErr.Length - StderrTailBudgetPerFailure);
+                    }
+                    sb.Append("```\n");
+                    sb.Append(stdErr);
+                    sb.Append('\n');
+                    sb.Append("```\n");
+                }
+            }
+        }
+        sb.Append('\n');
+        return sb.ToString();
     }
 }
