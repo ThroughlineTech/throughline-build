@@ -412,8 +412,14 @@ static async Task<int> RunAsync(string[] args)
             try
             {
                 // For a ship that just fast-forwarded, diff is most informative when
-                // measured against the merge-base on the configured remote/main.
-                var ontoRef = $"{config2.Ship.Remote}/{config2.Ship.BaseBranch}";
+                // measured against the merge-base. When no remote is configured, fall
+                // back to the local base branch (TLB-127).
+                string ontoRef;
+                var summaryRemoteExists = await summaryGit.RemoteExistsAsync(config2.Ship.Remote, cwd, CancellationToken.None);
+                if (summaryRemoteExists)
+                    ontoRef = $"{config2.Ship.Remote}/{config2.Ship.BaseBranch}";
+                else
+                    ontoRef = config2.Ship.BaseBranch;
                 var d = await summaryGit.DiffAsync(ontoRef, result.MergedSha!, cwd, includePatchContent: false, CancellationToken.None);
                 shipDiff = d.Entries;
             }

@@ -107,15 +107,33 @@ public class ShipPhase : IWorkflowPhase
                 $"feature worktree not found at {worktreeNames.WorktreePath}",
                 ShipFailureStage.StateCheck), worktreeNames);
 
-        // Step 4: Fetch remote
-        var fetchResult = await _git.FetchAsync(_shipOptions.Remote, workingDirectory, ct).ConfigureAwait(false);
-        if (!fetchResult.Success)
-            return (new ShipResult(false, ticketId, null,
-                $"git fetch failed: {fetchResult.FailureReason}",
-                ShipFailureStage.Fetch), worktreeNames);
+        // Step 4: Check for remote and conditionally fetch
+        var remote = _shipOptions.Remote;
+        var baseBranch = _shipOptions.BaseBranch;
+        var remoteExists = await _git.RemoteExistsAsync(remote, workingDirectory, ct).ConfigureAwait(false);
+        string ontoRef;
+        if (!remoteExists)
+        {
+            // No remote configured - skip fetch and rebase onto local base branch
+            await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
+            {
+                ["action"] = "fetch_skipped",
+                ["reason"] = "no_remote",
+                ["remote"] = remote
+            }, ct).ConfigureAwait(false);
+            ontoRef = baseBranch;
+        }
+        else
+        {
+            var fetchResult = await _git.FetchAsync(remote, workingDirectory, ct).ConfigureAwait(false);
+            if (!fetchResult.Success)
+                return (new ShipResult(false, ticketId, null,
+                    $"git fetch failed: {fetchResult.FailureReason}",
+                    ShipFailureStage.Fetch), worktreeNames);
+            ontoRef = $"{remote}/{baseBranch}";
+        }
 
-        // Step 5: Rebase feature branch onto remote/baseBranch
-        var ontoRef = $"{_shipOptions.Remote}/{_shipOptions.BaseBranch}";
+        // Step 5: Rebase feature branch onto ontoRef
         var rebaseResult = await _git.RebaseAsync(ontoRef, worktreeNames.WorktreePath, ct).ConfigureAwait(false);
         if (rebaseResult.HadConflicts)
         {

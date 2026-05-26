@@ -38,4 +38,10 @@ public interface IGitClient
     // Both return best-effort values: 0 / empty list on git failure, never throw.
     Task<int> RevListCountAsync(string range, string workingDirectory, CancellationToken ct);
     Task<IReadOnlyList<string>> LogOnelineAsync(string range, int limit, string workingDirectory, CancellationToken ct);
+
+    // Returns true if a remote with the given name is configured in the repo.
+    // Default returns true so existing FakeGitClients remain unchanged (TLB-127).
+    // Never throws - treat any error as false.
+    Task<bool> RemoteExistsAsync(string remote, string workingDirectory, CancellationToken ct) =>
+        Task.FromResult(true);
 }

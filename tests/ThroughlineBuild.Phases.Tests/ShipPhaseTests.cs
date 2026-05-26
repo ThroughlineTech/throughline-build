@@ -405,6 +405,44 @@ public class ShipPhaseTests
         Assert.NotNull(result.FailureReason);
     }
 
+    [Fact]
+    public async Task RunAsync_NoRemote_SkipsFetchAndRebasesOntoLocalBaseBranch()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true)
+        {
+            RemoteExistsResult = false
+        };
+        var decrufter = new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git);
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: decrufter);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        // fetch must be skipped
+        Assert.Equal(0, git.FetchCallCount);
+
+        // rebase must use local base branch, not remote/baseBranch
+        Assert.Equal(1, git.RebaseCallCount);
+        Assert.Single(git.RebaseOntoRefs);
+        Assert.Equal("main", git.RebaseOntoRefs[0]);
+
+        // ticket transitions to Done and result is success
+        Assert.True(result.Success);
+        Assert.Single(ticketing.Transitions);
+        Assert.Equal(TicketState.Done, ticketing.Transitions[0].state);
+
+        // a fetch_skipped TicketWrite event must appear
+        var writeEvents = events.Events.Where(e => e.Kind == EventKind.TicketWrite).ToList();
+        var fetchSkipped = writeEvents.FirstOrDefault(e =>
+            e.Data.TryGetValue("action", out var a) && a.ToString() == "fetch_skipped");
+        Assert.NotNull(fetchSkipped);
+        Assert.Equal("no_remote", fetchSkipped!.Data["reason"].ToString());
+    }
+
     // ---------- Fakes ----------
 
     private sealed class FakeTicketing : ITicketing
@@ -458,17 +496,22 @@ public class ShipPhaseTests
         public GitOpResult RebaseAbortResult { get; set; } = new GitOpResult(true, null);
         public GitOpResult FastForwardResult { get; set; } = new GitOpResult(true, null);
         public GitOpResult DeleteBranchResult { get; set; } = new GitOpResult(true, null);
+        public bool RemoteExistsResult { get; set; } = true;
 
         public int FetchCallCount { get; private set; }
         public int RebaseCallCount { get; private set; }
         public int RebaseAbortCallCount { get; private set; }
         public int FastForwardCallCount { get; private set; }
         public List<(string branch, bool force)> DeleteBranchCalls { get; } = new();
+        public List<string> RebaseOntoRefs { get; } = new();
 
         public FakeGitClient(bool includeWorktreeMatching)
         {
             _includeWorktreeMatching = includeWorktreeMatching;
         }
+
+        public Task<bool> RemoteExistsAsync(string remote, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(RemoteExistsResult);
 
         public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
             Task.FromResult(MergedSha);
@@ -510,6 +553,7 @@ public class ShipPhaseTests
         public Task<RebaseResult> RebaseAsync(string ontoRef, string featureWorktreePath, CancellationToken ct)
         {
             RebaseCallCount++;
+            RebaseOntoRefs.Add(ontoRef);
             return Task.FromResult(RebaseResult);
         }
 
