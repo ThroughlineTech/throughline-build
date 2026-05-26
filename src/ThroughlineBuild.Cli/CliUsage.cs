@@ -6,9 +6,9 @@ public static class CliUsage
 build - Throughline Build
 
 Usage:
-  build plan <ticket-id> [--debug]                        Run the plan phase for a ticket
-  build implement <ticket-id> [--debug]                   Run the implement phase for a ticket
-  build review <ticket-id> [--debug]                      Run the review phase for a ticket
+  build plan <ticket-id> [--debug|--quiet]                Run the plan phase for a ticket
+  build implement <ticket-id> [--debug|--quiet]           Run the implement phase for a ticket
+  build review <ticket-id> [--debug|--quiet]              Run the review phase for a ticket
   build ship <ticket-id> [--debug]                        Ship a reviewed ticket (local fast-forward merge; no push to remote); --debug accepted but is a no-op (ship has no worker subprocess)
   build amend <ticket-id> [--size S|M|L] [--note "..."]   Amend an existing ticket (at least one flag required)
   build close <ticket-id> <reason>                        Close a ticket (reason required)
@@ -21,7 +21,16 @@ Flags:
             artifacts to .build/sessions/<session-id>/. Stdout lines are prefixed "worker> "; stderr
             lines are prefixed "worker! ". Use 2>&1 | tee log.txt to capture both streams.
             Writes: worker-stdin.txt, worker-stdout.txt, worker-stderr.txt, envelope-result.txt (or parse-error.txt on failure), worker-result.json
-            No-op for ship (ship has no worker subprocess).
+            Replaces the default progress digest (mutually exclusive). No-op for ship (ship has no worker subprocess).
+  --quiet   Suppress the default progress digest. Use for scripted/batch runs that want the pre-TLB-122
+            silent behavior. Mutually exclusive with --debug (which replaces the digest with raw stream).
+
+Progress digest (default behavior for plan/implement/review):
+  Without --debug or --quiet, the orchestrator prints a one-line digest per worker stream event to stderr
+  (e.g. tool_use Read foo.cs, tool_use Bash git status, result ok 23888 out / 317k cache-read).
+  Each line carries a [m:ss] offset from worker start. Default-on to a TTY stderr; auto-suppressed when
+  stderr is redirected (2>err.log or piped) to keep CI/script logs clean. Set BUILD_PROGRESS=1 to force
+  digest on even when stderr is redirected.
 
 Exit codes:
   0  Success

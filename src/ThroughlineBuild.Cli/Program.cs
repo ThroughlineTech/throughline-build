@@ -22,15 +22,18 @@ static async Task<int> RunAsync(string[] args)
         return 0;
     }
 
-    // Pre-pass: strip --debug from args before any positional parser sees it.
-    // --debug is a bare bool flag (no value); the existing key/value parser expects pairs
-    // and would mangle subsequent args if --debug were left in.
+    // Pre-pass: strip --debug and --quiet from args before any positional parser sees them.
+    // Both are bare bool flags (no value); the existing key/value parser expects pairs
+    // and would mangle subsequent args if they were left in.
     bool debugMode = false;
+    bool quietMode = false;
     var filteredArgs = new List<string>(args.Length);
     foreach (var a in args)
     {
         if (a == "--debug")
             debugMode = true;
+        else if (a == "--quiet")
+            quietMode = true;
         else
             filteredArgs.Add(a);
     }
@@ -206,13 +209,22 @@ static async Task<int> RunAsync(string[] args)
         BaseDirectory = config2.Events.LogDirectory,
         SessionId = sessionId
     });
+    // Digest is default-on when stderr is a TTY and the user has not opted out
+    // via --quiet or replaced it with the --debug raw firehose. When stderr is
+    // redirected (e.g. 2>err.log or piped to tee), the digest is suppressed to
+    // keep scripted/CI logs clean unless BUILD_PROGRESS=1 forces it on.
+    bool enableDigest = !debugMode
+        && !quietMode
+        && (!Console.IsErrorRedirected || Environment.GetEnvironmentVariable("BUILD_PROGRESS") == "1");
+
     var buildOptions = new BuildOptions(
         SessionId: sessionId,
         WorkerName: config2.Workers.DefaultAgent,
         WorkerTimeout: TimeSpan.FromMinutes(config2.Workers.TimeoutMinutes),
         DebugCaptureDirectory: debugCaptureDir,
         LiveStdoutSink: debugMode ? Console.Out : null,
-        LiveStderrSink: debugMode ? Console.Error : null);
+        LiveStderrSink: debugMode ? Console.Error : null,
+        ProgressDigestSink: enableDigest ? Console.Error : null);
 
     if (verb == "plan")
     {
@@ -354,7 +366,8 @@ static async Task<int> RunAsync(string[] args)
             config2.Review.VerifierAllowedTools,
             DebugCaptureDirectory: debugCaptureDir,
             LiveStdoutSink: debugMode ? Console.Out : null,
-            LiveStderrSink: debugMode ? Console.Error : null);
+            LiveStderrSink: debugMode ? Console.Error : null,
+            ProgressDigestSink: enableDigest ? Console.Error : null);
         var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
         var phase = new ReviewPhase(ticketing, worker, eventSink, buildOptions, reviewOptions, project: config2.Project);
         ReviewResult result;
