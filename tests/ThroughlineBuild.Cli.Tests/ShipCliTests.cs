@@ -20,6 +20,14 @@ public class ShipCliTests
     }
 
     [Fact]
+    public void UsageText_MentionsSummaryJsonFlagAndContract()
+    {
+        // TLB-123
+        Assert.Contains("--summary-json", CliUsage.UsageText);
+        Assert.Contains("Summary contract:", CliUsage.UsageText);
+    }
+
+    [Fact]
     public void UsageText_DebugFlagDocumentedForPlanImplementReview()
     {
         // The usage line for plan/implement/review must accept --debug (and after

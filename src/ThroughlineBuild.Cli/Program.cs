@@ -3,6 +3,7 @@ using ThroughlineBuild.Anthropic;
 using ThroughlineBuild.Cli;
 using ThroughlineBuild.Commands;
 using ThroughlineBuild.Contracts;
+using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.EventLog;
 using ThroughlineBuild.Git;
 using ThroughlineBuild.Helpers;
@@ -22,11 +23,12 @@ static async Task<int> RunAsync(string[] args)
         return 0;
     }
 
-    // Pre-pass: strip --debug and --quiet from args before any positional parser sees them.
-    // Both are bare bool flags (no value); the existing key/value parser expects pairs
+    // Pre-pass: strip --debug, --quiet, and --summary-json from args before any positional parser sees them.
+    // All three are bare bool flags (no value); the existing key/value parser expects pairs
     // and would mangle subsequent args if they were left in.
     bool debugMode = false;
     bool quietMode = false;
+    bool summaryJson = false;
     var filteredArgs = new List<string>(args.Length);
     foreach (var a in args)
     {
@@ -34,6 +36,8 @@ static async Task<int> RunAsync(string[] args)
             debugMode = true;
         else if (a == "--quiet")
             quietMode = true;
+        else if (a == "--summary-json")
+            summaryJson = true;
         else
             filteredArgs.Add(a);
     }
@@ -99,11 +103,12 @@ static async Task<int> RunAsync(string[] args)
         ProjectId = config2.Ticketing.PlaneProjectId,
         ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
     });
-    await using var eventSink2 = new JsonlEventSink(new EventLogOptions
+    await using var jsonlEventSink2 = new JsonlEventSink(new EventLogOptions
     {
         BaseDirectory = config2.Events.LogDirectory,
         SessionId = sessionId2
     });
+    var eventSink2 = new RecordingEventSink(jsonlEventSink2);
 
     var registry = new TicketCommandRegistry();
     registry.Register("amend", new AmendCommand(ticketing2, eventSink2));
@@ -204,7 +209,7 @@ static async Task<int> RunAsync(string[] args)
         ExecutablePath = config2.Workers.ClaudeCodeExecutable,
         MaxOutputTokens = config2.Workers.MaxOutputTokens
     });
-    await using var eventSink = new JsonlEventSink(new EventLogOptions
+    await using var jsonlEventSink = new JsonlEventSink(new EventLogOptions
     {
         BaseDirectory = config2.Events.LogDirectory,
         SessionId = sessionId
@@ -217,6 +222,7 @@ static async Task<int> RunAsync(string[] args)
         && !quietMode
         && (!Console.IsErrorRedirected || Environment.GetEnvironmentVariable("BUILD_PROGRESS") == "1");
 
+    var eventSink = new RecordingEventSink(jsonlEventSink);
     var buildOptions = new BuildOptions(
         SessionId: sessionId,
         WorkerName: config2.Workers.DefaultAgent,
@@ -225,6 +231,22 @@ static async Task<int> RunAsync(string[] args)
         LiveStdoutSink: debugMode ? Console.Out : null,
         LiveStderrSink: debugMode ? Console.Error : null,
         ProgressDigestSink: enableDigest ? Console.Error : null);
+
+    // Shared git client (read-only ops only at this layer) for summary-block construction.
+    var summaryGit = new ProcessGitClient(cwd);
+    string PlaneUrl() => BuildPlaneUrl(config2.Project.PlaneProjectUrl, ticketId);
+    string? ArtifactsPath() => debugCaptureDir is not null
+        ? $".build/sessions/{sessionId}/"
+        : $".build/events/{sessionId}.jsonl";
+
+    void WriteSummary(PhaseSummary summary)
+    {
+        var text = summaryJson
+            ? PhaseSummaryRenderer.RenderJson(summary)
+            : PhaseSummaryRenderer.RenderText(summary);
+        Console.Out.Write(text);
+        if (!text.EndsWith('\n')) Console.Out.WriteLine();
+    }
 
     if (verb == "plan")
     {
@@ -247,6 +269,24 @@ static async Task<int> RunAsync(string[] args)
             return 1;
         }
 
+        Ticket? planTicket = null;
+        try { planTicket = await ticketing.GetAsync(ticketId, CancellationToken.None); }
+        catch { /* best effort - summary tolerates a missing ticket */ }
+
+        var planSummary = PhaseSummaryBuilder.BuildPlan(
+            ticketId: result.TicketId,
+            success: result.Success,
+            riskLabel: result.RiskLabel,
+            sizeLabel: result.SizeLabel,
+            plannedAtSha: result.PlannedAtSha,
+            failureReason: result.FailureReason,
+            ticket: planTicket,
+            events: eventSink.Snapshot(),
+            sessionId: sessionId,
+            planeUrl: PlaneUrl(),
+            sessionArtifactsPath: ArtifactsPath());
+        WriteSummary(planSummary);
+
         if (!result.Success)
         {
             Console.Error.WriteLine($"Plan phase failed: {result.FailureReason}");
@@ -255,7 +295,6 @@ static async Task<int> RunAsync(string[] args)
             return 1;
         }
 
-        Console.WriteLine($"Plan complete: {result.TicketId} risk={result.RiskLabel} size={result.SizeLabel}");
         if (debugCaptureDir is not null)
             Console.WriteLine($"Debug capture: .build/sessions/{sessionId}/");
         return 0;
@@ -281,6 +320,38 @@ static async Task<int> RunAsync(string[] args)
             return 1;
         }
 
+        // Best-effort git facts for the implement summary - failures are silently
+        // absorbed and the summary just omits those fields.
+        IReadOnlyList<DiffEntry> implDiff = Array.Empty<DiffEntry>();
+        IReadOnlyList<string> implCommits = Array.Empty<string>();
+        int implCommitCount = 0;
+        if (result.Success && !string.IsNullOrEmpty(result.BranchName))
+        {
+            try
+            {
+                var (baseRef, _) = await ThroughlineBuild.Git.BaseRefResolver.ResolveAsync(summaryGit, cwd, CancellationToken.None);
+                var d = await summaryGit.DiffAsync(baseRef, result.BranchName!, cwd, includePatchContent: false, CancellationToken.None);
+                implDiff = d.Entries;
+                implCommitCount = await summaryGit.RevListCountAsync($"{baseRef}..{result.BranchName}", cwd, CancellationToken.None);
+                implCommits = await summaryGit.LogOnelineAsync($"{baseRef}..{result.BranchName}", 10, cwd, CancellationToken.None);
+            }
+            catch { /* tolerated */ }
+        }
+
+        var implSummary = PhaseSummaryBuilder.BuildImplement(
+            ticketId: result.TicketId,
+            success: result.Success,
+            branchName: result.BranchName,
+            commitSha: result.CommitSha,
+            failureReason: result.FailureReason,
+            events: eventSink.Snapshot(),
+            diff: implDiff,
+            commitOnelines: implCommits,
+            commitCount: implCommitCount,
+            planeUrl: PlaneUrl(),
+            sessionArtifactsPath: ArtifactsPath());
+        WriteSummary(implSummary);
+
         if (!result.Success)
         {
             Console.Error.WriteLine($"Implement phase failed: {result.FailureReason}");
@@ -289,7 +360,6 @@ static async Task<int> RunAsync(string[] args)
             return 1;
         }
 
-        Console.WriteLine($"Implement complete: {result.TicketId} commit={result.CommitSha} branch={result.BranchName}");
         if (debugCaptureDir is not null)
             Console.WriteLine($"Debug capture: .build/sessions/{sessionId}/");
         return 0;
@@ -322,23 +392,46 @@ static async Task<int> RunAsync(string[] args)
             return 1;
         }
 
-        if (result.Success)
+        // Derive branch name from the deterministic worktree layout (best effort).
+        string shipBranchName = "(unknown)";
+        try
         {
-            // Derive branch name from the deterministic worktree layout.
-            // Fetch the ticket to get its title for slug computation.
-            string branchName;
+            using var fetchCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var ticket = await ticketing.GetAsync(ticketId, fetchCts.Token);
+            var layout = PhaseWorktreeLayout.Compute(ticketId, ticket.Title, cwd);
+            shipBranchName = layout.BranchName;
+        }
+        catch { /* tolerated */ }
+
+        IReadOnlyList<DiffEntry> shipDiff = Array.Empty<DiffEntry>();
+        if (result.Success && !string.IsNullOrEmpty(result.MergedSha))
+        {
             try
             {
-                using var fetchCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                var ticket = await ticketing.GetAsync(ticketId, fetchCts.Token);
-                var layout = PhaseWorktreeLayout.Compute(ticketId, ticket.Title, cwd);
-                branchName = layout.BranchName;
+                // For a ship that just fast-forwarded, diff is most informative when
+                // measured against the merge-base on the configured remote/main.
+                var ontoRef = $"{config2.Ship.Remote}/{config2.Ship.BaseBranch}";
+                var d = await summaryGit.DiffAsync(ontoRef, result.MergedSha!, cwd, includePatchContent: false, CancellationToken.None);
+                shipDiff = d.Entries;
             }
-            catch
-            {
-                branchName = "(unknown)";
-            }
-            Console.WriteLine($"Ship complete: {result.TicketId} merged={result.MergedSha} branch={branchName}");
+            catch { /* tolerated */ }
+        }
+
+        var shipSummary = PhaseSummaryBuilder.BuildShip(
+            ticketId: result.TicketId,
+            success: result.Success,
+            branchName: shipBranchName == "(unknown)" ? null : shipBranchName,
+            mergedSha: result.MergedSha,
+            failureReason: result.FailureReason,
+            failedAtStage: result.FailedAt?.ToString(),
+            events: eventSink.Snapshot(),
+            diff: shipDiff,
+            planeUrl: PlaneUrl(),
+            sessionArtifactsPath: ArtifactsPath());
+        WriteSummary(shipSummary);
+
+        if (result.Success)
+        {
             return 0;
         }
 
@@ -388,6 +481,18 @@ static async Task<int> RunAsync(string[] args)
             return 1;
         }
 
+        var reviewSummary = PhaseSummaryBuilder.BuildReview(
+            ticketId: result.TicketId,
+            success: result.Success,
+            verdict: result.Verdict?.ToString(),
+            rationale: result.VerdictRationale,
+            checksFailed: result.ChecksFailed,
+            failureReason: result.FailureReason,
+            events: eventSink.Snapshot(),
+            planeUrl: PlaneUrl(),
+            sessionArtifactsPath: ArtifactsPath());
+        WriteSummary(reviewSummary);
+
         if (!result.Success)
         {
             Console.Error.WriteLine($"Review phase failed: {result.FailureReason}");
@@ -396,14 +501,22 @@ static async Task<int> RunAsync(string[] args)
             return 4;
         }
 
-        Console.WriteLine($"Review complete: {result.TicketId} verdict={result.Verdict}");
-        if (!string.IsNullOrEmpty(result.VerdictRationale))
-            Console.WriteLine($"  rationale: {result.VerdictRationale}");
         if (debugCaptureDir is not null)
             Console.WriteLine($"Debug capture: .build/sessions/{sessionId}/");
 
         return result.Verdict == ThroughlineBuild.Contracts.Models.VerdictKind.Pass ? 0 : 1;
     }
+}
+
+// Builds the Plane work-item URL by joining the configured PlaneProjectUrl with the
+// ticket id. Returns an empty string when the config field is unset so the summary
+// renderer can omit the URL line entirely.
+static string BuildPlaneUrl(string planeProjectUrl, string ticketId)
+{
+    if (string.IsNullOrEmpty(planeProjectUrl) || string.IsNullOrEmpty(ticketId))
+        return string.Empty;
+    var trimmed = planeProjectUrl.TrimEnd('/');
+    return $"{trimmed}/browse/{ticketId}/";
 }
 
 static string? WireUpConditionalCommands(

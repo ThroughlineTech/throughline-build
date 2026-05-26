@@ -530,6 +530,11 @@ public class ShipPhaseTests
             DeleteBranchCalls.Add((branch, force));
             return Task.FromResult(DeleteBranchResult);
         }
+
+        public Task<int> RevListCountAsync(string range, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(0);
+        public Task<IReadOnlyList<string>> LogOnelineAsync(string range, int limit, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
     }
 
     private sealed class FakeChecksRunner : AutomatedChecksRunner

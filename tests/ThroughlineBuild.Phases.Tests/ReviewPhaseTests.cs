@@ -505,6 +505,11 @@ public class ReviewPhaseTests
 
         public Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct) =>
             Task.FromResult(new GitOpResult(true, null));
+
+        public Task<int> RevListCountAsync(string range, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(0);
+        public Task<IReadOnlyList<string>> LogOnelineAsync(string range, int limit, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
     }
 }
 
@@ -662,5 +667,10 @@ public class ReviewPhaseDebugCaptureTests
             Task.FromResult(new GitOpResult(true, null));
         public Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct) =>
             Task.FromResult(new GitOpResult(true, null));
+
+        public Task<int> RevListCountAsync(string range, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(0);
+        public Task<IReadOnlyList<string>> LogOnelineAsync(string range, int limit, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
     }
 }

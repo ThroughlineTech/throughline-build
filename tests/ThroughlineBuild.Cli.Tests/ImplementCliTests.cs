@@ -47,6 +47,14 @@ public class ImplementCliTests
     }
 
     [Fact]
+    public void UsageText_MentionsSummaryJsonFlagAndContract()
+    {
+        // TLB-123: --summary-json flag and the summary-contract paragraph must be documented.
+        Assert.Contains("--summary-json", CliUsage.UsageText);
+        Assert.Contains("Summary contract:", CliUsage.UsageText);
+    }
+
+    [Fact]
     public void ImplementPhase_AcceptsSameDependencyShapeAsPlanPhase()
     {
         // Both phases must construct from the same shape so the CLI's
