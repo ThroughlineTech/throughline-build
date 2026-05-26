@@ -354,7 +354,35 @@ public class PublishOpsTests : IDisposable
         var result = await client.FastForwardMergeAsync("feature", repoDir, CancellationToken.None);
 
         Assert.False(result.Success);
-        Assert.Equal("main is not at the feature branch's parent; rebase first", result.FailureReason);
+        Assert.Contains("Not possible to fast-forward", result.FailureReason);
+    }
+
+    // ---------------------------------------------------------------------------
+    // FastForwardMergeAsync - dirty working tree returns actual git stderr
+    // ---------------------------------------------------------------------------
+
+    [Fact]
+    public async Task FastForwardMergeAsync_DirtyWorkingTree_ReturnsActualGitStderr()
+    {
+        var repoDir = CreateTempGitRepo();
+        var mainBranch = RunGitOutput(repoDir, "rev-parse", "--abbrev-ref", "HEAD");
+
+        // Create feature branch with one extra commit
+        RunGit(repoDir, "checkout", "-b", "feature");
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "feature content");
+        RunGit(repoDir, "add", "tracked.txt");
+        RunGit(repoDir, "commit", "-m", "feature commit");
+
+        // Switch back to main and modify the same file (dirty working tree)
+        RunGit(repoDir, "checkout", mainBranch);
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "uncommitted change");
+
+        var client = new ProcessGitClient(repoDir);
+        var result = await client.FastForwardMergeAsync("feature", repoDir, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.FailureReason);
+        Assert.Contains("would be overwritten", result.FailureReason);
     }
 
     // ---------------------------------------------------------------------------

@@ -81,7 +81,7 @@ public record RebaseResult(
     - Non-zero exit with unmerged paths -> parse `git diff --name-only --diff-filter=U` (invoked BEFORE abort) to populate `ConflictingPaths`, return `RebaseResult(false, HadConflicts: true, ConflictingPaths, FailureReason: stderr)`. Caller is responsible for invoking `RebaseAbortAsync` to leave the worktree usable.
     - Non-zero exit with no unmerged paths -> `RebaseResult(false, HadConflicts: false, [], FailureReason: stderr)` (some other rebase failure; caller decides recovery)
   - `RebaseAbortAsync` wraps `git rebase --abort`; treats "no rebase in progress" exit code (typically 128 with that message) as success - idempotent.
-  - `FastForwardMergeAsync` wraps `git merge --ff-only <mergeRef>` in the main worktree. Non-fast-forwardable returns `GitOpResult(false, "main is not at the feature branch's parent; rebase first")`. No implicit non-FF merge under any flag combination.
+  - `FastForwardMergeAsync` wraps `git merge --ff-only <mergeRef>` in the main worktree. On failure it returns `GitOpResult(false, FailureReason: stderr)` - git's actual stderr is surfaced verbatim (with a generic exit-code fallback when stderr is empty). No implicit non-FF merge under any flag combination.
   - `DeleteBranchAsync` wraps `git branch -d <branch>` (or `-D` when `force: true`). Refuses unmerged branch without force (relies on git's built-in safety check).
 - xUnit tests using a temp git repo with origin and a local clone simulating remote behavior:
   - Fetch retrieves new refs from the simulated remote
