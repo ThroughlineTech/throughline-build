@@ -189,7 +189,7 @@ static async Task<int> RunAsync(string[] args)
     // Create the dir eagerly so the "Debug capture:" line at exit always points somewhere
     // real, even when the phase fails before the worker spawns (e.g. early git errors).
     string? debugCaptureDir = debugMode
-        ? Path.Combine(cwd, ".build", "sessions", sessionId)
+        ? Path.GetFullPath(Path.Combine(cwd, ".build", "sessions", sessionId))
         : null;
     if (debugCaptureDir is not null)
         Directory.CreateDirectory(debugCaptureDir);
