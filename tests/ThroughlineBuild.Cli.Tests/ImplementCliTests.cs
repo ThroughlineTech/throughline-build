@@ -36,6 +36,17 @@ public class ImplementCliTests
     }
 
     [Fact]
+    public void UsageText_DocumentsQuietFlag()
+    {
+        // --quiet must appear in both the verb usage and the Flags block, and the
+        // digest behavior must be documented (BUILD_PROGRESS env var, TTY rule).
+        Assert.Contains("--quiet", CliUsage.UsageText);
+        Assert.Contains("--debug|--quiet", CliUsage.UsageText);
+        Assert.Contains("Progress digest", CliUsage.UsageText);
+        Assert.Contains("BUILD_PROGRESS", CliUsage.UsageText);
+    }
+
+    [Fact]
     public void ImplementPhase_AcceptsSameDependencyShapeAsPlanPhase()
     {
         // Both phases must construct from the same shape so the CLI's

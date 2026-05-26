@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Xunit;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
@@ -306,6 +307,104 @@ public class ClaudeCodeAgentEnvelopeParserTests
         Assert.NotNull(result.FailureReason);
         Assert.Contains("Failed to deserialize WORKER_RESULT JSON", result.FailureReason);
         Assert.Contains("JsonException", result.FailureReason);
+    }
+
+    // NDJSON path: stream-json output is a sequence of events; the last type=result
+    // line carries the terminal envelope. The parser must locate that line and
+    // route its inner result text through WorkerResultParser exactly like the
+    // legacy single-blob path.
+    [Fact]
+    public void EnvelopeParser_NdjsonStream_LocatesTerminalResultLine()
+    {
+        var systemLine = "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"abc12345-6789-aaaa-bbbb-ccccddddeeee\",\"model\":\"claude-opus-4-6\"}";
+        var assistantLine = "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-6\",\"content\":[{\"type\":\"text\",\"text\":\"thinking\"}]}}";
+        var resultLine = MakeEnvelope(ValidWorkerResultBlock);
+        var stdout = systemLine + "\n" + assistantLine + "\n" + resultLine + "\n";
+
+        var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 0, stderr: "");
+
+        Assert.Equal(Status.Ok, result.Status);
+        Assert.Equal("done", result.Summary);
+        Assert.Equal(new[] { "foo.cs" }, result.FilesChanged);
+    }
+
+    [Fact]
+    public void EnvelopeParser_NdjsonStream_MissingTerminalResult_ReturnsEscalate()
+    {
+        // NDJSON stream that ends before the terminal result event arrives
+        var systemLine = "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"abc\",\"model\":\"x\"}";
+        var assistantLine = "{\"type\":\"assistant\",\"message\":{\"model\":\"x\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}";
+        var stdout = systemLine + "\n" + assistantLine + "\n";
+
+        var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 0, stderr: "");
+
+        Assert.Equal(Status.Escalate, result.Status);
+        Assert.NotNull(result.FailureReason);
+    }
+
+    [Fact]
+    public void EnvelopeParser_NdjsonStream_WithRateLimitEvents_IgnoresAndFindsResult()
+    {
+        // Real stream-json output interleaves rate_limit_event lines. The scanner
+        // must skip them rather than failing on unrecognized type values.
+        var rateLimitLine = "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed\"}}";
+        var resultLine = MakeEnvelope(ValidWorkerResultBlock);
+        var stdout = rateLimitLine + "\n" + resultLine + "\n";
+
+        var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 0, stderr: "");
+
+        Assert.Equal(Status.Ok, result.Status);
+        Assert.Equal("done", result.Summary);
+    }
+}
+
+public class ClaudeCodeAgentNdjsonFixtureTests
+{
+    private static string FixturePath(string name) => Path.Combine(
+        AppContext.BaseDirectory, "Fixtures", name);
+
+    [Fact]
+    public void Fixture_StreamHello_HasSystemAssistantResultEvents()
+    {
+        var path = FixturePath("stream-json-hello.ndjson");
+        Assert.True(File.Exists(path), $"Fixture missing: {path}");
+        var lines = File.ReadAllLines(path).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+
+        // Must have at least one of each kind we care about.
+        Assert.Contains(lines, l => l.Contains("\"type\":\"system\""));
+        Assert.Contains(lines, l => l.Contains("\"type\":\"assistant\""));
+        Assert.Contains(lines, l => l.Contains("\"type\":\"result\""));
+    }
+
+    [Fact]
+    public void Fixture_StreamTools_ContainsToolUseAndResult()
+    {
+        var path = FixturePath("stream-json-tools.ndjson");
+        Assert.True(File.Exists(path), $"Fixture missing: {path}");
+        var lines = File.ReadAllLines(path).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+
+        Assert.Contains(lines, l => l.Contains("\"type\":\"tool_use\"") || l.Contains("\"tool_use\""));
+        Assert.Contains(lines, l => l.Contains("\"type\":\"result\""));
+    }
+
+    // Feeding the raw NDJSON fixture through ParseStdoutEnvelope should succeed
+    // for the hello fixture (terminal result has a plain text answer; no
+    // WORKER_RESULT marker => Escalate with "No WORKER_RESULT" message).
+    [Fact]
+    public void Fixture_StreamHello_ParsesEnvelopeWithoutCrash()
+    {
+        var path = FixturePath("stream-json-hello.ndjson");
+        var stdout = File.ReadAllText(path);
+
+        var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 0, stderr: "");
+
+        // Real fixture has no WORKER_RESULT block in the result text; we expect
+        // Escalate with the "No WORKER_RESULT" message. This proves the envelope
+        // located the terminal result line and routed it to the WORKER_RESULT
+        // parser exactly like the legacy single-blob path.
+        Assert.Equal(Status.Escalate, result.Status);
+        Assert.NotNull(result.FailureReason);
+        Assert.Contains("WORKER_RESULT", result.FailureReason);
     }
 }
 
@@ -675,5 +774,287 @@ public class ClaudeCodeAgentLlmUsageTests
         Assert.Null(metadata["cache_create_tokens"]);
         Assert.Equal(5678L, metadata["wall_clock_ms"]);
         Assert.True((bool)metadata["partial"]);
+    }
+}
+
+public class WorkerProgressDigestTests
+{
+    // Tests use TimeSpan-based offsets so they are deterministic regardless of
+    // wall-clock skew. The DateTimeOffset overload is exercised indirectly via
+    // ClaudeCodeAgentDigestRoutingTests below.
+    private static JsonElement Parse(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        // Clone to detach from the disposed JsonDocument lifetime.
+        return doc.RootElement.Clone();
+    }
+
+    [Fact]
+    public void FormatLine_SystemEvent_EmitsInitLineWithSessionAndModel()
+    {
+        var el = Parse("{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"abc12345-6789-aaaa-bbbb-ccccddddeeee\",\"model\":\"claude-opus-4-6\"}");
+
+        var line = WorkerProgressDigest.FormatLine(el, TimeSpan.FromSeconds(3));
+
+        Assert.NotNull(line);
+        Assert.StartsWith("[0:03] ", line);
+        Assert.Contains("system", line);
+        Assert.Contains("abc12345", line);
+        Assert.Contains("claude-opus-4-6", line);
+    }
+
+    [Fact]
+    public void FormatLine_AssistantToolUseRead_EmitsToolUseLineWithFilePath()
+    {
+        var el = Parse("{\"type\":\"assistant\",\"message\":{\"model\":\"x\",\"content\":[{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{\"file_path\":\"docs/foo.md\"}}]}}");
+
+        var line = WorkerProgressDigest.FormatLine(el, TimeSpan.FromMinutes(1).Add(TimeSpan.FromSeconds(15)));
+
+        Assert.NotNull(line);
+        Assert.StartsWith("[1:15] ", line);
+        Assert.Contains("tool_use", line);
+        Assert.Contains("Read", line);
+        Assert.Contains("docs/foo.md", line);
+    }
+
+    [Fact]
+    public void FormatLine_AssistantToolUseGrep_SurfacesPatternArg()
+    {
+        var el = Parse("{\"type\":\"assistant\",\"message\":{\"model\":\"x\",\"content\":[{\"type\":\"tool_use\",\"name\":\"Grep\",\"input\":{\"pattern\":\"plan-enriched\"}}]}}");
+
+        var line = WorkerProgressDigest.FormatLine(el, TimeSpan.FromSeconds(8));
+
+        Assert.NotNull(line);
+        Assert.StartsWith("[0:08] ", line);
+        Assert.Contains("Grep", line);
+        Assert.Contains("plan-enriched", line);
+    }
+
+    [Fact]
+    public void FormatLine_AssistantToolUseBash_SurfacesCommandArg()
+    {
+        var el = Parse("{\"type\":\"assistant\",\"message\":{\"model\":\"x\",\"content\":[{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"git status\"}}]}}");
+
+        var line = WorkerProgressDigest.FormatLine(el, TimeSpan.FromMinutes(2));
+
+        Assert.NotNull(line);
+        Assert.StartsWith("[2:00] ", line);
+        Assert.Contains("Bash", line);
+        Assert.Contains("git status", line);
+    }
+
+    [Fact]
+    public void FormatLine_AssistantTextOnly_EmitsTurnMarker()
+    {
+        // Text/thinking-only assistant turn coalesces to a single "turn" line
+        // (no per-block deltas at default verbosity).
+        var el = Parse("{\"type\":\"assistant\",\"message\":{\"model\":\"x\",\"content\":[{\"type\":\"text\",\"text\":\"some response text\"}]}}");
+
+        var line = WorkerProgressDigest.FormatLine(el, TimeSpan.FromSeconds(47));
+
+        Assert.NotNull(line);
+        Assert.StartsWith("[0:47] ", line);
+        Assert.Contains("assistant", line);
+        Assert.Contains("turn", line);
+    }
+
+    [Fact]
+    public void FormatLine_AssistantThinkingOnly_EmitsTurnMarker()
+    {
+        var el = Parse("{\"type\":\"assistant\",\"message\":{\"model\":\"x\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"reasoning...\"}]}}");
+
+        var line = WorkerProgressDigest.FormatLine(el, TimeSpan.FromSeconds(5));
+
+        Assert.NotNull(line);
+        Assert.Contains("assistant", line);
+        Assert.Contains("turn", line);
+    }
+
+    [Fact]
+    public void FormatLine_TerminalResult_EmitsResultLineWithTokens()
+    {
+        var el = Parse("{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"usage\":{\"input_tokens\":3,\"output_tokens\":23888,\"cache_read_input_tokens\":317000}}");
+
+        var line = WorkerProgressDigest.FormatLine(el, new TimeSpan(0, 7, 30));
+
+        Assert.NotNull(line);
+        Assert.StartsWith("[7:30] ", line);
+        Assert.Contains("result", line);
+        Assert.Contains("ok", line);
+        Assert.Contains("23888", line);
+        Assert.Contains("317000", line);
+    }
+
+    [Fact]
+    public void FormatLine_TerminalResultIsError_EmitsErrMarker()
+    {
+        var el = Parse("{\"type\":\"result\",\"subtype\":\"error\",\"is_error\":true,\"usage\":{\"output_tokens\":0,\"cache_read_input_tokens\":0}}");
+
+        var line = WorkerProgressDigest.FormatLine(el, TimeSpan.FromSeconds(12));
+
+        Assert.NotNull(line);
+        Assert.Contains("err", line);
+    }
+
+    [Fact]
+    public void FormatLine_RateLimitEvent_ReturnsNull()
+    {
+        // Unknown / decoration event must not produce a digest line.
+        var el = Parse("{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed\"}}");
+
+        var line = WorkerProgressDigest.FormatLine(el, TimeSpan.FromSeconds(1));
+
+        Assert.Null(line);
+    }
+
+    [Fact]
+    public void FormatLine_UserEvent_ReturnsNull()
+    {
+        // The user event (tool_result echo) is not surfaced today.
+        var el = Parse("{\"type\":\"user\",\"message\":{\"role\":\"user\"}}");
+
+        var line = WorkerProgressDigest.FormatLine(el, TimeSpan.FromSeconds(1));
+
+        Assert.Null(line);
+    }
+
+    [Fact]
+    public void FormatLine_TruncatesPayloadOver80Chars()
+    {
+        // Build a file_path longer than 80 chars and verify the digest line
+        // truncates with an ellipsis. The line carries [m:ss] + kind padding
+        // + payload; the payload itself is truncated, not the whole line.
+        var longPath = new string('x', 120);
+        var el = Parse("{\"type\":\"assistant\",\"message\":{\"model\":\"x\",\"content\":[{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{\"file_path\":\"" + longPath + "\"}}]}}");
+
+        var line = WorkerProgressDigest.FormatLine(el, TimeSpan.FromSeconds(3));
+
+        Assert.NotNull(line);
+        Assert.Contains("...", line);
+        // The bare "x" run after the prefix must be at most 80 chars.
+        // We assert the rendered line is no longer than the prefix + max payload.
+        var maxLine = "[0:03] ".Length + 10 + 1 + WorkerProgressDigest.MaxPayloadChars;
+        Assert.True(line.Length <= maxLine,
+            $"line too long: {line.Length} > {maxLine}: '{line}'");
+    }
+
+    [Fact]
+    public void FormatLine_MultipleToolUsesInSingleTurn_EmitsLinePerToolUse()
+    {
+        // A single assistant message can include multiple tool_use blocks.
+        // Each must produce its own digest line.
+        var el = Parse("{\"type\":\"assistant\",\"message\":{\"model\":\"x\",\"content\":[" +
+            "{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{\"file_path\":\"a.cs\"}}," +
+            "{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{\"file_path\":\"b.cs\"}}" +
+            "]}}");
+
+        var line = WorkerProgressDigest.FormatLine(el, TimeSpan.FromSeconds(5));
+
+        Assert.NotNull(line);
+        var subLines = line.Split('\n');
+        Assert.Equal(2, subLines.Length);
+        Assert.Contains("a.cs", subLines[0]);
+        Assert.Contains("b.cs", subLines[1]);
+    }
+
+    [Theory]
+    [InlineData(0, 3, "0:03")]
+    [InlineData(1, 15, "1:15")]
+    [InlineData(7, 30, "7:30")]
+    [InlineData(12, 34, "12:34")]
+    public void FormatOffset_FormatsMinutesAndSeconds(int minutes, int seconds, string expected)
+    {
+        var ts = new TimeSpan(0, minutes, seconds);
+
+        var actual = WorkerProgressDigest.FormatOffset(ts);
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void FormatOffset_HourBoundary_FormatsAsHhMmSs()
+    {
+        var ts = new TimeSpan(1, 5, 30);
+
+        var actual = WorkerProgressDigest.FormatOffset(ts);
+
+        Assert.Equal("1:05:30", actual);
+    }
+}
+
+public class ClaudeCodeAgentDigestRoutingTests
+{
+    [Fact]
+    public void TryEmitDigestLine_NdjsonResultEvent_WritesFormattedLineToSink()
+    {
+        var sink = new System.IO.StringWriter();
+        var resultLine = "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"usage\":{\"output_tokens\":42,\"cache_read_input_tokens\":100}}";
+
+        ClaudeCodeAgent.TryEmitDigestLine(resultLine, sink, DateTimeOffset.UtcNow);
+
+        var written = sink.ToString();
+        Assert.Contains("result", written);
+        Assert.Contains("42", written);
+    }
+
+    [Fact]
+    public void TryEmitDigestLine_MalformedJson_DoesNotThrowAndDoesNotWrite()
+    {
+        var sink = new System.IO.StringWriter();
+
+        // Must not throw - digest is best-effort.
+        var exception = Record.Exception(() =>
+            ClaudeCodeAgent.TryEmitDigestLine("not json at all", sink, DateTimeOffset.UtcNow));
+
+        Assert.Null(exception);
+        Assert.Equal(string.Empty, sink.ToString());
+    }
+
+    [Fact]
+    public void TryEmitDigestLine_FilteredEvent_DoesNotWrite()
+    {
+        var sink = new System.IO.StringWriter();
+        var rateLimitLine = "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed\"}}";
+
+        ClaudeCodeAgent.TryEmitDigestLine(rateLimitLine, sink, DateTimeOffset.UtcNow);
+
+        Assert.Equal(string.Empty, sink.ToString());
+    }
+
+    [Fact]
+    public void TryEmitDigestLine_AssistantToolUseLine_WritesFormattedLine()
+    {
+        var sink = new System.IO.StringWriter();
+        var line = "{\"type\":\"assistant\",\"message\":{\"model\":\"x\",\"content\":[{\"type\":\"tool_use\",\"name\":\"Grep\",\"input\":{\"pattern\":\"foo\"}}]}}";
+
+        ClaudeCodeAgent.TryEmitDigestLine(line, sink, DateTimeOffset.UtcNow);
+
+        var written = sink.ToString();
+        Assert.Contains("tool_use", written);
+        Assert.Contains("Grep", written);
+        Assert.Contains("foo", written);
+    }
+
+    // Integration-style: feed the captured stream-json-tools.ndjson fixture
+    // line-by-line through TryEmitDigestLine and confirm we get at least one
+    // tool_use digest line and a final result line.
+    [Fact]
+    public void TryEmitDigestLine_ToolsFixture_ProducesToolUseAndResultLines()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", "stream-json-tools.ndjson");
+        Assert.True(File.Exists(path), $"Fixture missing: {path}");
+        var sink = new System.IO.StringWriter();
+        var start = DateTimeOffset.UtcNow;
+
+        foreach (var line in File.ReadAllLines(path))
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            ClaudeCodeAgent.TryEmitDigestLine(line, sink, start);
+        }
+
+        var written = sink.ToString();
+        Assert.Contains("tool_use", written);
+        Assert.Contains("Read", written);
+        Assert.Contains("result", written);
     }
 }

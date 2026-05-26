@@ -22,9 +22,11 @@ public class ShipCliTests
     [Fact]
     public void UsageText_DebugFlagDocumentedForPlanImplementReview()
     {
-        Assert.Contains("build plan <ticket-id> [--debug]", CliUsage.UsageText);
-        Assert.Contains("build implement <ticket-id> [--debug]", CliUsage.UsageText);
-        Assert.Contains("build review <ticket-id> [--debug]", CliUsage.UsageText);
+        // The usage line for plan/implement/review must accept --debug (and after
+        // TLB-122 also --quiet, declared as the [--debug|--quiet] pair).
+        Assert.Contains("build plan <ticket-id> [--debug|--quiet]", CliUsage.UsageText);
+        Assert.Contains("build implement <ticket-id> [--debug|--quiet]", CliUsage.UsageText);
+        Assert.Contains("build review <ticket-id> [--debug|--quiet]", CliUsage.UsageText);
     }
 
     [Fact]
