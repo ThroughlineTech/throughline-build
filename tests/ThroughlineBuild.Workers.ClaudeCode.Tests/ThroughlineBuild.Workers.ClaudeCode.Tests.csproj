@@ -18,4 +18,8 @@
     <ProjectReference Include="..\..\src\ThroughlineBuild.Workers.ClaudeCode\ThroughlineBuild.Workers.ClaudeCode.csproj" />
     <ProjectReference Include="..\..\src\ThroughlineBuild.Contracts\ThroughlineBuild.Contracts.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="Fixtures\**\*.ndjson" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
+

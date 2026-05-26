@@ -5,7 +5,9 @@ using ThroughlineBuild.Contracts.Models;
 namespace ThroughlineBuild.Workers.ClaudeCode;
 
 // Wire-format DTO for the Claude Code CLI JSON envelope.
-// Emitted when claude is invoked with --print --output-format json.
+// Emitted by --output-format stream-json as the terminal NDJSON line
+// (type=result); the legacy --output-format json single-blob output has
+// bit-for-bit the same shape, so the same record handles both formats.
 // Field names match the snake_case keys the CLI emits.
 public record ClaudeCodeJsonEnvelope(
     [property: JsonPropertyName("type")] string? Type,
@@ -64,6 +66,12 @@ internal sealed class WorkerResultDto
 [JsonSerializable(typeof(ClaudeCodeUsage))]
 [JsonSerializable(typeof(WorkerResultDto))]
 [JsonSerializable(typeof(Dictionary<string, JsonElement>))]
+[JsonSerializable(typeof(ClaudeCodeSystemEvent))]
+[JsonSerializable(typeof(ClaudeCodeAssistantEvent))]
+[JsonSerializable(typeof(ClaudeCodeAssistantMessage))]
+[JsonSerializable(typeof(ClaudeCodeContentBlock))]
+[JsonSerializable(typeof(ClaudeCodeUserEvent))]
+[JsonSerializable(typeof(List<ClaudeCodeContentBlock>))]
 internal partial class ClaudeCodeJsonContext : JsonSerializerContext { }
 
 [JsonSerializable(typeof(WorkerResultDebugDto))]

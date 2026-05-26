@@ -14,7 +14,8 @@ public record BuildOptions(
     IReadOnlyList<string>? WorkerAllowedTools = null,
     string? DebugCaptureDirectory = null,
     System.IO.TextWriter? LiveStdoutSink = null,
-    System.IO.TextWriter? LiveStderrSink = null);
+    System.IO.TextWriter? LiveStderrSink = null,
+    System.IO.TextWriter? ProgressDigestSink = null);
 
 public record PlanResult(
     bool Success,
@@ -83,7 +84,8 @@ public class PlanPhase : IWorkflowPhase
         var workerOptions = new WorkerOptions(_options.WorkerTimeout, _options.WorkerAllowedTools,
             DebugCaptureDirectory: _options.DebugCaptureDirectory,
             LiveStdoutSink: _options.LiveStdoutSink,
-            LiveStderrSink: _options.LiveStderrSink);
+            LiveStderrSink: _options.LiveStderrSink,
+            ProgressDigestSink: _options.ProgressDigestSink);
         var workerResult = await _worker.ExecuteAsync(brief, workingDirectory, workerOptions, ct).ConfigureAwait(false);
 
         await _ticketing.TransitionAsync(ticketId, TicketState.Planning, ct).ConfigureAwait(false);
