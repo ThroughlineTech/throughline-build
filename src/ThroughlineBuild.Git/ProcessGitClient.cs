@@ -600,7 +600,8 @@ public sealed class ProcessGitClient : IGitClient
         if (proc.ExitCode == 0)
             return new GitOpResult(true, null);
 
-        return new GitOpResult(false, "main is not at the feature branch's parent; rebase first");
+        var trimmed = stderr.Trim();
+        return new GitOpResult(false, trimmed.Length > 0 ? trimmed : $"git merge --ff-only exited with code {proc.ExitCode} and produced no stderr output");
     }
 
     public async Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct)
