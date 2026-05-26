@@ -601,7 +601,7 @@ public sealed class ProcessGitClient : IGitClient
             return new GitOpResult(true, null);
 
         var trimmed = stderr.Trim();
-        return new GitOpResult(false, trimmed.Length > 0 ? trimmed : $"git merge --ff-only exited with code {proc.ExitCode} and produced no stderr output");
+        return new GitOpResult(false, trimmed.Length > 0 ? trimmed : $"git merge --ff-only exited with exit code {proc.ExitCode} and produced no stderr output");
     }
 
     public async Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct)
