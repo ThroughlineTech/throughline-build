@@ -33,4 +33,9 @@ public interface IGitClient
     Task<GitOpResult> RebaseAbortAsync(string featureWorktreePath, CancellationToken ct);
     Task<GitOpResult> FastForwardMergeAsync(string mergeRef, string mainWorktreePath, CancellationToken ct);
     Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct);
+
+    // Read-only helpers added for phase-completion summaries (TLB-123).
+    // Both return best-effort values: 0 / empty list on git failure, never throw.
+    Task<int> RevListCountAsync(string range, string workingDirectory, CancellationToken ct);
+    Task<IReadOnlyList<string>> LogOnelineAsync(string range, int limit, string workingDirectory, CancellationToken ct);
 }

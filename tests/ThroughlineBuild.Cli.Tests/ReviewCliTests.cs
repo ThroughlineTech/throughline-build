@@ -37,6 +37,13 @@ public class ReviewCliTests
     }
 
     [Fact]
+    public void UsageText_MentionsSummaryJsonFlag()
+    {
+        // TLB-123
+        Assert.Contains("--summary-json", CliUsage.UsageText);
+    }
+
+    [Fact]
     public void ReviewPhase_AcceptsExpectedDependencyShape()
     {
         var ticketing = new StubTicketing();
