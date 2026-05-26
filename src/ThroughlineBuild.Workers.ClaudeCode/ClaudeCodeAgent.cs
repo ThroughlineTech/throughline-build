@@ -25,8 +25,12 @@ public class ClaudeCodeAgent : IWorkerAgent
         await File.WriteAllTextAsync(briefPath, brief.Instruction, ct);
 
         // Build args - brief is delivered via stdin.
-        // --output-format json must immediately follow --print (claude --help: "only works with --print").
-        var args = new List<string> { "--print", "--output-format", "json" };
+        // --output-format must immediately follow --print (claude --help: "only works with --print").
+        // --verbose is required by claude-code when combining --print with --output-format stream-json
+        // (the CLI rejects the combination otherwise). The terminal NDJSON event is type=result and is
+        // bit-for-bit identical to the legacy --output-format json single-blob envelope, so envelope
+        // parsing downstream is unchanged.
+        var args = new List<string> { "--print", "--verbose", "--output-format", "stream-json" };
         if (options.AllowedTools is { Count: > 0 })
             args.AddRange(new[] { "--allowedTools", string.Join(",", options.AllowedTools) });
         foreach (var extra in _options.ExtraArgs)
@@ -54,12 +58,23 @@ public class ClaudeCodeAgent : IWorkerAgent
         var stopwatch = Stopwatch.StartNew();
 
         var process = new Process { StartInfo = psi };
+        var digestStart = DateTimeOffset.UtcNow;
         process.OutputDataReceived += (_, e) =>
         {
             if (e.Data != null)
             {
                 stdoutBuilder.AppendLine(e.Data);
-                WriteWorkerLine(options.LiveStdoutSink, "worker> ", e.Data);
+                if (options.LiveStdoutSink is not null)
+                {
+                    // --debug path: raw firehose. Digest is suppressed (mutually exclusive).
+                    WriteWorkerLine(options.LiveStdoutSink, "worker> ", e.Data);
+                }
+                else if (options.ProgressDigestSink is not null)
+                {
+                    // Default path: per-event digest. Best-effort - a malformed line or
+                    // unexpected schema must not crash the worker dispatch.
+                    TryEmitDigestLine(e.Data, options.ProgressDigestSink, digestStart);
+                }
             }
         };
         process.ErrorDataReceived += (_, e) =>
@@ -98,39 +113,108 @@ public class ClaudeCodeAgent : IWorkerAgent
 
         if (options.DebugCaptureDirectory is not null)
         {
-            ClaudeCodeJsonEnvelope? envelope = null;
-            try
-            {
-                envelope = JsonSerializer.Deserialize(stdout.Trim(), ClaudeCodeJsonContext.Default.ClaudeCodeJsonEnvelope);
-            }
-            catch { }
+            // Same envelope-parse fallback chain as ParseStdoutEnvelope: try single
+            // object first (legacy), fall back to last type=result NDJSON line.
+            ClaudeCodeJsonEnvelope? envelope = TryParseEnvelopeFromStdout(stdout, out _);
             WriteDebugCapture(options.DebugCaptureDirectory, brief.Instruction, stdout, stderr, envelope, result);
         }
 
         return result;
     }
 
+    // Try to extract the terminal "result" envelope from stdout. Returns null when
+    // no envelope can be located; on a hard JSON parse failure, sets parseError to
+    // the deserializer message. Tries single-object parse first (legacy
+    // --output-format json path; preserves all existing single-blob tests), then
+    // falls back to NDJSON scanning for the last line whose type=result.
+    internal static ClaudeCodeJsonEnvelope? TryParseEnvelopeFromStdout(string stdout, out string? parseError)
+    {
+        parseError = null;
+        var trimmed = stdout.Trim();
+        if (trimmed.Length == 0) return null;
+
+        // Single-object fast path: matches legacy --output-format json output.
+        try
+        {
+            var envelope = JsonSerializer.Deserialize(trimmed, ClaudeCodeJsonContext.Default.ClaudeCodeJsonEnvelope);
+            if (envelope is not null && envelope.Type == "result")
+                return envelope;
+            // Parsed as JSON but not a result envelope - fall through to NDJSON scan.
+        }
+        catch (JsonException ex)
+        {
+            // Stream-json case: stdout is NDJSON, not a single object. Remember the
+            // first error message in case the NDJSON scan also fails to find a
+            // terminal result line.
+            parseError = ex.Message;
+        }
+
+        // NDJSON fallback: scan from the end, keep the last line that parses as
+        // a result envelope. This tolerates leading non-result events (system,
+        // assistant, user, rate_limit_event, ...) without bespoke per-type parsing.
+        var lines = stdout.Split('\n');
+        for (int i = lines.Length - 1; i >= 0; i--)
+        {
+            var line = lines[i].Trim();
+            if (line.Length == 0) continue;
+            ClaudeCodeJsonEnvelope? candidate;
+            try
+            {
+                candidate = JsonSerializer.Deserialize(line, ClaudeCodeJsonContext.Default.ClaudeCodeJsonEnvelope);
+            }
+            catch (JsonException)
+            {
+                continue;
+            }
+            if (candidate is not null && candidate.Type == "result")
+            {
+                parseError = null;
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    // Best-effort: parse a single NDJSON line via WorkerProgressDigest and write
+    // the formatted digest line to the sink. Any exception (malformed JSON,
+    // unexpected schema, sink-write failure) is swallowed: digest emission must
+    // never crash the worker dispatch.
+    internal static void TryEmitDigestLine(string ndjsonLine, System.IO.TextWriter sink, DateTimeOffset startTime)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(ndjsonLine);
+            var formatted = WorkerProgressDigest.FormatLine(doc.RootElement, startTime);
+            if (formatted is not null)
+                sink.WriteLine(formatted);
+        }
+        catch
+        {
+            // Swallow: best-effort digest. The terminal result envelope is parsed
+            // separately by ParseStdoutEnvelope and is NOT best-effort.
+        }
+    }
+
     // Parses the Claude Code JSON envelope from stdout, extracts the inner result text,
     // and routes it through WorkerResultParser. Extracted as an internal static method
     // so envelope-parsing logic can be unit-tested without spawning a real process
     // (mirrors the ConfigureEnvironment pattern; InternalsVisibleTo allows test access).
+    //
+    // Supports both legacy --output-format json (single JSON object) and the new
+    // --output-format stream-json (NDJSON; one JSON object per line, terminal
+    // line is type=result). Single-object parse is tried first to preserve
+    // back-compat with the legacy envelope tests; on JsonException we fall back
+    // to scanning the NDJSON stream for the last line whose type=result.
     internal static WorkerResult ParseStdoutEnvelope(string stdout, int exitCode, string stderr, long wallClockMs = 0)
     {
-        ClaudeCodeJsonEnvelope? envelope;
-        try
-        {
-            envelope = JsonSerializer.Deserialize(stdout.Trim(), ClaudeCodeJsonContext.Default.ClaudeCodeJsonEnvelope);
-        }
-        catch (JsonException ex)
-        {
-            var head = stdout.Length > 200 ? stdout[..200] : stdout;
-            return new WorkerResult(Status.Escalate, "Failed to parse Claude Code JSON envelope", Array.Empty<string>(),
-                $"Failed to parse Claude Code JSON envelope: {ex.Message}. Stdout head: {head}", new Dictionary<string, object>());
-        }
-
+        ClaudeCodeJsonEnvelope? envelope = TryParseEnvelopeFromStdout(stdout, out var parseError);
         if (envelope is null)
         {
             var head = stdout.Length > 200 ? stdout[..200] : stdout;
+            if (parseError is not null)
+                return new WorkerResult(Status.Escalate, "Failed to parse Claude Code JSON envelope", Array.Empty<string>(),
+                    $"Failed to parse Claude Code JSON envelope: {parseError}. Stdout head: {head}", new Dictionary<string, object>());
             return new WorkerResult(Status.Escalate, "Claude Code JSON envelope was null after deserialization", Array.Empty<string>(),
                 $"Deserialized envelope was null. Stdout head: {head}", new Dictionary<string, object>());
         }
