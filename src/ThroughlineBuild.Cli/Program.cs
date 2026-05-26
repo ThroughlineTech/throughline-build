@@ -93,35 +93,34 @@ static async Task<int> RunAsync(string[] args)
         return 3;
     }
 
-    var sessionId2 = Guid.NewGuid().ToString("N");
-    var http2 = new HttpClient();
-    var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
-    {
-        BaseUrl = config2.Ticketing.PlaneBaseUrl,
-        ApiToken = secrets2.PlaneApiToken,
-        WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
-        ProjectId = config2.Ticketing.PlaneProjectId,
-        ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
-    });
-    await using var jsonlEventSink2 = new JsonlEventSink(new EventLogOptions
-    {
-        BaseDirectory = config2.Events.LogDirectory,
-        SessionId = sessionId2
-    });
-    var eventSink2 = new RecordingEventSink(jsonlEventSink2);
-
-    var registry = new TicketCommandRegistry();
-    registry.Register("amend", new AmendCommand(ticketing2, eventSink2));
-
-    var wireUpError = WireUpConditionalCommands(verb, registry, secrets2, http2, ticketing2, eventSink2, cwd2);
-    if (wireUpError is not null)
-    {
-        Console.Error.WriteLine($"Secret error: {wireUpError}");
-        return 3;
-    }
-
     if (verb == "amend" || verb == "close" || verb == "defer" || verb == "reopen")
     {
+        var sessionId2 = Guid.NewGuid().ToString("N");
+        var http2 = new HttpClient();
+        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
+        {
+            BaseUrl = config2.Ticketing.PlaneBaseUrl,
+            ApiToken = secrets2.PlaneApiToken,
+            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
+            ProjectId = config2.Ticketing.PlaneProjectId,
+            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
+        });
+        await using var jsonlEventSink2 = new JsonlEventSink(new EventLogOptions
+        {
+            BaseDirectory = config2.Events.LogDirectory,
+            SessionId = sessionId2
+        });
+        var eventSink2 = new RecordingEventSink(jsonlEventSink2);
+
+        var registry = new TicketCommandRegistry();
+        registry.Register("amend", new AmendCommand(ticketing2, eventSink2));
+
+        var wireUpError = WireUpConditionalCommands(verb, registry, secrets2, http2, ticketing2, eventSink2, cwd2);
+        if (wireUpError is not null)
+        {
+            Console.Error.WriteLine($"Secret error: {wireUpError}");
+            return 3;
+        }
         if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]))
         {
             Console.Error.WriteLine($"Error: ticket-id is required");
