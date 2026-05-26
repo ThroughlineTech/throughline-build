@@ -130,7 +130,7 @@ public class ImplementCliTests
         return File.Exists(fullPath) ? fullPath : null;
     }
 
-    private static async Task<(int exitCode, string stdout, string stderr)> RunProcess(string exe, string[] args)
+    private static async Task<(int exitCode, string stdout, string stderr)> RunProcess(string exe, string[] args, string? workingDirectory = null)
     {
         var psi = new ProcessStartInfo(exe)
         {
@@ -139,6 +139,8 @@ public class ImplementCliTests
             UseShellExecute = false,
             CreateNoWindow = true
         };
+        if (workingDirectory is not null)
+            psi.WorkingDirectory = workingDirectory;
         foreach (var a in args) psi.ArgumentList.Add(a);
 
         using var proc = Process.Start(psi)!;

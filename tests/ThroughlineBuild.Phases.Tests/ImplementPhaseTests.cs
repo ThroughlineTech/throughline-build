@@ -395,6 +395,34 @@ public class ImplementPhaseDebugCaptureTests
         Assert.Null(worker.LastOptions!.DebugCaptureDirectory);
     }
 
+    [Fact]
+    public async Task RunAsync_DebugCaptureDirectorySet_DirectoryCreatedOnDisk()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var captureDir = Path.Combine(tempRoot, "sessions", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var ticketing = new FakeTicketing(MakeTicket());
+            var worker = new CapturingWorkerAgent(OkWorkerResult());
+            var events = new FakeEventSink();
+            var git = new FakeGitClient(MainSha, CommitSha);
+            var options = new BuildOptions("session-disk-test", "claude-code", TimeSpan.FromMinutes(5),
+                DebugCaptureDirectory: captureDir);
+            var phase = new ImplementPhase(ticketing, worker, events, options, git);
+
+            await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+            Assert.True(Directory.Exists(captureDir),
+                $"Expected debug capture directory to be created at {captureDir}");
+        }
+        finally
+        {
+            // Cleanup
+            if (Directory.Exists(tempRoot))
+                Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
     private sealed class CapturingWorkerAgent : IWorkerAgent
     {
         private readonly WorkerResult _result;
