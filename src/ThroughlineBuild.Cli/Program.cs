@@ -57,7 +57,14 @@ static async Task<int> RunAsync(string[] args)
         }
     }
 
-    var cwd2 = Directory.GetCurrentDirectory();
+    // Resolve the main worktree root via git worktree list so that phases receive a
+    // sane workingDirectory even when the CLI is invoked from inside a feature worktree.
+    // Fall back to the raw cwd on any error so no new failure mode is introduced.
+    var rawCwd = Directory.GetCurrentDirectory();
+    var resolverGit = new ProcessGitClient(rawCwd);
+    var resolvedCwd = await MainWorktreeResolver.ResolveAsync(resolverGit, rawCwd, CancellationToken.None);
+
+    var cwd2 = resolvedCwd;
 
     string configPath2;
     try
@@ -184,7 +191,7 @@ static async Task<int> RunAsync(string[] args)
     }
 
     var ticketId = args[1];
-    var cwd = Directory.GetCurrentDirectory();
+    var cwd = resolvedCwd;
 
     var sessionId = Guid.NewGuid().ToString("N");
 
