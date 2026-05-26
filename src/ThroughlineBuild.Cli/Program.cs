@@ -93,6 +93,10 @@ static async Task<int> RunAsync(string[] args)
         return 3;
     }
 
+    var configDir = Path.GetDirectoryName(configPath2) ?? cwd2;
+    string ResolveLogDir(string raw) =>
+        Path.IsPathRooted(raw) ? raw : Path.Combine(configDir, raw);
+
     if (verb == "amend" || verb == "close" || verb == "defer" || verb == "reopen")
     {
         var sessionId2 = Guid.NewGuid().ToString("N");
@@ -107,7 +111,7 @@ static async Task<int> RunAsync(string[] args)
         });
         await using var jsonlEventSink2 = new JsonlEventSink(new EventLogOptions
         {
-            BaseDirectory = config2.Events.LogDirectory,
+            BaseDirectory = ResolveLogDir(config2.Events.LogDirectory),
             SessionId = sessionId2
         });
         var eventSink2 = new RecordingEventSink(jsonlEventSink2);
@@ -210,7 +214,7 @@ static async Task<int> RunAsync(string[] args)
     });
     await using var jsonlEventSink = new JsonlEventSink(new EventLogOptions
     {
-        BaseDirectory = config2.Events.LogDirectory,
+        BaseDirectory = ResolveLogDir(config2.Events.LogDirectory),
         SessionId = sessionId
     });
     // Digest is default-on when stderr is a TTY and the user has not opted out
