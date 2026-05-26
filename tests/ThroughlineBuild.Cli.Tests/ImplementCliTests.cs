@@ -113,6 +113,73 @@ public class ImplementCliTests
         Assert.Contains("build implement <ticket-id>", stderr);
     }
 
+    [Fact]
+    public async Task BuildBinary_InvokedFromSubdirectory_DoesNotLeaveEmptyEventFiles()
+    {
+        var exe = LocateBuildExecutable();
+        if (exe is null) return;
+
+        var mainRepo = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        try
+        {
+            // Create a minimal main-repo layout with .build/config.toml
+            var buildDir = Path.Combine(mainRepo, ".build");
+            Directory.CreateDirectory(buildDir);
+
+            var configToml =
+                "[ticketing]\n" +
+                "backend = \"plane\"\n" +
+                "plane_base_url = \"https://stub.plane.invalid\"\n" +
+                "plane_workspace_slug = \"stub-ws\"\n" +
+                "plane_project_id = \"00000000-0000-0000-0000-000000000000\"\n" +
+                "\n" +
+                "[workers]\n" +
+                "default_agent = \"claude-code\"\n" +
+                "claude_code_executable = \"claude\"\n" +
+                "\n" +
+                "[events]\n" +
+                "log_directory = \".build/events\"\n";
+
+            File.WriteAllText(Path.Combine(buildDir, "config.toml"), configToml);
+
+            // Create the simulated worktree sub-directory
+            var subDir = Path.Combine(mainRepo, "sub");
+            Directory.CreateDirectory(subDir);
+
+            // Invoke build implement from the sub-directory; tolerate any non-zero exit
+            var env = new Dictionary<string, string> { { "PLANE_API_TOKEN", "stub" } };
+            var psi = new ProcessStartInfo(exe)
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = subDir
+            };
+            psi.ArgumentList.Add("implement");
+            psi.ArgumentList.Add("TLB-bogus");
+            foreach (var kv in env)
+                psi.Environment[kv.Key] = kv.Value;
+
+            using var proc = Process.Start(psi)!;
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+            var stderrTask = proc.StandardError.ReadToEndAsync();
+            await proc.WaitForExitAsync();
+            await stdoutTask;
+            await stderrTask;
+
+            // Assert: the sub-directory does NOT contain .build/events/
+            var eventsInSub = Path.Combine(subDir, ".build", "events");
+            Assert.False(Directory.Exists(eventsInSub),
+                $"Expected no events directory in sub-worktree, but found: {eventsInSub}");
+        }
+        finally
+        {
+            if (Directory.Exists(mainRepo))
+                Directory.Delete(mainRepo, recursive: true);
+        }
+    }
+
     private static string? LocateBuildExecutable()
     {
         var here = AppContext.BaseDirectory;

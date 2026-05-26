@@ -190,6 +190,29 @@ public class JsonlEventSinkTests
     }
 
     [Fact]
+    public async Task Construction_WithoutEmit_DoesNotCreateFile()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var sessionId = "test-no-emit";
+        var options = new EventLogOptions { BaseDirectory = tempDir, SessionId = sessionId };
+
+        try
+        {
+            var sink = new JsonlEventSink(options);
+            await sink.DisposeAsync();
+
+            var expectedPath = Path.Combine(tempDir, $"{sessionId}.jsonl");
+            Assert.False(File.Exists(expectedPath));
+            Assert.False(Directory.Exists(tempDir));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task SessionId_DeterminesFileName()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());

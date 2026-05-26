@@ -8,16 +8,27 @@ namespace ThroughlineBuild.EventLog;
 public sealed class JsonlEventSink : IEventSink, IAsyncDisposable
 {
     private readonly SemaphoreSlim _lock = new(1, 1);
-    private readonly FileStream _stream;
+    private FileStream? _stream;
+    private bool _opened;
+    private readonly EventLogOptions _options;
     private static readonly byte[] Newline = Encoding.UTF8.GetBytes("\n");
 
     public JsonlEventSink(EventLogOptions options)
     {
-        var dir = options.BaseDirectory;
+        _options = options;
+    }
+
+    // Caller must already hold _lock before calling this method.
+    private void EnsureOpened()
+    {
+        if (_opened)
+            return;
+        var dir = _options.BaseDirectory;
         Directory.CreateDirectory(dir);
-        var path = Path.Combine(dir, $"{options.SessionId}.jsonl");
+        var path = Path.Combine(dir, $"{_options.SessionId}.jsonl");
         _stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read,
             bufferSize: 4096, useAsync: true);
+        _opened = true;
     }
 
     public async Task EmitAsync(WorkflowEvent ev, CancellationToken ct)
@@ -28,8 +39,9 @@ public sealed class JsonlEventSink : IEventSink, IAsyncDisposable
         await _lock.WaitAsync(ct);
         try
         {
-            await _stream.WriteAsync(bytes, ct);
-            await _stream.WriteAsync(Newline, ct);
+            EnsureOpened();
+            await _stream!.WriteAsync(bytes, ct);
+            await _stream!.WriteAsync(Newline, ct);
         }
         finally
         {
@@ -42,7 +54,9 @@ public sealed class JsonlEventSink : IEventSink, IAsyncDisposable
         await _lock.WaitAsync(ct);
         try
         {
-            await _stream.FlushAsync(ct);
+            if (!_opened)
+                return;
+            await _stream!.FlushAsync(ct);
         }
         finally
         {
@@ -52,7 +66,8 @@ public sealed class JsonlEventSink : IEventSink, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await _stream.DisposeAsync();
+        if (_opened && _stream is not null)
+            await _stream.DisposeAsync();
         _lock.Dispose();
     }
 }
