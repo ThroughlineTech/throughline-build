@@ -68,11 +68,11 @@ public class ShipPhase : IWorkflowPhase
 
     public async Task<ShipResult> RunAsync(string ticketId, string workingDirectory, CancellationToken ct)
     {
-        var (result, _) = await RunInternalAsync(ticketId, workingDirectory, ct).ConfigureAwait(false);
+        var (result, _, _) = await RunInternalAsync(ticketId, workingDirectory, ct).ConfigureAwait(false);
         return result;
     }
 
-    private async Task<(ShipResult Result, PhaseWorktreeNames? WorktreeNames)> RunInternalAsync(
+    private async Task<(ShipResult Result, PhaseWorktreeNames? WorktreeNames, string? CanonicalPath)> RunInternalAsync(
         string ticketId, string workingDirectory, CancellationToken ct)
     {
         // Step 1: Fetch ticket
@@ -80,16 +80,19 @@ public class ShipPhase : IWorkflowPhase
 
         // Step 2: Validate state
         if (ticket.State != TicketState.InReview)
-            return (new ShipResult(false, ticketId, null, "ticket not in InReview state", ShipFailureStage.StateCheck), null);
+            return (new ShipResult(false, ticketId, null, "ticket not in InReview state", ShipFailureStage.StateCheck), null, null);
 
         // Step 3: Compute and locate worktree
         var worktreeNames = PhaseWorktreeLayout.Compute(ticketId, ticket.Title, workingDirectory);
         var worktrees = await _git.ListWorktreesAsync(ct).ConfigureAwait(false);
         bool worktreeFound = false;
+        // Default to the computed path; overwritten below with the canonical path from git.
+        string canonicalWorktreePath = worktreeNames.WorktreePath;
         foreach (var w in worktrees)
         {
             if (w.Branch == worktreeNames.BranchName)
             {
+                canonicalWorktreePath = w.Path;
                 worktreeFound = true;
                 break;
             }
@@ -98,6 +101,7 @@ public class ShipPhase : IWorkflowPhase
             catch { wPathFull = w.Path; }
             if (string.Equals(wPathFull, worktreeNames.WorktreePath, StringComparison.OrdinalIgnoreCase))
             {
+                canonicalWorktreePath = w.Path;
                 worktreeFound = true;
                 break;
             }
@@ -105,7 +109,7 @@ public class ShipPhase : IWorkflowPhase
         if (!worktreeFound)
             return (new ShipResult(false, ticketId, null,
                 $"feature worktree not found at {worktreeNames.WorktreePath}",
-                ShipFailureStage.StateCheck), worktreeNames);
+                ShipFailureStage.StateCheck), worktreeNames, null);
 
         // Step 4: Check for remote and conditionally fetch
         var remote = _shipOptions.Remote;
@@ -129,15 +133,15 @@ public class ShipPhase : IWorkflowPhase
             if (!fetchResult.Success)
                 return (new ShipResult(false, ticketId, null,
                     $"git fetch failed: {fetchResult.FailureReason}",
-                    ShipFailureStage.Fetch), worktreeNames);
+                    ShipFailureStage.Fetch), worktreeNames, null);
             ontoRef = $"{remote}/{baseBranch}";
         }
 
         // Step 5: Rebase feature branch onto ontoRef
-        var rebaseResult = await _git.RebaseAsync(ontoRef, worktreeNames.WorktreePath, ct).ConfigureAwait(false);
+        var rebaseResult = await _git.RebaseAsync(ontoRef, canonicalWorktreePath, ct).ConfigureAwait(false);
         if (rebaseResult.HadConflicts)
         {
-            await _git.RebaseAbortAsync(worktreeNames.WorktreePath, ct).ConfigureAwait(false);
+            await _git.RebaseAbortAsync(canonicalWorktreePath, ct).ConfigureAwait(false);
             var paths = string.Join(", ", rebaseResult.ConflictingPaths);
             await _ticketing.CreateCommentAsync(ticketId,
                 $"<p><strong>ship_blocked:</strong> rebase conflicts in: {paths}</p>", ct).ConfigureAwait(false);
@@ -147,7 +151,7 @@ public class ShipPhase : IWorkflowPhase
                 ["conflicting_paths"] = rebaseResult.ConflictingPaths
             }, ct).ConfigureAwait(false);
             return (new ShipResult(false, ticketId, null,
-                $"rebase conflicts in: {paths}", ShipFailureStage.Rebase), worktreeNames);
+                $"rebase conflicts in: {paths}", ShipFailureStage.Rebase), worktreeNames, null);
         }
         if (!rebaseResult.Success)
         {
@@ -160,14 +164,14 @@ public class ShipPhase : IWorkflowPhase
                 ["reason"] = reason
             }, ct).ConfigureAwait(false);
             return (new ShipResult(false, ticketId, null,
-                $"rebase failed: {reason}", ShipFailureStage.Rebase), worktreeNames);
+                $"rebase failed: {reason}", ShipFailureStage.Rebase), worktreeNames, null);
         }
 
         // Step 6: Conflict-marker scan (post-rebase, pre-checks)
         var diff = await _git.DiffAsync(ontoRef, worktreeNames.BranchName, workingDirectory,
             includePatchContent: false, ct).ConfigureAwait(false);
         var scanPaths = diff.Entries
-            .Select(e => Path.Combine(worktreeNames.WorktreePath, e.Path))
+            .Select(e => Path.Combine(canonicalWorktreePath, e.Path))
             .ToList();
         var markerHits = await _markerScanner(scanPaths, ct).ConfigureAwait(false);
         if (markerHits.Count > 0)
@@ -182,11 +186,11 @@ public class ShipPhase : IWorkflowPhase
                 ["marker_files"] = distinctMarkerFiles
             }, ct).ConfigureAwait(false);
             return (new ShipResult(false, ticketId, null,
-                $"conflict markers detected in: {pathsList}", ShipFailureStage.ConflictMarkerScan), worktreeNames);
+                $"conflict markers detected in: {pathsList}", ShipFailureStage.ConflictMarkerScan), worktreeNames, null);
         }
 
         // Step 7: Regression checks
-        var checkResults = await _checksRunner.RunAsync(_shipOptions.RegressionChecks, worktreeNames.WorktreePath, ct).ConfigureAwait(false);
+        var checkResults = await _checksRunner.RunAsync(_shipOptions.RegressionChecks, canonicalWorktreePath, ct).ConfigureAwait(false);
         var checksFailed = checkResults.Where(r => !r.Passed).Select(r => r.Name).ToList();
         if (checksFailed.Count > 0)
         {
@@ -199,7 +203,7 @@ public class ShipPhase : IWorkflowPhase
                 ["checks_failed"] = checksFailed
             }, ct).ConfigureAwait(false);
             return (new ShipResult(false, ticketId, null,
-                $"regression checks failed: {namesList}", ShipFailureStage.RegressionChecks), worktreeNames);
+                $"regression checks failed: {namesList}", ShipFailureStage.RegressionChecks), worktreeNames, null);
         }
 
         // Step 8: Fast-forward merge into local baseBranch (main worktree)
@@ -207,7 +211,7 @@ public class ShipPhase : IWorkflowPhase
         if (!ffResult.Success)
             return (new ShipResult(false, ticketId, null,
                 $"fast-forward merge failed: {ffResult.FailureReason}",
-                ShipFailureStage.FastForwardMerge), worktreeNames);
+                ShipFailureStage.FastForwardMerge), worktreeNames, null);
 
         // Step 9: Read merged HEAD sha
         var mergedSha = await _git.HeadShaAsync(workingDirectory, ct).ConfigureAwait(false);
@@ -233,7 +237,7 @@ public class ShipPhase : IWorkflowPhase
         string? decruftError = null;
         try
         {
-            var decruftResult = await _decrufter.DecruftAsync(worktreeNames.WorktreePath, workingDirectory, ct).ConfigureAwait(false);
+            var decruftResult = await _decrufter.DecruftAsync(canonicalWorktreePath, workingDirectory, ct).ConfigureAwait(false);
             decruftHaltedAt = decruftResult.HaltedAt?.ToString() ?? "complete";
         }
         catch (Exception ex)
@@ -265,20 +269,20 @@ public class ShipPhase : IWorkflowPhase
         }
 
         // Step 14: Return success
-        return (new ShipResult(true, ticketId, mergedSha, null, null), worktreeNames);
+        return (new ShipResult(true, ticketId, mergedSha, null, null), worktreeNames, canonicalWorktreePath);
     }
 
     async Task<PhaseResult> IWorkflowPhase.RunAsync(string ticketId, string workingDirectory, CancellationToken ct)
     {
-        var (shipResult, worktreeNames) = await RunInternalAsync(ticketId, workingDirectory, ct).ConfigureAwait(false);
+        var (shipResult, worktreeNames, canonicalPath) = await RunInternalAsync(ticketId, workingDirectory, ct).ConfigureAwait(false);
         IReadOnlyDictionary<string, string> outputs;
-        if (shipResult.Success && worktreeNames is not null)
+        if (shipResult.Success && worktreeNames is not null && canonicalPath is not null)
         {
             outputs = new Dictionary<string, string>
             {
                 ["merged_sha"] = shipResult.MergedSha ?? "",
                 ["branch"] = worktreeNames.BranchName,
-                ["worktree_path"] = worktreeNames.WorktreePath
+                ["worktree_path"] = canonicalPath
             };
         }
         else

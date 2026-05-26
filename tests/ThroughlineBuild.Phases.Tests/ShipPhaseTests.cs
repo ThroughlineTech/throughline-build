@@ -381,8 +381,9 @@ public class ShipPhaseTests
         Assert.Equal(3, result.Outputs.Count);
         Assert.Equal(MergedSha, result.Outputs["merged_sha"]);
         Assert.Equal(BranchName, result.Outputs["branch"]);
-        var expectedWtPath = PhaseWorktreeLayout.Compute(TicketId, TicketTitle, MakeWorkingDir()).WorktreePath;
-        Assert.Equal(expectedWtPath, result.Outputs["worktree_path"]);
+        // worktree_path must be the canonical path reported by git worktree list,
+        // not the computed layout path (which may double-path when invoked from a worktree).
+        Assert.Equal("/some/worktree/path", result.Outputs["worktree_path"]);
     }
 
     [Fact]
@@ -441,6 +442,33 @@ public class ShipPhaseTests
             e.Data.TryGetValue("action", out var a) && a.ToString() == "fetch_skipped");
         Assert.NotNull(fetchSkipped);
         Assert.Equal("no_remote", fetchSkipped!.Data["reason"].ToString());
+    }
+
+    [Fact]
+    public async Task RunAsync_CanonicalPathFromListWorktrees_UsedForRebaseAndChecks()
+    {
+        // Arrange: make the git-reported worktree path differ from the computed layout path.
+        // The computed path is something like <cwd>/.worktrees/ticket-tlb-1-test-ticket.
+        // We configure FakeGitClient to report a completely different canonical path.
+        const string canonicalPath = "/canonical/worktree/path";
+
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClientWithCanonicalPath(canonicalPath);
+        var checksRunner = new RecordingFakeChecksRunner(Array.Empty<CheckResult>());
+        var decrufter = new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git);
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: checksRunner,
+            markerScanner: EmptyScanner(),
+            decrufter: decrufter);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        // Rebase must use the canonical path from git worktree list, not the computed layout path.
+        Assert.Equal(canonicalPath, git.LastRebaseFeatureWorktreePath);
+        // Checks runner must also use the canonical path.
+        Assert.Equal(canonicalPath, checksRunner.LastWorkingDirectory);
     }
 
     // ---------- Fakes ----------
@@ -550,10 +578,13 @@ public class ShipPhaseTests
             return Task.FromResult(FetchResult);
         }
 
+        public string? LastRebaseFeatureWorktreePath { get; private set; }
+
         public Task<RebaseResult> RebaseAsync(string ontoRef, string featureWorktreePath, CancellationToken ct)
         {
             RebaseCallCount++;
             RebaseOntoRefs.Add(ontoRef);
+            LastRebaseFeatureWorktreePath = featureWorktreePath;
             return Task.FromResult(RebaseResult);
         }
 
@@ -597,5 +628,94 @@ public class ShipPhaseTests
         public override Task<DecruftResult> DecruftAsync(
             string worktreePath, string mainWorktreePath, CancellationToken ct) =>
             Task.FromResult(_result);
+    }
+
+    /// <summary>
+    /// A standalone IGitClient that returns a caller-specified canonical worktree path
+    /// from ListWorktreesAsync so the canonical-path threading can be verified.
+    /// Tracks the last featureWorktreePath argument passed to RebaseAsync.
+    /// </summary>
+    private sealed class FakeGitClientWithCanonicalPath : IGitClient
+    {
+        private readonly string _canonicalPath;
+
+        public FakeGitClientWithCanonicalPath(string canonicalPath)
+        {
+            _canonicalPath = canonicalPath;
+        }
+
+        public string? LastRebaseFeatureWorktreePath { get; private set; }
+
+        public Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<WorktreeInfo>>(new[]
+            {
+                new WorktreeInfo(_canonicalPath, BranchName, "deadbeef", false, false)
+            });
+
+        public Task<RebaseResult> RebaseAsync(string ontoRef, string featureWorktreePath, CancellationToken ct)
+        {
+            LastRebaseFeatureWorktreePath = featureWorktreePath;
+            return Task.FromResult(new RebaseResult(true, false, Array.Empty<string>(), null));
+        }
+
+        public Task<GitOpResult> RebaseAbortAsync(string featureWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+
+        public Task<bool> RemoteExistsAsync(string remote, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(true);
+
+        public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(MergedSha);
+
+        public Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct) =>
+            Task.FromResult(new WorktreeRemoveResult(true, null));
+
+        public Task<IReadOnlyList<string>> GetBranchesNotMergedAsync(string pattern, string baseBranch, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
+
+        public Task<WorktreeCreateResult> CreateWorktreeAsync(string worktreePath, string newBranch, string fromRef, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
+
+        public Task<string> HeadShaAsync(string worktreePath, CancellationToken ct) =>
+            Task.FromResult(MergedSha);
+
+        public Task<GitDiff> DiffAsync(string fromRef, string toRef, string mainWorktreePath, bool includePatchContent, CancellationToken ct) =>
+            Task.FromResult(new GitDiff(fromRef, toRef, Array.Empty<DiffEntry>()));
+
+        public Task<GitOpResult> FetchAsync(string remote, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+
+        public Task<GitOpResult> FastForwardMergeAsync(string mergeRef, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+
+        public Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+
+        public Task<int> RevListCountAsync(string range, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(0);
+
+        public Task<IReadOnlyList<string>> LogOnelineAsync(string range, int limit, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
+    }
+
+    /// <summary>
+    /// FakeChecksRunner that records the workingDirectory argument for assertion.
+    /// </summary>
+    private sealed class RecordingFakeChecksRunner : AutomatedChecksRunner
+    {
+        private readonly IReadOnlyList<CheckResult> _results;
+        public string? LastWorkingDirectory { get; private set; }
+
+        public RecordingFakeChecksRunner(IReadOnlyList<CheckResult> results)
+        {
+            _results = results;
+        }
+
+        public override Task<IReadOnlyList<CheckResult>> RunAsync(
+            IReadOnlyList<CheckSpec> specs, string workingDirectory, CancellationToken ct)
+        {
+            LastWorkingDirectory = workingDirectory;
+            return Task.FromResult(_results);
+        }
     }
 }
