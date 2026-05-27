@@ -630,6 +630,68 @@ public class ShipPhaseTests
         Assert.Equal(TicketState.Done, ticketing.Transitions[0].state);
     }
 
+    [Fact]
+    public async Task RunAsync_LocalMainAheadOfOriginMain_RebasesOntoLocalMain()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        // Configure: origin/main is ancestor of main (local is ahead)
+        git.AncestryResponses[("origin/main", "main")] = true;   // origin/main is ancestor of main
+        git.AncestryResponses[("main", "origin/main")] = false;  // main is NOT ancestor of origin/main
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        // Should rebase onto local "main", not origin/main
+        Assert.Single(git.RebaseOntoRefs);
+        Assert.Equal("main", git.RebaseOntoRefs[0]);
+
+        // Verify base_ref_resolved event with correct reason
+        var writeEvents = events.Events.Where(e => e.Kind == EventKind.TicketWrite).ToList();
+        var baseRefResolved = writeEvents.FirstOrDefault(w => w.Data.TryGetValue("action", out var a) && a.ToString() == "base_ref_resolved");
+        Assert.NotNull(baseRefResolved);
+        Assert.Equal("local_main_ahead", baseRefResolved.Data["reason"].ToString());
+    }
+
+    [Fact]
+    public async Task RunAsync_DivergedBases_EmitsGateFailureAndBlocksShip()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        // Configure: bases have diverged (neither is ancestor of the other)
+        git.AncestryResponses[("origin/main", "main")] = false;  // origin/main is NOT ancestor of main
+        git.AncestryResponses[("main", "origin/main")] = false;  // main is NOT ancestor of origin/main
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("diverged", result.FailureReason, StringComparison.OrdinalIgnoreCase);
+
+        // Rebase should NOT be attempted
+        Assert.Equal(0, git.RebaseCallCount);
+
+        // GateFailure with kind=diverged_bases should be emitted
+        var gateFailures = events.Events.Where(e => e.Kind == EventKind.GateFailure).ToList();
+        Assert.Single(gateFailures);
+        Assert.Equal("diverged_bases", gateFailures[0].Data["kind"].ToString());
+        Assert.Equal("main", gateFailures[0].Data["local_ref"].ToString());
+        Assert.Equal("origin/main", gateFailures[0].Data["remote_ref"].ToString());
+
+        // Ticket should remain in InReview (no Done transition)
+        var stateTransitions = events.Events.Where(e => e.Kind == EventKind.StateTransition).ToList();
+        Assert.DoesNotContain(stateTransitions, t => t.Data["to"].ToString() == "Done");
+    }
+
     // ---------- Fakes ----------
 
     private sealed class FakeTicketing : ITicketing
@@ -685,6 +747,7 @@ public class ShipPhaseTests
         public GitOpResult DeleteBranchResult { get; set; } = new GitOpResult(true, null);
         public bool RemoteExistsResult { get; set; } = true;
         public Dictionary<string, IReadOnlyList<string>> TrackedChangesByPath { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<(string ancestor, string descendant), bool> AncestryResponses { get; } = new();
 
         public int FetchCallCount { get; private set; }
         public int RebaseCallCount { get; private set; }
@@ -780,6 +843,9 @@ public class ShipPhaseTests
 
         public Task<bool> IsAncestorAsync(string ancestor, string descendant, string workingDirectory, CancellationToken ct)
         {
+            var key = (ancestor, descendant);
+            if (AncestryResponses.TryGetValue(key, out var result))
+                return Task.FromResult(result);
             // Default: both are ancestors of each other (same commit)
             return Task.FromResult(true);
         }
