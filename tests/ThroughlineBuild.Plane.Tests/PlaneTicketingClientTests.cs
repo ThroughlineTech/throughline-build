@@ -138,7 +138,8 @@ internal static class TestData
         BaseUrl = "https://plane.example.com",
         ApiToken = "test-token",
         WorkspaceSlug = "my-workspace",
-        ProjectId = "my-project"
+        ProjectId = "my-project",
+        ProjectIdentifier = "TLB"
     };
 }
 
