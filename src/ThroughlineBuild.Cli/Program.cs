@@ -58,13 +58,15 @@ static async Task<int> RunAsync(string[] args)
         }
     }
 
-    // Validation for new verb (requires body path).
+    // Validation for new verb (requires body path unless --print-template is set).
     if (verb == "new")
     {
-        if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]))
+        bool hasPrintTemplate = Array.Exists(args, a => a == "--print-template");
+        if (!hasPrintTemplate && (args.Length < 2 || string.IsNullOrWhiteSpace(args[1])))
         {
             Console.Error.WriteLine("Error: body-path is required");
             Console.Error.WriteLine("Usage: build new <body-path> [--title \"...\"] [--type \"...\"] [--label \"...\"]* [--debug]");
+            Console.Error.WriteLine("       build new --print-template");
             return 2;
         }
     }
@@ -231,19 +233,30 @@ static async Task<int> RunAsync(string[] args)
 
         var phase = new NewPhase(ticketing2, eventSink2, buildOptions2);
 
-        var bodyPath = args[1];
-        var newCommandArgs = new Dictionary<string, string>(StringComparer.Ordinal)
+        // Check for --print-template (bare bool flag; no body-path needed).
+        bool printTemplate = Array.Exists(args, a => a == "--print-template");
+
+        var newCommandArgs = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (printTemplate)
         {
-            ["body_path"] = bodyPath
-        };
+            newCommandArgs["print_template"] = "true";
+        }
+        else
+        {
+            newCommandArgs["body_path"] = args[1];
+        }
 
         // Parse flags: --title, --type, --label (repeatable), --debug (already stripped).
         var labels = new List<string>();
-        int parseStart = 2;
+        int parseStart = printTemplate ? 1 : 2;
         for (int i = parseStart; i < args.Length; i++)
         {
             var arg = args[i];
-            if (arg == "--title" && i + 1 < args.Length)
+            if (arg == "--print-template")
+            {
+                // already handled above
+            }
+            else if (arg == "--title" && i + 1 < args.Length)
             {
                 newCommandArgs["title"] = args[++i];
             }

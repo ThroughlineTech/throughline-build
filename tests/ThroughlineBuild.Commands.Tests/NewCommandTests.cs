@@ -206,6 +206,47 @@ Body.
     }
 
     [Fact]
+    public async Task PrintTemplate_emits_template_to_stdout_and_makes_no_Plane_calls()
+    {
+        var ticketing = new FakeTicketing();
+        var events = new FakeEventSink();
+        var options = new BuildOptions(
+            SessionId: "test-session",
+            WorkerName: "",
+            WorkerTimeout: TimeSpan.Zero,
+            DebugCaptureDirectory: null);
+        var phase = new NewPhase(ticketing, events, options);
+        var cmd = new NewCommand(phase, "", null);
+
+        var ctx = MakeCtx(new Dictionary<string, string> { ["print_template"] = "true" });
+
+        // Capture Console.Out to verify template content.
+        var originalOut = Console.Out;
+        var captured = new System.IO.StringWriter();
+        Console.SetOut(captured);
+        CommandResult result;
+        try
+        {
+            result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        var output = captured.ToString();
+        Assert.True(result.Success);
+        // Template must contain a top-level heading (NewPhase title marker).
+        Assert.Contains("# ", output);
+        // Must contain Acceptance criteria section (NewPhase validator looks for this).
+        Assert.Contains("Acceptance", output);
+        // Must contain Out of scope section.
+        Assert.Contains("Out of scope", output);
+        // No Plane calls must have been made.
+        Assert.Empty(ticketing.CreateCalls);
+    }
+
+    [Fact]
     public async Task MissingBodyPath_fails()
     {
         var ticketing = new FakeTicketing();
