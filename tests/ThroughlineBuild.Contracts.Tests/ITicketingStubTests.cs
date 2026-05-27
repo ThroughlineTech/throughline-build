@@ -92,11 +92,7 @@ public class ITicketingStubTests
             if (!_tickets.TryGetValue(id, out var ticket))
                 throw new KeyNotFoundException($"Ticket {id} not found");
 
-            var combined = new HashSet<string>(ticket.Labels);
-            foreach (var label in labels)
-                combined.Add(label);
-
-            _tickets[id] = ticket with { Labels = combined.ToList() };
+            _tickets[id] = ticket with { Labels = labels.ToList() };
             return Task.CompletedTask;
         }
 
@@ -182,6 +178,20 @@ public class ITicketingStubTests
         var ticket = await stub.GetAsync("TLB-1", CancellationToken.None);
         Assert.Contains("bug", ticket.Labels);
         Assert.Contains("urgent", ticket.Labels);
+    }
+
+    [Fact]
+    public async Task ITicketing_ApplyLabelsAsync_ReplacesLabelsOnSecondCall()
+    {
+        var stub = new TicketingStub();
+        await stub.ApplyLabelsAsync("TLB-1", new[] { "bug", "urgent" }, CancellationToken.None);
+        await stub.ApplyLabelsAsync("TLB-1", new[] { "feature" }, CancellationToken.None);
+
+        var ticket = await stub.GetAsync("TLB-1", CancellationToken.None);
+        Assert.Single(ticket.Labels);
+        Assert.Contains("feature", ticket.Labels);
+        Assert.DoesNotContain("bug", ticket.Labels);
+        Assert.DoesNotContain("urgent", ticket.Labels);
     }
 
     [Fact]

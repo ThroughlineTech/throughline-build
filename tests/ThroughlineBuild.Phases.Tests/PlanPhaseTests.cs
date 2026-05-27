@@ -7,7 +7,7 @@ namespace ThroughlineBuild.Phases.Tests;
 
 public class PlanPhaseTests
 {
-    private static Ticket MakeTicket(TicketState state) => new Ticket(
+    private static Ticket MakeTicket(TicketState state, IReadOnlyList<string>? labels = null) => new Ticket(
         Id: "TLB-1",
         Title: "Test ticket",
         Type: "feature",
@@ -16,7 +16,7 @@ public class PlanPhaseTests
         Risk: Risk.Low,
         DescriptionHtml: "<p>desc</p>",
         Relations: Array.Empty<Relation>(),
-        Labels: Array.Empty<string>(),
+        Labels: labels ?? Array.Empty<string>(),
         ParentId: null);
 
     private static BuildOptions MakeOptions() => new BuildOptions(
@@ -123,6 +123,108 @@ public class PlanPhaseTests
         Assert.False(result.Success);
         Assert.Single(ticketing.Transitions);
         Assert.Equal(TicketState.Planning, ticketing.Transitions[0].state);
+    }
+
+    [Fact]
+    public async Task RunAsync_NoPreExistingLabels_AppliesRiskAndSizeOnly()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.Backlog));
+        var worker = new FakeWorkerAgent(new WorkerResult(
+            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata()));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient("test-sha-123");
+        var phase = new PlanPhase(ticketing, worker, events, MakeOptions(), git);
+
+        await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.Single(ticketing.ApplyLabels);
+        var labels = ticketing.ApplyLabels[0].labels;
+        Assert.Equal(2, labels.Count);
+        Assert.Contains("risk:low", labels);
+        Assert.Contains("size:S", labels);
+    }
+
+    [Fact]
+    public async Task RunAsync_PreExistingUnrelatedLabels_PreservesAndAddsRiskSize()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.Backlog, new[] { "plan-ticket", "team:core" }));
+        var worker = new FakeWorkerAgent(new WorkerResult(
+            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata()));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient("test-sha-123");
+        var phase = new PlanPhase(ticketing, worker, events, MakeOptions(), git);
+
+        await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.Single(ticketing.ApplyLabels);
+        var labels = ticketing.ApplyLabels[0].labels;
+        Assert.Equal(4, labels.Count);
+        Assert.Contains("plan-ticket", labels);
+        Assert.Contains("team:core", labels);
+        Assert.Contains("risk:low", labels);
+        Assert.Contains("size:S", labels);
+    }
+
+    [Fact]
+    public async Task RunAsync_PreExistingRiskLabel_ReplacesRisk()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.Backlog, new[] { "risk:high" }));
+        var worker = new FakeWorkerAgent(new WorkerResult(
+            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata()));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient("test-sha-123");
+        var phase = new PlanPhase(ticketing, worker, events, MakeOptions(), git);
+
+        await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.Single(ticketing.ApplyLabels);
+        var labels = ticketing.ApplyLabels[0].labels;
+        Assert.Equal(2, labels.Count);
+        Assert.Contains("risk:low", labels);
+        Assert.DoesNotContain("risk:high", labels);
+        Assert.Contains("size:S", labels);
+    }
+
+    [Fact]
+    public async Task RunAsync_PreExistingSizeLabel_ReplacesSize()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.Backlog, new[] { "size:L" }));
+        var worker = new FakeWorkerAgent(new WorkerResult(
+            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata()));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient("test-sha-123");
+        var phase = new PlanPhase(ticketing, worker, events, MakeOptions(), git);
+
+        await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.Single(ticketing.ApplyLabels);
+        var labels = ticketing.ApplyLabels[0].labels;
+        Assert.Equal(2, labels.Count);
+        Assert.Contains("risk:low", labels);
+        Assert.DoesNotContain("size:L", labels);
+        Assert.Contains("size:S", labels);
+    }
+
+    [Fact]
+    public async Task RunAsync_PreExistingRiskAndSizeLabels_ReplacesBoth()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.Backlog, new[] { "risk:high", "size:L", "team:core" }));
+        var worker = new FakeWorkerAgent(new WorkerResult(
+            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata()));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient("test-sha-123");
+        var phase = new PlanPhase(ticketing, worker, events, MakeOptions(), git);
+
+        await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.Single(ticketing.ApplyLabels);
+        var labels = ticketing.ApplyLabels[0].labels;
+        Assert.Equal(3, labels.Count);
+        Assert.Contains("team:core", labels);
+        Assert.Contains("risk:low", labels);
+        Assert.Contains("size:S", labels);
+        Assert.DoesNotContain("risk:high", labels);
+        Assert.DoesNotContain("size:L", labels);
     }
 
     private sealed class FakeTicketing : ITicketing

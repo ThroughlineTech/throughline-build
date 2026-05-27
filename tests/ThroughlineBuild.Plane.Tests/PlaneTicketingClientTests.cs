@@ -76,9 +76,10 @@ internal static class TestData
     public const string IssueUuid = "aaaaaaaa-0000-0000-0000-000000000001";
     public const string StateUuid = "bbbbbbbb-0000-0000-0000-000000000001";
     public const string LabelUuid = "cccccccc-0000-0000-0000-000000000001";
+    public const string LabelUuid2 = "cccccccc-0000-0000-0000-000000000002";
     public const string CommentUuid = "dddddddd-0000-0000-0000-000000000001";
 
-    public static string IssueListJson(string stateId = StateUuid, string descHtml = "<p>desc</p>") =>
+    public static string IssueListJson(string stateId = StateUuid, string descHtml = "<p>desc</p>", string labelIdsJson = "[]") =>
         $$"""
         {
           "results": [
@@ -88,7 +89,7 @@ internal static class TestData
               "name": "plane-client",
               "description_html": "{{descHtml}}",
               "state": "{{stateId}}",
-              "label_ids": [],
+              "label_ids": {{labelIdsJson}},
               "parent": null,
               "type": null
             }
@@ -111,7 +112,8 @@ internal static class TestData
         $$"""
         {
           "results": [
-            { "id": "{{LabelUuid}}", "name": "Size: S" }
+            { "id": "{{LabelUuid}}", "name": "Size: S" },
+            { "id": "{{LabelUuid2}}", "name": "risk:low" }
           ]
         }
         """;
@@ -168,6 +170,7 @@ public class GetAsyncTests
         var handler = new FakeMessageHandler();
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
 
         var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
         var ticket = await client.GetAsync("TLB-24", CancellationToken.None);
@@ -184,6 +187,7 @@ public class GetAsyncTests
         var handler = new FakeMessageHandler();
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
 
         var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
         var ticket = await client.GetAsync("24", CancellationToken.None);
@@ -209,6 +213,7 @@ public class GetAsyncTests
         var handler = new FakeMessageHandler();
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
 
         var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
         await client.GetAsync("TLB-24", CancellationToken.None);
@@ -219,17 +224,52 @@ public class GetAsyncTests
     }
 }
 
+public class GetAsyncLabelResolutionTests
+{
+    [Fact]
+    public async Task GetAsync_ResolvesLabelUuidsToNames()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(
+            TestData.IssueListJson(labelIdsJson: $"[\"{TestData.LabelUuid}\"]")));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var ticket = await client.GetAsync("TLB-24", CancellationToken.None);
+
+        Assert.Single(ticket.Labels);
+        Assert.Contains("Size: S", ticket.Labels);
+    }
+
+    [Fact]
+    public async Task GetAsync_FiltersOrphanLabelUuids()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(
+            TestData.IssueListJson(labelIdsJson: "[\"ffffffff-0000-0000-0000-999999999999\"]")));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var ticket = await client.GetAsync("TLB-24", CancellationToken.None);
+
+        Assert.Empty(ticket.Labels);
+    }
+}
+
 public class GetBatchAsyncTests
 {
     [Fact]
     public async Task GetBatchAsync_ReturnsManyTickets()
     {
         var handler = new FakeMessageHandler();
-        // Two issues - each GetAsync call hits issues list + states
+        // Two issues - each GetAsync call hits issues list + states + labels
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
-        // Second GetAsync reuses cached states, no extra state request
+        // Second GetAsync reuses cached states and labels, no extra requests
 
         var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
         var tickets = await client.GetBatchAsync(["TLB-24", "TLB-24"], CancellationToken.None);
@@ -392,8 +432,11 @@ public class ApplyLabelsAsyncTests
     [Fact]
     public async Task ApplyLabelsAsync_ResolvesNamesToUuidsAndPatches()
     {
+        // Issue has a prior label UUID; set semantics means PATCH body has only the applied label
+        var priorLabelUuid = "eeeeeeee-0000-0000-0000-000000000001";
         var handler = new FakeMessageHandler();
-        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson())); // issue lookup
+        handler.Enqueue(FakeMessageHandler.OkJson(
+            TestData.IssueListJson(labelIdsJson: $"[\"{priorLabelUuid}\"]"))); // issue with prior label
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson())); // label cache
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.PatchOkJson()));   // PATCH
 
@@ -402,6 +445,7 @@ public class ApplyLabelsAsyncTests
 
         var patchReq = handler.Requests[2];
         Assert.Contains(TestData.LabelUuid, patchReq.Body);
+        Assert.DoesNotContain(priorLabelUuid, patchReq.Body);
     }
 
     [Fact]

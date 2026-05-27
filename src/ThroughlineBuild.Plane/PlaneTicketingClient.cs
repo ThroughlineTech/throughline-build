@@ -189,6 +189,13 @@ public sealed class PlaneTicketingClient : ITicketing
         var stateName = statesById.TryGetValue(issue.StateId, out var st) ? st.Name : string.Empty;
         var ticketState = _stateNameMap.TryGetValue(stateName, out var ts) ? ts : TicketState.Backlog;
 
+        var labelsByName = await GetLabelsByNameAsync(ct).ConfigureAwait(false);
+        var labelsById = labelsByName.ToDictionary(kvp => kvp.Value, kvp => kvp.Key, StringComparer.OrdinalIgnoreCase);
+        var resolvedLabels = (issue.LabelIds ?? [])
+            .Where(uid => labelsById.ContainsKey(uid))
+            .Select(uid => labelsById[uid])
+            .ToList();
+
         return new Ticket(
             Id: issue.Id,
             Title: issue.Name,
@@ -198,7 +205,7 @@ public sealed class PlaneTicketingClient : ITicketing
             Risk: Risk.Medium,
             DescriptionHtml: issue.DescriptionHtml ?? string.Empty,
             Relations: [],
-            Labels: (issue.LabelIds ?? []).AsReadOnly(),
+            Labels: resolvedLabels.AsReadOnly(),
             ParentId: issue.ParentId);
     }
 
@@ -313,12 +320,9 @@ public sealed class PlaneTicketingClient : ITicketing
                 return labelId;
             }).ToList();
 
-            // Merge with existing label_ids
-            var merged = (issue.LabelIds ?? []).Union(labelIds).ToList();
-
             await PatchJsonAsync(
                 $"{IssuesBase}{issue.Id}/",
-                new ApplyLabelsRequest(merged),
+                new ApplyLabelsRequest(labelIds),
                 PlaneJsonContext.Default,
                 token).ConfigureAwait(false);
         }, ct).ConfigureAwait(false);

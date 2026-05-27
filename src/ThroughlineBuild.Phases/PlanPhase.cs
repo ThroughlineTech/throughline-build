@@ -119,7 +119,8 @@ public class PlanPhase : IWorkflowPhase
             ["action"] = "append_description"
         }, ct).ConfigureAwait(false);
 
-        await _ticketing.ApplyLabelsAsync(ticketId, new[] { $"risk:{riskLabel}", $"size:{sizeLabel}" }, ct).ConfigureAwait(false);
+        var mergedLabels = MergeRiskSizeLabels(ticket.Labels, riskLabel, sizeLabel);
+        await _ticketing.ApplyLabelsAsync(ticketId, mergedLabels, ct).ConfigureAwait(false);
         await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
         {
             ["action"] = "apply_labels"
@@ -166,6 +167,18 @@ public class PlanPhase : IWorkflowPhase
             data), ct).ConfigureAwait(false);
     }
 
+
+    private static IReadOnlyList<string> MergeRiskSizeLabels(
+        IReadOnlyList<string> existing, string riskLabel, string sizeLabel)
+    {
+        var filtered = existing
+            .Where(l => !l.StartsWith("risk:", StringComparison.OrdinalIgnoreCase)
+                     && !l.StartsWith("size:", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        filtered.Add($"risk:{riskLabel}");
+        filtered.Add($"size:{sizeLabel}");
+        return filtered;
+    }
 
     private static (string? planHtml, string? riskLabel, string? sizeLabel, string? plannedAtSha)
         TryExtractMetadata(IReadOnlyDictionary<string, object> metadata)
