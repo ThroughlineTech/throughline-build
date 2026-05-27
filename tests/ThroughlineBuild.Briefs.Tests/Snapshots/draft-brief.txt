@@ -6,7 +6,7 @@ not state.
 
 ## Operator input
 
-{{operator_text}}
+Add a widget to the sidebar with a configurable label
 
 ## Target template structure
 
