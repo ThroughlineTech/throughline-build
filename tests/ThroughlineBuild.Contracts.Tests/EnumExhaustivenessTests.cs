@@ -8,7 +8,7 @@ public class EnumExhaustivenessTests
     [Fact]
     public void Phase_HasExactlyExpectedValues()
     {
-        var expected = new[] { Phase.Plan, Phase.Implement, Phase.Review, Phase.Ship, Phase.Chain, Phase.New, Phase.Command };
+        var expected = new[] { Phase.Plan, Phase.Implement, Phase.Review, Phase.Ship, Phase.Chain, Phase.New, Phase.Command, Phase.Draft };
         Assert.Equal(expected.OrderBy(x => (int)x), Enum.GetValues<Phase>().OrderBy(x => (int)x));
     }
 
