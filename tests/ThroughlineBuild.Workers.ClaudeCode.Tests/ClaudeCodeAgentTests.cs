@@ -1157,3 +1157,72 @@ public class ClaudeCodeAgentDigestRoutingTests
         Assert.Contains("result", written);
     }
 }
+
+public class WriteCancellationCaptureTests
+{
+    [Fact]
+    public void WriteCancellationCapture_WithValidCaptureDirAndContent_WritesAllFiles()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "tlb144-cancel-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            const string briefText = "This is the brief instruction";
+            const string stdoutText = "partial stdout output";
+            const string stderrText = "partial stderr output";
+
+            ClaudeCodeAgent.WriteCancellationCapture(dir, briefText, stdoutText, stderrText);
+
+            Assert.True(File.Exists(Path.Combine(dir, "worker-stdin.txt")));
+            Assert.True(File.Exists(Path.Combine(dir, "worker-stdout.txt")));
+            Assert.True(File.Exists(Path.Combine(dir, "worker-stderr.txt")));
+            Assert.True(File.Exists(Path.Combine(dir, "cancel-reason.txt")));
+
+            Assert.Equal(briefText, File.ReadAllText(Path.Combine(dir, "worker-stdin.txt"), System.Text.Encoding.UTF8));
+            Assert.Equal(stdoutText, File.ReadAllText(Path.Combine(dir, "worker-stdout.txt"), System.Text.Encoding.UTF8));
+            Assert.Equal(stderrText, File.ReadAllText(Path.Combine(dir, "worker-stderr.txt"), System.Text.Encoding.UTF8));
+            Assert.Contains("cancelled or timed out", File.ReadAllText(Path.Combine(dir, "cancel-reason.txt"), System.Text.Encoding.UTF8), System.StringComparison.OrdinalIgnoreCase);
+        }
+        finally { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public void WriteCancellationCapture_CaptureDirectoryNull_NoopsWithoutThrow()
+    {
+        // Should not throw when captureDir is null
+        ClaudeCodeAgent.WriteCancellationCapture(null, "brief", "stdout", "stderr");
+        // Pass - no exception
+    }
+
+    [Fact]
+    public void WriteCancellationCapture_EmptyContent_WritesEmptyFiles()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "tlb144-cancel-empty-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            ClaudeCodeAgent.WriteCancellationCapture(dir, "", "", "");
+
+            Assert.Equal("", File.ReadAllText(Path.Combine(dir, "worker-stdin.txt"), System.Text.Encoding.UTF8));
+            Assert.Equal("", File.ReadAllText(Path.Combine(dir, "worker-stdout.txt"), System.Text.Encoding.UTF8));
+            Assert.Equal("", File.ReadAllText(Path.Combine(dir, "worker-stderr.txt"), System.Text.Encoding.UTF8));
+        }
+        finally { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public void WriteCancellationCapture_IdempotentCall_OverwritesWithoutThrow()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "tlb144-cancel-idem-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            // First call
+            ClaudeCodeAgent.WriteCancellationCapture(dir, "brief1", "stdout1", "stderr1");
+
+            // Second call should overwrite idempotently
+            ClaudeCodeAgent.WriteCancellationCapture(dir, "brief2", "stdout2", "stderr2");
+
+            Assert.Equal("brief2", File.ReadAllText(Path.Combine(dir, "worker-stdin.txt"), System.Text.Encoding.UTF8));
+            Assert.Equal("stdout2", File.ReadAllText(Path.Combine(dir, "worker-stdout.txt"), System.Text.Encoding.UTF8));
+        }
+        finally { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+    }
+}

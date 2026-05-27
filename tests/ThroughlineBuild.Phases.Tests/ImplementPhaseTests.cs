@@ -230,6 +230,97 @@ public class ImplementPhaseTests
         Assert.Equal(Phase.Implement, iface.Phase);
     }
 
+    [Fact]
+    public async Task RunAsync_StateCheckFailure_WritesEarlyExitManifest()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var captureDir = Path.Combine(tempRoot, "sessions", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var ticketing = new FakeTicketing(MakeTicket(TicketState.Backlog));
+            var worker = new FakeWorkerAgent(OkWorkerResult());
+            var events = new FakeEventSink();
+            var git = new FakeGitClient(MainSha, CommitSha);
+            var options = new BuildOptions("session-state-fail", "claude-code", TimeSpan.FromMinutes(5),
+                DebugCaptureDirectory: captureDir);
+            var phase = new ImplementPhase(ticketing, worker, events, options, git);
+
+            await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+            var manifestPath = Path.Combine(captureDir, "phase-status.json");
+            Assert.True(File.Exists(manifestPath), $"Expected phase-status.json at {manifestPath}");
+
+            var content = File.ReadAllText(manifestPath);
+            Assert.Contains("Ready", content);
+            Assert.Contains("ticket not in Ready state", content);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+                Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_GitRevParseFails_WritesEarlyExitManifest()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var captureDir = Path.Combine(tempRoot, "sessions", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var ticketing = new FakeTicketing(MakeTicket(TicketState.Ready));
+            var worker = new FakeWorkerAgent(OkWorkerResult());
+            var events = new FakeEventSink();
+            var git = new FakeGitClient(MainSha, CommitSha) { RevParseFailure = "ref not found" };
+            var options = new BuildOptions("session-rev-parse-fail", "claude-code", TimeSpan.FromMinutes(5),
+                DebugCaptureDirectory: captureDir);
+            var phase = new ImplementPhase(ticketing, worker, events, options, git);
+
+            await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+            var manifestPath = Path.Combine(captureDir, "phase-status.json");
+            Assert.True(File.Exists(manifestPath), $"Expected phase-status.json at {manifestPath}");
+
+            var content = File.ReadAllText(manifestPath);
+            Assert.Contains("git rev-parse failed", content);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+                Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_WorktreeCreateFails_WritesEarlyExitManifest()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var captureDir = Path.Combine(tempRoot, "sessions", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var ticketing = new FakeTicketing(MakeTicket(TicketState.Ready));
+            var worker = new FakeWorkerAgent(OkWorkerResult());
+            var events = new FakeEventSink();
+            var git = new FakeGitClient(MainSha, CommitSha) { CreateWorktreeFailure = "worktree path exists" };
+            var options = new BuildOptions("session-worktree-fail", "claude-code", TimeSpan.FromMinutes(5),
+                DebugCaptureDirectory: captureDir);
+            var phase = new ImplementPhase(ticketing, worker, events, options, git);
+
+            await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+            var manifestPath = Path.Combine(captureDir, "phase-status.json");
+            Assert.True(File.Exists(manifestPath), $"Expected phase-status.json at {manifestPath}");
+
+            var content = File.ReadAllText(manifestPath);
+            Assert.Contains("worktree create failed", content);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+                Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
     private sealed class FakeTicketing : ITicketing
     {
         private readonly Ticket _ticket;
@@ -292,6 +383,7 @@ public class ImplementPhaseTests
         private readonly string _headSha;
         public int CreateWorktreeCalls { get; private set; }
         public string? CreateWorktreeFailure { get; set; }
+        public string? RevParseFailure { get; set; }
 
         public FakeGitClient(string mainSha, string headSha)
         {
@@ -299,8 +391,12 @@ public class ImplementPhaseTests
             _headSha = headSha;
         }
 
-        public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
-            Task.FromResult(_mainSha);
+        public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct)
+        {
+            if (RevParseFailure is not null)
+                throw new InvalidOperationException(RevParseFailure);
+            return Task.FromResult(_mainSha);
+        }
 
         public Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<WorktreeInfo>>(Array.Empty<WorktreeInfo>());

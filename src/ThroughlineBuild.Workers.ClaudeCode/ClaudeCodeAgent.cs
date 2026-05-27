@@ -105,6 +105,19 @@ public class ClaudeCodeAgent : IWorkerAgent
         catch (OperationCanceledException)
         {
             try { process.Kill(entireProcessTree: true); } catch { }
+            stopwatch.Stop();
+
+            // Write partial output to debug capture directory (best-effort)
+            try
+            {
+                WriteCancellationCapture(options.DebugCaptureDirectory, brief.Instruction,
+                    stdoutBuilder.ToString(), stderrBuilder.ToString());
+            }
+            catch
+            {
+                // Best-effort: failure to write debug artifacts never masks the cancellation.
+            }
+
             return new WorkerResult(Status.Failed, "Process cancelled or timed out", Array.Empty<string>(),
                 "Execution cancelled or timed out", new Dictionary<string, object>());
         }
@@ -417,5 +430,38 @@ public class ClaudeCodeAgent : IWorkerAgent
     {
         if (sink is null) return;
         sink.WriteLine(prefix + line);
+    }
+
+    // Writes partial worker input/output to a debug capture directory when the worker
+    // subprocess is cancelled or times out. Writes partial stdout/stderr (accumulated
+    // before cancellation) to preserve diagnostic information.
+    // No-op when captureDir is null. Exceptions are swallowed (best-effort).
+    // Files written:
+    //   worker-stdin.txt   - the brief instruction sent to the subprocess
+    //   worker-stdout.txt  - partial raw stdout (accumulated before cancellation)
+    //   worker-stderr.txt  - partial raw stderr (accumulated before cancellation)
+    //   cancel-reason.txt  - reason for cancellation
+    internal static void WriteCancellationCapture(
+        string? captureDir,
+        string briefInstruction,
+        string partialStdout,
+        string partialStderr)
+    {
+        if (captureDir is null)
+            return;
+
+        try
+        {
+            Directory.CreateDirectory(captureDir);
+
+            File.WriteAllText(Path.Combine(captureDir, "worker-stdin.txt"), briefInstruction, System.Text.Encoding.UTF8);
+            File.WriteAllText(Path.Combine(captureDir, "worker-stdout.txt"), partialStdout, System.Text.Encoding.UTF8);
+            File.WriteAllText(Path.Combine(captureDir, "worker-stderr.txt"), partialStderr, System.Text.Encoding.UTF8);
+            File.WriteAllText(Path.Combine(captureDir, "cancel-reason.txt"), "Process cancelled or timed out", System.Text.Encoding.UTF8);
+        }
+        catch
+        {
+            // Best-effort: failure to write debug artifacts never masks the cancellation.
+        }
     }
 }

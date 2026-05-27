@@ -49,7 +49,10 @@ public class ImplementPhase : IWorkflowPhase
 
         // Step 2: Validate state
         if (ticket.State != TicketState.Ready)
+        {
+            EarlyExitManifest.Write(_options.DebugCaptureDirectory, Phase.Implement.ToString(), ticketId, "ticket not in Ready state");
             return new ImplementResult(false, ticketId, null, null, null, "ticket not in Ready state");
+        }
 
         // Step 3: Resolve base ref (origin/main with fallback to local main) and its SHA
         string baseRef;
@@ -60,7 +63,9 @@ public class ImplementPhase : IWorkflowPhase
         }
         catch (Exception ex)
         {
-            return new ImplementResult(false, ticketId, null, null, null, $"git rev-parse failed: {ex.Message}");
+            var failureReason = $"git rev-parse failed: {ex.Message}";
+            EarlyExitManifest.Write(_options.DebugCaptureDirectory, Phase.Implement.ToString(), ticketId, failureReason);
+            return new ImplementResult(false, ticketId, null, null, null, failureReason);
         }
 
         // Step 4: Compute worktree names
@@ -107,8 +112,12 @@ public class ImplementPhase : IWorkflowPhase
             workingDirectory,
             ct).ConfigureAwait(false);
         if (!createResult.Success)
+        {
+            var failureReason = $"worktree create failed: {createResult.FailureReason}";
+            EarlyExitManifest.Write(_options.DebugCaptureDirectory, Phase.Implement.ToString(), ticketId, failureReason);
             return new ImplementResult(false, ticketId, null, worktreeNames.BranchName, worktreeNames.WorktreePath,
-                $"worktree create failed: {createResult.FailureReason}");
+                failureReason);
+        }
 
         // Step 9: Transition Ready -> InProgress
         await _ticketing.TransitionAsync(ticketId, TicketState.InProgress, ct).ConfigureAwait(false);
