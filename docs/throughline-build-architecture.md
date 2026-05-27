@@ -175,7 +175,7 @@ All three return `Brief`. The Brief is a typed object that gets serialized to ma
 
 ### 5.10 Event Log
 
-Append-only JSONL written per invocation to `.build/events/<session-id>.jsonl`. Every state transition, every LLM call, every worker spawn, every verifier outcome captured with inputs, outputs, model used, tokens consumed, wall time. Replayable: a recorded chain can be re-run against a different model or agent and compared. This is the substrate for both debugging and dogfooding-style evaluation.
+Append-only JSONL written per invocation to `.build/events/<session-id>.jsonl`. Every state transition, every LLM call, every worker spawn, every verifier outcome captured with inputs, outputs, model used, tokens consumed, wall time. Replayable: a recorded chain can be re-run against a different model or agent and compared. This is the substrate for both debugging and dogfooding-style evaluation. Relative events.log_directory values in .build/config.toml are resolved against the project root (the parent of the .build/ directory), not against the config file's directory.
 
 ---
 

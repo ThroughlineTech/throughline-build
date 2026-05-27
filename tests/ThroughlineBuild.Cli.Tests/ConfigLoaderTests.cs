@@ -174,6 +174,38 @@ log_directory = ".build/events"
     }
 
     [Fact]
+    public void ResolveLogDirectory_RelativePath_AnchoredToProjectRoot()
+    {
+        // config is at <root>/.build/config.toml
+        // project root is <root>
+        // relative .build/events should resolve to <root>/.build/events, NOT <root>/.build/.build/events
+        var root = Path.Combine(Path.GetTempPath(), "tlb134-test-repo");
+        var configPath = Path.Combine(root, ".build", "config.toml");
+        var result = BuildConfigLoader.ResolveLogDirectory(configPath, Path.Combine(".build", "events"), Path.Combine(Path.GetTempPath(), "fallback"));
+        var expected = Path.Combine(root, ".build", "events");
+        Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public void ResolveLogDirectory_AbsolutePath_PassesThroughUnchanged()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "tlb134-test-repo");
+        var configPath = Path.Combine(root, ".build", "config.toml");
+        var absoluteLogDir = Path.Combine(Path.GetTempPath(), "var", "log", "events");
+        var result = BuildConfigLoader.ResolveLogDirectory(configPath, absoluteLogDir, Path.Combine(Path.GetTempPath(), "fallback"));
+        Assert.Equal(absoluteLogDir, result);
+    }
+
+    [Fact]
+    public void ResolveLogDirectory_BareFilenameConfigPath_FallsBackToCwdFallback()
+    {
+        // config path with no directory component - GetDirectoryName returns null for bare names
+        var sentinel = Path.Combine(Path.GetTempPath(), "sentinel");
+        var result = BuildConfigLoader.ResolveLogDirectory("config.toml", "events", sentinel);
+        Assert.StartsWith(sentinel, result);
+    }
+
+    [Fact]
     public void ResolveSecrets_AnthropicKeyMissing_DoesNotThrow()
     {
         var path = WriteToml(ValidToml);

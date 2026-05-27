@@ -100,9 +100,7 @@ static async Task<int> RunAsync(string[] args)
         return 3;
     }
 
-    var configDir = Path.GetDirectoryName(configPath2) ?? cwd2;
-    string ResolveLogDir(string raw) =>
-        Path.IsPathRooted(raw) ? raw : Path.Combine(configDir, raw);
+    string ResolveLogDir(string raw) => BuildConfigLoader.ResolveLogDirectory(configPath2, raw, cwd2);
 
     if (verb == "amend" || verb == "close" || verb == "defer" || verb == "reopen")
     {
