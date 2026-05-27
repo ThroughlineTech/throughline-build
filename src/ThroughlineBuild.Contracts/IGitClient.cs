@@ -51,4 +51,11 @@ public interface IGitClient
     // Never throws - returns empty on git failure.
     Task<IReadOnlyList<string>> GetTrackedChangesAsync(string workingDirectory, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+    // Returns true if ancestor is an ancestor of descendant (i.e., descendant is reachable from ancestor).
+    // Returns false if descendant is not reachable from ancestor OR if either ref does not exist.
+    // Never throws - returns false on git failure.
+    // Used to check if local main and origin/main have diverged (TLB-148).
+    Task<bool> IsAncestorAsync(string ancestor, string descendant, string workingDirectory, CancellationToken ct) =>
+        Task.FromResult(false);
 }

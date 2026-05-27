@@ -166,6 +166,7 @@ public class ShipPhase : IWorkflowPhase
         var baseBranch = _shipOptions.BaseBranch;
         var remoteExists = await _git.RemoteExistsAsync(remote, workingDirectory, ct).ConfigureAwait(false);
         string ontoRef;
+        string baseRefReason;
         if (!remoteExists)
         {
             // No remote configured - skip fetch and rebase onto local base branch
@@ -176,6 +177,7 @@ public class ShipPhase : IWorkflowPhase
                 ["remote"] = remote
             }, ct).ConfigureAwait(false);
             ontoRef = baseBranch;
+            baseRefReason = "no_remote";
         }
         else
         {
@@ -184,8 +186,58 @@ public class ShipPhase : IWorkflowPhase
                 return (new ShipResult(false, ticketId, null,
                     $"git fetch failed: {fetchResult.FailureReason}",
                     ShipFailureStage.Fetch), worktreeNames, null);
-            ontoRef = $"{remote}/{baseBranch}";
+
+            // Step 4a: Determine rebase base by ancestry check
+            var localRef = baseBranch;
+            var remoteRef = $"{remote}/{baseBranch}";
+
+            // Check if local is ancestor of remote (remote is ahead or equal)
+            var localIsAncestorOfRemote = await _git.IsAncestorAsync(localRef, remoteRef, workingDirectory, ct).ConfigureAwait(false);
+            // Check if remote is ancestor of local (local is ahead or equal)
+            var remoteIsAncestorOfLocal = await _git.IsAncestorAsync(remoteRef, localRef, workingDirectory, ct).ConfigureAwait(false);
+
+            if (localIsAncestorOfRemote && !remoteIsAncestorOfLocal)
+            {
+                // Remote is ahead of local
+                ontoRef = remoteRef;
+                baseRefReason = "origin_main_ahead";
+            }
+            else if (remoteIsAncestorOfLocal && !localIsAncestorOfRemote)
+            {
+                // Local is ahead of remote
+                ontoRef = localRef;
+                baseRefReason = "local_main_ahead";
+            }
+            else if (localIsAncestorOfRemote && remoteIsAncestorOfLocal)
+            {
+                // Both are ancestors of each other -> same commit
+                ontoRef = remoteRef;
+                baseRefReason = "same_commit";
+            }
+            else
+            {
+                // Diverged - neither is ancestor of the other
+                await _ticketing.CreateCommentAsync(ticketId,
+                    $"<p><strong>ship_blocked:</strong> local {baseBranch} and {remote}/{baseBranch} have diverged; manual resolution required</p>", ct).ConfigureAwait(false);
+                await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+                {
+                    ["kind"] = "diverged_bases",
+                    ["local_ref"] = baseBranch,
+                    ["remote_ref"] = remoteRef
+                }, ct).ConfigureAwait(false);
+                return (new ShipResult(false, ticketId, null,
+                    $"local {baseBranch} and {remote}/{baseBranch} have diverged; manual resolution required",
+                    ShipFailureStage.Fetch), worktreeNames, null);
+            }
         }
+
+        // Emit base_ref_resolved event
+        await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
+        {
+            ["action"] = "base_ref_resolved",
+            ["ref"] = ontoRef,
+            ["reason"] = baseRefReason
+        }, ct).ConfigureAwait(false);
 
         // Step 5: Rebase feature branch onto ontoRef
         var rebaseResult = await _git.RebaseAsync(ontoRef, canonicalWorktreePath, ct).ConfigureAwait(false);

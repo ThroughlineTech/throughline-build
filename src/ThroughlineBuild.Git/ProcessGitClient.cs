@@ -769,6 +769,34 @@ public sealed class ProcessGitClient : IGitClient
         }
     }
 
+    public async Task<bool> IsAncestorAsync(string ancestor, string descendant, string workingDirectory, CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = workingDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("merge-base");
+            psi.ArgumentList.Add("--is-ancestor");
+            psi.ArgumentList.Add(ancestor);
+            psi.ArgumentList.Add(descendant);
+
+            using var proc = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start git process");
+            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+            return proc.ExitCode == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static async Task<string> RunGitAsync(
         string workingDirectory,
         string[] args,

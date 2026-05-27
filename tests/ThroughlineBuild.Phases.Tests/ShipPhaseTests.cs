@@ -75,12 +75,13 @@ public class ShipPhaseTests
         Assert.Contains(MergedSha, ticketing.Comments[0].html);
 
         var writeEvents = events.Events.Where(e => e.Kind == EventKind.TicketWrite).ToList();
-        // create_comment + decruft + delete_branch
-        Assert.Equal(3, writeEvents.Count);
-        Assert.Equal("create_comment", writeEvents[0].Data["action"].ToString());
-        Assert.Equal("decruft", writeEvents[1].Data["action"].ToString());
-        Assert.Equal("complete", writeEvents[1].Data["halted_at"].ToString());
-        Assert.Equal("delete_branch", writeEvents[2].Data["action"].ToString());
+        // base_ref_resolved + create_comment + decruft + delete_branch
+        Assert.Equal(4, writeEvents.Count);
+        Assert.Equal("base_ref_resolved", writeEvents[0].Data["action"].ToString());
+        Assert.Equal("create_comment", writeEvents[1].Data["action"].ToString());
+        Assert.Equal("decruft", writeEvents[2].Data["action"].ToString());
+        Assert.Equal("complete", writeEvents[2].Data["halted_at"].ToString());
+        Assert.Equal("delete_branch", writeEvents[3].Data["action"].ToString());
 
         var stateTransitions = events.Events.Where(e => e.Kind == EventKind.StateTransition).ToList();
         Assert.Single(stateTransitions);
@@ -328,7 +329,7 @@ public class ShipPhaseTests
         Assert.True(result.Success);
         Assert.Empty(git.DeleteBranchCalls);
         var writeEvents = events.Events.Where(e => e.Kind == EventKind.TicketWrite).ToList();
-        Assert.Equal(2, writeEvents.Count); // create_comment + decruft only
+        Assert.Equal(3, writeEvents.Count); // base_ref_resolved + create_comment + decruft only
         Assert.DoesNotContain(writeEvents, w => w.Data.TryGetValue("action", out var a) && a.ToString() == "delete_branch");
     }
 
@@ -776,6 +777,12 @@ public class ShipPhaseTests
             Task.FromResult(0);
         public Task<IReadOnlyList<string>> LogOnelineAsync(string range, int limit, string workingDirectory, CancellationToken ct) =>
             Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
+
+        public Task<bool> IsAncestorAsync(string ancestor, string descendant, string workingDirectory, CancellationToken ct)
+        {
+            // Default: both are ancestors of each other (same commit)
+            return Task.FromResult(true);
+        }
     }
 
     private sealed class FakeChecksRunner : AutomatedChecksRunner
@@ -862,6 +869,12 @@ public class ShipPhaseTests
 
         public Task<IReadOnlyList<string>> LogOnelineAsync(string range, int limit, string workingDirectory, CancellationToken ct) =>
             Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
+
+        public Task<bool> IsAncestorAsync(string ancestor, string descendant, string workingDirectory, CancellationToken ct)
+        {
+            // Default: both are ancestors of each other (same commit)
+            return Task.FromResult(true);
+        }
     }
 
     /// <summary>
