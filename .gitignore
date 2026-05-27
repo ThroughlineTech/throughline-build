@@ -8,3 +8,7 @@ obj/
 *.rsuser
 .idea/
 .scratch/
+.build/brief.md
+.build/events/
+.build/sessions/
+.build/config.toml
