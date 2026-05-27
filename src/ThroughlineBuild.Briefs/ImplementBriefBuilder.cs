@@ -4,7 +4,7 @@ namespace ThroughlineBuild.Briefs;
 
 public static class ImplementBriefBuilder
 {
-    public static Brief Build(Ticket ticket, RepoState repo, string branchName, string worktreePath, ProjectContext? project = null)
+    public static Brief Build(Ticket ticket, RepoState repo, string branchName, string worktreePath, ProjectContext? project = null, ReviewFeedback? reviewFeedback = null)
     {
         var proj = project ?? ProjectContext.Empty;
 
@@ -18,6 +18,8 @@ public static class ImplementBriefBuilder
             $"\"metadata\":{{\"commit_sha\":\"<HEAD SHA of feature branch after all commits>\"," +
             $"\"files_changed\":[\"path/relative/to/worktree\"]}}}}";
 
+        var reviewFeedbackSection = BuildReviewFeedbackSection(reviewFeedback);
+
         var vars = new Dictionary<string, string>
         {
             ["ticket_id"] = ticket.Id,
@@ -30,7 +32,8 @@ public static class ImplementBriefBuilder
             ["worktree_path"] = worktreePath,
             ["branch"] = branchName,
             ["main_sha"] = repo.MainSha,
-            ["worker_result_json"] = workerResultJson
+            ["worker_result_json"] = workerResultJson,
+            ["review_feedback_section"] = reviewFeedbackSection
         };
 
         var instruction = TemplateLoader.Load("implement.md").Substitute(vars);
@@ -54,7 +57,20 @@ public static class ImplementBriefBuilder
                 ["project_install_command"] = proj.InstallCommand,
                 ["project_dev_command"] = proj.DevCommand,
                 ["project_plane_project_url"] = proj.PlaneProjectUrl,
-                ["project_notes"] = proj.Notes
+                ["project_notes"] = proj.Notes,
+                ["review_feedback_section"] = reviewFeedbackSection
             });
+    }
+
+    private static string BuildReviewFeedbackSection(ReviewFeedback? reviewFeedback)
+    {
+        if (reviewFeedback is null)
+            return "";
+
+        var checksList = reviewFeedback.ChecksFailed.Count > 0
+            ? string.Join("\n", reviewFeedback.ChecksFailed.Select(c => $"- {c}"))
+            : "(none)";
+
+        return $"## Rework round {reviewFeedback.ReworkRoundNumber} - reviewer feedback\n\n{reviewFeedback.Rationale}\n\nChecks failed:\n{checksList}";
     }
 }

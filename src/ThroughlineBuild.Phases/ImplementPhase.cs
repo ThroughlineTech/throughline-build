@@ -7,13 +7,16 @@ using ThroughlineBuild.Helpers;
 
 namespace ThroughlineBuild.Phases;
 
+public record ImplementPhaseOptions(ReviewFeedback? ReviewFeedback = null);
+
 public record ImplementResult(
     bool Success,
     string TicketId,
     string? CommitSha,
     string? BranchName,
     string? WorktreePath,
-    string? FailureReason);
+    string? FailureReason,
+    int ReworkRoundNumber = 0);
 
 public class ImplementPhase : IWorkflowPhase
 {
@@ -23,6 +26,7 @@ public class ImplementPhase : IWorkflowPhase
     private readonly BuildOptions _options;
     private readonly IGitClient _git;
     private readonly ProjectContext _project;
+    private readonly ImplementPhaseOptions _phaseOptions;
 
     public ImplementPhase(
         ITicketing ticketing,
@@ -30,7 +34,8 @@ public class ImplementPhase : IWorkflowPhase
         IEventSink events,
         BuildOptions options,
         IGitClient? gitClient = null,
-        ProjectContext? project = null)
+        ProjectContext? project = null,
+        ImplementPhaseOptions? phaseOptions = null)
     {
         _ticketing = ticketing;
         _worker = worker;
@@ -38,6 +43,7 @@ public class ImplementPhase : IWorkflowPhase
         _options = options;
         _git = gitClient ?? new ProcessGitClient();
         _project = project ?? ProjectContext.Empty;
+        _phaseOptions = phaseOptions ?? new ImplementPhaseOptions();
     }
 
     public Phase Phase => Phase.Implement;
@@ -48,10 +54,17 @@ public class ImplementPhase : IWorkflowPhase
         var ticket = await _ticketing.GetAsync(ticketId, ct).ConfigureAwait(false);
 
         // Step 2: Validate state
-        if (ticket.State != TicketState.Ready)
+        bool isRework = _phaseOptions.ReviewFeedback is not null;
+        if (!isRework && ticket.State != TicketState.Ready)
         {
             EarlyExitManifest.Write(_options.DebugCaptureDirectory, Phase.Implement.ToString(), ticketId, "ticket not in Ready state");
             return new ImplementResult(false, ticketId, null, null, null, "ticket not in Ready state");
+        }
+        if (isRework && ticket.State != TicketState.InProgress)
+        {
+            var reason = $"rework round requires ticket in InProgress state; ticket is in {ticket.State}";
+            EarlyExitManifest.Write(_options.DebugCaptureDirectory, Phase.Implement.ToString(), ticketId, reason);
+            return new ImplementResult(false, ticketId, null, null, null, reason);
         }
 
         // Step 3: Resolve base ref (origin/main with fallback to local main) and its SHA
@@ -102,7 +115,7 @@ public class ImplementPhase : IWorkflowPhase
         var repoState = new RepoState(mainSha, topLevelEntries);
 
         // Step 7: Build brief
-        var brief = ImplementBriefBuilder.Build(ticket, repoState, worktreeNames.BranchName, worktreeNames.WorktreePath, _project);
+        var brief = ImplementBriefBuilder.Build(ticket, repoState, worktreeNames.BranchName, worktreeNames.WorktreePath, _project, _phaseOptions.ReviewFeedback);
 
         // Step 8: Create worktree
         var createResult = await _git.CreateWorktreeAsync(
@@ -119,13 +132,16 @@ public class ImplementPhase : IWorkflowPhase
                 failureReason);
         }
 
-        // Step 9: Transition Ready -> InProgress
-        await _ticketing.TransitionAsync(ticketId, TicketState.InProgress, ct).ConfigureAwait(false);
-        await EmitAsync(EventKind.StateTransition, ticketId, new Dictionary<string, object>
+        // Step 9: Transition Ready -> InProgress (initial round only; rework starts already InProgress)
+        if (!isRework)
         {
-            ["from"] = "Ready",
-            ["to"] = "InProgress"
-        }, ct).ConfigureAwait(false);
+            await _ticketing.TransitionAsync(ticketId, TicketState.InProgress, ct).ConfigureAwait(false);
+            await EmitAsync(EventKind.StateTransition, ticketId, new Dictionary<string, object>
+            {
+                ["from"] = "Ready",
+                ["to"] = "InProgress"
+            }, ct).ConfigureAwait(false);
+        }
 
         // Step 10: Emit WorkerSpawn
         await EmitAsync(EventKind.WorkerSpawn, ticketId, new Dictionary<string, object>
@@ -195,7 +211,8 @@ public class ImplementPhase : IWorkflowPhase
         }, ct).ConfigureAwait(false);
 
         // Step 19: Return success
-        return new ImplementResult(true, ticketId, actualHeadSha, worktreeNames.BranchName, worktreeNames.WorktreePath, null);
+        int reworkRound = _phaseOptions.ReviewFeedback?.ReworkRoundNumber ?? 0;
+        return new ImplementResult(true, ticketId, actualHeadSha, worktreeNames.BranchName, worktreeNames.WorktreePath, null, reworkRound);
     }
 
     async Task<PhaseResult> IWorkflowPhase.RunAsync(string ticketId, string workingDirectory, CancellationToken ct)
