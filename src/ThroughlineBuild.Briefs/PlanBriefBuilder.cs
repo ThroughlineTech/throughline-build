@@ -26,7 +26,8 @@ public static class PlanBriefBuilder
             ["description_html"] = ticket.DescriptionHtml,
             ["top_level_entries"] = topLevelEntries,
             ["main_sha"] = repo.MainSha,
-            ["project_notes_section"] = projectNotesSection
+            ["project_notes_section"] = projectNotesSection,
+            ["workflow_tool"] = proj.WorkflowTool
         };
 
         var instruction = TemplateLoader.Load("plan.md").Substitute(vars);
@@ -48,7 +49,8 @@ public static class PlanBriefBuilder
                 ["project_install_command"] = proj.InstallCommand,
                 ["project_dev_command"] = proj.DevCommand,
                 ["project_plane_project_url"] = proj.PlaneProjectUrl,
-                ["project_notes"] = proj.Notes
+                ["project_notes"] = proj.Notes,
+                ["project_workflow_tool"] = proj.WorkflowTool
             });
     }
 }

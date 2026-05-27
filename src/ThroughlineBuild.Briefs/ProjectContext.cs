@@ -9,7 +9,8 @@ public record ProjectContext(
     string InstallCommand,
     string DevCommand,
     string PlaneProjectUrl,
-    string Notes)
+    string Notes,
+    string WorkflowTool)
 {
     public static ProjectContext Empty { get; } = new(
         Language: string.Empty,
@@ -20,5 +21,6 @@ public record ProjectContext(
         InstallCommand: string.Empty,
         DevCommand: string.Empty,
         PlaneProjectUrl: string.Empty,
-        Notes: string.Empty);
+        Notes: string.Empty,
+        WorkflowTool: "build");
 }

@@ -23,18 +23,20 @@ Produce a plan an implementing agent can execute without guessing. The plan must
 
 ### Investigation behaviors
 
-1. **Read project context.** `CLAUDE.md` if present, any project notes referenced above, parent ticket if any. The parent provides framing, not work - do not expand scope.
+1. **Command syntax note.** When referencing commands, use the syntax of the active workflow tool. For this project, that is: {{workflow_tool}}. If "build", use `build <phase> <TKT-ID>` when mentioning commands; if "claude-config", use `/ticket-<phase>` slash commands. This project uses the {{workflow_tool}} tool.
 
-2. **Deep-dive the code.** Use Grep, Glob, and Read aggressively from key source locations. Read relevant files end-to-end; skimming produces vague plans. Map call chains entry → business logic → data layer. Identify the interfaces, types, and tests that will be touched.
+2. **Read project context.** `CLAUDE.md` if present, any project notes referenced above, parent ticket if any. The parent provides framing, not work - do not expand scope.
 
-3. **By ticket type:**
+3. **Deep-dive the code.** Use Grep, Glob, and Read aggressively from key source locations. Read relevant files end-to-end; skimming produces vague plans. Map call chains entry -> business logic -> data layer. Identify the interfaces, types, and tests that will be touched.
+
+4. **By ticket type:**
    - **Bug:** trace the path that produces the wrong behavior; identify the actual line or contract that is wrong. "Probably something in foo module" is not a root cause.
    - **Feature:** identify where new code fits; which interfaces extend; which new files; which patterns to follow vs deliberately diverge from.
    - **Refactor:** map call sites that depend on the surface being refactored; assess whether the change is mechanical or has semantic impact.
 
-4. **Verify environment.** If the project context names build/test/install commands, run one to confirm the environment is workable. Environment gaps (broken shims, stale lockfiles) are noted in Investigation but NOT fixed as part of this plan unless they directly block the ticket's work.
+5. **Verify environment.** If the project context names build/test/install commands, run one to confirm the environment is workable. Environment gaps (broken shims, stale lockfiles) are noted in Investigation but NOT fixed as part of this plan unless they directly block the ticket's work.
 
-5. **Identify regression risks.** Which tests cover the affected code? Which user-facing flows touch it? What could break? Which downstream callers are affected?
+6. **Identify regression risks.** Which tests cover the affected code? Which user-facing flows touch it? What could break? Which downstream callers are affected?
 
 ## Output structure
 

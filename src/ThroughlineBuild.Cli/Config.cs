@@ -306,6 +306,11 @@ public static class BuildConfigLoader
         var installCommand = OptionalString(t, "install_command", string.Empty);
         var devCommand = OptionalString(t, "dev_command", string.Empty);
         var planeProjectUrl = OptionalString(t, "plane_project_url", string.Empty);
+        var workflowTool = OptionalString(t, "workflow_tool", "build");
+
+        // Validate workflow_tool value
+        if (workflowTool != "build" && workflowTool != "claude-config")
+            throw new ConfigException($"key 'workflow_tool' in [project] must be either \"build\" or \"claude-config\", got \"{workflowTool}\"");
 
         var notes = string.Empty;
         var notesFile = OptionalString(t, "notes_file", string.Empty);
@@ -341,6 +346,7 @@ public static class BuildConfigLoader
             InstallCommand: installCommand,
             DevCommand: devCommand,
             PlaneProjectUrl: planeProjectUrl,
-            Notes: notes);
+            Notes: notes,
+            WorkflowTool: workflowTool);
     }
 }

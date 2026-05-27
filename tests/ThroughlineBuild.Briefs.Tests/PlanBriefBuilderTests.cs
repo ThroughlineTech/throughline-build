@@ -168,4 +168,28 @@ public class PlanBriefBuilderTests
 
         Assert.Null(ex);
     }
+
+    [Fact]
+    public void Build_WithBuildWorkflowTool_InstructionContainsBuildSyntax()
+    {
+        var ticket = MinimalTicket();
+        var repo = MinimalRepo();
+        var project = ProjectContext.Empty with { WorkflowTool = "build" };
+
+        var brief = PlanBriefBuilder.Build(ticket, repo, project);
+
+        Assert.Contains("build", brief.Instruction.ToLower());
+    }
+
+    [Fact]
+    public void Build_WithClaudeConfigWorkflowTool_InstructionContainsSlashCommandSyntax()
+    {
+        var ticket = MinimalTicket();
+        var repo = MinimalRepo();
+        var project = ProjectContext.Empty with { WorkflowTool = "claude-config" };
+
+        var brief = PlanBriefBuilder.Build(ticket, repo, project);
+
+        Assert.Contains("/ticket-", brief.Instruction);
+    }
 }

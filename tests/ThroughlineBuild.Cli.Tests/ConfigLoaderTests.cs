@@ -231,4 +231,72 @@ log_directory = ".build/events"
             File.Delete(path);
         }
     }
+
+    [Fact]
+    public void Load_ProjectSectionMissing_DefaultsWorkflowToolToBuild()
+    {
+        var path = WriteToml(ValidToml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            Assert.Equal("build", config.Project.WorkflowTool);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_ProjectWorkflowToolSetToBuild_ParsesSuccessfully()
+    {
+        var toml = ValidToml + "\n[project]\nworkflow_tool = \"build\"";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            Assert.Equal("build", config.Project.WorkflowTool);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_ProjectWorkflowToolSetToClaudeConfig_ParsesSuccessfully()
+    {
+        var toml = ValidToml + "\n[project]\nworkflow_tool = \"claude-config\"";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            Assert.Equal("claude-config", config.Project.WorkflowTool);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_ProjectWorkflowToolSetToInvalidValue_ThrowsConfigException()
+    {
+        var toml = ValidToml + "\n[project]\nworkflow_tool = \"vibes\"";
+        var path = WriteToml(toml);
+        try
+        {
+            var ex = Assert.Throws<ConfigException>(() => BuildConfigLoader.Load(path));
+            Assert.Contains("workflow_tool", ex.Message);
+            Assert.Contains("build", ex.Message);
+            Assert.Contains("claude-config", ex.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

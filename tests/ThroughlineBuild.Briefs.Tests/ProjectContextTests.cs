@@ -98,7 +98,8 @@ public class ProjectContextTests
             InstallCommand: "npm install",
             DevCommand: "npm run dev",
             PlaneProjectUrl: "https://plane.example/",
-            Notes: "## extra notes");
+            Notes: "## extra notes",
+            WorkflowTool: "claude-config");
 
         var brief = PlanBriefBuilder.Build(ticket, repo, proj);
 
@@ -111,5 +112,6 @@ public class ProjectContextTests
         Assert.Equal("npm run dev", brief.Context["project_dev_command"]);
         Assert.Equal("https://plane.example/", brief.Context["project_plane_project_url"]);
         Assert.Equal("## extra notes", brief.Context["project_notes"]);
+        Assert.Equal("claude-config", brief.Context["project_workflow_tool"]);
     }
 }
