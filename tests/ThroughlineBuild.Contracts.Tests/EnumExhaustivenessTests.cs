@@ -27,7 +27,8 @@ public class EnumExhaustivenessTests
     {
         var expected = new[] {
             EventKind.StateTransition, EventKind.LlmCall, EventKind.WorkerSpawn,
-            EventKind.VerifierVerdict, EventKind.GateFailure, EventKind.TicketWrite
+            EventKind.VerifierVerdict, EventKind.GateFailure, EventKind.TicketWrite,
+            EventKind.ChainStart, EventKind.ChainEnd, EventKind.ReworkRound
         };
         Assert.Equal(expected.OrderBy(x => (int)x), Enum.GetValues<EventKind>().OrderBy(x => (int)x));
     }
