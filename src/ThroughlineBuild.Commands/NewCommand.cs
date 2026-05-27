@@ -19,6 +19,14 @@ public sealed class NewCommand : ITicketCommand
 
     public async Task<CommandResult> ExecuteAsync(TicketCommandContext ctx, CancellationToken ct)
     {
+        // --print-template: emit the body template to stdout and return success immediately.
+        if (ctx.Args.TryGetValue("print_template", out var printTemplateFlag) && printTemplateFlag == "true")
+        {
+            var template = BodyTemplateLoader.Load();
+            Console.Out.Write(template);
+            return new CommandResult(true, string.Empty);
+        }
+
         // Extract body_path from context (required).
         if (!ctx.Args.TryGetValue("body_path", out var bodyPath) || string.IsNullOrWhiteSpace(bodyPath))
         {

@@ -11,6 +11,7 @@ Usage:
   build review <ticket-id> [--debug|--quiet] [--summary-json]     Run the review phase for a ticket
   build ship <ticket-id> [--debug] [--summary-json]               Ship a reviewed ticket (local fast-forward merge; no push to remote); --debug accepted but is a no-op (ship has no worker subprocess)
   build new <body-path> [--title "..."] [--type "..."] [--label "..."]* [--debug]  Create a new ticket from a body file
+  build new --print-template                                                        Print the body template to stdout for redirection into a draft file
   build amend <ticket-id> [--size S|M|L] [--note "..."]           Amend an existing ticket (at least one flag required)
   build close <ticket-id> <reason>                                Close a ticket (reason required)
   build defer <ticket-id> <reason>                                Defer a ticket (reason required)
