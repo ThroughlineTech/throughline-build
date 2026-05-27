@@ -33,6 +33,9 @@ public class ClaudeCodeAgent : IWorkerAgent
         var args = new List<string> { "--print", "--verbose", "--output-format", "stream-json" };
         if (options.AllowedTools is { Count: > 0 })
             args.AddRange(new[] { "--allowedTools", string.Join(",", options.AllowedTools) });
+        var modelArg = NormalizeModel(_options.Model);
+        if (modelArg is not null)
+            args.AddRange(new[] { "--model", modelArg });
         foreach (var extra in _options.ExtraArgs)
             args.Add(extra);
 
@@ -282,6 +285,21 @@ public class ClaudeCodeAgent : IWorkerAgent
         }
 
         return metadata;
+    }
+
+    // Strips the "anthropic:" provider prefix from a configured model id so the
+    // bare id (e.g. "claude-sonnet-4-6") can be passed to `claude --model`. Returns
+    // null when the configured value is null/empty so callers can skip emitting
+    // the flag and let the Claude Code CLI use its own default.
+    internal static string? NormalizeModel(string? configuredModel)
+    {
+        if (string.IsNullOrWhiteSpace(configuredModel))
+            return null;
+        var trimmed = configuredModel.Trim();
+        const string anthropicPrefix = "anthropic:";
+        if (trimmed.StartsWith(anthropicPrefix, StringComparison.OrdinalIgnoreCase))
+            trimmed = trimmed.Substring(anthropicPrefix.Length);
+        return trimmed.Length == 0 ? null : trimmed;
     }
 
     internal void ConfigureEnvironment(ProcessStartInfo psi, WorkerOptions options)
