@@ -96,7 +96,7 @@ public class ImplementBriefBuilderReworkTests
 
         var brief = ImplementBriefBuilder.Build(MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: feedback);
 
-        Assert.StartsWith("## Rework round 1 - reviewer feedback", brief.Context["review_feedback_section"]);
+        Assert.Contains("## Rework round 1 - reviewer feedback", brief.Context["review_feedback_section"]);
     }
 
     [Fact]

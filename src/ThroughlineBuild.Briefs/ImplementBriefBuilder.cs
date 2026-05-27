@@ -71,6 +71,6 @@ public static class ImplementBriefBuilder
             ? string.Join("\n", reviewFeedback.ChecksFailed.Select(c => $"- {c}"))
             : "(none)";
 
-        return $"## Rework round {reviewFeedback.ReworkRoundNumber} - reviewer feedback\n\n{reviewFeedback.Rationale}\n\nChecks failed:\n{checksList}";
+        return $"\n## Rework round {reviewFeedback.ReworkRoundNumber} - reviewer feedback\n\n{reviewFeedback.Rationale}\n\nChecks failed:\n{checksList}";
     }
 }

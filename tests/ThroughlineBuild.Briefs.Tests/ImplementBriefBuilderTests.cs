@@ -174,4 +174,19 @@ public class ImplementBriefBuilderTests
 
         Assert.Null(ex);
     }
+
+    [Fact]
+    public void Build_MatchesSnapshot_Rework()
+    {
+        var expected = SnapshotLoader.Load("implement-rework.txt");
+
+        var brief = ImplementBriefBuilder.Build(
+            SnapshotFixtures.Ticket(),
+            SnapshotFixtures.Repo(),
+            SnapshotFixtures.FixtureBranch,
+            SnapshotFixtures.FixtureWorktree,
+            reviewFeedback: SnapshotFixtures.ReworkFeedback());
+
+        Assert.Equal(expected, brief.Instruction);
+    }
 }
