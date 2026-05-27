@@ -648,7 +648,8 @@ static async Task<int> RunAsync(string[] args)
             shipPhaseFactory,
             workingDirectory: cwd);
 
-        var chainCommand = new ChainCommand(chainPhase, ticketing, config2.Project.PlaneProjectUrl);
+        var chainRunner = new DefaultChainRunner(chainPhase);
+        var chainCommand = new ChainCommand(chainRunner, ticketing, config2.Project.PlaneProjectUrl);
         var chainCtx = new TicketCommandContext(ticketId, new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["debug"] = debugMode ? "true" : "false"

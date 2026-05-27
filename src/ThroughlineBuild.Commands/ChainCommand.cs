@@ -2,24 +2,23 @@ using System.Text;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Helpers;
-using ThroughlineBuild.Phases;
 
 namespace ThroughlineBuild.Commands;
 
 /// <summary>
-/// Implements the "build chain <ticket-id>" command.
-/// Runs ChainPhase, streams per-phase output to stdout as phases complete,
-/// and prints a final result summary with operator-triage suggestions.
+/// Implements the "build chain &lt;ticket-id&gt;" command.
+/// Uses IChainRunner to stream per-phase output to stdout as each phase completes,
+/// then prints a final result summary with operator-triage suggestions.
 /// </summary>
 public sealed class ChainCommand : ITicketCommand
 {
-    private readonly ChainPhase _chainPhase;
+    private readonly IChainRunner _runner;
     private readonly ITicketing _ticketing;
     private readonly string _planeProjectUrl;
 
-    public ChainCommand(ChainPhase chainPhase, ITicketing ticketing, string planeProjectUrl)
+    public ChainCommand(IChainRunner runner, ITicketing ticketing, string planeProjectUrl)
     {
-        _chainPhase = chainPhase;
+        _runner = runner;
         _ticketing = ticketing;
         _planeProjectUrl = planeProjectUrl;
     }
@@ -61,10 +60,12 @@ public sealed class ChainCommand : ITicketCommand
         ChainResult result;
         try
         {
-            using var cts = new CancellationTokenSource();
-            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
-            var options = new ChainPhaseOptions(ticketId, debugMode);
-            result = await _chainPhase.RunAsync(options, cts.Token).ConfigureAwait(false);
+            // Use the ct passed in from Program.cs - no duplicate CancelKeyPress registration.
+            result = await _runner.RunAsync(
+                ticketId,
+                debugMode,
+                step => Console.WriteLine(FormatStepLine(ticketId, step)),
+                ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -81,13 +82,6 @@ public sealed class ChainCommand : ITicketCommand
 
         // Store result for exit code mapping.
         LastChainResult = result;
-
-        // Format and output each step.
-        foreach (var step in result.Steps)
-        {
-            var formatLine = FormatStepLine(ticketId, step);
-            Console.WriteLine(formatLine);
-        }
 
         // Write final chain completion/stop line and operator triage.
         var finalLine = FormatFinalLine(ticketId, result);
@@ -110,7 +104,7 @@ public sealed class ChainCommand : ITicketCommand
             string.Empty);
     }
 
-    private static string FormatStepLine(string ticketId, ChainStep step)
+    public static string FormatStepLine(string ticketId, ChainStep step)
     {
         var statusStr = step.Status switch
         {
