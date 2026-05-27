@@ -534,6 +534,101 @@ public class ShipPhaseTests
         Assert.Contains(workingDir, dirtyPaths);
     }
 
+    [Fact]
+    public async Task RunAsync_ExePathInsideWorktree_FailsPreFlightBeforeFetch()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        // The feature worktree canonical path is "/some/worktree/path"
+        var exePath = "/some/worktree/path/bin/build.exe";
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git),
+            processPathProvider: () => exePath);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ShipFailureStage.PreFlight, result.FailedAt);
+        Assert.Equal(0, git.FetchCallCount);
+        Assert.Equal(0, git.RebaseCallCount);
+        Assert.Empty(ticketing.Transitions);
+        Assert.Single(ticketing.Comments);
+        Assert.Contains("ship_blocked", ticketing.Comments[0].html);
+        Assert.Contains(exePath, result.FailureReason ?? "");
+
+        var gates = events.Events.Where(e => e.Kind == EventKind.GateFailure).ToList();
+        Assert.Single(gates);
+        Assert.Equal("pre_flight_exe_in_worktree", gates[0].Data["kind"].ToString());
+        Assert.Equal(exePath, gates[0].Data["exe_path"].ToString());
+    }
+
+    [Fact]
+    public async Task RunAsync_ExePathOutsideWorktree_ProceedsNormally()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var exePath = "/usr/local/bin/build.exe";
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git),
+            processPathProvider: () => exePath);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(MergedSha, result.MergedSha);
+        Assert.Single(ticketing.Transitions);
+        Assert.Equal(TicketState.Done, ticketing.Transitions[0].state);
+    }
+
+    [Fact]
+    public async Task RunAsync_NullExePath_ProceedsNormally()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git),
+            processPathProvider: () => null);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(MergedSha, result.MergedSha);
+        Assert.Single(ticketing.Transitions);
+        Assert.Equal(TicketState.Done, ticketing.Transitions[0].state);
+    }
+
+    [Fact]
+    public async Task RunAsync_ExePathInSiblingDir_ProceedsNormally()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        // The feature worktree is at "/some/worktree/path" but the exe is at
+        // "/some/worktree/path-sibling/build.exe" - StartsWith must not match
+        var exePath = "/some/worktree/path-sibling/build.exe";
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git),
+            processPathProvider: () => exePath);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(MergedSha, result.MergedSha);
+        Assert.Single(ticketing.Transitions);
+        Assert.Equal(TicketState.Done, ticketing.Transitions[0].state);
+    }
+
     // ---------- Fakes ----------
 
     private sealed class FakeTicketing : ITicketing

@@ -44,6 +44,7 @@ public class ShipPhase : IWorkflowPhase
     private readonly AutomatedChecksRunner _checksRunner;
     private readonly ConflictMarkerScannerFn _markerScanner;
     private readonly WorktreeDecrufter _decrufter;
+    private readonly Func<string?> _processPathProvider;
 
     public ShipPhase(
         ITicketing ticketing,
@@ -53,7 +54,8 @@ public class ShipPhase : IWorkflowPhase
         IGitClient? gitClient = null,
         AutomatedChecksRunner? checksRunner = null,
         ConflictMarkerScannerFn? markerScanner = null,
-        WorktreeDecrufter? decrufter = null)
+        WorktreeDecrufter? decrufter = null,
+        Func<string?>? processPathProvider = null)
     {
         _ticketing = ticketing;
         _events = events;
@@ -63,6 +65,7 @@ public class ShipPhase : IWorkflowPhase
         _checksRunner = checksRunner ?? new AutomatedChecksRunner();
         _markerScanner = markerScanner ?? ConflictMarkerScanner.ScanAsync;
         _decrufter = decrufter ?? new WorktreeDecrufter(_git);
+        _processPathProvider = processPathProvider ?? (() => Environment.ProcessPath);
     }
 
     public Phase Phase => Phase.Ship;
@@ -111,6 +114,28 @@ public class ShipPhase : IWorkflowPhase
             return (new ShipResult(false, ticketId, null,
                 $"feature worktree not found at {worktreeNames.WorktreePath}",
                 ShipFailureStage.StateCheck), worktreeNames, null);
+
+        // Step 3a: Pre-flight exe-in-worktree check
+        var exePath = _processPathProvider();
+        if (exePath is not null)
+        {
+            var exeFull = Path.GetFullPath(exePath);
+            var wtFull = Path.GetFullPath(canonicalWorktreePath);
+            if (!wtFull.EndsWith(Path.DirectorySeparatorChar))
+                wtFull += Path.DirectorySeparatorChar;
+            var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            if (exeFull.StartsWith(wtFull, cmp))
+            {
+                await _ticketing.CreateCommentAsync(ticketId,
+                    $"<p><strong>ship_blocked:</strong> build.exe is running from inside the worktree being rebased ({exePath}); copy the binary to a location outside the worktree and re-run from there</p>", ct).ConfigureAwait(false);
+                await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+                {
+                    ["kind"] = "pre_flight_exe_in_worktree",
+                    ["exe_path"] = exePath
+                }, ct).ConfigureAwait(false);
+                return (new ShipResult(false, ticketId, null, $"build.exe is running from inside the worktree being rebased ({exePath}); copy the binary to a location outside the worktree and re-run from there", ShipFailureStage.PreFlight), worktreeNames, null);
+            }
+        }
 
         // Step 3b: Pre-flight dirty check - both feature and main worktrees must be clean
         var featureChanges = await _git.GetTrackedChangesAsync(canonicalWorktreePath, ct).ConfigureAwait(false);
