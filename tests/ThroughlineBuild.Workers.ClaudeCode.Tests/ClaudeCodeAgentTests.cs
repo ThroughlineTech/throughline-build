@@ -742,8 +742,9 @@ public class ClaudeCodeAgentLlmUsageTests
 
         var metadata = ClaudeCodeAgent.BuildLlmUsageMetadata(envelope, wallClockMs);
 
-        Assert.Equal(6, metadata.Count);
+        Assert.Equal(7, metadata.Count);
         Assert.Null(metadata["model"]);
+        Assert.Equal("anthropic", metadata["vendor"]);
         Assert.Equal(10, metadata["input_tokens"]);
         Assert.Equal(20, metadata["output_tokens"]);
         Assert.Equal(5, metadata["cache_read_tokens"]);
@@ -766,14 +767,112 @@ public class ClaudeCodeAgentLlmUsageTests
 
         var metadata = ClaudeCodeAgent.BuildLlmUsageMetadata(envelope, wallClockMs);
 
-        Assert.Equal(7, metadata.Count);
+        Assert.Equal(8, metadata.Count);
         Assert.Null(metadata["model"]);
+        Assert.Equal("anthropic", metadata["vendor"]);
         Assert.Equal(0, metadata["input_tokens"]);
         Assert.Equal(0, metadata["output_tokens"]);
         Assert.Null(metadata["cache_read_tokens"]);
         Assert.Null(metadata["cache_create_tokens"]);
         Assert.Equal(5678L, metadata["wall_clock_ms"]);
         Assert.True((bool)metadata["partial"]);
+    }
+
+    [Fact]
+    public void BuildLlmUsageMetadata_WithModel_PopulatesModelAndVendor()
+    {
+        var envelope = new ClaudeCodeJsonEnvelope(
+            Type: "result",
+            Subtype: "success",
+            IsError: false,
+            Result: "some result",
+            Usage: new ClaudeCodeUsage(InputTokens: 1, OutputTokens: 1, CacheReadInputTokens: null, CacheCreationInputTokens: null)
+        );
+
+        var metadata = ClaudeCodeAgent.BuildLlmUsageMetadata(envelope, 0, "claude-opus-4-6");
+
+        Assert.Equal("claude-opus-4-6", metadata["model"]);
+        Assert.Equal("anthropic", metadata["vendor"]);
+    }
+}
+
+public class ClaudeCodeAgentModelExtractionTests
+{
+    [Fact]
+    public void TryExtractModelFromStream_SystemEventPresent_ReturnsModel()
+    {
+        var systemLine = "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"abc\",\"model\":\"claude-opus-4-6\"}";
+        var resultLine = "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"hi\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}";
+        var stdout = systemLine + "\n" + resultLine + "\n";
+
+        var model = ClaudeCodeAgent.TryExtractModelFromStream(stdout);
+
+        Assert.Equal("claude-opus-4-6", model);
+    }
+
+    [Fact]
+    public void TryExtractModelFromStream_NoSystemEvent_ReturnsNull()
+    {
+        var resultLine = "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"hi\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}";
+
+        var model = ClaudeCodeAgent.TryExtractModelFromStream(resultLine + "\n");
+
+        Assert.Null(model);
+    }
+
+    [Fact]
+    public void TryExtractModelFromStream_EmptyStdout_ReturnsNull()
+    {
+        var model = ClaudeCodeAgent.TryExtractModelFromStream(string.Empty);
+
+        Assert.Null(model);
+    }
+
+    [Fact]
+    public void TryExtractModelFromStream_HelloFixture_ExtractsModel()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", "stream-json-hello.ndjson");
+        Assert.True(File.Exists(path), $"Fixture missing: {path}");
+        var stdout = File.ReadAllText(path);
+
+        var model = ClaudeCodeAgent.TryExtractModelFromStream(stdout);
+
+        Assert.Equal("claude-opus-4-6", model);
+    }
+
+    [Fact]
+    public void ParseStdoutEnvelope_WithSystemEvent_PopulatesModelInLlmUsage()
+    {
+        var systemLine = "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"abc\",\"model\":\"claude-sonnet-4-6\"}";
+        var workerResult =
+            "WORKER_RESULT\n" +
+            "{\"status\":\"Ok\",\"summary\":\"done\",\"files_changed\":[],\"failure_reason\":null,\"metadata\":{}}\n";
+        var resultLine = $"{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":{System.Text.Json.JsonSerializer.Serialize(workerResult)},\"usage\":{{\"input_tokens\":1,\"output_tokens\":1,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}}";
+        var stdout = systemLine + "\n" + resultLine + "\n";
+
+        var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 0, stderr: "");
+
+        Assert.Equal(Status.Ok, result.Status);
+        Assert.True(result.Metadata.ContainsKey("llm_usage"));
+        var llmUsage = (System.Collections.Generic.Dictionary<string, object>)result.Metadata["llm_usage"];
+        Assert.Equal("claude-sonnet-4-6", llmUsage["model"]);
+        Assert.Equal("anthropic", llmUsage["vendor"]);
+    }
+
+    [Fact]
+    public void ParseStdoutEnvelope_FallbackModel_UsedWhenNoSystemEvent()
+    {
+        var workerResult =
+            "WORKER_RESULT\n" +
+            "{\"status\":\"Ok\",\"summary\":\"done\",\"files_changed\":[],\"failure_reason\":null,\"metadata\":{}}\n";
+        var resultLine = $"{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":{System.Text.Json.JsonSerializer.Serialize(workerResult)},\"usage\":{{\"input_tokens\":1,\"output_tokens\":1,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}}";
+
+        var result = ClaudeCodeAgent.ParseStdoutEnvelope(resultLine + "\n", exitCode: 0, stderr: "", fallbackModel: "claude-haiku-3-5");
+
+        Assert.Equal(Status.Ok, result.Status);
+        var llmUsage = (System.Collections.Generic.Dictionary<string, object>)result.Metadata["llm_usage"];
+        Assert.Equal("claude-haiku-3-5", llmUsage["model"]);
+        Assert.Equal("anthropic", llmUsage["vendor"]);
     }
 }
 

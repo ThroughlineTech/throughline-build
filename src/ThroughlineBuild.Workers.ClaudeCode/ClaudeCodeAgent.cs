@@ -112,7 +112,14 @@ public class ClaudeCodeAgent : IWorkerAgent
         var stdout = stdoutBuilder.ToString();
         var stderr = stderrBuilder.ToString();
 
-        var result = ParseStdoutEnvelope(stdout, process.ExitCode, stderr, stopwatch.ElapsedMilliseconds);
+        // Strip vendor prefix from DefaultModel (e.g. "anthropic:claude-sonnet-4-6" -> "claude-sonnet-4-6")
+        // so the fallback model matches the bare form reported by the stream system event.
+        var rawDefaultModel = _options.DefaultModel;
+        var fallbackModel = rawDefaultModel is not null && rawDefaultModel.Contains(':')
+            ? rawDefaultModel.Substring(rawDefaultModel.IndexOf(':') + 1)
+            : rawDefaultModel;
+
+        var result = ParseStdoutEnvelope(stdout, process.ExitCode, stderr, stopwatch.ElapsedMilliseconds, fallbackModel);
 
         if (options.DebugCaptureDirectory is not null)
         {
@@ -123,6 +130,34 @@ public class ClaudeCodeAgent : IWorkerAgent
         }
 
         return result;
+    }
+
+    // Scans the NDJSON stream for the first "system" event and returns its
+    // "model" field. The system event is emitted as the first line of every
+    // --output-format stream-json run and carries the actual model used.
+    // Returns null if no system event is found or if the model field is absent.
+    internal static string? TryExtractModelFromStream(string stdout)
+    {
+        var lines = stdout.Split('\n');
+        foreach (var line in lines)
+        {
+            var trimmed = line.Trim();
+            if (trimmed.Length == 0) continue;
+            // Fast path: only try to parse lines that look like system events.
+            if (!trimmed.Contains("\"type\":\"system\""))
+                continue;
+            try
+            {
+                var ev = JsonSerializer.Deserialize(trimmed, ClaudeCodeJsonContext.Default.ClaudeCodeSystemEvent);
+                if (ev?.Type == "system" && ev.Model is not null)
+                    return ev.Model;
+            }
+            catch (JsonException)
+            {
+                continue;
+            }
+        }
+        return null;
     }
 
     // Try to extract the terminal "result" envelope from stdout. Returns null when
@@ -209,7 +244,7 @@ public class ClaudeCodeAgent : IWorkerAgent
     // line is type=result). Single-object parse is tried first to preserve
     // back-compat with the legacy envelope tests; on JsonException we fall back
     // to scanning the NDJSON stream for the last line whose type=result.
-    internal static WorkerResult ParseStdoutEnvelope(string stdout, int exitCode, string stderr, long wallClockMs = 0)
+    internal static WorkerResult ParseStdoutEnvelope(string stdout, int exitCode, string stderr, long wallClockMs = 0, string? fallbackModel = null)
     {
         ClaudeCodeJsonEnvelope? envelope = TryParseEnvelopeFromStdout(stdout, out var parseError);
         if (envelope is null)
@@ -234,13 +269,16 @@ public class ClaudeCodeAgent : IWorkerAgent
                 $"Envelope result field is null. Subtype: {envelope.Subtype}. Stderr: {stderr}", new Dictionary<string, object>());
         }
 
+        // Extract model from the NDJSON system event; fall back to the configured default.
+        var model = TryExtractModelFromStream(stdout) ?? fallbackModel;
+
         // Route the inner result text through the existing WORKER_RESULT marker parser.
         var outcome = WorkerResultParser.TryParse(envelope.Result);
         if (outcome.Result != null)
         {
             // Merge llm_usage metadata on success path
             var mergedMetadata = new Dictionary<string, object>(outcome.Result.Metadata);
-            mergedMetadata["llm_usage"] = BuildLlmUsageMetadata(envelope, wallClockMs);
+            mergedMetadata["llm_usage"] = BuildLlmUsageMetadata(envelope, wallClockMs, model);
             return outcome.Result with { Metadata = mergedMetadata };
         }
 
@@ -259,12 +297,14 @@ public class ClaudeCodeAgent : IWorkerAgent
     }
 
     // Builds the llm_usage metadata dictionary from the Claude Code JSON envelope.
-    // Returns a dictionary with snake_case keys including model, token counts, cache fields, and wall_clock_ms.
-    internal static Dictionary<string, object> BuildLlmUsageMetadata(ClaudeCodeJsonEnvelope envelope, long wallClockMs)
+    // Returns a dictionary with snake_case keys including model, vendor, token counts, cache fields, and wall_clock_ms.
+    // anthropic_request_id is not included: the Claude Code CLI does not expose it in the stream envelope.
+    internal static Dictionary<string, object> BuildLlmUsageMetadata(ClaudeCodeJsonEnvelope envelope, long wallClockMs, string? model = null)
     {
         var metadata = new Dictionary<string, object>
         {
-            { "model", null! },
+            { "model", model! },
+            { "vendor", "anthropic" },
             { "wall_clock_ms", wallClockMs }
         };
 

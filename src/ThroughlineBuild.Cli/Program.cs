@@ -1,4 +1,5 @@
 using System.Net.Http;
+using System.Reflection;
 using ThroughlineBuild.Anthropic;
 using ThroughlineBuild.Cli;
 using ThroughlineBuild.Commands;
@@ -102,6 +103,13 @@ static async Task<int> RunAsync(string[] args)
 
     string ResolveLogDir(string raw) => BuildConfigLoader.ResolveLogDirectory(configPath2, raw, cwd2);
 
+    var buildVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
+    var sessionContext = new SessionContext(
+        ProjectId: config2.Ticketing.PlaneProjectId,
+        ProjectName: string.IsNullOrEmpty(config2.Ticketing.PlaneProjectName) ? null : config2.Ticketing.PlaneProjectName,
+        WorkspaceSlug: config2.Ticketing.PlaneWorkspaceSlug,
+        BuildVersion: buildVersion);
+
     if (verb == "amend" || verb == "close" || verb == "defer" || verb == "reopen")
     {
         var sessionId2 = Guid.NewGuid().ToString("N");
@@ -118,7 +126,7 @@ static async Task<int> RunAsync(string[] args)
         {
             BaseDirectory = ResolveLogDir(config2.Events.LogDirectory),
             SessionId = sessionId2
-        });
+        }, sessionContext);
         var eventSink2 = new RecordingEventSink(jsonlEventSink2);
 
         var registry = new TicketCommandRegistry();
@@ -216,13 +224,14 @@ static async Task<int> RunAsync(string[] args)
     {
         ExecutablePath = config2.Workers.ClaudeCodeExecutable,
         MaxOutputTokens = config2.Workers.MaxOutputTokens,
-        Model = config2.Llm.DefaultModel
+        Model = config2.Llm.DefaultModel,
+        DefaultModel = config2.Llm.DefaultModel
     });
     await using var jsonlEventSink = new JsonlEventSink(new EventLogOptions
     {
         BaseDirectory = ResolveLogDir(config2.Events.LogDirectory),
         SessionId = sessionId
-    });
+    }, sessionContext);
     // Digest is default-on when stderr is a TTY and the user has not opted out
     // via --quiet or replaced it with the --debug raw firehose. When stderr is
     // redirected (e.g. 2>err.log or piped to tee), the digest is suppressed to

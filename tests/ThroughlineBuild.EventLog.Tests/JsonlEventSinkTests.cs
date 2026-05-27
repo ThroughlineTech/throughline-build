@@ -254,3 +254,133 @@ public class JsonlEventSinkTests
         }
     }
 }
+
+public class JsonlEventSinkSessionContextTests
+{
+    private static WorkflowEvent MakeEvent(string sessionId = "test-session") => new WorkflowEvent(
+        SessionId: sessionId,
+        Timestamp: DateTimeOffset.UtcNow,
+        Kind: EventKind.StateTransition,
+        TicketId: "TLB-147",
+        Phase: Phase.Plan,
+        Data: new Dictionary<string, object> { { "from", "Backlog" }, { "to", "Ready" } });
+
+    [Fact]
+    public async Task EmitAsync_WithSessionContext_WritesAllFourSessionFields()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var options = new EventLogOptions { BaseDirectory = tempDir, SessionId = "test-ctx" };
+        var session = new SessionContext("proj-uuid-123", "My Project", "my-workspace", "1.2.3");
+
+        try
+        {
+            await using var sink = new JsonlEventSink(options, session);
+            await sink.EmitAsync(MakeEvent("test-ctx"), CancellationToken.None);
+            await sink.FlushAsync(CancellationToken.None);
+
+            var line = File.ReadAllLines(Path.Combine(tempDir, "test-ctx.jsonl"))[0];
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+
+            Assert.Equal("proj-uuid-123", root.GetProperty("project_id").GetString());
+            Assert.Equal("My Project", root.GetProperty("project_name").GetString());
+            Assert.Equal("my-workspace", root.GetProperty("workspace_slug").GetString());
+            Assert.Equal("1.2.3", root.GetProperty("build_version").GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EmitAsync_WithSessionContext_PreservesExistingPascalCaseFieldNames()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var options = new EventLogOptions { BaseDirectory = tempDir, SessionId = "test-pascal" };
+        var session = new SessionContext("pid", "Name", "slug", "1.0.0");
+
+        try
+        {
+            await using var sink = new JsonlEventSink(options, session);
+            await sink.EmitAsync(MakeEvent("test-pascal"), CancellationToken.None);
+            await sink.FlushAsync(CancellationToken.None);
+
+            var line = File.ReadAllLines(Path.Combine(tempDir, "test-pascal.jsonl"))[0];
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+
+            // Original 6 fields must still be PascalCase
+            Assert.True(root.TryGetProperty("SessionId", out _), "SessionId must be PascalCase");
+            Assert.True(root.TryGetProperty("Timestamp", out _), "Timestamp must be PascalCase");
+            Assert.True(root.TryGetProperty("Kind", out _), "Kind must be PascalCase");
+            Assert.True(root.TryGetProperty("TicketId", out _), "TicketId must be PascalCase");
+            Assert.True(root.TryGetProperty("Phase", out _), "Phase must be PascalCase");
+            Assert.True(root.TryGetProperty("Data", out _), "Data must be PascalCase");
+            // snake_case variants must NOT be present for the original fields
+            Assert.False(root.TryGetProperty("session_id", out _), "session_id must not appear");
+            Assert.False(root.TryGetProperty("ticket_id", out _), "ticket_id must not appear");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EmitAsync_WithoutSessionContext_DoesNotWriteSessionFields()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var options = new EventLogOptions { BaseDirectory = tempDir, SessionId = "test-no-ctx" };
+
+        try
+        {
+            // No session context - null default
+            await using var sink = new JsonlEventSink(options);
+            await sink.EmitAsync(MakeEvent("test-no-ctx"), CancellationToken.None);
+            await sink.FlushAsync(CancellationToken.None);
+
+            var line = File.ReadAllLines(Path.Combine(tempDir, "test-no-ctx.jsonl"))[0];
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+
+            Assert.False(root.TryGetProperty("project_id", out _), "project_id must be absent when no SessionContext");
+            Assert.False(root.TryGetProperty("project_name", out _), "project_name must be absent when no SessionContext");
+            Assert.False(root.TryGetProperty("workspace_slug", out _), "workspace_slug must be absent when no SessionContext");
+            Assert.False(root.TryGetProperty("build_version", out _), "build_version must be absent when no SessionContext");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EmitAsync_SessionContextWithNullProjectName_OmitsProjectName()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var options = new EventLogOptions { BaseDirectory = tempDir, SessionId = "test-null-name" };
+        // ProjectName is null (e.g. config key absent)
+        var session = new SessionContext("proj-id", null, "my-slug", "2.0.0");
+
+        try
+        {
+            await using var sink = new JsonlEventSink(options, session);
+            await sink.EmitAsync(MakeEvent("test-null-name"), CancellationToken.None);
+            await sink.FlushAsync(CancellationToken.None);
+
+            var line = File.ReadAllLines(Path.Combine(tempDir, "test-null-name.jsonl"))[0];
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+
+            Assert.True(root.TryGetProperty("project_id", out _));
+            Assert.False(root.TryGetProperty("project_name", out _), "project_name must be absent when null");
+            Assert.True(root.TryGetProperty("workspace_slug", out _));
+            Assert.True(root.TryGetProperty("build_version", out _));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+}

@@ -11,11 +11,13 @@ public sealed class JsonlEventSink : IEventSink, IAsyncDisposable
     private FileStream? _stream;
     private bool _opened;
     private readonly EventLogOptions _options;
+    private readonly SessionContext? _session;
     private static readonly byte[] Newline = Encoding.UTF8.GetBytes("\n");
 
-    public JsonlEventSink(EventLogOptions options)
+    public JsonlEventSink(EventLogOptions options, SessionContext? session = null)
     {
         _options = options;
+        _session = session;
     }
 
     // Caller must already hold _lock before calling this method.
@@ -33,7 +35,20 @@ public sealed class JsonlEventSink : IEventSink, IAsyncDisposable
 
     public async Task EmitAsync(WorkflowEvent ev, CancellationToken ct)
     {
-        var json = JsonSerializer.Serialize(ev, typeof(WorkflowEvent), EventLogJsonContext.Default);
+        var dto = new EventLineDto
+        {
+            SessionId = ev.SessionId,
+            Timestamp = ev.Timestamp,
+            Kind = ev.Kind,
+            TicketId = ev.TicketId,
+            Phase = ev.Phase,
+            Data = ev.Data,
+            ProjectId = _session?.ProjectId,
+            ProjectName = _session?.ProjectName,
+            WorkspaceSlug = _session?.WorkspaceSlug,
+            BuildVersion = _session?.BuildVersion
+        };
+        var json = JsonSerializer.Serialize(dto, typeof(EventLineDto), EventLogJsonContext.Default);
         var bytes = Encoding.UTF8.GetBytes(json);
 
         await _lock.WaitAsync(ct);

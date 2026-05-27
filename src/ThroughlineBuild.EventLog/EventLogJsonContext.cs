@@ -4,6 +4,7 @@ using ThroughlineBuild.Contracts.Models;
 namespace ThroughlineBuild.EventLog;
 
 [JsonSerializable(typeof(WorkflowEvent))]
+[JsonSerializable(typeof(EventLineDto))]
 [JsonSerializable(typeof(Dictionary<string, object>))]
 [JsonSerializable(typeof(Dictionary<string, string>))]
 [JsonSerializable(typeof(int))]

@@ -12,6 +12,7 @@ public record TicketingConfig(
     string PlaneProjectId,
     string PlaneApiTokenEnv,
     string PlaneProjectIdentifier = "",
+    string PlaneProjectName = "",
     string? PlaneApiToken = null);
 
 public record LlmConfig(
@@ -181,6 +182,7 @@ public static class BuildConfigLoader
             PlaneProjectId: RequireString(t, "ticketing", "plane_project_id"),
             PlaneApiTokenEnv: OptionalString(t, "plane_api_token_env", "PLANE_API_TOKEN"),
             PlaneProjectIdentifier: OptionalString(t, "plane_project_identifier", string.Empty),
+            PlaneProjectName: OptionalString(t, "plane_project_name", string.Empty),
             PlaneApiToken: OptionalString(t, "plane_api_token", string.Empty) is var tok && tok.Length > 0 ? tok : null);
     }
 
