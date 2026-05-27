@@ -11,8 +11,15 @@ Usage:
   build review <ticket-id> [--debug|--quiet] [--summary-json]     Run the review phase for a ticket
   build ship <ticket-id> [--debug] [--summary-json]               Ship a reviewed ticket (local fast-forward merge; no push to remote); --debug accepted but is a no-op (ship has no worker subprocess)
   build chain <ticket-id> [--debug]                               Run the full chain (plan -> implement -> review -> ship cycle) for a single ticket; streams per-phase output to stdout
-  build new <body-path> [--title "..."] [--type "..."] [--label "..."]* [--debug]  Create a new ticket from a body file
+  build new <body-path> [--title "..."] [--type "..."] [--label "..."]* [--debug]  Create a new ticket from a body file (file mode: arg must be an existing file)
+  build new <text> [--title "..."] [--type "..."] [--label "..."]* [--debug]       Create a new ticket from free-form text (draft mode: arg is not an existing file)
+  build new - [--title "..."] [--type "..."] [--label "..."]* [--debug]            Read operator text from stdin, then create a new ticket (draft mode)
   build new --print-template                                                        Print the body template to stdout for redirection into a draft file
+
+  text vs file disambiguation: if the argument is an existing file path, file mode is used unchanged.
+  If it looks like a path (contains / or \, or ends in .md/.txt) but no file exists, a stderr notice
+  is printed and a brief pause allows Ctrl-C before proceeding in draft mode. Multiple positional args
+  are joined with spaces as draft text (e.g. build new fix the readme typo).
   build amend <ticket-id> [--size S|M|L] [--note "..."]           Amend an existing ticket (at least one flag required)
   build close <ticket-id> <reason>                                Close a ticket (reason required)
   build defer <ticket-id> <reason>                                Defer a ticket (reason required)

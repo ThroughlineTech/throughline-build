@@ -69,14 +69,16 @@ static async Task<int> RunAsync(string[] args)
         }
     }
 
-    // Validation for new verb (requires body path unless --print-template is set).
+    // Early validation for new verb using the argument classifier.
     if (verb == "new")
     {
-        bool hasPrintTemplate = Array.Exists(args, a => a == "--print-template");
-        if (!hasPrintTemplate && (args.Length < 2 || string.IsNullOrWhiteSpace(args[1])))
+        var earlyClassification = NewVerbArgumentClassifier.Classify(args);
+        if (earlyClassification.Kind == NewVerbKind.HelpExitNonZero)
         {
             Console.Error.WriteLine("Error: body-path is required");
             Console.Error.WriteLine("Usage: build new <body-path> [--title \"...\"] [--type \"...\"] [--label \"...\"]* [--debug]");
+            Console.Error.WriteLine("       build new <text> [--title \"...\"] [--type \"...\"] [--label \"...\"]* [--debug]");
+            Console.Error.WriteLine("       build new - [--title \"...\"] [--type \"...\"] [--label \"...\"]* [--debug]");
             Console.Error.WriteLine("       build new --print-template");
             return 2;
         }
@@ -232,40 +234,54 @@ static async Task<int> RunAsync(string[] args)
         }, sessionContext);
         var eventSink2 = new RecordingEventSink(jsonlEventSink2);
 
-        var buildOptions2 = new BuildOptions(
-            SessionId: sessionId2,
-            WorkerName: "",
-            WorkerTimeout: TimeSpan.Zero,
-            DebugCaptureDirectory: debugMode
-                ? Path.GetFullPath(Path.Combine(cwd2, ".build", "sessions", sessionId2))
-                : null);
-        if (buildOptions2.DebugCaptureDirectory is not null)
-            Directory.CreateDirectory(buildOptions2.DebugCaptureDirectory);
+        // Classify argument shape to determine file-mode vs draft-mode.
+        var classification = NewVerbArgumentClassifier.Classify(args);
 
-        var phase = new NewPhase(ticketing2, eventSink2, buildOptions2);
+        // Build options: file-mode only needs a stub (no worker); draft-mode needs a real worker.
+        bool needsWorker = classification.Kind == NewVerbKind.DraftMode
+                        || classification.Kind == NewVerbKind.StdinDraftMode;
 
-        // Check for --print-template (bare bool flag; no body-path needed).
-        bool printTemplate = Array.Exists(args, a => a == "--print-template");
+        string? debugCaptureDir2 = debugMode
+            ? Path.GetFullPath(Path.Combine(cwd2, ".build", "sessions", sessionId2))
+            : null;
+        if (debugCaptureDir2 is not null)
+            Directory.CreateDirectory(debugCaptureDir2);
 
-        var newCommandArgs = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (printTemplate)
+        BuildOptions buildOptions2;
+        if (needsWorker)
         {
-            newCommandArgs["print_template"] = "true";
+            buildOptions2 = new BuildOptions(
+                SessionId: sessionId2,
+                WorkerName: config2.Workers.DefaultAgent,
+                WorkerTimeout: TimeSpan.FromMinutes(config2.Workers.TimeoutMinutes),
+                DebugCaptureDirectory: debugCaptureDir2,
+                LiveStdoutSink: debugMode ? Console.Out : null,
+                LiveStderrSink: debugMode ? Console.Error : null,
+                ProgressDigestSink: (!debugMode && !quietMode
+                    && (!Console.IsErrorRedirected || Environment.GetEnvironmentVariable("BUILD_PROGRESS") == "1"))
+                    ? Console.Error : null);
         }
         else
         {
-            newCommandArgs["body_path"] = args[1];
+            buildOptions2 = new BuildOptions(
+                SessionId: sessionId2,
+                WorkerName: "",
+                WorkerTimeout: TimeSpan.Zero,
+                DebugCaptureDirectory: debugCaptureDir2);
         }
 
-        // Parse flags: --title, --type, --label (repeatable), --debug (already stripped).
+        var newPhase2 = new NewPhase(ticketing2, eventSink2, buildOptions2);
+
+        var newCommandArgs = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        // Parse flags: --title, --type, --label (repeatable); --debug already stripped.
         var labels = new List<string>();
-        int parseStart = printTemplate ? 1 : 2;
-        for (int i = parseStart; i < args.Length; i++)
+        for (int i = 1; i < args.Length; i++)
         {
             var arg = args[i];
             if (arg == "--print-template")
             {
-                // already handled above
+                // handled by classifier
             }
             else if (arg == "--title" && i + 1 < args.Length)
             {
@@ -280,33 +296,104 @@ static async Task<int> RunAsync(string[] args)
                 labels.Add(args[++i]);
             }
         }
-
-        // Pack labels as tab-separated string for transport through Args dict.
         if (labels.Count > 0)
-        {
             newCommandArgs["labels"] = string.Join("\t", labels);
+
+        using var verbCts = new CancellationTokenSource();
+        Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+
+        // --- PrintTemplate path ---
+        if (classification.Kind == NewVerbKind.PrintTemplate)
+        {
+            newCommandArgs["print_template"] = "true";
+            var ctx2 = new TicketCommandContext("", newCommandArgs);
+            var cmd2 = new NewCommand(newPhase2, config2.Project.PlaneProjectUrl, buildOptions2.DebugCaptureDirectory);
+            try
+            {
+                var verbResult = await cmd2.ExecuteAsync(ctx2, verbCts.Token);
+                if (!verbResult.Success)
+                {
+                    Console.Error.WriteLine($"Command 'new' failed: {verbResult.Message}");
+                    return 1;
+                }
+                if (!string.IsNullOrEmpty(verbResult.Message))
+                    Console.WriteLine(verbResult.Message);
+                return 0;
+            }
+            catch (OperationCanceledException)
+            {
+                Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
         }
 
-        var ctx2 = new TicketCommandContext("", newCommandArgs);
-        var cmd2 = new NewCommand(phase, config2.Project.PlaneProjectUrl, buildOptions2.DebugCaptureDirectory);
-
-        try
+        // --- File mode path ---
+        if (classification.Kind == NewVerbKind.FileMode)
         {
-            using var verbCts = new CancellationTokenSource();
-            Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
-            var verbResult = await cmd2.ExecuteAsync(ctx2, verbCts.Token);
-            if (!verbResult.Success)
+            newCommandArgs["body_path"] = classification.FilePath!;
+            var ctx2 = new TicketCommandContext("", newCommandArgs);
+            var cmd2 = new NewCommand(newPhase2, config2.Project.PlaneProjectUrl, buildOptions2.DebugCaptureDirectory);
+            try
             {
-                Console.Error.WriteLine($"Command 'new' failed: {verbResult.Message}");
+                var verbResult = await cmd2.ExecuteAsync(ctx2, verbCts.Token);
+                if (!verbResult.Success)
+                {
+                    Console.Error.WriteLine($"Command 'new' failed: {verbResult.Message}");
+                    if (buildOptions2.DebugCaptureDirectory is not null)
+                        Console.WriteLine($"Debug capture: .build/sessions/{sessionId2}/");
+                    return 1;
+                }
+                if (!string.IsNullOrEmpty(verbResult.Message))
+                    Console.WriteLine(verbResult.Message);
+                if (buildOptions2.DebugCaptureDirectory is not null)
+                    Console.WriteLine($"Debug capture: .build/sessions/{sessionId2}/");
+                return 0;
+            }
+            catch (OperationCanceledException)
+            {
+                Console.Error.WriteLine("Cancelled.");
                 if (buildOptions2.DebugCaptureDirectory is not null)
                     Console.WriteLine($"Debug capture: .build/sessions/{sessionId2}/");
                 return 1;
             }
-            if (!string.IsNullOrEmpty(verbResult.Message))
-                Console.WriteLine(verbResult.Message);
-            if (buildOptions2.DebugCaptureDirectory is not null)
-                Console.WriteLine($"Debug capture: .build/sessions/{sessionId2}/");
-            return 0;
+        }
+
+        // --- Draft mode (DraftMode or StdinDraftMode) ---
+        string draftText;
+        if (classification.Kind == NewVerbKind.StdinDraftMode)
+        {
+            draftText = Console.In.ReadToEnd();
+        }
+        else
+        {
+            // DraftMode: may need to emit a warning notice and brief pause.
+            draftText = classification.DraftText!;
+            if (classification.LooksLikePathButMissing)
+            {
+                Console.Error.WriteLine(
+                    $"note: no file at '{draftText}'; treating as draft input. Press Ctrl-C to abort.");
+                Thread.Sleep(500);
+            }
+        }
+
+        // Build a real worker for draft mode.
+        var draftWorker = new ClaudeCodeAgent(new ClaudeCodeOptions
+        {
+            ExecutablePath = config2.Workers.ClaudeCodeExecutable,
+            MaxOutputTokens = config2.Workers.MaxOutputTokens,
+            Model = config2.Llm.DefaultModel,
+            DefaultModel = config2.Llm.DefaultModel
+        });
+
+        var draftPhase = new DraftPhase(draftWorker, buildOptions2);
+        var draftSw = System.Diagnostics.Stopwatch.StartNew();
+        DraftResult draftResult;
+        try
+        {
+            draftResult = await draftPhase.RunAsync(
+                new DraftPhaseOptions(draftText, debugMode),
+                cwd2,
+                verbCts.Token);
         }
         catch (OperationCanceledException)
         {
@@ -314,6 +401,55 @@ static async Task<int> RunAsync(string[] args)
             if (buildOptions2.DebugCaptureDirectory is not null)
                 Console.WriteLine($"Debug capture: .build/sessions/{sessionId2}/");
             return 1;
+        }
+        draftSw.Stop();
+
+        if (draftResult.Outcome != ThroughlineBuild.Contracts.Models.DraftOutcome.Ok)
+        {
+            Console.Error.WriteLine($"draft failed: {draftResult.FailureReason}");
+            if (buildOptions2.DebugCaptureDirectory is not null)
+                Console.WriteLine($"Debug capture: .build/sessions/{sessionId2}/");
+            return 1;
+        }
+
+        Console.WriteLine($"[drafted] from operator text ({draftSw.Elapsed.TotalSeconds:0.0}s)");
+
+        // Write body markdown to a temp file; NewCommand expects a file path.
+        var tempBodyPath = Path.ChangeExtension(Path.GetTempFileName(), ".md");
+        try
+        {
+            File.WriteAllText(tempBodyPath, draftResult.BodyMarkdown);
+            newCommandArgs["body_path"] = tempBodyPath;
+
+            var ctx3 = new TicketCommandContext("", newCommandArgs);
+            var cmd3 = new NewCommand(newPhase2, config2.Project.PlaneProjectUrl, buildOptions2.DebugCaptureDirectory);
+            try
+            {
+                var verbResult = await cmd3.ExecuteAsync(ctx3, verbCts.Token);
+                if (!verbResult.Success)
+                {
+                    Console.Error.WriteLine($"Command 'new' failed: {verbResult.Message}");
+                    if (buildOptions2.DebugCaptureDirectory is not null)
+                        Console.WriteLine($"Debug capture: .build/sessions/{sessionId2}/");
+                    return 1;
+                }
+                if (!string.IsNullOrEmpty(verbResult.Message))
+                    Console.WriteLine(verbResult.Message);
+                if (buildOptions2.DebugCaptureDirectory is not null)
+                    Console.WriteLine($"Debug capture: .build/sessions/{sessionId2}/");
+                return 0;
+            }
+            catch (OperationCanceledException)
+            {
+                Console.Error.WriteLine("Cancelled.");
+                if (buildOptions2.DebugCaptureDirectory is not null)
+                    Console.WriteLine($"Debug capture: .build/sessions/{sessionId2}/");
+                return 1;
+            }
+        }
+        finally
+        {
+            try { File.Delete(tempBodyPath); } catch { /* best effort cleanup */ }
         }
     }
 
