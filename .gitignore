@@ -12,3 +12,4 @@ obj/
 .build/events/
 .build/sessions/
 .build/config.toml
+.tmp/
