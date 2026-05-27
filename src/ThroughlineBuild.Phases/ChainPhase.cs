@@ -4,7 +4,7 @@ using ThroughlineBuild.Contracts.Models;
 
 namespace ThroughlineBuild.Phases;
 
-public record ChainPhaseOptions(string TicketId, bool Debug);
+public record ChainPhaseOptions(string TicketId, bool Debug, Action<ChainStep>? OnStep = null);
 
 public class ChainPhase
 {
@@ -98,14 +98,16 @@ public class ChainPhase
                 .ConfigureAwait(false);
             sw.Stop();
 
-            steps.Add(new ChainStep(
+            var planStep = new ChainStep(
                 PhaseName: "plan",
                 ReworkRoundNumber: -1,
                 Status: planResult.Success ? Status.Ok : Status.Failed,
                 FailureReason: planResult.FailureReason,
                 Verdict: null,
                 Duration: sw.Elapsed,
-                PhaseSessionId: sessionId));
+                PhaseSessionId: sessionId);
+            steps.Add(planStep);
+            options.OnStep?.Invoke(planStep);
 
             if (!planResult.Success)
             {
@@ -149,14 +151,16 @@ public class ChainPhase
             .ConfigureAwait(false);
         shipSw.Stop();
 
-        steps.Add(new ChainStep(
+        var shipStep = new ChainStep(
             PhaseName: "ship",
             ReworkRoundNumber: -1,
             Status: shipResult.Success ? Status.Ok : Status.Failed,
             FailureReason: shipResult.FailureReason,
             Verdict: null,
             Duration: shipSw.Elapsed,
-            PhaseSessionId: shipSessionId));
+            PhaseSessionId: shipSessionId);
+        steps.Add(shipStep);
+        options.OnStep?.Invoke(shipStep);
 
         totalSw.Stop();
         if (!shipResult.Success)
@@ -216,14 +220,16 @@ public class ChainPhase
                 .RunAsync(options.TicketId, _workingDirectory, ct).ConfigureAwait(false);
             implSw.Stop();
 
-            steps.Add(new ChainStep(
+            var implStep = new ChainStep(
                 PhaseName: "implement",
                 ReworkRoundNumber: round,
                 Status: implResult.Success ? Status.Ok : Status.Failed,
                 FailureReason: implResult.FailureReason,
                 Verdict: null,
                 Duration: implSw.Elapsed,
-                PhaseSessionId: implSessionId));
+                PhaseSessionId: implSessionId);
+            steps.Add(implStep);
+            options.OnStep?.Invoke(implStep);
 
             if (!implResult.Success)
                 return new ChainResult(options.TicketId, steps, ChainOutcome.StoppedAtImplement,
@@ -320,26 +326,30 @@ public class ChainPhase
 
         if (!revResult.Success)
         {
-            steps.Add(new ChainStep(
+            var failedRevStep = new ChainStep(
                 PhaseName: "review",
                 ReworkRoundNumber: -1,
                 Status: Status.Failed,
                 FailureReason: revResult.FailureReason,
                 Verdict: null,
                 Duration: revSw.Elapsed,
-                PhaseSessionId: revSessionId));
+                PhaseSessionId: revSessionId);
+            steps.Add(failedRevStep);
+            options.OnStep?.Invoke(failedRevStep);
             return (new ChainResult(options.TicketId, steps, ChainOutcome.StoppedAtReview,
                 TimeSpan.Zero, revResult.FailureReason), null);
         }
 
-        steps.Add(new ChainStep(
+        var revStep = new ChainStep(
             PhaseName: "review",
             ReworkRoundNumber: -1,
             Status: Status.Ok,
             FailureReason: null,
             Verdict: revResult.Verdict,
             Duration: revSw.Elapsed,
-            PhaseSessionId: revSessionId));
+            PhaseSessionId: revSessionId);
+        steps.Add(revStep);
+        options.OnStep?.Invoke(revStep);
 
         return (null, new Verdict(revResult.Verdict!.Value, revResult.VerdictRationale ?? "", revResult.ChecksFailed));
     }

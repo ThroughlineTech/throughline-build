@@ -10,6 +10,7 @@ Usage:
   build implement <ticket-id> [--debug|--quiet] [--summary-json]  Run the implement phase for a ticket
   build review <ticket-id> [--debug|--quiet] [--summary-json]     Run the review phase for a ticket
   build ship <ticket-id> [--debug] [--summary-json]               Ship a reviewed ticket (local fast-forward merge; no push to remote); --debug accepted but is a no-op (ship has no worker subprocess)
+  build chain <ticket-id> [--debug]                               Run the full chain (plan -> implement -> review -> ship cycle) for a single ticket; streams per-phase output to stdout
   build new <body-path> [--title "..."] [--type "..."] [--label "..."]* [--debug]  Create a new ticket from a body file
   build new --print-template                                                        Print the body template to stdout for redirection into a draft file
   build amend <ticket-id> [--size S|M|L] [--note "..."]           Amend an existing ticket (at least one flag required)
@@ -49,5 +50,14 @@ Exit codes:
   2  Config error or unknown verb
   3  Missing secret (env var not set)
   4  Phase infrastructure failure (review verifier crash, ship worktree missing, git unavailable)
+
+  For 'build chain' verb only (see separate exit code mapping):
+  0  ChainOutcome.Completed
+  2  RefusedInitialState (ticket state does not permit chain)
+  3  StoppedAtPlan (planning failed)
+  4  StoppedAtImplement (implementation failed before review)
+  5  StoppedAtReview (review returned Fail)
+  6  ReworkCapExceeded (review returned Rework more than the cap)
+  7  StoppedAtShip (ship gate failed)
 """;
 }

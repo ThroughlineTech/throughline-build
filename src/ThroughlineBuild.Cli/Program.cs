@@ -48,13 +48,24 @@ static async Task<int> RunAsync(string[] args)
 
     // Arg validation for phase verbs happens BEFORE config load so a missing id
     // surfaces a usage error (exit 2) rather than a config-not-found error.
-    if (verb == "plan" || verb == "implement" || verb == "review" || verb == "ship")
+    if (verb == "plan" || verb == "implement" || verb == "review" || verb == "ship" || verb == "chain")
     {
         if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]))
         {
             Console.Error.WriteLine("Error: ticket-id is required");
             Console.Error.WriteLine($"Usage: build {verb} <ticket-id>");
             return 2;
+        }
+
+        // For chain: reject multiple positional ticket IDs (v1 out of scope).
+        if (verb == "chain" && args.Length > 2)
+        {
+            // Check if args[2] is a flag or another ticket ID.
+            if (!args[2].StartsWith("--"))
+            {
+                Console.Error.WriteLine("Error: build chain accepts exactly one ticket ID in v1; multi-ticket dispatch is planned for a future release.");
+                return 2;
+            }
         }
     }
 
@@ -306,7 +317,7 @@ static async Task<int> RunAsync(string[] args)
         }
     }
 
-    if (verb != "plan" && verb != "implement" && verb != "review" && verb != "ship")
+    if (verb != "plan" && verb != "implement" && verb != "review" && verb != "ship" && verb != "chain")
     {
         Console.Error.WriteLine($"Unknown subcommand: {verb}");
         Console.Error.WriteLine(CliUsage.UsageText);
@@ -592,6 +603,91 @@ static async Task<int> RunAsync(string[] args)
             ShipFailureStage.Decruft => 0,  // decruft failure is post-success non-fatal
             _ => 1
         };
+    }
+    else if (verb == "chain")
+    {
+        // Construct per-phase factories for ChainPhase.
+        var planPhaseFactory = (BuildOptions buildOpts) =>
+            new PlanPhase(ticketing, worker, eventSink, buildOpts, project: config2.Project);
+
+        var implementPhaseFactory = (BuildOptions buildOpts, ImplementPhaseOptions implOpts) =>
+            new ImplementPhase(ticketing, worker, eventSink, buildOpts, project: config2.Project);
+
+        var reviewPhaseFactory = (BuildOptions buildOpts) =>
+        {
+            var verifierWorkerOptions = new WorkerOptions(
+                TimeSpan.FromMinutes(config2.Review.VerifierTimeoutMinutes),
+                config2.Review.VerifierAllowedTools,
+                DebugCaptureDirectory: debugCaptureDir,
+                LiveStdoutSink: debugMode ? Console.Out : null,
+                LiveStderrSink: debugMode ? Console.Error : null,
+                ProgressDigestSink: enableDigest ? Console.Error : null);
+            var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
+            return new ReviewPhase(ticketing, worker, eventSink, buildOpts, reviewOptions, project: config2.Project);
+        };
+
+        var shipPhaseFactory = (BuildOptions buildOpts) =>
+        {
+            var shipOptions = new ShipOptions(
+                RegressionChecks: config2.Ship.RegressionChecks,
+                Remote: config2.Ship.Remote,
+                BaseBranch: config2.Ship.BaseBranch,
+                DeleteFeatureBranch: config2.Ship.DeleteFeatureBranch);
+            var gitClient = new ProcessGitClient(cwd);
+            var checksRunner = new AutomatedChecksRunner();
+            return new ShipPhase(ticketing, eventSink, buildOpts, shipOptions, gitClient: gitClient, checksRunner: checksRunner);
+        };
+
+        var chainPhase = new ChainPhase(
+            ticketing,
+            eventSink,
+            buildOptions,
+            planPhaseFactory,
+            implementPhaseFactory,
+            reviewPhaseFactory,
+            shipPhaseFactory,
+            workingDirectory: cwd);
+
+        var chainRunner = new DefaultChainRunner(chainPhase);
+        var chainCommand = new ChainCommand(chainRunner, ticketing, config2.Project.PlaneProjectUrl);
+        var chainCtx = new TicketCommandContext(ticketId, new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["debug"] = debugMode ? "true" : "false"
+        });
+
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+            var cmdResult = await chainCommand.ExecuteAsync(chainCtx, cts.Token).ConfigureAwait(false);
+
+            if (!cmdResult.Success)
+            {
+                // Map ChainResult.Outcome to exit code.
+                if (chainCommand.LastChainResult is not null)
+                {
+                    return chainCommand.LastChainResult.Outcome switch
+                    {
+                        ChainOutcome.Completed => 0,
+                        ChainOutcome.RefusedInitialState => 2,
+                        ChainOutcome.StoppedAtPlan => 3,
+                        ChainOutcome.StoppedAtImplement => 4,
+                        ChainOutcome.StoppedAtReview => 5,
+                        ChainOutcome.ReworkCapExceeded => 6,
+                        ChainOutcome.StoppedAtShip => 7,
+                        _ => 1
+                    };
+                }
+                return 1;
+            }
+
+            return 0;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
     }
     else // review
     {
