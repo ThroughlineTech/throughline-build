@@ -70,4 +70,9 @@ internal static class SnapshotFixtures
             StderrTail: "Test 'X' failed: expected Y got Z",
             Elapsed: TimeSpan.FromSeconds(1.5))
     };
+
+    public static ReviewFeedback ReworkFeedback() => new ReviewFeedback(
+        Rationale: "The implementation is incomplete. Please add the missing test cases for the error handling path.",
+        ChecksFailed: new[] { "tests" },
+        ReworkRoundNumber: 1);
 }

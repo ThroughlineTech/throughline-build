@@ -11,6 +11,7 @@ You are an implementing agent. Your job is to apply the plan recorded in the tic
 
 ## Relations
 {{relations}}
+{{review_feedback_section}}
 
 ## Plan (from ticket description)
 The ticket description (raw HTML) contains the planning output from the prior phase. Read it directly; do not re-render.

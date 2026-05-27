@@ -13,6 +13,12 @@ You are an implementing agent. Your job is to apply the plan recorded in the tic
 - blocks: TLB-100
 - blocked_by: TLB-99
 
+## Rework round 1 - reviewer feedback
+
+The implementation is incomplete. Please add the missing test cases for the error handling path.
+
+Checks failed:
+- tests
 
 ## Plan (from ticket description)
 The ticket description (raw HTML) contains the planning output from the prior phase. Read it directly; do not re-render.
