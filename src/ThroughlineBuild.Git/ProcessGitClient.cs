@@ -629,6 +629,45 @@ public sealed class ProcessGitClient : IGitClient
         return new GitOpResult(false, stderr.Trim());
     }
 
+    public async Task<IReadOnlyList<string>> GetTrackedChangesAsync(string workingDirectory, CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = workingDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("status");
+            psi.ArgumentList.Add("--porcelain");
+
+            using var proc = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start git process");
+            var stdout = await proc.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+            if (proc.ExitCode != 0)
+                return Array.Empty<string>();
+
+            var lines = new List<string>();
+            foreach (var rawLine in stdout.Split('\n'))
+            {
+                var line = rawLine.TrimEnd('\r');
+                if (line.Length == 0) continue;
+                // "??" prefix means untracked - skip those, keep everything else
+                if (!line.StartsWith("??"))
+                    lines.Add(line);
+            }
+            return lines;
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
+    }
+
     public async Task<bool> RemoteExistsAsync(string remote, string workingDirectory, CancellationToken ct)
     {
         try

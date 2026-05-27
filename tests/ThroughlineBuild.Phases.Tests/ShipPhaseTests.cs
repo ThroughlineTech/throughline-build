@@ -471,6 +471,69 @@ public class ShipPhaseTests
         Assert.Equal(canonicalPath, checksRunner.LastWorkingDirectory);
     }
 
+    [Fact]
+    public async Task RunAsync_FeatureWorktreeDirty_FailsPreFlightBeforeFetch()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        // The feature worktree canonical path is "/some/worktree/path" (from FakeGitClient.ListWorktreesAsync)
+        git.TrackedChangesByPath["/some/worktree/path"] = new[] { " M src/Foo.cs", " M src/Bar.cs" };
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ShipFailureStage.PreFlight, result.FailedAt);
+        Assert.Equal(0, git.FetchCallCount);
+        Assert.Equal(0, git.RebaseCallCount);
+        Assert.Empty(ticketing.Transitions);
+        Assert.Single(ticketing.Comments);
+        Assert.Contains("ship_blocked", ticketing.Comments[0].html);
+        Assert.Contains("/some/worktree/path", result.FailureReason ?? "");
+
+        var gates = events.Events.Where(e => e.Kind == EventKind.GateFailure).ToList();
+        Assert.Single(gates);
+        Assert.Equal("pre_flight_dirty", gates[0].Data["kind"].ToString());
+        var dirtyPaths = (IReadOnlyList<string>)gates[0].Data["dirty_paths"];
+        Assert.Contains("/some/worktree/path", dirtyPaths);
+    }
+
+    [Fact]
+    public async Task RunAsync_MainWorktreeDirty_FailsPreFlightBeforeFetch()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        // Seed the main worktree (workingDirectory = Directory.GetCurrentDirectory()) as dirty
+        var workingDir = MakeWorkingDir();
+        git.TrackedChangesByPath[workingDir] = new[] { " M README.md" };
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, workingDir, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ShipFailureStage.PreFlight, result.FailedAt);
+        Assert.Equal(0, git.FetchCallCount);
+        Assert.Equal(0, git.RebaseCallCount);
+        Assert.Empty(ticketing.Transitions);
+        Assert.Single(ticketing.Comments);
+        Assert.Contains("ship_blocked", ticketing.Comments[0].html);
+        Assert.Contains(workingDir, result.FailureReason ?? "");
+
+        var gates = events.Events.Where(e => e.Kind == EventKind.GateFailure).ToList();
+        Assert.Single(gates);
+        Assert.Equal("pre_flight_dirty", gates[0].Data["kind"].ToString());
+        var dirtyPaths = (IReadOnlyList<string>)gates[0].Data["dirty_paths"];
+        Assert.Contains(workingDir, dirtyPaths);
+    }
+
     // ---------- Fakes ----------
 
     private sealed class FakeTicketing : ITicketing
@@ -525,6 +588,7 @@ public class ShipPhaseTests
         public GitOpResult FastForwardResult { get; set; } = new GitOpResult(true, null);
         public GitOpResult DeleteBranchResult { get; set; } = new GitOpResult(true, null);
         public bool RemoteExistsResult { get; set; } = true;
+        public Dictionary<string, IReadOnlyList<string>> TrackedChangesByPath { get; } = new(StringComparer.OrdinalIgnoreCase);
 
         public int FetchCallCount { get; private set; }
         public int RebaseCallCount { get; private set; }
@@ -604,6 +668,13 @@ public class ShipPhaseTests
         {
             DeleteBranchCalls.Add((branch, force));
             return Task.FromResult(DeleteBranchResult);
+        }
+
+        public Task<IReadOnlyList<string>> GetTrackedChangesAsync(string workingDirectory, CancellationToken ct)
+        {
+            if (TrackedChangesByPath.TryGetValue(workingDirectory, out var changes))
+                return Task.FromResult(changes);
+            return Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
         }
 
         public Task<int> RevListCountAsync(string range, string workingDirectory, CancellationToken ct) =>
