@@ -22,6 +22,7 @@ public record ShipResult(
 public enum ShipFailureStage
 {
     StateCheck,
+    PreFlight,
     Fetch,
     Rebase,
     ConflictMarkerScan,
@@ -110,6 +111,30 @@ public class ShipPhase : IWorkflowPhase
             return (new ShipResult(false, ticketId, null,
                 $"feature worktree not found at {worktreeNames.WorktreePath}",
                 ShipFailureStage.StateCheck), worktreeNames, null);
+
+        // Step 3b: Pre-flight dirty check - both feature and main worktrees must be clean
+        var featureChanges = await _git.GetTrackedChangesAsync(canonicalWorktreePath, ct).ConfigureAwait(false);
+        var mainChanges = await _git.GetTrackedChangesAsync(workingDirectory, ct).ConfigureAwait(false);
+        if (featureChanges.Count > 0 || mainChanges.Count > 0)
+        {
+            var dirtyParts = new List<string>();
+            if (featureChanges.Count > 0)
+                dirtyParts.Add($"{canonicalWorktreePath} has {featureChanges.Count} modified tracked files - commit or stash before shipping");
+            if (mainChanges.Count > 0)
+                dirtyParts.Add($"{workingDirectory} has {mainChanges.Count} modified tracked files - commit or stash before shipping");
+            var dirtyMessage = string.Join("; ", dirtyParts);
+            var dirtyPaths = new List<string>();
+            if (featureChanges.Count > 0) dirtyPaths.Add(canonicalWorktreePath);
+            if (mainChanges.Count > 0) dirtyPaths.Add(workingDirectory);
+            await _ticketing.CreateCommentAsync(ticketId,
+                $"<p><strong>ship_blocked:</strong> uncommitted tracked changes in: {string.Join(", ", dirtyPaths)}</p>", ct).ConfigureAwait(false);
+            await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+            {
+                ["kind"] = "pre_flight_dirty",
+                ["dirty_paths"] = (IReadOnlyList<string>)dirtyPaths
+            }, ct).ConfigureAwait(false);
+            return (new ShipResult(false, ticketId, null, dirtyMessage, ShipFailureStage.PreFlight), worktreeNames, null);
+        }
 
         // Step 4: Check for remote and conditionally fetch
         var remote = _shipOptions.Remote;

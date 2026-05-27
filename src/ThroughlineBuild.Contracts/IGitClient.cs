@@ -44,4 +44,11 @@ public interface IGitClient
     // Never throws - treat any error as false.
     Task<bool> RemoteExistsAsync(string remote, string workingDirectory, CancellationToken ct) =>
         Task.FromResult(true);
+
+    // Returns the list of tracked files with uncommitted changes in workingDirectory.
+    // Runs "git status --porcelain" and returns lines that are not untracked (i.e. not "??").
+    // Default returns empty so existing FakeGitClients remain unchanged (TLB-131).
+    // Never throws - returns empty on git failure.
+    Task<IReadOnlyList<string>> GetTrackedChangesAsync(string workingDirectory, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
 }
