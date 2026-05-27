@@ -292,9 +292,16 @@ public class JsonlEventSinkSessionContextTests
 
         try
         {
-            await using var sink = new JsonlEventSink(options, session);
-            await sink.EmitAsync(MakeEvent("test-ctx"), CancellationToken.None);
-            await sink.FlushAsync(CancellationToken.None);
+            var sink = new JsonlEventSink(options, session);
+            try
+            {
+                await sink.EmitAsync(MakeEvent("test-ctx"), CancellationToken.None);
+                await sink.FlushAsync(CancellationToken.None);
+            }
+            finally
+            {
+                await sink.DisposeAsync();
+            }
 
             var line = File.ReadAllLines(Path.Combine(tempDir, "test-ctx.jsonl"))[0];
             using var doc = JsonDocument.Parse(line);
@@ -320,9 +327,16 @@ public class JsonlEventSinkSessionContextTests
 
         try
         {
-            await using var sink = new JsonlEventSink(options, session);
-            await sink.EmitAsync(MakeEvent("test-pascal"), CancellationToken.None);
-            await sink.FlushAsync(CancellationToken.None);
+            var sink = new JsonlEventSink(options, session);
+            try
+            {
+                await sink.EmitAsync(MakeEvent("test-pascal"), CancellationToken.None);
+                await sink.FlushAsync(CancellationToken.None);
+            }
+            finally
+            {
+                await sink.DisposeAsync();
+            }
 
             var line = File.ReadAllLines(Path.Combine(tempDir, "test-pascal.jsonl"))[0];
             using var doc = JsonDocument.Parse(line);
@@ -354,9 +368,16 @@ public class JsonlEventSinkSessionContextTests
         try
         {
             // No session context - null default
-            await using var sink = new JsonlEventSink(options);
-            await sink.EmitAsync(MakeEvent("test-no-ctx"), CancellationToken.None);
-            await sink.FlushAsync(CancellationToken.None);
+            var sink = new JsonlEventSink(options);
+            try
+            {
+                await sink.EmitAsync(MakeEvent("test-no-ctx"), CancellationToken.None);
+                await sink.FlushAsync(CancellationToken.None);
+            }
+            finally
+            {
+                await sink.DisposeAsync();
+            }
 
             var line = File.ReadAllLines(Path.Combine(tempDir, "test-no-ctx.jsonl"))[0];
             using var doc = JsonDocument.Parse(line);
@@ -383,9 +404,16 @@ public class JsonlEventSinkSessionContextTests
 
         try
         {
-            await using var sink = new JsonlEventSink(options, session);
-            await sink.EmitAsync(MakeEvent("test-null-name"), CancellationToken.None);
-            await sink.FlushAsync(CancellationToken.None);
+            var sink = new JsonlEventSink(options, session);
+            try
+            {
+                await sink.EmitAsync(MakeEvent("test-null-name"), CancellationToken.None);
+                await sink.FlushAsync(CancellationToken.None);
+            }
+            finally
+            {
+                await sink.DisposeAsync();
+            }
 
             var line = File.ReadAllLines(Path.Combine(tempDir, "test-null-name.jsonl"))[0];
             using var doc = JsonDocument.Parse(line);
