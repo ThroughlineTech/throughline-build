@@ -180,6 +180,136 @@ public class ImplementCliTests
         }
     }
 
+    [Fact]
+    public async Task BuildBinary_InvokedFromRealGitWorktree_DoesNotLeaveEventsInWorktree()
+    {
+        var exe = LocateBuildExecutable();
+        if (exe is null) return;
+
+        var tempBaseDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var mainRepo = Path.Combine(tempBaseDir, "main-repo");
+        var worktreeDir = Path.Combine(tempBaseDir, "worktree");
+
+        try
+        {
+            // Initialize main repo as a git repository with an initial commit
+            Directory.CreateDirectory(mainRepo);
+            await RunGit(mainRepo, "init");
+            await RunGit(mainRepo, "config", "user.email", "test@example.com");
+            await RunGit(mainRepo, "config", "user.name", "Test User");
+
+            // Create and commit a dummy file so main branch exists
+            var dummyFile = Path.Combine(mainRepo, "README.md");
+            File.WriteAllText(dummyFile, "# Test Repo\n");
+            await RunGit(mainRepo, "add", "README.md");
+            await RunGit(mainRepo, "commit", "-m", "initial commit");
+
+            // Create .build/config.toml in main repo
+            var buildDir = Path.Combine(mainRepo, ".build");
+            Directory.CreateDirectory(buildDir);
+            var configToml =
+                "[ticketing]\n" +
+                "backend = \"plane\"\n" +
+                "plane_base_url = \"https://stub.plane.invalid\"\n" +
+                "plane_workspace_slug = \"stub-ws\"\n" +
+                "plane_project_id = \"00000000-0000-0000-0000-000000000000\"\n" +
+                "\n" +
+                "[workers]\n" +
+                "default_agent = \"claude-code\"\n" +
+                "claude_code_executable = \"claude\"\n" +
+                "\n" +
+                "[events]\n" +
+                "log_directory = \".build/events\"\n";
+            File.WriteAllText(Path.Combine(buildDir, "config.toml"), configToml);
+            await RunGit(mainRepo, "add", ".build/config.toml");
+            await RunGit(mainRepo, "commit", "-m", "add config");
+
+            // Create a git worktree pointing to a new branch
+            await RunGit(mainRepo, "worktree", "add", worktreeDir, "-b", "feature-branch");
+
+            // Invoke build implement from the worktree directory
+            var env = new Dictionary<string, string> { { "PLANE_API_TOKEN", "stub" } };
+            var psi = new ProcessStartInfo(exe)
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = worktreeDir
+            };
+            psi.ArgumentList.Add("implement");
+            psi.ArgumentList.Add("TLB-bogus");
+            foreach (var kv in env)
+                psi.Environment[kv.Key] = kv.Value;
+
+            using var proc = Process.Start(psi)!;
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+            var stderrTask = proc.StandardError.ReadToEndAsync();
+            await proc.WaitForExitAsync();
+            await stdoutTask;
+            await stderrTask;
+
+            // Assert: the worktree directory does NOT contain .build/events
+            var eventsInWorktree = Path.Combine(worktreeDir, ".build", "events");
+            Assert.False(Directory.Exists(eventsInWorktree),
+                $"Expected no events directory in worktree, but found: {eventsInWorktree}");
+
+            // The events should only be in the main repo
+            var eventsInMainRepo = Path.Combine(mainRepo, ".build", "events");
+            // Note: we don't assert that events exist in main repo since the implement
+            // might fail due to invalid ticket ID, but the point is it shouldn't create
+            // them in the worktree
+        }
+        finally
+        {
+            // Clean up: remove the worktree first, then force delete remaining files
+            try
+            {
+                if (Directory.Exists(mainRepo))
+                {
+                    try
+                    {
+                        await RunGit(mainRepo, "worktree", "remove", "--force", worktreeDir);
+                    }
+                    catch
+                    {
+                        // Ignore git errors; we'll clean up manually
+                    }
+                }
+            }
+            catch
+            {
+                // Ignore any errors during git cleanup
+            }
+
+            // Force delete any remaining files
+            if (Directory.Exists(tempBaseDir))
+            {
+                try
+                {
+                    // Try up to 3 times with small waits for file locks to release
+                    for (int retry = 0; retry < 3; retry++)
+                    {
+                        try
+                        {
+                            Directory.Delete(tempBaseDir, recursive: true);
+                            break;
+                        }
+                        catch when (retry < 2)
+                        {
+                            await Task.Delay(100);
+                        }
+                    }
+                }
+                catch
+                {
+                    // If cleanup fails after retries, log but don't fail the test
+                    // (the OS will clean up eventually)
+                }
+            }
+        }
+    }
+
     private static string? LocateBuildExecutable()
     {
         var here = AppContext.BaseDirectory;
@@ -215,6 +345,31 @@ public class ImplementCliTests
         var stderrTask = proc.StandardError.ReadToEndAsync();
         await proc.WaitForExitAsync();
         return (proc.ExitCode, await stdoutTask, await stderrTask);
+    }
+
+    private static async Task RunGit(string workingDirectory, params string[] args)
+    {
+        var psi = new ProcessStartInfo("git")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = workingDirectory
+        };
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var proc = Process.Start(psi)!;
+        var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+        var stderrTask = proc.StandardError.ReadToEndAsync();
+        await proc.WaitForExitAsync();
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
+
+        if (proc.ExitCode != 0)
+            throw new InvalidOperationException(
+                $"git {string.Join(" ", args)} failed with exit code {proc.ExitCode}: {stderr}");
     }
 
     private sealed class StubTicketing : ITicketing
