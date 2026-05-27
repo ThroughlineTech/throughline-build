@@ -213,6 +213,24 @@ public class JsonlEventSinkTests
     }
 
     [Fact]
+    public void Constructor_WithRelativePath_ThrowsArgumentException()
+    {
+        var options = new EventLogOptions { BaseDirectory = ".build/events", SessionId = "test-relative" };
+
+        var ex = Assert.Throws<ArgumentException>(() => new JsonlEventSink(options));
+        Assert.Contains("absolute path", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Constructor_WithEmptyPath_ThrowsArgumentException()
+    {
+        var options = new EventLogOptions { BaseDirectory = "", SessionId = "test-empty" };
+
+        var ex = Assert.Throws<ArgumentException>(() => new JsonlEventSink(options));
+        Assert.Contains("must not be null or empty", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task SessionId_DeterminesFileName()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());

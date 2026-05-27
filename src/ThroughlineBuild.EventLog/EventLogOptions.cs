@@ -2,6 +2,6 @@ namespace ThroughlineBuild.EventLog;
 
 public class EventLogOptions
 {
-    public string BaseDirectory { get; init; } = ".build/events";
+    public required string BaseDirectory { get; init; }
     public string SessionId { get; init; } = Guid.NewGuid().ToString("N");
 }

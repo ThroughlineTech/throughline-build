@@ -101,7 +101,7 @@ static async Task<int> RunAsync(string[] args)
         return 3;
     }
 
-    string ResolveLogDir(string raw) => BuildConfigLoader.ResolveLogDirectory(configPath2, raw, cwd2);
+    string ResolveLogDir(string raw) => Path.GetFullPath(BuildConfigLoader.ResolveLogDirectory(configPath2, raw, cwd2));
 
     var buildVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
     var sessionContext = new SessionContext(

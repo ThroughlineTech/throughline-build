@@ -16,6 +16,10 @@ public sealed class JsonlEventSink : IEventSink, IAsyncDisposable
 
     public JsonlEventSink(EventLogOptions options, SessionContext? session = null)
     {
+        if (string.IsNullOrEmpty(options.BaseDirectory))
+            throw new ArgumentException("BaseDirectory must not be null or empty", nameof(options));
+        if (!Path.IsPathRooted(options.BaseDirectory))
+            throw new ArgumentException("BaseDirectory must be an absolute path", nameof(options));
         _options = options;
         _session = session;
     }
