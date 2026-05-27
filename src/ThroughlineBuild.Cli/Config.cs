@@ -102,6 +102,14 @@ public static class BuildConfigLoader
         return new BuildConfig(ticketing, llm, workers, events, review, ship, project);
     }
 
+    public static string ResolveLogDirectory(string configFilePath, string rawLogDir, string cwdFallback)
+    {
+        if (Path.IsPathRooted(rawLogDir))
+            return rawLogDir;
+        var projectRoot = Path.GetDirectoryName(Path.GetDirectoryName(configFilePath)) ?? cwdFallback;
+        return Path.Combine(projectRoot, rawLogDir);
+    }
+
     public static BuildSecrets ResolveSecrets(BuildConfig config)
     {
         var planeToken = config.Ticketing.PlaneApiToken;
