@@ -11,6 +11,13 @@ public class AutomatedChecksRunnerTests
         TimeSpan? timeout = null)
         => new CheckSpec(name, exe, args, timeout ?? TimeSpan.FromSeconds(30));
 
+    // Cross-platform "sleep for ~N seconds" command for synthesizing long-running processes.
+    // Windows lacks `sleep`; macOS/Linux lack `cmd`/`ping -n`.
+    private static (string exe, string[] args) SleepCmd(int seconds)
+        => OperatingSystem.IsWindows()
+            ? ("cmd", new[] { "/c", $"ping -n {seconds + 1} 127.0.0.1 >NUL" })
+            : ("sh", new[] { "-c", $"sleep {seconds}" });
+
     // --- Test (a): All-pass ---
     // Two specs that both exit 0: "dotnet --version" and "dotnet --version" again.
     // Both should have Passed=true, ExitCode=0, Elapsed > Zero.
@@ -93,20 +100,16 @@ public class AutomatedChecksRunnerTests
     }
 
     // --- Test (d): Timeout ---
-    // spec: sleep ~5s via "cmd /c ping -n 6 127.0.0.1 >NUL" but timeout=200ms
+    // spec: sleep ~5s (cross-platform) but timeout=200ms
     // Expected: Passed=false, StderrTail contains "timeout after"
     [Fact]
     public async Task Timeout_MarksSpecAsFailed_AndAppendsTimeoutMessage()
     {
         var runner = new AutomatedChecksRunner();
+        var (exe, args) = SleepCmd(5);
         var specs = new[]
         {
-            // ping -n 6 sends 6 pings ~1s apart = ~5s total; we timeout at 200ms
-            new CheckSpec(
-                "slow",
-                "cmd",
-                new[] { "/c", "ping -n 6 127.0.0.1 >NUL" },
-                TimeSpan.FromMilliseconds(200))
+            new CheckSpec("slow", exe, args, TimeSpan.FromMilliseconds(200))
         };
 
         var results = await runner.RunAsync(specs, Directory.GetCurrentDirectory(), CancellationToken.None);
@@ -117,20 +120,20 @@ public class AutomatedChecksRunnerTests
     }
 
     // --- Test (e): Cancellation mid-flight ---
-    // spec1: long-running sleep (ping -n 30 = ~29s)
+    // spec1: long-running sleep (~29s, cross-platform)
     // spec2: fast success (dotnet --version)
     // Cancel ~100ms after starting; spec1 should be Passed=false; spec2 should be not-run
     [Fact]
     public async Task Cancellation_MidFlight_SubsequentSpecsAreNotRun()
     {
         var runner = new AutomatedChecksRunner();
+        var (sleepExe, sleepArgs) = SleepCmd(29);
         var specs = new[]
         {
-            // long sleep - ping -n 30 = ~29 seconds
             new CheckSpec(
                 "long-sleep",
-                "cmd",
-                new[] { "/c", "ping -n 30 127.0.0.1 >NUL" },
+                sleepExe,
+                sleepArgs,
                 TimeSpan.FromSeconds(60)),   // generous timeout so it doesn't time out on its own
             // fast success - would complete instantly if allowed
             Spec("version", "dotnet", new[] { "--version" })

@@ -13,7 +13,7 @@ public class ProcessGitClientWorktreeTests : IDisposable
         var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(dir);
         _tempDirs.Add(dir);
-        RunGit(dir, "init");
+        RunGit(dir, "init", "-b", "main");
         RunGit(dir, "config", "user.email", "test@test.com");
         RunGit(dir, "config", "user.name", "Test");
         RunGit(dir, "commit", "--allow-empty", "-m", "initial");
@@ -86,10 +86,11 @@ public class ProcessGitClientWorktreeTests : IDisposable
         Assert.NotNull(result.AbsolutePath);
 
         var worktrees = await client.ListWorktreesAsync(CancellationToken.None);
-        Assert.Contains(worktrees, w => string.Equals(
-            Path.GetFullPath(w.Path).TrimEnd(Path.DirectorySeparatorChar),
-            Path.GetFullPath(worktreeDir).TrimEnd(Path.DirectorySeparatorChar),
-            StringComparison.OrdinalIgnoreCase));
+        // Compare on branch name rather than path: macOS resolves /var -> /private/var when
+        // git records the worktree path, but Path.GetFullPath in .NET 8 doesn't follow that
+        // firmlink, so a path comparison never matches. The branch name is the unique tag
+        // we just created, so checking for it proves the worktree was created and listed.
+        Assert.Contains(worktrees, w => w.Branch == "wt-test-branch");
     }
 
     [Fact]

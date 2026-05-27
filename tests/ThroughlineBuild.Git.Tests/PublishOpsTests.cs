@@ -16,13 +16,15 @@ public class PublishOpsTests : IDisposable
         var remoteDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(remoteDir);
         _tempDirs.Add(remoteDir);
-        RunGit(remoteDir, "init", "--bare");
+        // Pin the bare repo's HEAD to main; otherwise CI runners that default to `master`
+        // leave the bare's HEAD on a nonexistent ref, breaking the clone+push round-trip below.
+        RunGit(remoteDir, "init", "--bare", "-b", "main");
 
         // Create a local repo that uses the bare repo as origin
         var localDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(localDir);
         _tempDirs.Add(localDir);
-        RunGit(localDir, "init");
+        RunGit(localDir, "init", "-b", "main");
         RunGit(localDir, "config", "user.email", "test@test.com");
         RunGit(localDir, "config", "user.name", "Test");
         RunGit(localDir, "remote", "add", "origin", remoteDir);
@@ -39,7 +41,7 @@ public class PublishOpsTests : IDisposable
         var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(dir);
         _tempDirs.Add(dir);
-        RunGit(dir, "init");
+        RunGit(dir, "init", "-b", "main");
         RunGit(dir, "config", "user.email", "test@test.com");
         RunGit(dir, "config", "user.name", "Test");
         RunGit(dir, "commit", "--allow-empty", "-m", "initial");
