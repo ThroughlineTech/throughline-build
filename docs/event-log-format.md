@@ -120,29 +120,29 @@ A successful `build review <ticket>` against a ticket in `InReview` emits a `Wor
 Pass (verdict `Pass`, ticket stays in `InReview`):
 
 ```jsonl
-{"SessionId":"<sid>","Timestamp":"...","Kind":2,"TicketId":"TLB-34","Phase":2,"Data":{"worker":"claude-code","role":"verifier"}}
-{"SessionId":"<sid>","Timestamp":"...","Kind":3,"TicketId":"TLB-34","Phase":2,"Data":{"kind":"Pass","checks_failed_count":0}}
-{"SessionId":"<sid>","Timestamp":"...","Kind":1,"TicketId":"TLB-34","Phase":2,"Data":{"model":"claude-opus","input_tokens":1234,"output_tokens":567,"cache_read_tokens":0,"cache_create_tokens":0,"wall_clock_ms":2500}}
-{"SessionId":"<sid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":2,"Data":{"action":"create_comment"}}
+{"SessionId":"<sid>","Timestamp":"...","Kind":2,"TicketId":"TLB-34","Phase":2,"Data":{"worker":"claude-code","role":"verifier"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<sid>","Timestamp":"...","Kind":3,"TicketId":"TLB-34","Phase":2,"Data":{"kind":"Pass","checks_failed_count":0},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<sid>","Timestamp":"...","Kind":1,"TicketId":"TLB-34","Phase":2,"Data":{"model":"claude-opus","vendor":"anthropic","input_tokens":1234,"output_tokens":567,"cache_read_tokens":0,"cache_create_tokens":0,"wall_clock_ms":2500},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<sid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":2,"Data":{"action":"create_comment"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
 ```
 
 Rework (verdict `Rework`, ticket transitions back to `InProgress`):
 
 ```jsonl
-{"SessionId":"<sid>","Timestamp":"...","Kind":2,"TicketId":"TLB-34","Phase":2,"Data":{"worker":"claude-code","role":"verifier"}}
-{"SessionId":"<sid>","Timestamp":"...","Kind":3,"TicketId":"TLB-34","Phase":2,"Data":{"kind":"Rework","checks_failed_count":2}}
-{"SessionId":"<sid>","Timestamp":"...","Kind":1,"TicketId":"TLB-34","Phase":2,"Data":{"model":"claude-opus","input_tokens":1234,"output_tokens":567,"cache_read_tokens":0,"cache_create_tokens":0,"wall_clock_ms":2500}}
-{"SessionId":"<sid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":2,"Data":{"action":"create_comment"}}
-{"SessionId":"<sid>","Timestamp":"...","Kind":0,"TicketId":"TLB-34","Phase":2,"Data":{"from":"InReview","to":"InProgress"}}
+{"SessionId":"<sid>","Timestamp":"...","Kind":2,"TicketId":"TLB-34","Phase":2,"Data":{"worker":"claude-code","role":"verifier"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<sid>","Timestamp":"...","Kind":3,"TicketId":"TLB-34","Phase":2,"Data":{"kind":"Rework","checks_failed_count":2},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<sid>","Timestamp":"...","Kind":1,"TicketId":"TLB-34","Phase":2,"Data":{"model":"claude-opus","vendor":"anthropic","input_tokens":1234,"output_tokens":567,"cache_read_tokens":0,"cache_create_tokens":0,"wall_clock_ms":2500},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<sid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":2,"Data":{"action":"create_comment"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<sid>","Timestamp":"...","Kind":0,"TicketId":"TLB-34","Phase":2,"Data":{"from":"InReview","to":"InProgress"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
 ```
 
 Fail (verdict `Fail`, ticket stays in `InReview`):
 
 ```jsonl
-{"SessionId":"<sid>","Timestamp":"...","Kind":2,"TicketId":"TLB-34","Phase":2,"Data":{"worker":"claude-code","role":"verifier"}}
-{"SessionId":"<sid>","Timestamp":"...","Kind":3,"TicketId":"TLB-34","Phase":2,"Data":{"kind":"Fail","checks_failed_count":0}}
-{"SessionId":"<sid>","Timestamp":"...","Kind":1,"TicketId":"TLB-34","Phase":2,"Data":{"model":"claude-opus","input_tokens":1234,"output_tokens":567,"cache_read_tokens":0,"cache_create_tokens":0,"wall_clock_ms":2500}}
-{"SessionId":"<sid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":2,"Data":{"action":"create_comment"}}
+{"SessionId":"<sid>","Timestamp":"...","Kind":2,"TicketId":"TLB-34","Phase":2,"Data":{"worker":"claude-code","role":"verifier"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<sid>","Timestamp":"...","Kind":3,"TicketId":"TLB-34","Phase":2,"Data":{"kind":"Fail","checks_failed_count":0},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<sid>","Timestamp":"...","Kind":1,"TicketId":"TLB-34","Phase":2,"Data":{"model":"claude-opus","vendor":"anthropic","input_tokens":1234,"output_tokens":567,"cache_read_tokens":0,"cache_create_tokens":0,"wall_clock_ms":2500},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<sid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":2,"Data":{"action":"create_comment"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
 ```
 
 ## Happy-path Ship example
@@ -150,22 +150,22 @@ Fail (verdict `Fail`, ticket stays in `InReview`):
 A successful `build ship <ticket>` against a ticket in `InReview` rebases the feature branch onto `origin/main`, scans for conflict markers, runs regression checks, fast-forward merges into the local main worktree, posts a `[shipped_at: <sha>]` comment, transitions `InReview -> Done`, then decrufts the worktree and deletes the feature branch. Ship-phase emits no `LlmCall` or `WorkerSpawn` events in v1.
 
 ```jsonl
-{"SessionId":"<sid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":3,"Data":{"action":"create_comment"}}
-{"SessionId":"<sid>","Timestamp":"...","Kind":0,"TicketId":"TLB-34","Phase":3,"Data":{"from":"InReview","to":"Done"}}
-{"SessionId":"<sid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":3,"Data":{"action":"decruft","halted_at":"complete"}}
-{"SessionId":"<sid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":3,"Data":{"action":"delete_branch","success":true}}
+{"SessionId":"<sid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":3,"Data":{"action":"create_comment"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<sid>","Timestamp":"...","Kind":0,"TicketId":"TLB-34","Phase":3,"Data":{"from":"InReview","to":"Done"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<sid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":3,"Data":{"action":"decruft","halted_at":"complete"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<sid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":3,"Data":{"action":"delete_branch","success":true},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
 ```
 
 Ship-blocking failures emit a single `GateFailure` line and halt. The ticket stays in `InReview` and no `StateTransition` is emitted. For example, a rebase that hits conflicts:
 
 ```jsonl
-{"SessionId":"<sid>","Timestamp":"...","Kind":4,"TicketId":"TLB-34","Phase":3,"Data":{"kind":"rebase_conflicts","conflicting_paths":["src/A.cs","src/B.cs"]}}
+{"SessionId":"<sid>","Timestamp":"...","Kind":4,"TicketId":"TLB-34","Phase":3,"Data":{"kind":"rebase_conflicts","conflicting_paths":["src/A.cs","src/B.cs"]},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
 ```
 
 A regression-check failure:
 
 ```jsonl
-{"SessionId":"<sid>","Timestamp":"...","Kind":4,"TicketId":"TLB-34","Phase":3,"Data":{"kind":"regression_checks","checks_failed":["test","lint"]}}
+{"SessionId":"<sid>","Timestamp":"...","Kind":4,"TicketId":"TLB-34","Phase":3,"Data":{"kind":"regression_checks","checks_failed":["test","lint"]},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
 ```
 
 The full set of ShipPhase `GateFailure.kind` values is `rebase_conflicts | rebase_other | conflict_markers | regression_checks`. Decruft and branch-delete failures after a successful Done transition (Steps 12-13) are logged via the `decruft` and `delete_branch` `TicketWrite` Data shapes documented above; they do not unwind the Done transition.
@@ -175,8 +175,8 @@ The full set of ShipPhase `GateFailure.kind` values is `rebase_conflicts | rebas
 Worker returns non-`Ok` (e.g. the nested-session guard fires). PlanPhase returns after the verdict event, so the file ends after two lines:
 
 ```jsonl
-{"SessionId":"06e46b9c08d74e13bd1815300c0b7e83","Timestamp":"2026-05-22T22:37:18.9689774+00:00","Kind":2,"TicketId":"TLB-34","Phase":0,"Data":{"worker":"claude-code"}}
-{"SessionId":"06e46b9c08d74e13bd1815300c0b7e83","Timestamp":"2026-05-22T22:37:19.3100749+00:00","Kind":3,"TicketId":"TLB-34","Phase":0,"Data":{"status":"Failed"}}
+{"SessionId":"06e46b9c08d74e13bd1815300c0b7e83","Timestamp":"2026-05-22T22:37:18.9689774+00:00","Kind":2,"TicketId":"TLB-34","Phase":0,"Data":{"worker":"claude-code"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"06e46b9c08d74e13bd1815300c0b7e83","Timestamp":"2026-05-22T22:37:19.3100749+00:00","Kind":3,"TicketId":"TLB-34","Phase":0,"Data":{"status":"Failed"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
 ```
 
 ---
