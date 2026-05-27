@@ -58,6 +58,17 @@ static async Task<int> RunAsync(string[] args)
         }
     }
 
+    // Validation for new verb (requires body path).
+    if (verb == "new")
+    {
+        if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]))
+        {
+            Console.Error.WriteLine("Error: body-path is required");
+            Console.Error.WriteLine("Usage: build new <body-path> [--title \"...\"] [--type \"...\"] [--label \"...\"]* [--debug]");
+            return 2;
+        }
+    }
+
     // Resolve the main worktree root via git worktree list so that phases receive a
     // sane workingDirectory even when the CLI is invoked from inside a feature worktree.
     // Fall back to the raw cwd on any error so no new failure mode is introduced.
@@ -185,6 +196,99 @@ static async Task<int> RunAsync(string[] args)
         catch (OperationCanceledException)
         {
             Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+    }
+
+    if (verb == "new")
+    {
+        var sessionId2 = Guid.NewGuid().ToString("N");
+        var http2 = new HttpClient();
+        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
+        {
+            BaseUrl = config2.Ticketing.PlaneBaseUrl,
+            ApiToken = secrets2.PlaneApiToken,
+            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
+            ProjectId = config2.Ticketing.PlaneProjectId,
+            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
+        });
+        await using var jsonlEventSink2 = new JsonlEventSink(new EventLogOptions
+        {
+            BaseDirectory = ResolveLogDir(config2.Events.LogDirectory),
+            SessionId = sessionId2
+        }, sessionContext);
+        var eventSink2 = new RecordingEventSink(jsonlEventSink2);
+
+        var buildOptions2 = new BuildOptions(
+            SessionId: sessionId2,
+            WorkerName: "",
+            WorkerTimeout: TimeSpan.Zero,
+            DebugCaptureDirectory: debugMode
+                ? Path.GetFullPath(Path.Combine(cwd2, ".build", "sessions", sessionId2))
+                : null);
+        if (buildOptions2.DebugCaptureDirectory is not null)
+            Directory.CreateDirectory(buildOptions2.DebugCaptureDirectory);
+
+        var phase = new NewPhase(ticketing2, eventSink2, buildOptions2);
+
+        var bodyPath = args[1];
+        var newCommandArgs = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["body_path"] = bodyPath
+        };
+
+        // Parse flags: --title, --type, --label (repeatable), --debug (already stripped).
+        var labels = new List<string>();
+        int parseStart = 2;
+        for (int i = parseStart; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (arg == "--title" && i + 1 < args.Length)
+            {
+                newCommandArgs["title"] = args[++i];
+            }
+            else if (arg == "--type" && i + 1 < args.Length)
+            {
+                newCommandArgs["type"] = args[++i];
+            }
+            else if (arg == "--label" && i + 1 < args.Length)
+            {
+                labels.Add(args[++i]);
+            }
+        }
+
+        // Pack labels as tab-separated string for transport through Args dict.
+        if (labels.Count > 0)
+        {
+            newCommandArgs["labels"] = string.Join("\t", labels);
+        }
+
+        var ctx2 = new TicketCommandContext("", newCommandArgs);
+        var cmd2 = new NewCommand(phase, config2.Project.PlaneProjectUrl, buildOptions2.DebugCaptureDirectory);
+
+        try
+        {
+            using var verbCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+            var verbResult = await cmd2.ExecuteAsync(ctx2, verbCts.Token);
+            if (!verbResult.Success)
+            {
+                Console.Error.WriteLine($"Command 'new' failed: {verbResult.Message}");
+                if (buildOptions2.DebugCaptureDirectory is not null)
+                    Console.WriteLine($"Debug capture: .build/sessions/{sessionId2}/");
+                return 1;
+            }
+            if (!string.IsNullOrEmpty(verbResult.Message))
+                Console.WriteLine(verbResult.Message);
+            if (buildOptions2.DebugCaptureDirectory is not null)
+                Console.WriteLine($"Debug capture: .build/sessions/{sessionId2}/");
+            return 0;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            if (buildOptions2.DebugCaptureDirectory is not null)
+                Console.WriteLine($"Debug capture: .build/sessions/{sessionId2}/");
             return 1;
         }
     }
