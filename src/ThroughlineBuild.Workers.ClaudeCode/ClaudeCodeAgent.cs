@@ -251,10 +251,16 @@ public class ClaudeCodeAgent : IWorkerAgent
         {
             var head = stdout.Length > 200 ? stdout[..200] : stdout;
             if (parseError is not null)
-                return new WorkerResult(Status.Escalate, "Failed to parse Claude Code JSON envelope", Array.Empty<string>(),
-                    $"Failed to parse Claude Code JSON envelope: {parseError}. Stdout head: {head}", new Dictionary<string, object>());
-            return new WorkerResult(Status.Escalate, "Claude Code JSON envelope was null after deserialization", Array.Empty<string>(),
-                $"Deserialized envelope was null. Stdout head: {head}", new Dictionary<string, object>());
+            {
+                var failureReason = $"Failed to parse Claude Code JSON envelope: {parseError}. Stdout head: {head}";
+                Console.Error.WriteLine($"[WorkerResultParser] {failureReason}");
+                return new WorkerResult(Status.Failed, "Failed to parse Claude Code JSON envelope", Array.Empty<string>(),
+                    failureReason, new Dictionary<string, object>());
+            }
+            var nullFailureReason = $"Deserialized envelope was null. Stdout head: {head}";
+            Console.Error.WriteLine($"[WorkerResultParser] {nullFailureReason}");
+            return new WorkerResult(Status.Failed, "Claude Code JSON envelope was null after deserialization", Array.Empty<string>(),
+                nullFailureReason, new Dictionary<string, object>());
         }
 
         if (envelope.IsError)
@@ -265,8 +271,10 @@ public class ClaudeCodeAgent : IWorkerAgent
 
         if (envelope.Result is null)
         {
-            return new WorkerResult(Status.Escalate, "Claude Code JSON envelope missing result field", Array.Empty<string>(),
-                $"Envelope result field is null. Subtype: {envelope.Subtype}. Stderr: {stderr}", new Dictionary<string, object>());
+            var failureReason = $"Envelope result field is null. Subtype: {envelope.Subtype}. Stderr: {stderr}";
+            Console.Error.WriteLine($"[WorkerResultParser] {failureReason}");
+            return new WorkerResult(Status.Failed, "Claude Code JSON envelope missing result field", Array.Empty<string>(),
+                failureReason, new Dictionary<string, object>());
         }
 
         // Extract model from the NDJSON system event; fall back to the configured default.
@@ -284,16 +292,20 @@ public class ClaudeCodeAgent : IWorkerAgent
 
         if (outcome.DeserializeErrorType != null)
         {
-            return new WorkerResult(Status.Escalate, "Failed to deserialize WORKER_RESULT JSON", Array.Empty<string>(),
-                $"Failed to deserialize WORKER_RESULT JSON: {outcome.DeserializeErrorType}: {outcome.DeserializeErrorMessage}", new Dictionary<string, object>());
+            var failureReason = $"Failed to deserialize WORKER_RESULT JSON: {outcome.DeserializeErrorType}: {outcome.DeserializeErrorMessage}";
+            Console.Error.WriteLine($"[WorkerResultParser] {failureReason}");
+            return new WorkerResult(Status.Failed, "Failed to deserialize WORKER_RESULT JSON", Array.Empty<string>(),
+                failureReason, new Dictionary<string, object>());
         }
 
         if (exitCode != 0)
             return new WorkerResult(Status.Failed, "Process exited with non-zero code", Array.Empty<string>(),
                 $"Exit code {exitCode}. Stderr: {stderr}", new Dictionary<string, object>());
 
-        return new WorkerResult(Status.Escalate, "No WORKER_RESULT found in output", Array.Empty<string>(),
-            $"Envelope result did not contain a WORKER_RESULT block. Stderr: {stderr}", new Dictionary<string, object>());
+        var markerFailureReason = $"Envelope result did not contain a WORKER_RESULT block. Stderr: {stderr}";
+        Console.Error.WriteLine($"[WorkerResultParser] {markerFailureReason}");
+        return new WorkerResult(Status.Failed, "No WORKER_RESULT found in output", Array.Empty<string>(),
+            markerFailureReason, new Dictionary<string, object>());
     }
 
     // Builds the llm_usage metadata dictionary from the Claude Code JSON envelope.

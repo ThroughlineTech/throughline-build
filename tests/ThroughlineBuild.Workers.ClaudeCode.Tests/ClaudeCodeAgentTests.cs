@@ -236,26 +236,26 @@ public class ClaudeCodeAgentEnvelopeParserTests
     }
 
     [Fact]
-    public void EnvelopeParser_MalformedJson_ReturnsEscalate()
+    public void EnvelopeParser_MalformedJson_ReturnsFailed()
     {
         var stdout = "this is not valid json at all";
 
         var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 0, stderr: "");
 
-        Assert.Equal(Status.Escalate, result.Status);
+        Assert.Equal(Status.Failed, result.Status);
         Assert.NotNull(result.FailureReason);
         Assert.Contains("Failed to parse Claude Code JSON envelope", result.FailureReason);
     }
 
     [Fact]
-    public void EnvelopeParser_MissingResultField_ReturnsEscalate()
+    public void EnvelopeParser_MissingResultField_ReturnsFailed()
     {
         // result field is absent (null) - envelope with is_error:false but no result
         var stdout = "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":null}";
 
         var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 0, stderr: "");
 
-        Assert.Equal(Status.Escalate, result.Status);
+        Assert.Equal(Status.Failed, result.Status);
         Assert.NotNull(result.FailureReason);
         Assert.Contains("result field", result.FailureReason);
     }
@@ -273,14 +273,14 @@ public class ClaudeCodeAgentEnvelopeParserTests
     }
 
     [Fact]
-    public void EnvelopeParser_ValidEnvelope_NoWorkerResultMarker_ReturnsEscalate()
+    public void EnvelopeParser_ValidEnvelope_NoWorkerResultMarker_ReturnsFailed()
     {
         // Valid envelope but inner result has no WORKER_RESULT block
         var stdout = MakeEnvelope("Hello, this is a plain response with no marker.");
 
         var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 0, stderr: "");
 
-        Assert.Equal(Status.Escalate, result.Status);
+        Assert.Equal(Status.Failed, result.Status);
         Assert.NotNull(result.FailureReason);
         Assert.Contains("WORKER_RESULT", result.FailureReason);
     }
@@ -297,13 +297,13 @@ public class ClaudeCodeAgentEnvelopeParserTests
     }
 
     [Fact]
-    public void EnvelopeParser_MalformedWorkerResultJson_ReturnsEscalateWithDeserializeAttribution()
+    public void EnvelopeParser_MalformedWorkerResultJson_ReturnsFailedWithDeserializeAttribution()
     {
         var stdout = MakeEnvelope("WORKER_RESULT\nthis is not valid json");
 
         var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 0, stderr: "");
 
-        Assert.Equal(Status.Escalate, result.Status);
+        Assert.Equal(Status.Failed, result.Status);
         Assert.NotNull(result.FailureReason);
         Assert.Contains("Failed to deserialize WORKER_RESULT JSON", result.FailureReason);
         Assert.Contains("JsonException", result.FailureReason);
@@ -329,7 +329,7 @@ public class ClaudeCodeAgentEnvelopeParserTests
     }
 
     [Fact]
-    public void EnvelopeParser_NdjsonStream_MissingTerminalResult_ReturnsEscalate()
+    public void EnvelopeParser_NdjsonStream_MissingTerminalResult_ReturnsFailed()
     {
         // NDJSON stream that ends before the terminal result event arrives
         var systemLine = "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"abc\",\"model\":\"x\"}";
@@ -338,7 +338,7 @@ public class ClaudeCodeAgentEnvelopeParserTests
 
         var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 0, stderr: "");
 
-        Assert.Equal(Status.Escalate, result.Status);
+        Assert.Equal(Status.Failed, result.Status);
         Assert.NotNull(result.FailureReason);
     }
 
@@ -389,7 +389,7 @@ public class ClaudeCodeAgentNdjsonFixtureTests
 
     // Feeding the raw NDJSON fixture through ParseStdoutEnvelope should succeed
     // for the hello fixture (terminal result has a plain text answer; no
-    // WORKER_RESULT marker => Escalate with "No WORKER_RESULT" message).
+    // WORKER_RESULT marker => Failed with "No WORKER_RESULT" message).
     [Fact]
     public void Fixture_StreamHello_ParsesEnvelopeWithoutCrash()
     {
@@ -399,10 +399,10 @@ public class ClaudeCodeAgentNdjsonFixtureTests
         var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 0, stderr: "");
 
         // Real fixture has no WORKER_RESULT block in the result text; we expect
-        // Escalate with the "No WORKER_RESULT" message. This proves the envelope
+        // Failed with the "No WORKER_RESULT" message. This proves the envelope
         // located the terminal result line and routed it to the WORKER_RESULT
         // parser exactly like the legacy single-blob path.
-        Assert.Equal(Status.Escalate, result.Status);
+        Assert.Equal(Status.Failed, result.Status);
         Assert.NotNull(result.FailureReason);
         Assert.Contains("WORKER_RESULT", result.FailureReason);
     }
