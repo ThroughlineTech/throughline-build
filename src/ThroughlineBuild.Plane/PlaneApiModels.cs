@@ -97,6 +97,19 @@ public record ApplyLabelsRequest(
     [property: JsonPropertyName("label_ids")] List<string> LabelIds
 );
 
+public record CreateIssueRequest(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("description_html")] string DescriptionHtml,
+    [property: JsonPropertyName("type")] string? Type,
+    [property: JsonPropertyName("label_ids")] List<string> LabelIds
+);
+
+public record PlaneCreateIssueResponse(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("sequence_id")] int SequenceId,
+    [property: JsonPropertyName("created_at")] DateTime CreatedAt
+);
+
 [JsonSerializable(typeof(PlaneIssue))]
 [JsonSerializable(typeof(PlaneIssueList))]
 [JsonSerializable(typeof(PlaneState))]
@@ -116,6 +129,8 @@ public record ApplyLabelsRequest(
 [JsonSerializable(typeof(AppendDescriptionRequest))]
 [JsonSerializable(typeof(CreateCommentRequest))]
 [JsonSerializable(typeof(ApplyLabelsRequest))]
+[JsonSerializable(typeof(CreateIssueRequest))]
+[JsonSerializable(typeof(PlaneCreateIssueResponse))]
 [JsonSerializable(typeof(List<PlaneState>))]
 [JsonSerializable(typeof(List<PlaneLabel>))]
 [JsonSerializable(typeof(List<PlaneRelationItem>))]

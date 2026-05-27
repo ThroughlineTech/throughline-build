@@ -58,6 +58,29 @@ public interface ITicketing
     /// Fetch all comments on a ticket. Returns empty list on 404 or empty result.
     /// </summary>
     Task<IReadOnlyList<TicketComment>> GetCommentsAsync(string id, CancellationToken ct);
+
+    /// <summary>
+    /// Create a new ticket in the project and return its identifier and UUID.
+    /// <para>
+    /// The <paramref name="type"/> parameter maps to the backend's native issue-type field
+    /// (e.g. Plane's structured "type" field). If the backend represents type as a label,
+    /// implementations should prepend it to <paramref name="initialLabelNames"/>.
+    /// </para>
+    /// <para>
+    /// The returned <see cref="NewTicketResult.Id"/> is the human-readable identifier
+    /// (e.g. "TLB-42"), built as {ProjectIdentifier}-{sequence_id}.
+    /// </para>
+    /// <para>
+    /// Initial state is whatever the backend assigns by default (typically Backlog).
+    /// This method does NOT set state explicitly.
+    /// </para>
+    /// </summary>
+    Task<NewTicketResult> CreateTicketAsync(
+        string title,
+        string type,
+        string descriptionHtml,
+        IReadOnlyList<string>? initialLabelNames,
+        CancellationToken ct);
 }
 
 /// <summary>
@@ -78,3 +101,11 @@ public record BackendCapabilities(
 /// Result returned by RollupParentAsync.
 /// </summary>
 public record RollupResult(bool ParentTransitioned, string? NewParentState, string? FailureReason);
+
+/// <summary>
+/// Result returned by CreateTicketAsync.
+/// </summary>
+/// <param name="Id">Human-readable identifier, e.g. "TLB-42".</param>
+/// <param name="Uuid">Plane work item UUID.</param>
+/// <param name="CreatedAt">Timestamp when the ticket was created (UTC).</param>
+public record NewTicketResult(string Id, string Uuid, DateTime CreatedAt);

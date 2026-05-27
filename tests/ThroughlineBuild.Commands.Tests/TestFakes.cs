@@ -94,6 +94,14 @@ internal sealed class FakeTicketing : ITicketing
 
     public Task<IReadOnlyList<TicketComment>> GetCommentsAsync(string id, CancellationToken ct) =>
         Task.FromResult((IReadOnlyList<TicketComment>)ExistingComments);
+
+    public Task<NewTicketResult> CreateTicketAsync(
+        string title,
+        string type,
+        string descriptionHtml,
+        IReadOnlyList<string>? initialLabelNames,
+        CancellationToken ct) =>
+        throw new NotImplementedException();
 }
 
 internal sealed class FakeEventSink : IEventSink

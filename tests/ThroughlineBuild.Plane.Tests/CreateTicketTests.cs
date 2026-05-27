@@ -1,0 +1,139 @@
+using System.Net;
+using System.Text.Json;
+using ThroughlineBuild.Contracts;
+using ThroughlineBuild.Plane;
+using Xunit;
+
+namespace ThroughlineBuild.Plane.Tests;
+
+// ---------------------------------------------------------------------------
+// CreateTicketAsync tests
+// ---------------------------------------------------------------------------
+public class CreateTicketAsyncTests
+{
+    private const string NewIssueUuid = "11111111-0000-0000-0000-000000000042";
+    private const int NewSequenceId = 42;
+    private const string CreatedAtIso = "2026-05-27T10:00:00Z";
+
+    private static string CreateIssueResponseJson(
+        string uuid = NewIssueUuid,
+        int seq = NewSequenceId,
+        string createdAt = CreatedAtIso) =>
+        $$"""{"id":"{{uuid}}","sequence_id":{{seq}},"created_at":"{{createdAt}}"}""";
+
+    // Fact (a): successful create returns NewTicketResult with Id "TLB-42" and correct Uuid
+    [Fact]
+    public async Task CreateTicketAsync_ReturnsNewTicketResultWithIdAndUuid()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(CreateIssueResponseJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var result = await client.CreateTicketAsync(
+            title: "My new ticket",
+            type: "",
+            descriptionHtml: "<p>desc</p>",
+            initialLabelNames: null,
+            ct: CancellationToken.None);
+
+        Assert.Equal("TLB-42", result.Id);
+        Assert.Equal(NewIssueUuid, result.Uuid);
+        Assert.Equal(
+            DateTime.Parse(CreatedAtIso, null, System.Globalization.DateTimeStyles.RoundtripKind),
+            result.CreatedAt);
+
+        var postReq = handler.Requests[0];
+        Assert.Equal(HttpMethod.Post, postReq.Method);
+        Assert.Contains("issues", postReq.RequestUri!.ToString());
+    }
+
+    // Fact (b): initial labels are resolved to UUIDs and included in the request body
+    [Fact]
+    public async Task CreateTicketAsync_WithInitialLabels_ResolvesUuidsInRequestBody()
+    {
+        var handler = new FakeMessageHandler();
+        // First request: labels GET
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
+        // Second request: issues POST
+        handler.Enqueue(FakeMessageHandler.OkJson(CreateIssueResponseJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var result = await client.CreateTicketAsync(
+            title: "Labeled ticket",
+            type: "",
+            descriptionHtml: "<p>desc</p>",
+            initialLabelNames: ["Size: S"],
+            ct: CancellationToken.None);
+
+        Assert.Equal("TLB-42", result.Id);
+
+        var postReq = handler.Requests[1];
+        Assert.Equal(HttpMethod.Post, postReq.Method);
+        Assert.Contains(TestData.LabelUuid, postReq.Body);
+    }
+
+    // Fact (c): null initial labels -> no extra list-labels GET, label_ids empty in request
+    [Fact]
+    public async Task CreateTicketAsync_NullInitialLabels_NoLabelLookupAndEmptyLabelIds()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(CreateIssueResponseJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        await client.CreateTicketAsync(
+            title: "No labels",
+            type: "",
+            descriptionHtml: "<p>desc</p>",
+            initialLabelNames: null,
+            ct: CancellationToken.None);
+
+        // Only one HTTP request: the POST (no label-list GET)
+        Assert.Single(handler.Requests);
+        Assert.Equal(HttpMethod.Post, handler.Requests[0].Method);
+        // label_ids must be present but empty in the JSON body
+        var body = handler.Requests[0].Body;
+        Assert.Contains("label_ids", body);
+        Assert.Contains("[]", body);
+    }
+
+    // Fact (d): 422 API error throws PlaneApiException with correct status
+    [Fact]
+    public async Task CreateTicketAsync_ApiError_ThrowsPlaneApiException()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.ErrorJson(422, "unprocessable entity"));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var ex = await Assert.ThrowsAsync<PlaneApiException>(() =>
+            client.CreateTicketAsync(
+                title: "Bad ticket",
+                type: "",
+                descriptionHtml: "<p>desc</p>",
+                initialLabelNames: null,
+                ct: CancellationToken.None));
+
+        Assert.Equal(422, ex.Status);
+        Assert.Contains("422", ex.Message);
+    }
+
+    // Fact (e): unknown label name throws InvalidOperationException with clear message
+    [Fact]
+    public async Task CreateTicketAsync_UnknownLabelName_ThrowsInvalidOperationException()
+    {
+        var handler = new FakeMessageHandler();
+        // Labels GET returns known labels (not including "unknown-label")
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.CreateTicketAsync(
+                title: "Ticket with bad label",
+                type: "",
+                descriptionHtml: "<p>desc</p>",
+                initialLabelNames: ["unknown-label"],
+                ct: CancellationToken.None));
+
+        Assert.Contains("unknown-label", ex.Message);
+        Assert.Contains("not found", ex.Message);
+    }
+}

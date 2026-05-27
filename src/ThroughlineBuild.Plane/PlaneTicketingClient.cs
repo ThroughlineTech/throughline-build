@@ -435,6 +435,51 @@ public sealed class PlaneTicketingClient : ITicketing
         }
     }
 
+    public async Task<NewTicketResult> CreateTicketAsync(
+        string title,
+        string type,
+        string descriptionHtml,
+        IReadOnlyList<string>? initialLabelNames,
+        CancellationToken ct)
+    {
+        return await _pipeline.ExecuteAsync(async token =>
+        {
+            // Resolve label names to UUIDs if any are provided
+            var labelIds = new List<string>();
+            if (initialLabelNames is { Count: > 0 })
+            {
+                var labelsByName = await GetLabelsByNameAsync(token).ConfigureAwait(false);
+                foreach (var name in initialLabelNames)
+                {
+                    if (!labelsByName.TryGetValue(name, out var labelId))
+                        throw new InvalidOperationException($"Label '{name}' not found in Plane project");
+                    labelIds.Add(labelId);
+                }
+            }
+
+            var request = new CreateIssueRequest(
+                Name: title,
+                DescriptionHtml: descriptionHtml,
+                Type: string.IsNullOrEmpty(type) ? null : type,
+                LabelIds: labelIds);
+
+            var responseBody = await PostJsonAsync(
+                IssuesBase,
+                request,
+                PlaneJsonContext.Default,
+                token).ConfigureAwait(false);
+
+            var response = (PlaneCreateIssueResponse?)JsonSerializer.Deserialize(
+                responseBody, typeof(PlaneCreateIssueResponse), PlaneJsonContext.Default)
+                ?? throw new InvalidOperationException("Deserialized null for PlaneCreateIssueResponse");
+
+            return new NewTicketResult(
+                Id: $"{_options.ProjectIdentifier}-{response.SequenceId}",
+                Uuid: response.Id,
+                CreatedAt: response.CreatedAt);
+        }, ct).ConfigureAwait(false);
+    }
+
     // ------------------------------------------------------------------ rollup helpers
 
     private static string ExtractStateName(JsonElement stateElement)
