@@ -291,6 +291,14 @@ public class CloseCommandTests
 
         public Task<IReadOnlyList<TicketComment>> GetCommentsAsync(string id, CancellationToken ct) =>
             Task.FromResult((IReadOnlyList<TicketComment>)Array.Empty<TicketComment>());
+
+        public Task<NewTicketResult> CreateTicketAsync(
+            string title,
+            string type,
+            string descriptionHtml,
+            IReadOnlyList<string>? initialLabelNames,
+            CancellationToken ct) =>
+            throw new NotImplementedException();
     }
 
     private sealed class FakeEventSink : IEventSink

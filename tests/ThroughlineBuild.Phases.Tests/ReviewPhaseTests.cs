@@ -398,6 +398,14 @@ public class ReviewPhaseTests
             Task.FromResult(new RollupResult(false, null, null));
         public Task<IReadOnlyList<TicketComment>> GetCommentsAsync(string id, CancellationToken ct) =>
             Task.FromResult((IReadOnlyList<TicketComment>)_seededComments);
+
+        public Task<NewTicketResult> CreateTicketAsync(
+            string title,
+            string type,
+            string descriptionHtml,
+            IReadOnlyList<string>? initialLabelNames,
+            CancellationToken ct) =>
+            throw new NotImplementedException();
     }
 
     private sealed class FakeWorkerAgent : IWorkerAgent
@@ -616,6 +624,14 @@ public class ReviewPhaseDebugCaptureTests
             Task.FromResult(new RollupResult(false, null, null));
         public Task<IReadOnlyList<TicketComment>> GetCommentsAsync(string id, CancellationToken ct) =>
             Task.FromResult((IReadOnlyList<TicketComment>)_seededComments);
+
+        public Task<NewTicketResult> CreateTicketAsync(
+            string title,
+            string type,
+            string descriptionHtml,
+            IReadOnlyList<string>? initialLabelNames,
+            CancellationToken ct) =>
+            throw new NotImplementedException();
     }
 
     private sealed class FakeEventSink : IEventSink
