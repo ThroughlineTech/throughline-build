@@ -27,6 +27,10 @@ public sealed class PlaneTicketingClient : ITicketing
     private Dictionary<string, string>? _labelsByName;
     private readonly SemaphoreSlim _labelLock = new(1, 1);
 
+    // Issue-type cache: name -> uuid, lazy-loaded on first use
+    private Dictionary<string, string>? _issueTypesByName;
+    private readonly SemaphoreSlim _issueTypeLock = new(1, 1);
+
     private static readonly JsonSerializerOptions _jsonOptions = new()
     {
         TypeInfoResolver = PlaneJsonContext.Default,
@@ -69,6 +73,9 @@ public sealed class PlaneTicketingClient : ITicketing
 
     private string LabelsBase =>
         $"api/v1/workspaces/{_options.WorkspaceSlug}/projects/{_options.ProjectId}/labels/";
+
+    private string IssueTypesBase =>
+        $"api/v1/workspaces/{_options.WorkspaceSlug}/projects/{_options.ProjectId}/issue-types/";
 
     private static int ParseSequenceId(string id)
     {
@@ -156,6 +163,24 @@ public sealed class PlaneTicketingClient : ITicketing
         finally
         {
             _labelLock.Release();
+        }
+    }
+
+    private async Task<Dictionary<string, string>> GetIssueTypesByNameAsync(CancellationToken ct)
+    {
+        if (_issueTypesByName is not null) return _issueTypesByName;
+
+        await _issueTypeLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_issueTypesByName is not null) return _issueTypesByName;
+            var list = await GetJsonAsync<PlaneIssueTypeList>(IssueTypesBase, PlaneJsonContext.Default, ct).ConfigureAwait(false);
+            _issueTypesByName = list.Results.ToDictionary(t => t.Name, t => t.Id, StringComparer.OrdinalIgnoreCase);
+            return _issueTypesByName;
+        }
+        finally
+        {
+            _issueTypeLock.Release();
         }
     }
 
@@ -466,10 +491,18 @@ public sealed class PlaneTicketingClient : ITicketing
                 }
             }
 
+            string? typeId = null;
+            if (!string.IsNullOrEmpty(type))
+            {
+                var issueTypesByName = await GetIssueTypesByNameAsync(token).ConfigureAwait(false);
+                if (!issueTypesByName.TryGetValue(type, out typeId))
+                    throw new InvalidOperationException($"Issue type '{type}' not found in Plane project");
+            }
+
             var request = new CreateIssueRequest(
                 Name: title,
                 DescriptionHtml: descriptionHtml,
-                Type: string.IsNullOrEmpty(type) ? null : type,
+                Type: typeId,
                 LabelIds: labelIds);
 
             var responseBody = await PostJsonAsync(

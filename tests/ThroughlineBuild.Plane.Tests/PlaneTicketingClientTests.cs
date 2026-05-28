@@ -78,6 +78,7 @@ internal static class TestData
     public const string LabelUuid = "cccccccc-0000-0000-0000-000000000001";
     public const string LabelUuid2 = "cccccccc-0000-0000-0000-000000000002";
     public const string CommentUuid = "dddddddd-0000-0000-0000-000000000001";
+    public const string IssueTypeUuid = "eeeeeeee-1111-0000-0000-000000000001";
 
     public static string IssueListJson(string stateId = StateUuid, string descHtml = "<p>desc</p>", string labelIdsJson = "[]") =>
         $$"""
@@ -114,6 +115,16 @@ internal static class TestData
           "results": [
             { "id": "{{LabelUuid}}", "name": "Size: S" },
             { "id": "{{LabelUuid2}}", "name": "risk:low" }
+          ]
+        }
+        """;
+
+    public static string IssueTypeListJson() =>
+        $$"""
+        {
+          "results": [
+            { "id": "{{IssueTypeUuid}}", "name": "Task" },
+            { "id": "eeeeeeee-1111-0000-0000-000000000002", "name": "Bug" }
           ]
         }
         """;

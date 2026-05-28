@@ -34,6 +34,15 @@ public record PlaneLabelList(
     [property: JsonPropertyName("results")] List<PlaneLabel> Results
 );
 
+public record PlaneIssueType(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("name")] string Name
+);
+
+public record PlaneIssueTypeList(
+    [property: JsonPropertyName("results")] List<PlaneIssueType> Results
+);
+
 public record PlaneComment(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("comment_html")] string CommentHtml
@@ -120,6 +129,8 @@ public record SetParentRequest(
 [JsonSerializable(typeof(PlaneStateList))]
 [JsonSerializable(typeof(PlaneLabel))]
 [JsonSerializable(typeof(PlaneLabelList))]
+[JsonSerializable(typeof(PlaneIssueType))]
+[JsonSerializable(typeof(PlaneIssueTypeList))]
 [JsonSerializable(typeof(PlaneComment))]
 [JsonSerializable(typeof(PlaneCommentListItem))]
 [JsonSerializable(typeof(PlaneCommentList))]

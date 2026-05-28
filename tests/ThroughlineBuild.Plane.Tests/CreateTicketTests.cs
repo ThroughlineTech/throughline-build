@@ -136,4 +136,87 @@ public class CreateTicketAsyncTests
         Assert.Contains("unknown-label", ex.Message);
         Assert.Contains("not found", ex.Message);
     }
+
+    // Fact (f): non-empty type name is resolved to UUID and sent in request body
+    [Fact]
+    public async Task CreateTicketAsync_WithTypeName_ResolvesUuidInRequestBody()
+    {
+        var handler = new FakeMessageHandler();
+        // First request: issue-types GET
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueTypeListJson()));
+        // Second request: issues POST
+        handler.Enqueue(FakeMessageHandler.OkJson(CreateIssueResponseJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        await client.CreateTicketAsync(
+            title: "Typed ticket",
+            type: "task",
+            descriptionHtml: "<p>desc</p>",
+            initialLabelNames: null,
+            ct: CancellationToken.None);
+
+        var postReq = handler.Requests[1];
+        Assert.Equal(HttpMethod.Post, postReq.Method);
+        Assert.Contains(TestData.IssueTypeUuid, postReq.Body);
+    }
+
+    // Fact (g): type name lookup is case-insensitive
+    [Fact]
+    public async Task CreateTicketAsync_TypeNameCaseInsensitive_ResolvesUuid()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueTypeListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(CreateIssueResponseJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        await client.CreateTicketAsync(
+            title: "Typed ticket",
+            type: "TASK",
+            descriptionHtml: "<p>desc</p>",
+            initialLabelNames: null,
+            ct: CancellationToken.None);
+
+        var postReq = handler.Requests[1];
+        Assert.Contains(TestData.IssueTypeUuid, postReq.Body);
+    }
+
+    // Fact (h): unknown type name throws InvalidOperationException with clear message
+    [Fact]
+    public async Task CreateTicketAsync_UnknownTypeName_ThrowsInvalidOperationException()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueTypeListJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.CreateTicketAsync(
+                title: "Bad type ticket",
+                type: "unknown-type",
+                descriptionHtml: "<p>desc</p>",
+                initialLabelNames: null,
+                ct: CancellationToken.None));
+
+        Assert.Contains("unknown-type", ex.Message);
+        Assert.Contains("not found", ex.Message);
+    }
+
+    // Fact (i): empty type string skips issue-types lookup entirely
+    [Fact]
+    public async Task CreateTicketAsync_EmptyType_NoIssueTypeLookup()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(CreateIssueResponseJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        await client.CreateTicketAsync(
+            title: "No type ticket",
+            type: "",
+            descriptionHtml: "<p>desc</p>",
+            initialLabelNames: null,
+            ct: CancellationToken.None);
+
+        // Only the POST -- no issue-types GET
+        Assert.Single(handler.Requests);
+        Assert.Equal(HttpMethod.Post, handler.Requests[0].Method);
+    }
 }
