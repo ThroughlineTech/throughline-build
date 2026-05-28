@@ -274,14 +274,19 @@ static async Task<int> RunAsync(string[] args)
 
         var newCommandArgs = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        // Parse flags: --title, --type, --label (repeatable); --debug already stripped.
+        // Parse flags: --title, --type, --label (repeatable), --review; --debug already stripped.
         var labels = new List<string>();
+        bool review = false;
         for (int i = 1; i < args.Length; i++)
         {
             var arg = args[i];
             if (arg == "--print-template")
             {
                 // handled by classifier
+            }
+            else if (arg == "--review")
+            {
+                review = true;
             }
             else if (arg == "--title" && i + 1 < args.Length)
             {
@@ -414,11 +419,32 @@ static async Task<int> RunAsync(string[] args)
 
         Console.WriteLine($"[drafted] from operator text ({draftSw.Elapsed.TotalSeconds:0.0}s)");
 
+        // When --review is set, run interactive review loop before filing.
+        string finalBody;
+        if (review)
+        {
+            var loop = new ReviewLoop(
+                SystemConsole.Instance,
+                (text, ct2) => draftPhase.RunAsync(new DraftPhaseOptions(text, debugMode), cwd2, ct2),
+                ReviewLoop.DefaultEditorResolver());
+            var loopResult = await loop.RunAsync(draftResult.BodyMarkdown!, draftText, verbCts.Token);
+            if (loopResult.Outcome == ReviewLoopOutcome.Aborted)
+            {
+                Console.WriteLine("no ticket filed");
+                return 0;
+            }
+            finalBody = loopResult.FinalBody!;
+        }
+        else
+        {
+            finalBody = draftResult.BodyMarkdown!;
+        }
+
         // Write body markdown to a temp file; NewCommand expects a file path.
         var tempBodyPath = Path.ChangeExtension(Path.GetTempFileName(), ".md");
         try
         {
-            File.WriteAllText(tempBodyPath, draftResult.BodyMarkdown);
+            File.WriteAllText(tempBodyPath, finalBody);
             newCommandArgs["body_path"] = tempBodyPath;
 
             var ctx3 = new TicketCommandContext("", newCommandArgs);

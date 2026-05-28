@@ -72,6 +72,10 @@ public static class NewVerbArgumentClassifier
                 hasPrintTemplate = true;
                 // not positional
             }
+            else if (a == "--review")
+            {
+                // Known bare bool flag; does not consume the next arg.
+            }
             else if (a.StartsWith("--") && i + 1 < args.Length)
             {
                 // Known value flags: skip both flag and value.
