@@ -119,7 +119,7 @@ public class NewPhase : IWorkflowPhase
 
         // Compose create call parameters.
         var createTitle = options.OverrideTitle ?? title!;
-        var createType = options.OverrideType ?? "task";
+        var createType = options.OverrideType;
         var createBody = bodyText; // Pass through as-is; Plane handles markdown rendering.
         var createLabels = options.InitialLabels;
 

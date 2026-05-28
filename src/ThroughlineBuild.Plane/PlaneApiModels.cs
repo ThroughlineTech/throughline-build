@@ -109,7 +109,7 @@ public record ApplyLabelsRequest(
 public record CreateIssueRequest(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("description_html")] string DescriptionHtml,
-    [property: JsonPropertyName("type")] string? Type,
+    [property: JsonPropertyName("type"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Type,
     [property: JsonPropertyName("label_ids")] List<string> LabelIds
 );
 
