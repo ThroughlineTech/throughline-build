@@ -45,6 +45,13 @@ public class NewCliTests
         Assert.Contains("text vs file", CliUsage.UsageText);
     }
 
+    [Fact]
+    public void UsageText_ContainsReviewFlag()
+    {
+        // --review flag should appear in the new-verb help block.
+        Assert.Contains("--review", CliUsage.UsageText);
+    }
+
     // --- subprocess tests ---
 
     [Fact]

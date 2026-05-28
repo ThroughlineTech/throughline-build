@@ -11,9 +11,9 @@ Usage:
   build review <ticket-id> [--debug|--quiet] [--summary-json]     Run the review phase for a ticket
   build ship <ticket-id> [--debug] [--summary-json]               Ship a reviewed ticket (local fast-forward merge; no push to remote); --debug accepted but is a no-op (ship has no worker subprocess)
   build chain <ticket-id> [--debug]                               Run the full chain (plan -> implement -> review -> ship cycle) for a single ticket; streams per-phase output to stdout
-  build new <body-path> [--title "..."] [--type "..."] [--label "..."]* [--debug]  Create a new ticket from a body file (file mode: arg must be an existing file)
-  build new <text> [--title "..."] [--type "..."] [--label "..."]* [--debug]       Create a new ticket from free-form text (draft mode: arg is not an existing file)
-  build new - [--title "..."] [--type "..."] [--label "..."]* [--debug]            Read operator text from stdin, then create a new ticket (draft mode)
+  build new <body-path> [--title "..."] [--type "..."] [--label "..."]* [--review] [--debug]  Create a new ticket from a body file (file mode: arg must be an existing file)
+  build new <text> [--title "..."] [--type "..."] [--label "..."]* [--review] [--debug]       Create a new ticket from free-form text (draft mode: arg is not an existing file)
+  build new - [--title "..."] [--type "..."] [--label "..."]* [--review] [--debug]            Read operator text from stdin, then create a new ticket (draft mode)
   build new --print-template                                                        Print the body template to stdout for redirection into a draft file
 
   text vs file disambiguation: if the argument is an existing file path, file mode is used unchanged.
@@ -36,6 +36,9 @@ Flags:
                    silent behavior. Mutually exclusive with --debug (which replaces the digest with raw stream).
   --summary-json   Emit the per-phase completion summary as a JSON object on stdout instead of the
                    default human-readable text block. Useful for piping into jq or downstream tooling.
+  --review         (draft mode only) After drafting, open an interactive review loop before filing.
+                   Choose [a]ccept to file with the current body, [e]dit to open $EDITOR, [r]egenerate
+                   to re-run the drafter (optionally with extra context), or [q]uit to abort (exit 0).
 
 Progress digest (default behavior for plan/implement/review):
   Without --debug or --quiet, the orchestrator prints a one-line digest per worker stream event to stderr

@@ -182,4 +182,26 @@ public class NewVerbArgumentClassifierTests
             FilesExist("ticket-body"));
         Assert.Equal(NewVerbKind.FileMode, result.Kind);
     }
+
+    // --- --review bare bool flag ---
+
+    [Fact]
+    public void ReviewFlag_DoesNotConsumeNextPositional()
+    {
+        // --review is a bare bool; the word after it must remain a positional arg.
+        var result = NewVerbArgumentClassifier.Classify(
+            new[] { "new", "--review", "fix the readme typo" }, NoFiles());
+        Assert.Equal(NewVerbKind.DraftMode, result.Kind);
+        Assert.Equal("fix the readme typo", result.DraftText);
+    }
+
+    [Fact]
+    public void ReviewFlag_DoesNotChangeClassificationKind()
+    {
+        // --review with a single positional should still classify as DraftMode.
+        var result = NewVerbArgumentClassifier.Classify(
+            new[] { "new", "some text", "--review" }, NoFiles());
+        Assert.Equal(NewVerbKind.DraftMode, result.Kind);
+        Assert.Equal("some text", result.DraftText);
+    }
 }
