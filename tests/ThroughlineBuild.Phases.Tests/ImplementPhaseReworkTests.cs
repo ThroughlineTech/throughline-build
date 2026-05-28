@@ -105,7 +105,8 @@ public class ImplementPhaseReworkTests
         var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
 
         Assert.False(result.Success);
-        Assert.Contains("Ready", result.FailureReason ?? "");
+        Assert.Contains("did you mean to invoke rework", result.FailureReason ?? "");
+        Assert.Contains("InProgress", result.FailureReason ?? "");
         Assert.Empty(ticketing.Transitions);
     }
 
@@ -122,8 +123,8 @@ public class ImplementPhaseReworkTests
         var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
 
         Assert.False(result.Success);
-        Assert.Contains("InProgress", result.FailureReason ?? "");
-        Assert.Contains("rework", result.FailureReason ?? "");
+        Assert.Contains("no review has run yet", result.FailureReason ?? "");
+        Assert.Contains("Ready", result.FailureReason ?? "");
         Assert.Empty(ticketing.Transitions);
     }
 
