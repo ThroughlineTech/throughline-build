@@ -25,3 +25,14 @@ The template uses the section headings that the NewPhase validator recognises (t
 `#` heading, `## Acceptance criteria`, `## Out of scope`). Filling those sections avoids the
 "missing acceptance criteria" warning that appears when creating a ticket from a bare file.
 
+Codex install:
+Windows: powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"
+Mac: curl -fsSL https://chatgpt.com/codex/install.sh | sh
+
+Gemini install:
+Mac/Windows: npm install -g @google/gemini-cli --or-- npx @google/gemini-cli
+
+CoPilot install:
+https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli
+Mac/Windows: npm install -g @github/copilot
+
