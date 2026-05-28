@@ -17,4 +17,9 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\ThroughlineBuild.Scaffold\ThroughlineBuild.Scaffold.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="Fixtures\example-op-doc.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
 </Project>
