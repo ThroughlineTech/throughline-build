@@ -1,0 +1,4 @@
+Analyzing the task requirements...
+Reading file src/ThroughlineBuild.Workers.Codex/CodexAgent.cs
+Error: context window exceeded. Unable to complete the requested changes within the current context limit.
+Please break the task into smaller steps and retry.
