@@ -104,7 +104,7 @@ public class ReworkPhaseTests
         var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
 
         Assert.Equal(ReworkOutcome.TicketNotInProgress, result.Outcome);
-        Assert.Contains("Done", result.FailureReason ?? "");
+        Assert.Contains("this is unexpected", result.FailureReason ?? "");
         Assert.Null(result.ImplementResult);
         Assert.Equal(0, worker.CallCount);
         Assert.Equal(0, retriever.CallCount);
@@ -123,7 +123,7 @@ public class ReworkPhaseTests
         var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
 
         Assert.Equal(ReworkOutcome.TicketNotInProgress, result.Outcome);
-        Assert.Contains("Ready", result.FailureReason ?? "");
+        Assert.Contains("this is unexpected", result.FailureReason ?? "");
         Assert.Equal(0, worker.CallCount);
         Assert.Equal(0, retriever.CallCount);
     }

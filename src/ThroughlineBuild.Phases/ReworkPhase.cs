@@ -70,7 +70,7 @@ public sealed class ReworkPhase : IWorkflowPhase
                 ticketId,
                 ReworkOutcome.TicketNotInProgress,
                 null,
-                $"ticket is in {ticket.State}; rework requires InProgress (if Rework was the verdict, ReviewPhase should have transitioned it). For Done/Cancelled tickets, this likely needs a new ticket instead.",
+                $"ticket is in {ticket.State}; if Rework was the verdict, this is unexpected - state should have transitioned to InProgress",
                 "");
         }
 
