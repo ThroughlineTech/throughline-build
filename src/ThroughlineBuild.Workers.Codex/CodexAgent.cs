@@ -24,6 +24,11 @@ public class CodexAgent : IWorkerAgent
         var args = new List<string> { "exec", "--full-auto" };
         foreach (var extra in _options.ExtraArgs)
             args.Add(extra);
+        // Resolve size -> model, normalize, add --model flag if resolved
+        _options.Sizes.TryGetValue(options.Size, out var resolvedModelRaw);
+        var modelArg = NormalizeModel(resolvedModelRaw);
+        if (modelArg is not null)
+            args.AddRange(new[] { "--model", modelArg });
         args.Add(brief.Instruction);
 
         var stdoutBuilder = new StringBuilder();
@@ -97,6 +102,11 @@ public class CodexAgent : IWorkerAgent
 
         var result = ParseStdoutForWorkerResult(stdout, process.ExitCode, stderr);
 
+        // Merge llm_usage metadata regardless of success/failure
+        var mergedMeta = new Dictionary<string, object>(result.Metadata);
+        mergedMeta["llm_usage"] = BuildLlmUsageMetadata(null, null, stopwatch.ElapsedMilliseconds, modelArg);
+        result = result with { Metadata = mergedMeta };
+
         if (options.DebugCaptureDirectory is not null)
         {
             WriteDebugCapture(options.DebugCaptureDirectory, brief.Instruction, stdout, stderr, result);
@@ -135,9 +145,44 @@ public class CodexAgent : IWorkerAgent
 
     internal void ConfigureEnvironment(ProcessStartInfo psi, WorkerOptions options)
     {
+        // Strip API-key env vars to force subscription auth (same pattern as ClaudeCodeAgent).
+        psi.Environment.Remove("CODEX_API_KEY");
+        psi.Environment.Remove("OPENAI_API_KEY");
         if (options.EnvironmentVariables != null)
             foreach (var (k, v) in options.EnvironmentVariables)
                 psi.Environment[k] = v;
+    }
+
+    // Strips the "openai:" vendor prefix from a configured model id so the
+    // bare id can be passed to `codex --model`. Returns null when the configured
+    // value is null/empty so callers can skip the flag and let codex use its default.
+    internal static string? NormalizeModel(string? configuredModel)
+    {
+        if (string.IsNullOrWhiteSpace(configuredModel))
+            return null;
+        var trimmed = configuredModel.Trim();
+        const string openaiPrefix = "openai:";
+        if (trimmed.StartsWith(openaiPrefix, StringComparison.OrdinalIgnoreCase))
+            trimmed = trimmed.Substring(openaiPrefix.Length);
+        return trimmed.Length == 0 ? null : trimmed;
+    }
+
+    // Builds llm_usage metadata for Codex runs. vendor is always "openai".
+    // cost_usd is always null (Codex emits tokens, not USD).
+    // Token counts are populated from usage when available; null otherwise.
+    internal static Dictionary<string, object> BuildLlmUsageMetadata(
+        int? inputTokens, int? outputTokens, long wallClockMs, string? model)
+    {
+        var metadata = new Dictionary<string, object>
+        {
+            { "model",         (object)(model ?? "") },
+            { "vendor",        "openai" },
+            { "wall_clock_ms", wallClockMs },
+            { "input_tokens",  (object)(inputTokens ?? 0) },
+            { "output_tokens", (object)(outputTokens ?? 0) },
+            { "cost_usd",      (object?)null! },
+        };
+        return metadata;
     }
 
     internal static void WriteDebugCapture(
