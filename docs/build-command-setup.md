@@ -150,7 +150,7 @@ What happens:
 2. It builds a structured brief and dispatches a `claude-code` worker agent.
 3. The worker investigates the codebase and writes an implementation plan back to the ticket.
 4. On success the CLI prints: `Plan complete: TLB-99 risk=low size=m`
-5. Event logs land in `.build/events/` as JSONL files named by session ID.
+5. Event logs land in `.build/events/` as JSONL files named `<project>-<ticket>-<verb>-<yyyy-MM-dd>-<HHmmss>.jsonl` (see [docs/event-log-format.md](event-log-format.md#file-location-and-naming)).
 
 The `risk=` and `size=` values in the success message are the raw Plane label names (`risk:low`, `size:m`, etc.), which use lowercase. The investigation workflow uses uppercase `S / M / L` for sizing tier references, but the stored label strings and CLI output are always lowercase.
 

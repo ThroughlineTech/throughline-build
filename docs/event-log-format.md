@@ -10,7 +10,14 @@ The `build` CLI writes a structured event log for every invocation. Each run pro
 ## File location and naming
 
 - Directory: configured by `events.log_directory` in `.build/config.toml` (typically `.build/events/`).
-- Filename: `<session-id>.jsonl`, where `<session-id>` is a fresh GUID (no hyphens) generated per CLI invocation.
+- Filename stem: `<project>-<ticket-or-slug>-<verb>-<yyyy-MM-dd>-<HHmmss>.jsonl`. Example: `latticeflow-TLB-169-implement-2026-05-28-143052.jsonl`.
+  - `<project>` is the slugified, lowercased `ticketing.plane_project_name` from the config; if absent, falls back to slugified `plane_project_identifier`; if both empty, the segment is omitted.
+  - `<ticket-or-slug>` is the canonical ticket id (case preserved, e.g. `TLB-169`) for phase verbs (`plan`, `implement`, `review`, `ship`, `chain`, `rework`, `amend`, `close`, `defer`, `reopen`). For `scaffold`, it is the op-doc filename stem. For `new`, it is omitted.
+  - `<verb>` is the CLI subcommand, lowercased.
+  - The `HHmmss` suffix is local time and exists for collision-safety: the sink opens in `FileMode.Append`, so two runs of the same verb on the same ticket on the same second would otherwise merge into one file. Within the same second, the second run will indeed append to the first.
+  - Stem construction lives in [src/ThroughlineBuild.EventLog/SessionFileNameBuilder.cs](../src/ThroughlineBuild.EventLog/SessionFileNameBuilder.cs).
+- The same stem is used as the directory name for `--debug` worker captures under `.build/sessions/<stem>/`, so the two artifacts of a single run sort together by name.
+- The `SessionId` field inside each event record (see [Record schema](#record-schema) below) is still a per-invocation GUID with no hyphens. The on-disk filename was made human-readable; the in-record correlation key was not changed.
 - Format: [JSON Lines](https://jsonlines.org/) - one UTF-8 JSON object per line, terminated by `\n`. Append-only.
 - Empty file: legal. It means the run exited before emitting any event (for example, PlanPhase rejects a ticket that is not in `Backlog` state at [src/ThroughlineBuild.Phases/PlanPhase.cs:79-80](../src/ThroughlineBuild.Phases/PlanPhase.cs#L79-L80) before the first emit).
 
@@ -197,7 +204,9 @@ The CLI owns the sink with `await using` at [src/ThroughlineBuild.Cli/Program.cs
 Quick inspection:
 
 ```bash
-cat .build/events/<session-id>.jsonl | jq .
+cat .build/events/<stem>.jsonl | jq .
 ```
+
+(The `SessionId` inside each line is still a GUID; only the filename was made human-readable.)
 
 Programmatically: parse line-by-line with any JSON library. Lines are independent; partial files are still partially valid.

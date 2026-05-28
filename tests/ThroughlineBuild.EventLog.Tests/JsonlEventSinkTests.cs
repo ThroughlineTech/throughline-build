@@ -429,4 +429,65 @@ public class JsonlEventSinkSessionContextTests
             if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
         }
     }
+
+    [Fact]
+    public async Task FileNameStem_OverridesDefault_FileNameUsesStem()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var sid = Guid.NewGuid().ToString("N");
+        var stem = "latticeflow-TLB-169-implement-2026-05-28-143052";
+        var options = new EventLogOptions { BaseDirectory = tempDir, SessionId = sid, FileNameStem = stem };
+
+        try
+        {
+            var sink = new JsonlEventSink(options);
+            try
+            {
+                await sink.EmitAsync(MakeEvent(sid), CancellationToken.None);
+                await sink.FlushAsync(CancellationToken.None);
+            }
+            finally
+            {
+                await sink.DisposeAsync();
+            }
+
+            Assert.True(File.Exists(Path.Combine(tempDir, $"{stem}.jsonl")));
+            Assert.False(File.Exists(Path.Combine(tempDir, $"{sid}.jsonl")));
+
+            var line = File.ReadAllLines(Path.Combine(tempDir, $"{stem}.jsonl"))[0];
+            using var doc = JsonDocument.Parse(line);
+            Assert.Equal(sid, doc.RootElement.GetProperty("SessionId").GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task FileNameStem_NullOrEmpty_FallsBackToSessionId()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var options = new EventLogOptions { BaseDirectory = tempDir, SessionId = "fallback-sid", FileNameStem = null };
+
+        try
+        {
+            var sink = new JsonlEventSink(options);
+            try
+            {
+                await sink.EmitAsync(MakeEvent("fallback-sid"), CancellationToken.None);
+                await sink.FlushAsync(CancellationToken.None);
+            }
+            finally
+            {
+                await sink.DisposeAsync();
+            }
+
+            Assert.True(File.Exists(Path.Combine(tempDir, "fallback-sid.jsonl")));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
 }

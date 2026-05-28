@@ -31,7 +31,10 @@ public sealed class JsonlEventSink : IEventSink, IAsyncDisposable
             return;
         var dir = _options.BaseDirectory;
         Directory.CreateDirectory(dir);
-        var path = Path.Combine(dir, $"{_options.SessionId}.jsonl");
+        var stem = string.IsNullOrEmpty(_options.FileNameStem)
+            ? _options.SessionId
+            : _options.FileNameStem;
+        var path = Path.Combine(dir, $"{stem}.jsonl");
         _stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read,
             bufferSize: 4096, useAsync: true);
         _opened = true;
