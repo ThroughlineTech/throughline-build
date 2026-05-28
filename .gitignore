@@ -13,3 +13,4 @@ obj/
 .build/sessions/
 .build/config.toml
 .tmp/
+src/tools/artifacts/
