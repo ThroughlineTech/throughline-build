@@ -155,7 +155,8 @@ public class ImplementPhase : IWorkflowPhase
             DebugCaptureDirectory: _options.DebugCaptureDirectory,
             LiveStdoutSink: _options.LiveStdoutSink,
             LiveStderrSink: _options.LiveStderrSink,
-            ProgressDigestSink: _options.ProgressDigestSink);
+            ProgressDigestSink: _options.ProgressDigestSink,
+            Size: WorkerSizeMapper.FromTicketSize(ticket.Size));
         if (_options.DebugCaptureDirectory is not null)
             Directory.CreateDirectory(_options.DebugCaptureDirectory);
         var workerResult = await _worker.ExecuteAsync(brief, worktreeNames.WorktreePath, workerOptions, ct).ConfigureAwait(false);

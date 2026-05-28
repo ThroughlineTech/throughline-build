@@ -85,7 +85,8 @@ public class PlanPhase : IWorkflowPhase
             DebugCaptureDirectory: _options.DebugCaptureDirectory,
             LiveStdoutSink: _options.LiveStdoutSink,
             LiveStderrSink: _options.LiveStderrSink,
-            ProgressDigestSink: _options.ProgressDigestSink);
+            ProgressDigestSink: _options.ProgressDigestSink,
+            Size: WorkerSize.Small);
         var workerResult = await _worker.ExecuteAsync(brief, workingDirectory, workerOptions, ct).ConfigureAwait(false);
 
         await _ticketing.TransitionAsync(ticketId, TicketState.Planning, ct).ConfigureAwait(false);
