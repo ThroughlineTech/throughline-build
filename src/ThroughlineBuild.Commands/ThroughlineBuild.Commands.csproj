@@ -14,5 +14,6 @@
     <ProjectReference Include="..\ThroughlineBuild.Helpers\ThroughlineBuild.Helpers.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.JudgmentSlots\ThroughlineBuild.JudgmentSlots.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.Phases\ThroughlineBuild.Phases.csproj" />
+    <ProjectReference Include="..\ThroughlineBuild.Scaffold\ThroughlineBuild.Scaffold.csproj" />
   </ItemGroup>
 </Project>
