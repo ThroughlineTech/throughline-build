@@ -11,6 +11,7 @@ using ThroughlineBuild.Helpers;
 using ThroughlineBuild.JudgmentSlots;
 using ThroughlineBuild.Phases;
 using ThroughlineBuild.Plane;
+using ThroughlineBuild.Scaffold;
 using ThroughlineBuild.Verification;
 using ThroughlineBuild.Workers.ClaudeCode;
 
@@ -66,6 +67,17 @@ static async Task<int> RunAsync(string[] args)
                 Console.Error.WriteLine("Error: build chain accepts exactly one ticket ID in v1; multi-ticket dispatch is planned for a future release.");
                 return 2;
             }
+        }
+    }
+
+    // Early arg validation for scaffold verb: op-doc-path is a required positional.
+    if (verb == "scaffold")
+    {
+        if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]) || args[1].StartsWith("--"))
+        {
+            Console.Error.WriteLine("Error: op-doc-path is required");
+            Console.Error.WriteLine("Usage: build scaffold <op-doc-path> [--validate-only] [--dry-run] [--accept-warnings] [--debug]");
+            return 2;
         }
     }
 
@@ -476,6 +488,77 @@ static async Task<int> RunAsync(string[] args)
         finally
         {
             try { File.Delete(tempBodyPath); } catch { /* best effort cleanup */ }
+        }
+    }
+
+    if (verb == "scaffold")
+    {
+        var scaffoldSessionId = Guid.NewGuid().ToString("N");
+        var scaffoldHttp = new HttpClient();
+        var scaffoldTicketing = new PlaneTicketingClient(scaffoldHttp, new PlaneClientOptions
+        {
+            BaseUrl = config2.Ticketing.PlaneBaseUrl,
+            ApiToken = secrets2.PlaneApiToken,
+            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
+            ProjectId = config2.Ticketing.PlaneProjectId,
+            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
+        });
+        await using var scaffoldJsonlSink = new JsonlEventSink(new EventLogOptions
+        {
+            BaseDirectory = ResolveLogDir(config2.Events.LogDirectory),
+            SessionId = scaffoldSessionId
+        }, sessionContext);
+        var scaffoldEventSink = new RecordingEventSink(scaffoldJsonlSink);
+
+        var scaffoldPhase = new ScaffoldPhase(scaffoldTicketing, scaffoldEventSink, scaffoldSessionId);
+        var scaffoldCommand = new ScaffoldCommand(scaffoldPhase);
+
+        // Parse scaffold-local flags.
+        var scaffoldArgs = new Dictionary<string, string>(StringComparer.Ordinal);
+        scaffoldArgs["op_doc_path"] = args[1];
+        for (int i = 2; i < args.Length; i++)
+        {
+            var a = args[i];
+            if (a == "--validate-only") scaffoldArgs["validate_only"] = "true";
+            else if (a == "--dry-run") scaffoldArgs["dry_run"] = "true";
+            else if (a == "--accept-warnings") scaffoldArgs["accept_warnings"] = "true";
+            // --debug already stripped by pre-pass; other unknown flags are silently ignored
+        }
+
+        var scaffoldCtx = new TicketCommandContext("", scaffoldArgs);
+
+        try
+        {
+            using var scaffoldCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; scaffoldCts.Cancel(); };
+            var scaffoldResult = await scaffoldCommand.ExecuteAsync(scaffoldCtx, scaffoldCts.Token);
+
+            // Strip the EXIT: tag from the message to get the human-readable output.
+            var msg = scaffoldResult.Message ?? string.Empty;
+            int firstNl = msg.IndexOf('\n');
+            string tag = firstNl >= 0 ? msg.Substring(0, firstNl) : msg;
+            string body = firstNl >= 0 ? msg.Substring(firstNl + 1) : string.Empty;
+
+            if (!string.IsNullOrEmpty(body))
+            {
+                if (!scaffoldResult.Success)
+                    Console.Error.WriteLine(body);
+                else
+                    Console.WriteLine(body);
+            }
+
+            return tag switch
+            {
+                ScaffoldExitCategory.Clean => 0,
+                ScaffoldExitCategory.ValidationError => 2,
+                ScaffoldExitCategory.PartialCreation => 3,
+                _ => scaffoldResult.Success ? 0 : 1
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
         }
     }
 
