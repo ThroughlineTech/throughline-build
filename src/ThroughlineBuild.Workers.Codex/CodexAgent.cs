@@ -80,7 +80,18 @@ public class CodexAgent : IWorkerAgent
         };
 
         _digester.ResetStart();
-        process.Start();
+        try
+        {
+            process.Start();
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            var reason = $"Worker executable not found: '{_options.ExecutablePath}'. " +
+                         $"Verify it is on PATH or set workers.codex.executable in config.toml. Win32: {ex.Message}";
+            Console.Error.WriteLine($"[CodexAgent] {reason}");
+            return new WorkerResult(Status.Failed, $"Worker executable not found: '{_options.ExecutablePath}'",
+                Array.Empty<string>(), reason, new Dictionary<string, object>());
+        }
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
         // Brief is in args; close stdin immediately (nothing to pipe)
