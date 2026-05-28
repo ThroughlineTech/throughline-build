@@ -19,7 +19,7 @@ The `build` CLI writes a structured event log for every invocation. Each run pro
 - The same stem is used as the directory name for `--debug` worker captures under `.build/sessions/<stem>/`, so the two artifacts of a single run sort together by name.
 - The `SessionId` field inside each event record (see [Record schema](#record-schema) below) is still a per-invocation GUID with no hyphens. The on-disk filename was made human-readable; the in-record correlation key was not changed.
 - Format: [JSON Lines](https://jsonlines.org/) - one UTF-8 JSON object per line, terminated by `\n`. Append-only.
-- Empty file: legal. It means the run exited before emitting any event (for example, PlanPhase rejects a ticket that is not in `Backlog` state at [src/ThroughlineBuild.Phases/PlanPhase.cs:79-80](../src/ThroughlineBuild.Phases/PlanPhase.cs#L79-L80) before the first emit).
+- Empty file: legal. It means the run exited before emitting any event (for example, PlanPhase rejects a ticket that is not in `Backlog` state at [src/ThroughlineBuild.Phases/PlanPhase.cs:59-60](../src/ThroughlineBuild.Phases/PlanPhase.cs#L59-L60) before the first emit).
 
 ---
 
@@ -48,29 +48,35 @@ Logs produced before TLB-147 lack `project_id`, `project_name`, `workspace_slug`
 
 ### Event kinds
 
-From `EventKind` at [src/ThroughlineBuild.Contracts/Models/WorkflowEvent.cs:11](../src/ThroughlineBuild.Contracts/Models/WorkflowEvent.cs#L11):
+From `EventKind` at [src/ThroughlineBuild.Contracts/Models/WorkflowEvent.cs:13](../src/ThroughlineBuild.Contracts/Models/WorkflowEvent.cs#L13):
 
 | Value | Name              | Meaning |
 |-------|-------------------|---------|
 | 0     | `StateTransition` | Ticket moved between Plane states (e.g. Backlog -> Ready). |
-| 1     | `LlmCall`         | Direct LLM invocation. Emitted by PlanPhase once per successful plan with worker token usage. |
+| 1     | `LlmCall`         | Direct LLM invocation. Emitted by PlanPhase / ImplementPhase / ReviewPhase once per successful run with worker token usage extracted from the `WORKER_RESULT` envelope's `llm_usage` metadata. |
 | 2     | `WorkerSpawn`     | A worker agent (e.g. Claude Code) was launched. |
 | 3     | `VerifierVerdict` | A worker or verifier returned a status. |
 | 4     | `GateFailure`     | A precondition gate fired. Used by ImplementPhase to surface a `drift_warning` (the run still proceeds) and by ShipPhase to surface ship-blocking conditions (the run halts and the ticket stays in `InReview`). |
 | 5     | `TicketWrite`     | Side effect on a Plane ticket (description, labels, comment). |
+| 6     | `ChainStart`      | Emitted once at the beginning of a `build chain` run, before any inner phase runs. |
+| 7     | `ChainEnd`        | Emitted once at the end of a `build chain` run, after the final inner phase (or after the refused-state early-exit). |
+| 8     | `ReworkRound`    | Emitted by ChainPhase between an `InReview -> InProgress` Rework transition and the start of the next ImplementPhase round. Not emitted by `build rework` (manual rework does not loop). |
 
 ### Phases
 
 From `Phase` at [src/ThroughlineBuild.Contracts/Models/Phase.cs:3](../src/ThroughlineBuild.Contracts/Models/Phase.cs#L3):
 
-| Value | Name      |
-|-------|-----------|
-| 0     | `Plan`    |
-| 1     | `Implement` |
-| 2     | `Review`  |
-| 3     | `Ship`    |
-| 4     | `Chain`   |
-| 5     | `New`     |
+| Value | Name      | Used by |
+|-------|-----------|---------|
+| 0     | `Plan`    | `PlanPhase` |
+| 1     | `Implement` | `ImplementPhase`, `ReworkPhase` (delegated), `ChainPhase.ReworkRound` events |
+| 2     | `Review`  | `ReviewPhase` |
+| 3     | `Ship`    | `ShipPhase` |
+| 4     | `Chain`   | `ChainPhase` (ChainStart / ChainEnd) |
+| 5     | `New`     | `NewPhase` |
+| 6     | `Command` | `AmendCommand`, `CloseCommand`, `DeferCommand`, `ReopenCommand` (generic command-bearing events that do not belong to a workflow phase) |
+| 7     | `Draft`   | `DraftPhase` (used by `build new` in draft mode) |
+| 8     | `Scaffold` | `ScaffoldPhase` (used by `build scaffold`) |
 
 ---
 
@@ -86,6 +92,9 @@ From `Phase` at [src/ThroughlineBuild.Contracts/Models/Phase.cs:3](../src/Throug
 | `TicketWrite`     | `action`, plus action-specific extras | `{"action": "append_description"}`, `{"action": "apply_labels"}`, `{"action": "create_comment"}`, `{"action": "decruft", "halted_at": "complete"}` (ShipPhase; `halted_at` is `complete` on success, a `DecruftStep` name on halt, or `exception` if the decrufter threw - in which case an `error` key carries the exception message), `{"action": "delete_branch", "success": true}` (ShipPhase; on failure a `reason` key carries the git error) |
 | `StateTransition` | `from`, `to`      | `{"from": "Backlog", "to": "Ready"}`, `{"from": "Ready", "to": "InProgress"}`, `{"from": "InProgress", "to": "InReview"}`, `{"from": "InReview", "to": "InProgress"}` (Review-phase Rework path), `{"from": "InReview", "to": "Done"}` (Ship-phase success) |
 | `GateFailure`     | `kind`, kind-specific extras | `{"kind": "drift_warning", "planned_at_sha": "...", "main_sha": "..."}` (ImplementPhase emits this when the `[planned_at: <sha>]` marker on a ticket disagrees with current `origin/main`; the phase logs the warning and proceeds without gating). ShipPhase emits one of five ship-blocking kinds, all of which halt the run with the ticket left in `InReview`: `{"kind": "rebase_conflicts", "conflicting_paths": [...]}`, `{"kind": "rebase_other", "reason": "..."}`, `{"kind": "conflict_markers", "marker_files": [...]}`, `{"kind": "regression_checks", "checks_failed": [...]}`, `{"kind": "diverged_bases", "local_ref": "...", "remote_ref": "..."}` |
+| `ChainStart`      | `starting_at_phase`, `initial_state`, `chain_session_id` | `{"starting_at_phase": "plan", "initial_state": "Backlog", "chain_session_id": "<guid>"}`. `starting_at_phase` is one of `plan` (Backlog ticket), `implement` (Ready ticket), `review` (InReview ticket), or `refused` (any other state). `chain_session_id` is the GUID shared by every `WorkflowEvent.SessionId` written from this chain run, including the inner phase events. |
+| `ChainEnd`        | `outcome`, `phases_run`, `rework_rounds`, `total_duration_ms`, optional `final_rationale_preview` | `{"outcome": "Completed", "phases_run": 4, "rework_rounds": 0, "total_duration_ms": 312500}`. `outcome` is the `ChainOutcome` enum name (`Completed`, `RefusedInitialState`, `StoppedAtPlan`, `StoppedAtImplement`, `StoppedAtReview`, `ReworkCapExceeded`, `StoppedAtShip`). `phases_run` counts every `ChainStep` produced including rework retries. `rework_rounds` counts only implement steps whose `ReworkRoundNumber >= 1`. `final_rationale_preview` is a truncated form of the last review's rationale, present only when ChainPhase has a Rework / Fail verdict to record. |
+| `ReworkRound`     | `round`, `verdict_that_triggered`, `rationale_preview` | `{"round": 1, "verdict_that_triggered": "Rework", "rationale_preview": "first 200 chars of the review rationale..."}`. Emitted before the next ImplementPhase round begins. `round` is the 1-based index of the upcoming implement attempt (round 0 is the initial implement). `verdict_that_triggered` is always `"Rework"` today - `Fail` and `Pass` do not loop. `rationale_preview` is `""` if the review supplied no rationale. The event's `Phase` field is `Implement` (= 1), not `Chain`, because the round number refers to an implement attempt. |
 
 New emit sites should follow this style: short, lowercase, snake_case keys; values are strings or primitives.
 
@@ -177,6 +186,49 @@ A regression-check failure:
 
 The full set of ShipPhase `GateFailure.kind` values is `rebase_conflicts | rebase_other | conflict_markers | regression_checks | diverged_bases`. Decruft and branch-delete failures after a successful Done transition (Steps 12-13) are logged via the `decruft` and `delete_branch` `TicketWrite` Data shapes documented above; they do not unwind the Done transition.
 
+## Happy-path Chain example
+
+A successful `build chain <ticket>` against a `Backlog` ticket runs Plan -> Implement -> Review (Pass) -> Ship. The file opens with a `ChainStart` and closes with a `ChainEnd`; everything in between is the same shape as the per-phase runs above, just interleaved into one file. The chain's own `SessionId` (the `chain_session_id` carried in the `ChainStart` data) is the `SessionId` on every line - the inner phases share it rather than minting their own.
+
+```jsonl
+{"SessionId":"<csid>","Timestamp":"...","Kind":6,"TicketId":"TLB-34","Phase":4,"Data":{"starting_at_phase":"plan","initial_state":"Backlog","chain_session_id":"<csid>"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":2,"TicketId":"TLB-34","Phase":0,"Data":{"worker":"claude-code"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":3,"TicketId":"TLB-34","Phase":0,"Data":{"status":"Ok"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":1,"TicketId":"TLB-34","Phase":0,"Data":{"model":"claude-sonnet-4-6","vendor":"anthropic","input_tokens":1234,"output_tokens":567,"cache_read_tokens":0,"cache_create_tokens":0,"wall_clock_ms":2500},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":0,"Data":{"action":"append_description"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":0,"Data":{"action":"apply_labels"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":0,"Data":{"action":"create_comment"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":0,"TicketId":"TLB-34","Phase":0,"Data":{"from":"Backlog","to":"Ready"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":0,"TicketId":"TLB-34","Phase":1,"Data":{"from":"Ready","to":"InProgress"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":2,"TicketId":"TLB-34","Phase":1,"Data":{"worker":"claude-code"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":3,"TicketId":"TLB-34","Phase":1,"Data":{"status":"Ok"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":1,"TicketId":"TLB-34","Phase":1,"Data":{"model":"claude-sonnet-4-6","vendor":"anthropic","input_tokens":12000,"output_tokens":3200,"cache_read_tokens":0,"cache_create_tokens":0,"wall_clock_ms":48000},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":1,"Data":{"action":"create_comment"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":0,"TicketId":"TLB-34","Phase":1,"Data":{"from":"InProgress","to":"InReview"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":2,"TicketId":"TLB-34","Phase":2,"Data":{"worker":"claude-code","role":"verifier"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":3,"TicketId":"TLB-34","Phase":2,"Data":{"kind":"Pass","checks_failed_count":0},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":1,"TicketId":"TLB-34","Phase":2,"Data":{"model":"claude-opus","vendor":"anthropic","input_tokens":8000,"output_tokens":2000,"cache_read_tokens":0,"cache_create_tokens":0,"wall_clock_ms":15000},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":2,"Data":{"action":"create_comment"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":3,"Data":{"action":"create_comment"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":0,"TicketId":"TLB-34","Phase":3,"Data":{"from":"InReview","to":"Done"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":3,"Data":{"action":"decruft","halted_at":"complete"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":3,"Data":{"action":"delete_branch","success":true},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":7,"TicketId":"TLB-34","Phase":4,"Data":{"outcome":"Completed","phases_run":4,"rework_rounds":0,"total_duration_ms":312500},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+```
+
+If the review returns `Rework`, ChainPhase emits a `ReworkRound` line between the Rework `StateTransition` and the next ImplementPhase:
+
+```jsonl
+{"SessionId":"<csid>","Timestamp":"...","Kind":3,"TicketId":"TLB-34","Phase":2,"Data":{"kind":"Rework","checks_failed_count":1},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":5,"TicketId":"TLB-34","Phase":2,"Data":{"action":"create_comment"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":0,"TicketId":"TLB-34","Phase":2,"Data":{"from":"InReview","to":"InProgress"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":8,"TicketId":"TLB-34","Phase":1,"Data":{"round":1,"verdict_that_triggered":"Rework","rationale_preview":"missing acceptance criterion for empty-list case"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+{"SessionId":"<csid>","Timestamp":"...","Kind":2,"TicketId":"TLB-34","Phase":1,"Data":{"worker":"claude-code"},"project_id":"<uuid>","project_name":"LatticeFlow","workspace_slug":"acme","build_version":"1.0.0"}
+...
+```
+
+If the chain refuses to start (the ticket is in some state other than `Backlog` / `Ready` / `InReview`), the file contains only `ChainStart` (with `starting_at_phase: "refused"`) and `ChainEnd` (with `outcome: "RefusedInitialState"`, `phases_run: 0`).
+
 ## Worker-failure example
 
 Worker returns non-`Ok` (e.g. the nested-session guard fires). PlanPhase returns after the verdict event, so the file ends after two lines:
@@ -195,7 +247,7 @@ The sink ([src/ThroughlineBuild.EventLog/JsonlEventSink.cs](../src/ThroughlineBu
 - explicit `FlushAsync(ct)` on the sink, or
 - `DisposeAsync()` when the sink leaves scope.
 
-The CLI owns the sink with `await using` at [src/ThroughlineBuild.Cli/Program.cs:96](../src/ThroughlineBuild.Cli/Program.cs#L96), so every exit path - success, phase failure, exception, `Ctrl+C` (handled cooperatively via `CancellationTokenSource`) - runs `DisposeAsync` and flushes. A `kill -9` or process crash will still leave a 0-byte file or a partial trailing line; readers must tolerate that.
+The CLI owns the sink with `await using` in each verb-dispatch branch ([src/ThroughlineBuild.Cli/Program.cs:181, 268, 541, 647](../src/ThroughlineBuild.Cli/Program.cs#L647) - one binding per verb family: state-command, `new`, `scaffold`, and the phase verbs). Every exit path - success, phase failure, exception, `Ctrl+C` (handled cooperatively via `CancellationTokenSource`) - runs `DisposeAsync` and flushes. A `kill -9` or process crash will still leave a 0-byte file or a partial trailing line; readers must tolerate that.
 
 ---
 

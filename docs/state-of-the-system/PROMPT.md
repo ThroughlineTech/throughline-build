@@ -1,0 +1,219 @@
+# PROMPT
+
+The verbatim prompt that produced the `state-of-the-system` doc set in this directory, the interpretation notes for how it was answered, the doc set listing, and the refresh history.
+
+---
+
+## Verbatim prompt
+
+```
+# State of the System - Repo Documentation Prompt (generic)
+
+A drop-in prompt for producing a code-true "state of the system" doc set for
+any repository. Fill the CONFIG block, then paste CONFIG + PROMPT into a
+session opened at the repo root.
+
+The agent produces the doc set **and** a `PROMPT.md` that records exactly
+what it was given, so the set stays reproducible and updatable on later runs.
+
+---
+
+## How to use
+
+1. Fill the CONFIG block. Delete any line that does not apply.
+2. Paste the CONFIG block followed by the PROMPT body into the session.
+3. On a later refresh, paste the same (or amended) CONFIG + PROMPT. The agent
+   reads the existing `PROMPT.md`, updates docs in place, and appends to the
+   refresh history. If the prompt text itself changed, it updates the verbatim
+   copy in `PROMPT.md` and notes what changed.
+
+---
+
+## CONFIG
+
+```
+Repo:            latticeflow
+Main focus:      "even coverage, no single focus"
+Related sets:    "none"
+Must-answer Qs:  "none, derive them"
+Output dir:      docs/state-of-the-system/
+Notify on done:  notify me
+```
+
+---
+
+## PROMPT
+
+Read through the entire `<Repo>` repository as it exists today and document it
+thoroughly: what is in it, what each component does, what each reads and
+writes, what each expects from the workspace and from the host machine, and
+how it composes with the rest of the stack.
+
+Where a main focus is named in CONFIG, that subsystem gets the deepest
+treatment - it is the load-bearing surface and the rest of the set is context
+around it. Where CONFIG says even coverage, weight the docs by how much each
+area actually matters to someone re-scaffolding the system.
+
+Write it for where the repo is **today**, broken into logical sections.
+
+### Rules
+
+- **Code-true.** Read from source, not from existing docs or specs. Where a
+  doc and the code disagree, the code wins, and note the disagreement.
+- **Cite `file:line` for every claim.** No assertion about behavior without a
+  reference.
+- **Point to schemas and contracts, do not reproduce them.** Reference schema
+  files, type definitions, and contract files by path. Keep the prose at the
+  level of what they mean and how they are used.
+- **Status-tag every command and major code path** as one of: Functional,
+  Partial, Legacy, Aspirational, Broken.
+- **End every section with a "loose ends" call-out** - declared but unused
+  capabilities, dead references, planned-but-not-shipped behavior, known gaps.
+- If a CONFIG question has no implementation, answer it explicitly as "not
+  implemented" and name the boundary where it would live.
+
+### Cross-reference
+
+If CONFIG names related doc sets, mirror their depth and structure - the
+reader will have all sets open side by side. Note where this repo's surfaces
+connect to theirs.
+
+### Questions the set must answer
+
+Answer every question in the CONFIG must-answer list, each by `file:line`
+cite or by explicit "not implemented + boundary named".
+
+In addition, regardless of CONFIG, the set must answer all of the following:
+
+1. **Inventory.** Every command / module / service / endpoint / script: what
+   it does at a high level, its inputs (arguments, files read, env vars, MCP
+   tools, network calls), its outputs (files written, side effects, exit
+   states), and which other components it invokes.
+2. **Install / build / run.** How the repo gets onto a machine and runs -
+   setup scripts, package managers, build steps. What an update does, what an
+   uninstall leaves behind, what the host machine must provide.
+3. **External dependencies.** Services, APIs, MCP servers, and databases the
+   repo requires, and which specific tools or endpoints from each. What the
+   handshake looks like when a dependency is missing or unauthenticated.
+4. **Configuration and environment.** Every env var, config file, and secret.
+   Which are required vs optional, and which are referenced but unused.
+5. **State and persistence.** Everything the repo writes over the lifetime of
+   a session - files, directories, logs, scratch state, DB rows, caches -
+   where it writes them, and whether they are cleaned up.
+6. **Public surfaces.** APIs, CLIs, and exported interfaces other code depends
+   on, with the functional state of each.
+7. **Contracts with sibling repos or systems.** What this repo reads that
+   another wrote, and vice versa. Where two definitions of a shared artifact
+   overlap or conflict, and how each side handles the other's version.
+8. **Workspace and environment assumptions.** What the code assumes about
+   where it runs beyond the obvious - branch conventions, required tooling,
+   OS, CI integration, stack-specific code paths in command or build bodies.
+9. **Failure modes and idempotency.** For each major operation: how it fails,
+   and whether re-running it is safe.
+10. **Lifecycle / orchestration.** If the repo drives a multi-step process,
+    the phases, the coordination protocol, and how it transitions state.
+
+### Output
+
+Save the docs under the CONFIG output directory (default
+`docs/state-of-the-system/`). Use a numbered scheme with a `00`-prefixed
+index/README that carries a short architectural map and a one-line summary of
+each doc. Standalone-readable documents - one per logical section. Split into
+several documents rather than one long file.
+
+### PROMPT.md (required deliverable)
+
+Write a `PROMPT.md` alongside the doc set containing:
+
+- **Verbatim prompt.** The exact CONFIG block and PROMPT body used for this
+  run, copied verbatim, in a fenced block. If this is a refresh and the prompt
+  text changed since the last run, update this copy and add a short note of
+  what was added, removed, or reworded.
+- **Document set.** A list of every document in the set with a one-line
+  description, and how the set evolved (docs added or removed over time).
+- **How the prompt was interpreted.** Any judgment calls made - what "main
+  focus" was taken to mean, what was deliberately covered lightly, how
+  ambiguous instructions were resolved.
+- **Refresh history.** A table: date, branch / HEAD commit, notes on what
+  changed in that pass.
+
+On every later run, update `PROMPT.md` in place: refresh the verbatim prompt
+if it changed, update the document set list, and append a row to the refresh
+history table.
+
+### Voice
+
+Professional. No marketing prose, no "we" voice, no emoji. Plain technical
+prose, `file:line` references throughout.
+
+### On completion
+
+<Notify on done - e.g. "notify me when you're done", or omit.>
+```
+
+---
+
+## Document set
+
+| File | Description |
+|---|---|
+| `00-index.md` | Architectural map + one-line summary per doc + status legend. |
+| `01-inventory.md` | CLI verbs, 14 library projects, 2 tools, scripts and CI - what each is, what it reads/writes, status. |
+| `02-install-build-run.md` | Toolchain, `build.sh`, `dotnet publish` flow, host requirements, update / uninstall. |
+| `03-external-dependencies.md` | Plane REST API, Anthropic REST API, `claude` CLI, NuGet packages, handshake on missing dependency. |
+| `04-configuration.md` | `.build/config.toml` sections, env vars, secrets, precedence. |
+| `05-state-and-persistence.md` | `.build/`, `.worktrees/`, Plane writes, in-process caches, cleanup. |
+| `06-public-surfaces.md` | CLI surface, library-level public types, stability call-outs (`WORKER_RESULT` envelope, marker comments, JSONL schema). |
+| `07-contracts.md` | Inter-project contracts within this repo, shared artifacts with Plane / Claude Code / the older claude-config flow. |
+| `08-workspace-assumptions.md` | Branch conventions, required tooling, OS specifics, CI matrix, worktree-aware behavior. |
+| `09-failure-modes.md` | Per-phase failure modes, idempotency posture, cross-cutting failure modes. |
+| `10-lifecycle-orchestration.md` | The state machine, per-phase step sequences, chain rework loop (`MaxReworkRounds = 2`), event kinds emitted. |
+| `11-llm-architecture.md` | The two LLM-contact interfaces (`ILlmClient`, `IWorkerAgent`), vendor-specific code map, refactor sequence to add a new provider. Added 2026-05-28 by request to support multi-provider planning. |
+| `PROMPT.md` | This file. |
+
+Set evolution:
+- 2026-05-28 - initial publication (12 documents: 00-index, 01-10, PROMPT.md).
+- 2026-05-28 - added `11-llm-architecture.md` after operator request for a multi-provider planning document. No existing docs were modified except this `PROMPT.md` and `00-index.md` to link the new entry.
+
+---
+
+## How the prompt was interpreted
+
+**CONFIG resolution.**
+
+- **Repo: `latticeflow`** - taken to be the repository at the cwd. The product housed in it is "Throughline Build" (the architecture doc gives both names); both names are used in the prose where context warrants.
+- **Main focus: `"even coverage, no single focus"`** - taken to mean each must-answer question gets its own doc, with weighting by load-bearing surface. The Cli + Phases + Plane + Workers axis got the longest treatment because that is what a re-scaffolder would need to reproduce most carefully; the smaller libraries (Helpers, JudgmentSlots, Anthropic) got proportionally shorter coverage.
+- **Related sets: `"none"`** - no cross-reference to other doc sets was attempted. The doc set assumes the reader has only this repository open.
+- **Must-answer Qs: `"none, derive them"`** - taken to mean: answer only the ten universal questions in the PROMPT body, no additions.
+- **Output dir: `docs/state-of-the-system/`** - used verbatim.
+- **Notify on done: `notify me`** - executed at the end of the run via `bin/notify` per the user's global `CLAUDE.md` convention.
+
+**Doc structure choice.** A numbered scheme with `00-index` was chosen per the spec. The ten universal questions map cleanly to `01` through `10`, in the order the prompt lists them. The architectural map and status legend live in `00`.
+
+**Code-true judgments.**
+
+- The architecture document [docs/throughline-build-architecture.md](../throughline-build-architecture.md) is a forward-looking proposal dated 2026-05-21 - it names a number of components that do not exist in the source today (OpenAI / Google LLM clients, Codex / Gemini workers, GitHub ticketing adapter, `install` verb, MCP server packaging, replay verb). Where the architecture and the code disagree, the code wins, and the discrepancy is called out as a "loose end" in the relevant doc.
+- Status-tagging was applied to verbs, library projects, and individual public-surface types. The bar for "Functional" was: implemented end-to-end, exercised by the test suite, and not marked TODO. The bar for "Partial" required a real stub (`NotImplementedException`) or unwired plumbing.
+
+**Citation style.** Every assertion about behavior carries a `file:line` reference rendered as a markdown link to the source path with `#L<n>` anchor (VSCode-friendly). Where a reference covers a small range, `#L<start>-L<end>` is used. The convention is consistent across the set.
+
+**Deliberately covered lightly.**
+
+- Individual test bodies are not described; the test suite shape is summarized in [01-inventory.md](01-inventory.md). Each phase's per-test behavior would multiply the set's size without giving a re-scaffolder more leverage.
+- Per-file private helpers are mentioned only when they are the load-bearing piece (e.g., `MarkerParser`, `SlugBuilder`, `WorktreeDecrufter`). Helpers without production callers (`DocOnlyDetector`, `DriftComparator`) are flagged but not detailed.
+- The op-doc narrative chain under `docs/op-docs/` is summarized briefly in [01-inventory.md](01-inventory.md) but not unpacked op-by-op - those are historical execution plans, not current contracts.
+
+**Ambiguities resolved.**
+
+- The architecture mentions "MCP tools" as an invocation surface (the binary as an MCP server). No such code path exists today; [03-external-dependencies.md](03-external-dependencies.md) names this explicitly under "Architecture-named services that are not yet wired".
+- "Backend" in `.build/config.toml` is read but only `"plane"` is meaningfully supported. The doc set surfaces this as a loose end in [04-configuration.md](04-configuration.md).
+- The `Phase.Command` enum value is documented as "used by `ITicketCommand` implementations for `WorkflowEvent.Phase` when no specific workflow phase applies" - that is the observed usage, not a documented intent.
+
+---
+
+## Refresh history
+
+| Date | HEAD commit | Notes |
+|---|---|---|
+| 2026-05-28 | `164e733` on `main` | First publication. 12 documents created (00-index, 01-10, PROMPT.md). Doc set built from `Program.cs`, the 14 `ThroughlineBuild.*` projects, `tests/`, `docs/throughline-build-architecture.md`, `.build/config.toml.example`, `.claude/plane-config.md`, `.claude/ticket-config.md`, `.github/workflows/build.yml`, `build.sh`, `.gitignore`, `.gitattributes`. |
+| 2026-05-28 | `164e733` on `main` | Added [11-llm-architecture.md](11-llm-architecture.md) at operator request: a dedicated map of LLM interfaces (`ILlmClient`, `IWorkerAgent`), vendor-specific code locations, and the architectural choices required to add a second provider. Updated `00-index.md` and this `PROMPT.md` to reference the new doc. No other docs touched. |
