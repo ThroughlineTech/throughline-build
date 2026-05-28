@@ -25,6 +25,10 @@ The template uses the section headings that the NewPhase validator recognises (t
 `#` heading, `## Acceptance criteria`, `## Out of scope`). Filling those sections avoids the
 "missing acceptance criteria" warning that appears when creating a ticket from a bare file.
 
+Claude Cli:
+Windows: winget install Anthropic.ClaudeCode
+Mac/Windows: curl -fsSL https://claude.ai/install.sh | bash
+
 Codex install:
 Windows: powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"
 Mac: curl -fsSL https://chatgpt.com/codex/install.sh | sh

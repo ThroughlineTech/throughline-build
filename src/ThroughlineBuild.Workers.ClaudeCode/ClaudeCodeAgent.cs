@@ -94,7 +94,18 @@ public class ClaudeCodeAgent : IWorkerAgent
             }
         };
 
-        process.Start();
+        try
+        {
+            process.Start();
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            var reason = $"Worker executable not found: '{_options.ExecutablePath}'. " +
+                         $"Verify it is on PATH or set workers.claude-code.executable in config.toml. Win32: {ex.Message}";
+            Console.Error.WriteLine($"[ClaudeCodeAgent] {reason}");
+            return new WorkerResult(Status.Failed, $"Worker executable not found: '{_options.ExecutablePath}'",
+                Array.Empty<string>(), reason, new Dictionary<string, object>());
+        }
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
