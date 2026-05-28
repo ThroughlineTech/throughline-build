@@ -1,8 +1,59 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using ThroughlineBuild.Contracts.Models;
 
-namespace ThroughlineBuild.Workers.ClaudeCode;
+namespace ThroughlineBuild.Workers.Common;
 
+// DTO for deserializing the WORKER_RESULT JSON block emitted by agent workers.
+// File-scoped so it can be registered with WorkersCommonJsonContext for source-gen.
+// AOT trap: Dictionary<string, object> is not AOT-serializable; use
+// Dictionary<string, JsonElement> instead. Callers that read metadata values
+// should handle JsonElement (the phases already do via their TryGetString helpers).
+internal sealed class WorkerResultDto
+{
+    // [JsonConverter] is required here: source-gen does not inherit the
+    // CamelCase enum policy from JsonSerializerOptions; it must be wired
+    // per-property. JsonStringEnumConverter<T> performs case-insensitive
+    // matching on read, so PascalCase worker output ("Ok", "NeedsRework",
+    // "Failed", "Escalate") and camelCase output are both accepted.
+    // Status is nullable so the parser can detect a missing 'status' key
+    // and fail loudly rather than silently defaulting to Ok (the enum zero).
+    [JsonPropertyName("status")]
+    [JsonConverter(typeof(JsonStringEnumConverter<Status>))]
+    public Status? Status { get; set; }
+    [JsonPropertyName("summary")]
+    public string? Summary { get; set; }
+    [JsonPropertyName("files_changed")]
+    public List<string>? FilesChanged { get; set; }
+    [JsonPropertyName("failure_reason")]
+    public string? FailureReason { get; set; }
+    [JsonPropertyName("metadata")]
+    public Dictionary<string, JsonElement>? Metadata { get; set; }
+}
+
+[JsonSerializable(typeof(WorkerResultDto))]
+[JsonSerializable(typeof(Dictionary<string, JsonElement>))]
+internal partial class WorkersCommonJsonContext : JsonSerializerContext { }
+
+/// <summary>
+/// Scans agent stdout for a WORKER_RESULT envelope and deserializes it into a
+/// <see cref="WorkerResult"/>.
+///
+/// WORKER_RESULT envelope schema:
+///   - Marker line: the literal string "WORKER_RESULT" on its own line (leading/
+///     trailing whitespace is tolerated).
+///   - Payload: a JSON object immediately following the marker, optionally wrapped
+///     in a triple-backtick code fence (with or without a language tag such as "json").
+///   - Required fields:
+///       status   (string) - one of: Ok, NeedsRework, Failed, Escalate
+///       summary  (string, non-empty) - one-line human-readable description
+///   - Optional fields:
+///       files_changed  (string array) - list of paths modified by the worker
+///       failure_reason (string or null) - root cause when status != Ok
+///       metadata       (object) - arbitrary key/value pairs (values as JsonElement)
+///   - Multiple markers are tolerated; the LAST valid envelope wins (the first
+///     marker is often a template echo with placeholder text).
+/// </summary>
 internal static class WorkerResultParser
 {
     internal static WorkerResultParseOutcome TryParse(string stdout)
@@ -15,8 +66,8 @@ internal static class WorkerResultParser
         // Walk markers in reverse so the LAST envelope wins - tolerates the worker
         // echoing the template example block before emitting its real envelope.
         //
-        // Uses the source-gen overload (ClaudeCodeJsonContext) so deserialization works
-        // under PublishAot=true where reflection-based JsonSerializer.Deserialize<T>
+        // Uses the source-gen overload (WorkersCommonJsonContext) so deserialization
+        // works under PublishAot=true where reflection-based JsonSerializer.Deserialize<T>
         // throws NotSupportedException. See docs/throughline-build-architecture.md,
         // section "AOT serialization traps".
         var lines = stdout.Split('\n');
@@ -36,7 +87,7 @@ internal static class WorkerResultParser
             var json = StripCodeFence(string.Join("\n", lines, i + 1, lines.Length - i - 1).Trim());
             try
             {
-                var dto = JsonSerializer.Deserialize(json, ClaudeCodeJsonContext.Default.WorkerResultDto);
+                var dto = JsonSerializer.Deserialize(json, WorkersCommonJsonContext.Default.WorkerResultDto);
                 if (dto is null)
                 {
                     lastFailure = WorkerResultParseOutcome.DeserializeFailed("JsonElement", "Deserialization returned null");

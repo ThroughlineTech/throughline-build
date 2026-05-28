@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Workers.Common;
 
 namespace ThroughlineBuild.Workers.ClaudeCode;
 
