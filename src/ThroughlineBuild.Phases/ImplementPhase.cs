@@ -57,12 +57,13 @@ public class ImplementPhase : IWorkflowPhase
         bool isRework = _phaseOptions.ReviewFeedback is not null;
         if (!isRework && ticket.State != TicketState.Ready)
         {
-            EarlyExitManifest.Write(_options.DebugCaptureDirectory, Phase.Implement.ToString(), ticketId, "ticket not in Ready state");
-            return new ImplementResult(false, ticketId, null, null, null, "ticket not in Ready state");
+            var reason = $"initial round invoked but ticket is in {ticket.State} - did you mean to invoke rework?";
+            EarlyExitManifest.Write(_options.DebugCaptureDirectory, Phase.Implement.ToString(), ticketId, reason);
+            return new ImplementResult(false, ticketId, null, null, null, reason);
         }
         if (isRework && ticket.State != TicketState.InProgress)
         {
-            var reason = $"rework round requires ticket in InProgress state; ticket is in {ticket.State}";
+            var reason = $"rework round invoked but ticket is in {ticket.State} - no review has run yet";
             EarlyExitManifest.Write(_options.DebugCaptureDirectory, Phase.Implement.ToString(), ticketId, reason);
             return new ImplementResult(false, ticketId, null, null, null, reason);
         }

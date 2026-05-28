@@ -1,6 +1,6 @@
 namespace ThroughlineBuild.Contracts.Models;
 
-public record ReviewFeedback(
+public sealed record ReviewFeedback(
     string Rationale,
     IReadOnlyList<string> ChecksFailed,
     int ReworkRoundNumber);
