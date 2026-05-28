@@ -32,9 +32,9 @@ public class ProjectContextTests
         var ticket = MinimalTicket();
         var repo = MinimalRepo();
 
-        var withoutProject = PlanBriefBuilder.Build(ticket, repo);
-        var withEmpty = PlanBriefBuilder.Build(ticket, repo, ProjectContext.Empty);
-        var withNull = PlanBriefBuilder.Build(ticket, repo, null);
+        var withoutProject = PlanBriefBuilder.Build("claude-code", ticket, repo);
+        var withEmpty = PlanBriefBuilder.Build("claude-code", ticket, repo, ProjectContext.Empty);
+        var withNull = PlanBriefBuilder.Build("claude-code", ticket, repo, null);
 
         Assert.Equal(withoutProject.Instruction, withEmpty.Instruction);
         Assert.Equal(withoutProject.Instruction, withNull.Instruction);
@@ -48,9 +48,9 @@ public class ProjectContextTests
         var ticket = MinimalTicket();
         var repo = MinimalRepo();
 
-        var withoutProject = ImplementBriefBuilder.Build(ticket, repo, Branch, Worktree);
-        var withEmpty = ImplementBriefBuilder.Build(ticket, repo, Branch, Worktree, ProjectContext.Empty);
-        var withNull = ImplementBriefBuilder.Build(ticket, repo, Branch, Worktree, null);
+        var withoutProject = ImplementBriefBuilder.Build("claude-code", ticket, repo, Branch, Worktree);
+        var withEmpty = ImplementBriefBuilder.Build("claude-code", ticket, repo, Branch, Worktree, ProjectContext.Empty);
+        var withNull = ImplementBriefBuilder.Build("claude-code", ticket, repo, Branch, Worktree, null);
 
         Assert.Equal(withoutProject.Instruction, withEmpty.Instruction);
         Assert.Equal(withoutProject.Instruction, withNull.Instruction);
@@ -74,9 +74,9 @@ public class ProjectContextTests
             Metadata: new Dictionary<string, object>());
         var checks = Array.Empty<CheckResult>();
 
-        var withoutProject = ReviewBriefBuilder.Build(ticket, diff, implementerResult, checks);
-        var withEmpty = ReviewBriefBuilder.Build(ticket, diff, implementerResult, checks, ProjectContext.Empty);
-        var withNull = ReviewBriefBuilder.Build(ticket, diff, implementerResult, checks, null);
+        var withoutProject = ReviewBriefBuilder.Build("claude-code", ticket, diff, implementerResult, checks);
+        var withEmpty = ReviewBriefBuilder.Build("claude-code", ticket, diff, implementerResult, checks, ProjectContext.Empty);
+        var withNull = ReviewBriefBuilder.Build("claude-code", ticket, diff, implementerResult, checks, null);
 
         Assert.Equal(withoutProject.Instruction, withEmpty.Instruction);
         Assert.Equal(withoutProject.Instruction, withNull.Instruction);
@@ -101,7 +101,7 @@ public class ProjectContextTests
             Notes: "## extra notes",
             WorkflowTool: "claude-config");
 
-        var brief = PlanBriefBuilder.Build(ticket, repo, proj);
+        var brief = PlanBriefBuilder.Build("claude-code", ticket, repo, proj);
 
         Assert.Equal("typescript", brief.Context["project_language"]);
         Assert.Equal("react-vite", brief.Context["project_framework"]);

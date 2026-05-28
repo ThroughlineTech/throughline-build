@@ -35,6 +35,7 @@ public class ReviewBriefBuilderTests
     public void Build_MinimalInputs_ReturnsReviewBrief()
     {
         var brief = ReviewBriefBuilder.Build(
+            "claude-code",
             MinimalTicket(),
             MinimalDiff(),
             MinimalImplementerResult(),
@@ -66,6 +67,7 @@ public class ReviewBriefBuilderTests
         };
 
         var brief = ReviewBriefBuilder.Build(
+            "claude-code",
             MinimalTicket(),
             diff,
             MinimalImplementerResult(),
@@ -80,6 +82,7 @@ public class ReviewBriefBuilderTests
     public void Build_Instruction_ContainsWorkerResultEnvelopeWithVerdictRationaleChecksFailed()
     {
         var brief = ReviewBriefBuilder.Build(
+            "claude-code",
             MinimalTicket(),
             MinimalDiff(),
             MinimalImplementerResult(),
@@ -103,6 +106,7 @@ public class ReviewBriefBuilderTests
         };
 
         var brief = ReviewBriefBuilder.Build(
+            "claude-code",
             ticket,
             MinimalDiff(),
             MinimalImplementerResult(),
@@ -122,6 +126,7 @@ public class ReviewBriefBuilderTests
         };
 
         var brief = ReviewBriefBuilder.Build(
+            "claude-code",
             MinimalTicket(),
             MinimalDiff(),
             implementerResult,
@@ -153,6 +158,7 @@ public class ReviewBriefBuilderTests
         };
 
         var brief = ReviewBriefBuilder.Build(
+            "claude-code",
             MinimalTicket(),
             MinimalDiff(),
             MinimalImplementerResult(),
@@ -179,6 +185,7 @@ public class ReviewBriefBuilderTests
         };
 
         var brief = ReviewBriefBuilder.Build(
+            "claude-code",
             MinimalTicket(),
             MinimalDiff(),
             MinimalImplementerResult(),
@@ -208,6 +215,7 @@ public class ReviewBriefBuilderTests
         var diff = MinimalDiff() with { Entries = largePatches };
 
         var brief = ReviewBriefBuilder.Build(
+            "claude-code",
             MinimalTicket(),
             diff,
             MinimalImplementerResult(),
@@ -223,6 +231,7 @@ public class ReviewBriefBuilderTests
         var diff = MinimalDiff() with { Entries = Array.Empty<DiffEntry>() };
 
         var brief = ReviewBriefBuilder.Build(
+            "claude-code",
             MinimalTicket(),
             diff,
             MinimalImplementerResult(),
@@ -251,6 +260,7 @@ public class ReviewBriefBuilderTests
         };
 
         var brief = ReviewBriefBuilder.Build(
+            "claude-code",
             MinimalTicket(),
             diff,
             MinimalImplementerResult(),
@@ -278,6 +288,7 @@ public class ReviewBriefBuilderTests
         };
 
         var brief = ReviewBriefBuilder.Build(
+            "claude-code",
             MinimalTicket(),
             diff,
             MinimalImplementerResult(),
@@ -304,6 +315,7 @@ public class ReviewBriefBuilderTests
         };
 
         var brief = ReviewBriefBuilder.Build(
+            "claude-code",
             MinimalTicket(),
             diff,
             MinimalImplementerResult(),
@@ -318,6 +330,7 @@ public class ReviewBriefBuilderTests
         var expected = SnapshotLoader.Load("review-original.txt");
 
         var brief = ReviewBriefBuilder.Build(
+            "claude-code",
             SnapshotFixtures.Ticket(),
             SnapshotFixtures.Diff(),
             SnapshotFixtures.ImplementerResult(),
@@ -329,7 +342,7 @@ public class ReviewBriefBuilderTests
     [Fact]
     public void Build_TemplateLoadable_NameIsRegistered()
     {
-        var ex = Record.Exception(() => TemplateLoader.Load("review.md"));
+        var ex = Record.Exception(() => TemplateLoader.Load("claude-code", "review.md"));
 
         Assert.Null(ex);
     }

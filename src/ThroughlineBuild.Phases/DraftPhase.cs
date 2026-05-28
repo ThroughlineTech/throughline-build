@@ -41,7 +41,7 @@ public class DraftPhase : IWorkflowPhase
         var brief = new Brief(
             TicketId: "",
             Phase: Phase.Draft,
-            Instruction: DraftBriefBuilder.Build(options.OperatorText),
+            Instruction: DraftBriefBuilder.Build(_worker.Name, options.OperatorText),
             RelevantFiles: Array.Empty<string>(),
             AllowedWrites: Array.Empty<string>(),
             Context: new Dictionary<string, string>());

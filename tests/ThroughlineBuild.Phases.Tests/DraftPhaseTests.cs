@@ -202,7 +202,7 @@ public class DraftPhaseTests
     {
         private readonly WorkerResult _result;
         public FakeWorkerAgent(WorkerResult result) { _result = result; }
-        public string Name => "fake";
+        public string Name => "claude-code";
         public IWorkerProgressDigester? Digester => null;
         public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct) =>
             Task.FromResult(_result);
@@ -212,7 +212,7 @@ public class DraftPhaseTests
     private sealed class TrackingWorkerAgent : IWorkerAgent
     {
         public bool WasInvoked { get; private set; }
-        public string Name => "tracking";
+        public string Name => "claude-code";
         public IWorkerProgressDigester? Digester => null;
         public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
         {
@@ -227,7 +227,7 @@ public class DraftPhaseTests
         private readonly WorkerResult _result;
         public Brief? CapturedBrief { get; private set; }
         public CapturingWorkerAgent(WorkerResult result) { _result = result; }
-        public string Name => "capturing";
+        public string Name => "claude-code";
         public IWorkerProgressDigester? Digester => null;
         public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
         {

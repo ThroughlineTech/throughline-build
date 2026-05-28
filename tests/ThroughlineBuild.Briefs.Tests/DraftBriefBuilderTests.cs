@@ -10,7 +10,7 @@ public class DraftBriefBuilderTests
     [Fact]
     public void Build_SubstitutesOperatorText_ContainsLiteralText()
     {
-        var result = DraftBriefBuilder.Build(FixtureOperatorText);
+        var result = DraftBriefBuilder.Build("claude-code", FixtureOperatorText);
 
         Assert.Contains(FixtureOperatorText, result);
     }
@@ -18,7 +18,7 @@ public class DraftBriefBuilderTests
     [Fact]
     public void Build_TemplateLoadable_NameIsRegistered()
     {
-        var ex = Record.Exception(() => TemplateLoader.Load("draft.md"));
+        var ex = Record.Exception(() => TemplateLoader.Load("claude-code", "draft.md"));
 
         Assert.Null(ex);
     }
@@ -26,7 +26,7 @@ public class DraftBriefBuilderTests
     [Fact]
     public void Build_DoesNotContainEmDashes()
     {
-        var result = DraftBriefBuilder.Build(FixtureOperatorText);
+        var result = DraftBriefBuilder.Build("claude-code", FixtureOperatorText);
 
         Assert.DoesNotContain("—", result); // em-dash
         Assert.DoesNotContain("–", result); // en-dash
@@ -35,7 +35,7 @@ public class DraftBriefBuilderTests
     [Fact]
     public void Build_ContainsWorkerResultEnvelopeAndBodyMarkdownKey()
     {
-        var result = DraftBriefBuilder.Build(FixtureOperatorText);
+        var result = DraftBriefBuilder.Build("claude-code", FixtureOperatorText);
 
         Assert.Contains("WORKER_RESULT", result);
         Assert.Contains("body_markdown", result);
@@ -46,7 +46,7 @@ public class DraftBriefBuilderTests
     {
         var expected = SnapshotLoader.Load("draft-brief.txt");
 
-        var result = DraftBriefBuilder.Build(FixtureOperatorText);
+        var result = DraftBriefBuilder.Build("claude-code", FixtureOperatorText);
 
         Assert.Equal(expected, result);
     }

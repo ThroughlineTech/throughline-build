@@ -373,7 +373,7 @@ public class ImplementPhaseTests
     {
         private readonly WorkerResult _result;
         public FakeWorkerAgent(WorkerResult result) { _result = result; }
-        public string Name => "fake";
+        public string Name => "claude-code";
         public IWorkerProgressDigester? Digester => null;
         public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct) =>
             Task.FromResult(_result);
@@ -537,7 +537,7 @@ public class ImplementPhaseDebugCaptureTests
         private readonly WorkerResult _result;
         public WorkerOptions? LastOptions { get; private set; }
         public CapturingWorkerAgent(WorkerResult result) { _result = result; }
-        public string Name => "capturing-fake";
+        public string Name => "claude-code";
         public IWorkerProgressDigester? Digester => null;
         public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
         {

@@ -11,6 +11,7 @@ public static class ReviewBriefBuilder
     const int StderrTailBudgetPerFailure = 2048;
 
     public static Brief Build(
+        string agentName,
         Ticket ticket,
         GitDiff diff,
         WorkerResult implementerResult,
@@ -29,7 +30,7 @@ public static class ReviewBriefBuilder
             "\"rationale\":\"<your rationale here>\"," +
             "\"checks_failed\":[\"check_name_if_applicable\"]}}";
 
-        var template = TemplateLoader.Load("review.md");
+        var template = TemplateLoader.Load(agentName, "review.md");
 
         var vars = new Dictionary<string, string>
         {

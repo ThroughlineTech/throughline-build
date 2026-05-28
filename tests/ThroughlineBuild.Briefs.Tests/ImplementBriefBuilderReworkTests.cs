@@ -28,7 +28,7 @@ public class ImplementBriefBuilderReworkTests
     [Fact]
     public void Build_NullReviewFeedback_ReviewFeedbackSectionInContextIsEmptyString()
     {
-        var brief = ImplementBriefBuilder.Build(MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: null);
+        var brief = ImplementBriefBuilder.Build("claude-code", MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: null);
 
         Assert.True(brief.Context.ContainsKey("review_feedback_section"));
         Assert.Equal("", brief.Context["review_feedback_section"]);
@@ -38,7 +38,7 @@ public class ImplementBriefBuilderReworkTests
     public void Build_NullReviewFeedback_DoesNotThrow()
     {
         var ex = Record.Exception(() =>
-            ImplementBriefBuilder.Build(MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: null));
+            ImplementBriefBuilder.Build("claude-code", MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: null));
 
         Assert.Null(ex);
     }
@@ -51,7 +51,7 @@ public class ImplementBriefBuilderReworkTests
             ChecksFailed: new[] { "tests_pass" },
             ReworkRoundNumber: 1);
 
-        var brief = ImplementBriefBuilder.Build(MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: feedback);
+        var brief = ImplementBriefBuilder.Build("claude-code", MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: feedback);
 
         Assert.Contains("The implementation missed edge cases.", brief.Context["review_feedback_section"]);
     }
@@ -64,7 +64,7 @@ public class ImplementBriefBuilderReworkTests
             ChecksFailed: new[] { "tests_pass", "coverage_ok", "no_warnings" },
             ReworkRoundNumber: 1);
 
-        var brief = ImplementBriefBuilder.Build(MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: feedback);
+        var brief = ImplementBriefBuilder.Build("claude-code", MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: feedback);
 
         var section = brief.Context["review_feedback_section"];
         Assert.Contains("tests_pass", section);
@@ -80,7 +80,7 @@ public class ImplementBriefBuilderReworkTests
             ChecksFailed: Array.Empty<string>(),
             ReworkRoundNumber: 2);
 
-        var brief = ImplementBriefBuilder.Build(MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: feedback);
+        var brief = ImplementBriefBuilder.Build("claude-code", MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: feedback);
 
         Assert.Contains("2", brief.Context["review_feedback_section"]);
         Assert.Contains("Rework round 2", brief.Context["review_feedback_section"]);
@@ -94,7 +94,7 @@ public class ImplementBriefBuilderReworkTests
             ChecksFailed: new[] { "check_one" },
             ReworkRoundNumber: 1);
 
-        var brief = ImplementBriefBuilder.Build(MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: feedback);
+        var brief = ImplementBriefBuilder.Build("claude-code", MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: feedback);
 
         Assert.Contains("## Rework round 1 - reviewer feedback", brief.Context["review_feedback_section"]);
     }
@@ -107,7 +107,7 @@ public class ImplementBriefBuilderReworkTests
             ChecksFailed: Array.Empty<string>(),
             ReworkRoundNumber: 1);
 
-        var brief = ImplementBriefBuilder.Build(MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: feedback);
+        var brief = ImplementBriefBuilder.Build("claude-code", MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: feedback);
 
         Assert.Contains("(none)", brief.Context["review_feedback_section"]);
     }
@@ -118,6 +118,7 @@ public class ImplementBriefBuilderReworkTests
         var expected = SnapshotLoader.Load("implement-original.txt");
 
         var brief = ImplementBriefBuilder.Build(
+            "claude-code",
             SnapshotFixtures.Ticket(),
             SnapshotFixtures.Repo(),
             SnapshotFixtures.FixtureBranch,

@@ -10,7 +10,7 @@
     <ProjectReference Include="..\ThroughlineBuild.Contracts\ThroughlineBuild.Contracts.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <EmbeddedResource Include="Templates\*.md" />
+    <EmbeddedResource Include="Templates\**\*.md" />
   </ItemGroup>
   <ItemGroup>
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">

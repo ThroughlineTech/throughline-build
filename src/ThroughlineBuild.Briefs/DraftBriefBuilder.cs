@@ -10,13 +10,13 @@ public static class DraftBriefBuilder
     /// </summary>
     /// <param name="operatorText">Free-form operator input to embed in the brief.</param>
     /// <returns>The rendered brief string ready to pass to IWorkerAgent.</returns>
-    public static string Build(string operatorText)
+    public static string Build(string agentName, string operatorText)
     {
         var vars = new Dictionary<string, string>
         {
             ["operator_text"] = operatorText
         };
 
-        return TemplateLoader.Load("draft.md").Substitute(vars);
+        return TemplateLoader.Load(agentName, "draft.md").Substitute(vars);
     }
 }

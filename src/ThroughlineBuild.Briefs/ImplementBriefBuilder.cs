@@ -4,7 +4,7 @@ namespace ThroughlineBuild.Briefs;
 
 public static class ImplementBriefBuilder
 {
-    public static Brief Build(Ticket ticket, RepoState repo, string branchName, string worktreePath, ProjectContext? project = null, ReviewFeedback? reviewFeedback = null)
+    public static Brief Build(string agentName, Ticket ticket, RepoState repo, string branchName, string worktreePath, ProjectContext? project = null, ReviewFeedback? reviewFeedback = null)
     {
         var proj = project ?? ProjectContext.Empty;
 
@@ -36,7 +36,7 @@ public static class ImplementBriefBuilder
             ["review_feedback_section"] = reviewFeedbackSection
         };
 
-        var instruction = TemplateLoader.Load("implement.md").Substitute(vars);
+        var instruction = TemplateLoader.Load(agentName, "implement.md").Substitute(vars);
 
         return new Brief(
             ticket.Id,

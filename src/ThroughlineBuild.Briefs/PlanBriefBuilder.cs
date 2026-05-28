@@ -6,7 +6,7 @@ public record RepoState(string MainSha, IReadOnlyList<string> TopLevelEntries);
 
 public static class PlanBriefBuilder
 {
-    public static Brief Build(Ticket ticket, RepoState repo, ProjectContext? project = null)
+    public static Brief Build(string agentName, Ticket ticket, RepoState repo, ProjectContext? project = null)
     {
         var proj = project ?? ProjectContext.Empty;
 
@@ -30,7 +30,7 @@ public static class PlanBriefBuilder
             ["workflow_tool"] = proj.WorkflowTool
         };
 
-        var instruction = TemplateLoader.Load("plan.md").Substitute(vars);
+        var instruction = TemplateLoader.Load(agentName, "plan.md").Substitute(vars);
 
         return new Brief(
             ticket.Id,
