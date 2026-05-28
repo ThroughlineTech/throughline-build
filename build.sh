@@ -3,7 +3,15 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-RID="${RID:-win-x64}"
+if [[ -z "${RID:-}" ]]; then
+  case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64)  RID="linux-x64" ;;
+    Linux-arm64)   RID="linux-arm64" ;;
+    Darwin-x86_64) RID="osx-x64" ;;
+    Darwin-arm64)  RID="osx-arm64" ;;
+    *)             RID="win-x64" ;;
+  esac
+fi
 EXT=""
 [[ "$RID" == win-* ]] && EXT=".exe"
 
