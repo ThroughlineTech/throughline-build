@@ -132,7 +132,7 @@ public sealed class ScaffoldPhase
                 string planHtml = BriefHtmlRenderer.RenderPlan(plan);
                 var planResult = await _ticketing.CreateTicketAsync(
                     planTitle,
-                    "task",
+                    null,
                     planHtml,
                     new[] { "plan-ticket" },
                     ct).ConfigureAwait(false);
@@ -169,7 +169,7 @@ public sealed class ScaffoldPhase
                     string briefHtml = BriefHtmlRenderer.RenderBrief(brief);
                     var briefResult = await _ticketing.CreateTicketAsync(
                         briefTitle,
-                        "task",
+                        null,
                         briefHtml,
                         null,
                         ct).ConfigureAwait(false);

@@ -1029,6 +1029,11 @@ static async Task<int> RunAsync(string[] args)
                         _ => 1
                     };
                 }
+                // Unhandled exception path: LastChainResult not set because ChainCommand
+                // caught an exception before completing the chain. Print the message so
+                // the operator can see what went wrong instead of a silent exit code 1.
+                if (!string.IsNullOrEmpty(cmdResult.Message))
+                    Console.Error.WriteLine($"Error: {cmdResult.Message}");
                 return 1;
             }
 

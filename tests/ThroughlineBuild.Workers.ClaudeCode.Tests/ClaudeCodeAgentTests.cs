@@ -839,7 +839,7 @@ public class ClaudeCodeAgentLlmUsageTests
         var metadata = ClaudeCodeAgent.BuildLlmUsageMetadata(envelope, 0);
 
         Assert.True(metadata.ContainsKey("cost_usd"));
-        Assert.Equal(0.0123m, metadata["cost_usd"]);
+        Assert.Equal((double)0.0123m, metadata["cost_usd"]);
     }
 
     [Fact]

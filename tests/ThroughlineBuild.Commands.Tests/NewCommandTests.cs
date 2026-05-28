@@ -422,7 +422,7 @@ Body.
 
     private sealed class FakeTicketing : ITicketing
     {
-        public List<(string title, string type, string descriptionHtml, IReadOnlyList<string>? labels)> CreateCalls { get; } = new();
+        public List<(string title, string? type, string descriptionHtml, IReadOnlyList<string>? labels)> CreateCalls { get; } = new();
 
         public BackendCapabilities Capabilities => new BackendCapabilities(true, true, true, false);
 
@@ -455,7 +455,7 @@ Body.
 
         public Task<NewTicketResult> CreateTicketAsync(
             string title,
-            string type,
+            string? type,
             string descriptionHtml,
             IReadOnlyList<string>? initialLabelNames,
             CancellationToken ct)

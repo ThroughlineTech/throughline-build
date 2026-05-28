@@ -350,7 +350,7 @@ public class ClaudeCodeAgent : IWorkerAgent
         }
 
         if (envelope.TotalCostUsd is decimal cost)
-            metadata["cost_usd"] = cost;
+            metadata["cost_usd"] = (double)cost;
 
         return metadata;
     }

@@ -359,7 +359,7 @@ public class ImplementPhaseTests
 
         public Task<NewTicketResult> CreateTicketAsync(
             string title,
-            string type,
+            string? type,
             string descriptionHtml,
             IReadOnlyList<string>? initialLabelNames,
             CancellationToken ct) =>
@@ -567,7 +567,7 @@ public class ImplementPhaseDebugCaptureTests
 
         public Task<NewTicketResult> CreateTicketAsync(
             string title,
-            string type,
+            string? type,
             string descriptionHtml,
             IReadOnlyList<string>? initialLabelNames,
             CancellationToken ct) =>

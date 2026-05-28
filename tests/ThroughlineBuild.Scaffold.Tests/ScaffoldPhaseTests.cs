@@ -484,7 +484,7 @@ OOS:
 
     private record CreateCall(
         string Title,
-        string Type,
+        string? Type,
         string DescriptionHtml,
         IReadOnlyList<string>? LabelNames);
 
@@ -537,7 +537,7 @@ OOS:
 
         public Task<NewTicketResult> CreateTicketAsync(
             string title,
-            string type,
+            string? type,
             string descriptionHtml,
             IReadOnlyList<string>? initialLabelNames,
             CancellationToken ct)

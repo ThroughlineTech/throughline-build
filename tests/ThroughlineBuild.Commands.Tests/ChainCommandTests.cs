@@ -390,6 +390,41 @@ public class ChainCommandTests
         Assert.False(result.Success);
         Assert.Contains("ticket-id is required", result.Message ?? "");
     }
+
+    // --- unhandled exception from runner ---
+
+    [Fact]
+    public async Task RunnerException_returns_failure_with_message_and_null_LastChainResult()
+    {
+        // When the runner throws an unexpected exception (e.g., NotSupportedException
+        // from AOT serialization of an unregistered type), ChainCommand should catch it,
+        // return failure, and populate CommandResult.Message so Program.cs can print it.
+        var t = MakeTicket();
+        var ticketing = new FakeTicketing(t);
+        var runner = new FakeThrowingChainRunner(new InvalidOperationException("chain failed internally"));
+        var cmd = new ChainCommand(runner, ticketing, "https://plane.example.com/project");
+        var ctx = MakeCtx();
+
+        var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("chain failed", result.Message ?? "");
+        Assert.Contains("chain failed internally", result.Message ?? "");
+        Assert.Null(cmd.LastChainResult);
+    }
+}
+
+/// <summary>
+/// Test-double IChainRunner that throws on RunAsync to exercise the exception path.
+/// </summary>
+internal sealed class FakeThrowingChainRunner : IChainRunner
+{
+    private readonly Exception _exception;
+
+    public FakeThrowingChainRunner(Exception exception) => _exception = exception;
+
+    public Task<ChainResult> RunAsync(string ticketId, bool debug, Action<ChainStep> onStep, CancellationToken ct)
+        => throw _exception;
 }
 
 /// <summary>

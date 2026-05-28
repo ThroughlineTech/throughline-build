@@ -519,7 +519,7 @@ public class ChainPhaseTests
             Task.FromResult<IReadOnlyList<TicketComment>>(_seededComments.ToList());
 
         public Task<NewTicketResult> CreateTicketAsync(
-            string title, string type, string descriptionHtml,
+            string title, string? type, string descriptionHtml,
             IReadOnlyList<string>? initialLabelNames, CancellationToken ct) =>
             throw new NotImplementedException();
 

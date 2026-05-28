@@ -123,7 +123,7 @@ public class PlanPhaseInterfaceTests
 
         public Task<NewTicketResult> CreateTicketAsync(
             string title,
-            string type,
+            string? type,
             string descriptionHtml,
             IReadOnlyList<string>? initialLabelNames,
             CancellationToken ct) =>

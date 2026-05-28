@@ -471,7 +471,7 @@ public sealed class PlaneTicketingClient : ITicketing
 
     public async Task<NewTicketResult> CreateTicketAsync(
         string title,
-        string type,
+        string? type,
         string descriptionHtml,
         IReadOnlyList<string>? initialLabelNames,
         CancellationToken ct)

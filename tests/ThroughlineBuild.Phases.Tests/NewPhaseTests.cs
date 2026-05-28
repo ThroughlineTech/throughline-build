@@ -52,7 +52,7 @@ This feature adds a REST endpoint for user creation.
             Assert.Single(ticketing.CreatedTickets);
             var created = ticketing.CreatedTickets[0];
             Assert.Equal("Create User API", created.title);
-            Assert.Equal("task", created.type);
+            Assert.Null(created.type);
             Assert.Equal(bodyContent, created.descriptionHtml);
             Assert.Null(created.initialLabelNames);
 
@@ -389,7 +389,7 @@ Content with acceptance.
 
     private sealed class FakeTicketing : ITicketing
     {
-        public List<(string title, string type, string descriptionHtml, IReadOnlyList<string>? initialLabelNames)>
+        public List<(string title, string? type, string descriptionHtml, IReadOnlyList<string>? initialLabelNames)>
             CreatedTickets { get; } = new();
 
         public BackendCapabilities Capabilities =>
@@ -424,7 +424,7 @@ Content with acceptance.
 
         public Task<NewTicketResult> CreateTicketAsync(
             string title,
-            string type,
+            string? type,
             string descriptionHtml,
             IReadOnlyList<string>? initialLabelNames,
             CancellationToken ct)
