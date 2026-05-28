@@ -191,6 +191,122 @@ public class WorkerResultParserTests
         Assert.Equal("ValidationError", outcome.DeserializeErrorType);
         Assert.Contains("summary", outcome.DeserializeErrorMessage);
     }
+
+    // Worker (notably Sonnet) sometimes mirrors the plan template's fenced
+    // example layout and emits the WORKER_RESULT envelope inside a triple-
+    // backtick code fence. Without fence-stripping the deserializer sees a
+    // backtick at byte 0 and aborts with
+    // "'`' is an invalid start of a value. Path: $ | LineNumber: 0 | BytePositionInLine: 0".
+    [Fact]
+    public void TryParse_FencedPayload_WithJsonLanguageTag_ReturnsResult()
+    {
+        var stdout =
+            "Some preamble\n" +
+            "WORKER_RESULT\n" +
+            "```json\n" +
+            "{\"status\":\"Ok\",\"summary\":\"done\",\"files_changed\":[\"foo.cs\"],\"failure_reason\":null,\"metadata\":{}}\n" +
+            "```\n";
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.NotNull(outcome.Result);
+        Assert.Equal(Status.Ok, outcome.Result.Status);
+        Assert.Equal("done", outcome.Result.Summary);
+        Assert.Equal(new[] { "foo.cs" }, outcome.Result.FilesChanged);
+    }
+
+    [Fact]
+    public void TryParse_FencedPayload_NoLanguageTag_ReturnsResult()
+    {
+        var stdout =
+            "WORKER_RESULT\n" +
+            "```\n" +
+            "{\"status\":\"Ok\",\"summary\":\"plan complete\",\"files_changed\":[],\"failure_reason\":null,\"metadata\":{\"risk_label\":\"low\"}}\n" +
+            "```\n";
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.NotNull(outcome.Result);
+        Assert.Equal(Status.Ok, outcome.Result.Status);
+        Assert.Equal("plan complete", outcome.Result.Summary);
+    }
+
+    [Fact]
+    public void TryParse_FencedPrettyPrintedPayload_ReturnsResult()
+    {
+        var stdout =
+            "WORKER_RESULT\n" +
+            "```json\n" +
+            "{\n" +
+            "  \"status\": \"Ok\",\n" +
+            "  \"summary\": \"multiline\",\n" +
+            "  \"files_changed\": [],\n" +
+            "  \"failure_reason\": null,\n" +
+            "  \"metadata\": {}\n" +
+            "}\n" +
+            "```";
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.NotNull(outcome.Result);
+        Assert.Equal(Status.Ok, outcome.Result.Status);
+        Assert.Equal("multiline", outcome.Result.Summary);
+    }
+
+    // Spec: envelope is the LAST output. If a worker echoes the template example
+    // block first (which has placeholder text inside the fence and would fail to
+    // deserialize), the parser must still pick up the real envelope that follows.
+    [Fact]
+    public void TryParse_TwoMarkers_FirstMalformed_SecondValid_ReturnsSecond()
+    {
+        var stdout =
+            "Here is the envelope I will emit:\n" +
+            "WORKER_RESULT\n" +
+            "{\"status\":\"Ok\",\"summary\":\"<placeholder>\",\"files_changed\":[],bogus}\n" +
+            "Now the real result:\n" +
+            "WORKER_RESULT\n" +
+            "{\"status\":\"Ok\",\"summary\":\"actual\",\"files_changed\":[\"a.cs\"],\"failure_reason\":null,\"metadata\":{}}\n";
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.NotNull(outcome.Result);
+        Assert.Equal("actual", outcome.Result.Summary);
+        Assert.Equal(new[] { "a.cs" }, outcome.Result.FilesChanged);
+    }
+
+    // Guards against an over-eager fence strip mangling legitimate content:
+    // a backtick inside a JSON string value (e.g. in a markdown summary)
+    // must survive intact.
+    [Fact]
+    public void TryParse_BacktickInsideStringValue_NotStripped()
+    {
+        var stdout =
+            "WORKER_RESULT\n" +
+            "{\"status\":\"Ok\",\"summary\":\"uses `foo` syntax\",\"files_changed\":[],\"failure_reason\":null,\"metadata\":{}}\n";
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.NotNull(outcome.Result);
+        Assert.Equal("uses `foo` syntax", outcome.Result.Summary);
+    }
+
+    // Regression-guard: when every candidate fails, the reverse-scan must still
+    // surface a DeserializeFailed outcome (not silently fall through to MarkerMissing).
+    [Fact]
+    public void TryParse_AllCandidatesMalformed_ReturnsDeserializeFailed()
+    {
+        var stdout =
+            "WORKER_RESULT\n" +
+            "first garbage\n" +
+            "WORKER_RESULT\n" +
+            "second garbage\n";
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.Null(outcome.Result);
+        Assert.NotNull(outcome.DeserializeErrorType);
+        Assert.Equal("JsonException", outcome.DeserializeErrorType);
+    }
 }
 
 public class ClaudeCodeAgentNameTests
