@@ -463,6 +463,9 @@ Body.
             CreateCalls.Add((title, type, descriptionHtml, initialLabelNames));
             return Task.FromResult(new NewTicketResult("TLB-42", "12345678-1234-1234-1234-123456789012", DateTime.UtcNow));
         }
+
+        public Task SetParentAsync(string childUuid, string parentUuid, CancellationToken ct) =>
+            Task.CompletedTask;
     }
 
     private sealed class FakeEventSink : IEventSink

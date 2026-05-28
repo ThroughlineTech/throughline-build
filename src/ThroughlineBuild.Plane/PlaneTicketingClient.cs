@@ -480,6 +480,18 @@ public sealed class PlaneTicketingClient : ITicketing
         }, ct).ConfigureAwait(false);
     }
 
+    public async Task SetParentAsync(string childUuid, string parentUuid, CancellationToken ct)
+    {
+        await _pipeline.ExecuteAsync(async token =>
+        {
+            await PatchJsonAsync(
+                $"{IssuesBase}{childUuid}/",
+                new SetParentRequest(parentUuid),
+                PlaneJsonContext.Default,
+                token).ConfigureAwait(false);
+        }, ct).ConfigureAwait(false);
+    }
+
     // ------------------------------------------------------------------ rollup helpers
 
     private static string ExtractStateName(JsonElement stateElement)

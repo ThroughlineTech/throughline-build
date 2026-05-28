@@ -81,6 +81,12 @@ public interface ITicketing
         string descriptionHtml,
         IReadOnlyList<string>? initialLabelNames,
         CancellationToken ct);
+
+    /// <summary>
+    /// Set the parent of a ticket.
+    /// Implemented via a PATCH to the issue endpoint with the parent UUID field.
+    /// </summary>
+    Task SetParentAsync(string childUuid, string parentUuid, CancellationToken ct);
 }
 
 /// <summary>
