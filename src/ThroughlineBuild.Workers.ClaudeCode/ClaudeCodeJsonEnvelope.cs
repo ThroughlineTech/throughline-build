@@ -13,7 +13,8 @@ public record ClaudeCodeJsonEnvelope(
     [property: JsonPropertyName("subtype")] string? Subtype,
     [property: JsonPropertyName("is_error")] bool IsError,
     [property: JsonPropertyName("result")] string? Result,
-    [property: JsonPropertyName("usage")] ClaudeCodeUsage? Usage
+    [property: JsonPropertyName("usage")] ClaudeCodeUsage? Usage,
+    [property: JsonPropertyName("total_cost_usd")] decimal? TotalCostUsd
 );
 
 // Usage block nested inside the Claude Code JSON envelope.
