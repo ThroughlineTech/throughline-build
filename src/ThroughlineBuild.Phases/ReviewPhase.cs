@@ -161,7 +161,9 @@ public class ReviewPhase : IWorkflowPhase
         await EmitAsync(EventKind.VerifierVerdict, ticketId, new Dictionary<string, object>
         {
             ["kind"] = verdict.Kind.ToString(),
-            ["checks_failed_count"] = verdict.ChecksFailed.Count
+            ["checks_failed_count"] = verdict.ChecksFailed.Count,
+            ["rationale"] = verdict.Rationale,
+            ["checks_failed"] = verdict.ChecksFailed
         }, ct).ConfigureAwait(false);
 
         // Step 12: LlmCall event if verifier worker reported usage
