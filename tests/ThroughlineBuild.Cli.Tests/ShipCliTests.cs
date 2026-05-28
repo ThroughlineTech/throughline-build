@@ -32,9 +32,10 @@ public class ShipCliTests
     {
         // The usage line for plan/implement/review must accept --debug (and after
         // TLB-122 also --quiet, declared as the [--debug|--quiet] pair).
-        Assert.Contains("build plan <ticket-id> [--debug|--quiet]", CliUsage.UsageText);
-        Assert.Contains("build implement <ticket-id> [--debug|--quiet]", CliUsage.UsageText);
-        Assert.Contains("build review <ticket-id> [--debug|--quiet]", CliUsage.UsageText);
+        // TLB-191 added [--agent <name>] before the debug/quiet flags.
+        Assert.Contains("build plan <ticket-id> [--agent <name>] [--debug|--quiet]", CliUsage.UsageText);
+        Assert.Contains("build implement <ticket-id> [--agent <name>] [--debug|--quiet]", CliUsage.UsageText);
+        Assert.Contains("build review <ticket-id> [--agent <name>] [--debug|--quiet]", CliUsage.UsageText);
     }
 
     [Fact]

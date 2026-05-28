@@ -45,6 +45,11 @@ static async Task<int> RunAsync(string[] args)
     }
     args = filteredArgs.ToArray();
 
+    // Second pre-pass: extract --agent / --agent-<phase> flag pairs before verb dispatch.
+    var (agentAll, agentPlanFlag, agentImplementFlag, agentReviewFlag, argsAfterAgentFlags) =
+        CliArgParser.ExtractAgentFlags(args);
+    args = ((List<string>)argsAfterAgentFlags).ToArray();
+
     var verb = args[0];
 
     // Arg validation for phase verbs happens BEFORE config load so a missing id
@@ -651,9 +656,16 @@ static async Task<int> RunAsync(string[] args)
         throw new ConfigException($"missing [workers.{config2.Workers.DefaultAgent}] sub-table in config");
 
     // Collect all agent names referenced by phases (plus default) and register them.
+    // Also include any names supplied via CLI flags so they are available to the factory
+    // (and so that unknown names surface as a clear ConfigException from factory.Create).
     var allAgentNames = new HashSet<string>(StringComparer.Ordinal) { config2.Workers.DefaultAgent };
     foreach (var phaseName in config2.Workers.Phases.Values)
         allAgentNames.Add(phaseName);
+    foreach (var flagAgentName in new[] { agentAll, agentPlanFlag, agentImplementFlag, agentReviewFlag })
+    {
+        if (flagAgentName is not null && config2.Workers.Agents.ContainsKey(flagAgentName))
+            allAgentNames.Add(flagAgentName);
+    }
 
     var factoryEntries = new Dictionary<string, Func<IWorkerAgent>>(StringComparer.Ordinal);
     foreach (var agentName in allAgentNames)
@@ -674,6 +686,15 @@ static async Task<int> RunAsync(string[] args)
     // Helper: resolve the agent name for a given phase, falling back to default_agent.
     string AgentFor(string phase) =>
         config2.Workers.Phases.TryGetValue(phase, out var n) ? n : config2.Workers.DefaultAgent;
+
+    // Helper: apply CLI flag overrides on top of config. Per-phase flag wins over --agent,
+    // which wins over config. Phases not listed here fall back to AgentFor(phase).
+    string EffectiveAgentFor(string phase) =>
+        phase == "plan"      ? (agentPlanFlag ?? agentAll ?? AgentFor("plan")) :
+        phase == "implement" ? (agentImplementFlag ?? agentAll ?? AgentFor("implement")) :
+        phase == "review"    ? (agentReviewFlag ?? agentAll ?? AgentFor("review")) :
+        AgentFor(phase);
+
     await using var jsonlEventSink = new JsonlEventSink(new EventLogOptions
     {
         BaseDirectory = ResolveLogDir(config2.Events.LogDirectory),
@@ -716,7 +737,7 @@ static async Task<int> RunAsync(string[] args)
 
     if (verb == "plan")
     {
-        var phase = new PlanPhase(ticketing, workerFactory.Create(AgentFor("plan")), eventSink, buildOptions, project: config2.Project);
+        var phase = new PlanPhase(ticketing, workerFactory.Create(EffectiveAgentFor("plan")), eventSink, buildOptions, project: config2.Project);
         PlanResult result;
         try
         {
@@ -767,7 +788,7 @@ static async Task<int> RunAsync(string[] args)
     }
     else if (verb == "implement")
     {
-        var phase = new ImplementPhase(ticketing, workerFactory.Create(AgentFor("implement")), eventSink, buildOptions, project: config2.Project);
+        var phase = new ImplementPhase(ticketing, workerFactory.Create(EffectiveAgentFor("implement")), eventSink, buildOptions, project: config2.Project);
         ImplementResult result;
         try
         {
@@ -928,10 +949,10 @@ static async Task<int> RunAsync(string[] args)
     {
         // Construct per-phase factories for ChainPhase.
         var planPhaseFactory = (BuildOptions buildOpts) =>
-            new PlanPhase(ticketing, workerFactory.Create(AgentFor("plan")), eventSink, buildOpts, project: config2.Project);
+            new PlanPhase(ticketing, workerFactory.Create(EffectiveAgentFor("plan")), eventSink, buildOpts, project: config2.Project);
 
         var implementPhaseFactory = (BuildOptions buildOpts, ImplementPhaseOptions implOpts) =>
-            new ImplementPhase(ticketing, workerFactory.Create(AgentFor("implement")), eventSink, buildOpts, project: config2.Project);
+            new ImplementPhase(ticketing, workerFactory.Create(EffectiveAgentFor("implement")), eventSink, buildOpts, project: config2.Project);
 
         var reviewPhaseFactory = (BuildOptions buildOpts) =>
         {
@@ -943,7 +964,7 @@ static async Task<int> RunAsync(string[] args)
                 LiveStderrSink: debugMode ? Console.Error : null,
                 ProgressDigestSink: enableDigest ? Console.Error : null);
             var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
-            return new ReviewPhase(ticketing, workerFactory.Create(AgentFor("review")), eventSink, buildOpts, reviewOptions, project: config2.Project);
+            return new ReviewPhase(ticketing, workerFactory.Create(EffectiveAgentFor("review")), eventSink, buildOpts, reviewOptions, project: config2.Project);
         };
 
         var shipPhaseFactory = (BuildOptions buildOpts) =>
@@ -1032,7 +1053,7 @@ static async Task<int> RunAsync(string[] args)
 
         var reworkPhase = new ReworkPhase(
             ticketing,
-            workerFactory.Create(AgentFor("implement")),
+            workerFactory.Create(EffectiveAgentFor("implement")),
             eventSink,
             buildOptions,
             retriever,
@@ -1088,7 +1109,7 @@ static async Task<int> RunAsync(string[] args)
             LiveStderrSink: debugMode ? Console.Error : null,
             ProgressDigestSink: enableDigest ? Console.Error : null);
         var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
-        var phase = new ReviewPhase(ticketing, workerFactory.Create(AgentFor("review")), eventSink, buildOptions, reviewOptions, project: config2.Project);
+        var phase = new ReviewPhase(ticketing, workerFactory.Create(EffectiveAgentFor("review")), eventSink, buildOptions, reviewOptions, project: config2.Project);
         ReviewResult result;
         try
         {

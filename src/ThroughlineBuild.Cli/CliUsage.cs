@@ -6,11 +6,11 @@ public static class CliUsage
 build - Throughline Build
 
 Usage:
-  build plan <ticket-id> [--debug|--quiet] [--summary-json]       Run the plan phase for a ticket
-  build implement <ticket-id> [--debug|--quiet] [--summary-json]  Run the implement phase for a ticket
-  build review <ticket-id> [--debug|--quiet] [--summary-json]     Run the review phase for a ticket
+  build plan <ticket-id> [--agent <name>] [--debug|--quiet] [--summary-json]       Run the plan phase for a ticket
+  build implement <ticket-id> [--agent <name>] [--debug|--quiet] [--summary-json]  Run the implement phase for a ticket
+  build review <ticket-id> [--agent <name>] [--debug|--quiet] [--summary-json]     Run the review phase for a ticket
   build ship <ticket-id> [--debug] [--summary-json]               Ship a reviewed ticket (local fast-forward merge; no push to remote); --debug accepted but is a no-op (ship has no worker subprocess)
-  build chain <ticket-id> [--debug]                               Run the full chain (plan -> implement -> review -> ship cycle) for a single ticket; streams per-phase output to stdout
+  build chain <ticket-id> [--agent <name>] [--agent-plan <name>] [--agent-implement <name>] [--agent-review <name>] [--debug]  Run the full chain (plan -> implement -> review -> ship cycle) for a single ticket; streams per-phase output to stdout
   build new <body-path> [--title "..."] [--type "..."] [--label "..."]* [--review] [--debug]  Create a new ticket from a body file (file mode: arg must be an existing file)
   build new <text> [--title "..."] [--type "..."] [--label "..."]* [--review] [--debug]       Create a new ticket from free-form text (draft mode: arg is not an existing file)
   build new - [--title "..."] [--type "..."] [--label "..."]* [--review] [--debug]            Read operator text from stdin, then create a new ticket (draft mode)
@@ -29,6 +29,14 @@ Usage:
   build --help                                                    Show this help
 
 Flags:
+  --agent <name>         Override the worker agent for the invocation. On plan/implement/review, applies to that
+                         phase. On chain, applies to all phases unless a per-phase flag is also set.
+                         Agent name must be a key in [workers.<name>] in the config file; unknown names
+                         produce a clear error. Example: --agent claude-code-fast
+  --agent-plan <name>    Override the worker agent for the plan phase only (chain only).
+  --agent-implement <name>  Override the worker agent for the implement phase only (chain only).
+  --agent-review <name>  Override the worker agent for the review phase only (chain only).
+                         Per-phase flag beats --agent beats config. --agent on ship is not supported (no worker).
   --debug          Stream worker stdout/stderr to the orchestrator console in real time, and capture all worker
                    artifacts to .build/sessions/<session-id>/. Stdout lines are prefixed "worker> "; stderr
                    lines are prefixed "worker! ". Use 2>&1 | tee log.txt to capture both streams.

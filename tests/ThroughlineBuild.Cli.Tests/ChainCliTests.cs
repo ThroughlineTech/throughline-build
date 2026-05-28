@@ -35,7 +35,9 @@ public class ChainCliTests
     public void UsageText_DocumentsChainDebugFlag()
     {
         // Chain usage line must document [--debug].
-        Assert.Contains("build chain <ticket-id> [--debug]", CliUsage.UsageText);
+        // TLB-191 added agent flags before --debug on the chain line.
+        Assert.Contains("[--debug]", CliUsage.UsageText);
+        Assert.Contains("build chain <ticket-id>", CliUsage.UsageText);
     }
 
     [Fact]
