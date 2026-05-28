@@ -304,7 +304,7 @@ public class ClaudeCodeAgent : IWorkerAgent
         {
             // Merge llm_usage metadata on success path
             var mergedMetadata = new Dictionary<string, object>(outcome.Result.Metadata);
-            mergedMetadata["llm_usage"] = BuildLlmUsageMetadata(envelope, wallClockMs, model);
+            mergedMetadata["llm_usage"] = BuildLlmUsageMetadata(envelope, wallClockMs, model, vendor: "anthropic");
             return outcome.Result with { Metadata = mergedMetadata };
         }
 
@@ -329,12 +329,12 @@ public class ClaudeCodeAgent : IWorkerAgent
     // Builds the llm_usage metadata dictionary from the Claude Code JSON envelope.
     // Returns a dictionary with snake_case keys including model, vendor, token counts, cache fields, and wall_clock_ms.
     // anthropic_request_id is not included: the Claude Code CLI does not expose it in the stream envelope.
-    internal static Dictionary<string, object> BuildLlmUsageMetadata(ClaudeCodeJsonEnvelope envelope, long wallClockMs, string? model = null)
+    internal static Dictionary<string, object> BuildLlmUsageMetadata(ClaudeCodeJsonEnvelope envelope, long wallClockMs, string? model = null, string vendor = "anthropic")
     {
         var metadata = new Dictionary<string, object>
         {
             { "model", model! },
-            { "vendor", "anthropic" },
+            { "vendor", vendor },
             { "wall_clock_ms", wallClockMs }
         };
 
@@ -353,6 +353,9 @@ public class ClaudeCodeAgent : IWorkerAgent
             metadata["cache_create_tokens"] = null!;
             metadata["partial"] = true;
         }
+
+        if (envelope.TotalCostUsd is decimal cost)
+            metadata["cost_usd"] = cost;
 
         return metadata;
     }

@@ -600,7 +600,7 @@ public class ClaudeCodeAgentDebugCaptureTests
         new Dictionary<string, object>());
 
     private static ClaudeCodeJsonEnvelope MakeEnvelope(string? result) => new ClaudeCodeJsonEnvelope(
-        Type: "result", Subtype: "success", IsError: false, Result: result, Usage: null);
+        Type: "result", Subtype: "success", IsError: false, Result: result, Usage: null, TotalCostUsd: null);
 
     [Fact]
     public void WriteDebugCapture_HappyPath_WritesFiveFiles()
@@ -760,7 +760,8 @@ public class ClaudeCodeAgentLlmUsageTests
             Subtype: "success",
             IsError: false,
             Result: "some result",
-            Usage: usage
+            Usage: usage,
+            TotalCostUsd: null
         );
         var wallClockMs = 1234L;
 
@@ -775,6 +776,7 @@ public class ClaudeCodeAgentLlmUsageTests
         Assert.Equal(3, metadata["cache_create_tokens"]);
         Assert.Equal(1234L, metadata["wall_clock_ms"]);
         Assert.False(metadata.ContainsKey("partial"));
+        Assert.False(metadata.ContainsKey("cost_usd"));
     }
 
     [Fact]
@@ -785,7 +787,8 @@ public class ClaudeCodeAgentLlmUsageTests
             Subtype: "success",
             IsError: false,
             Result: "some result",
-            Usage: null
+            Usage: null,
+            TotalCostUsd: null
         );
         var wallClockMs = 5678L;
 
@@ -800,6 +803,7 @@ public class ClaudeCodeAgentLlmUsageTests
         Assert.Null(metadata["cache_create_tokens"]);
         Assert.Equal(5678L, metadata["wall_clock_ms"]);
         Assert.True((bool)metadata["partial"]);
+        Assert.False(metadata.ContainsKey("cost_usd"));
     }
 
     [Fact]
@@ -810,13 +814,66 @@ public class ClaudeCodeAgentLlmUsageTests
             Subtype: "success",
             IsError: false,
             Result: "some result",
-            Usage: new ClaudeCodeUsage(InputTokens: 1, OutputTokens: 1, CacheReadInputTokens: null, CacheCreationInputTokens: null)
+            Usage: new ClaudeCodeUsage(InputTokens: 1, OutputTokens: 1, CacheReadInputTokens: null, CacheCreationInputTokens: null),
+            TotalCostUsd: null
         );
 
         var metadata = ClaudeCodeAgent.BuildLlmUsageMetadata(envelope, 0, "claude-opus-4-6");
 
         Assert.Equal("claude-opus-4-6", metadata["model"]);
         Assert.Equal("anthropic", metadata["vendor"]);
+    }
+
+    [Fact]
+    public void BuildLlmUsageMetadata_WithCost_PopulatesCostUsd()
+    {
+        var envelope = new ClaudeCodeJsonEnvelope(
+            Type: "result",
+            Subtype: "success",
+            IsError: false,
+            Result: "some result",
+            Usage: new ClaudeCodeUsage(InputTokens: 1, OutputTokens: 1, CacheReadInputTokens: null, CacheCreationInputTokens: null),
+            TotalCostUsd: 0.0123m
+        );
+
+        var metadata = ClaudeCodeAgent.BuildLlmUsageMetadata(envelope, 0);
+
+        Assert.True(metadata.ContainsKey("cost_usd"));
+        Assert.Equal(0.0123m, metadata["cost_usd"]);
+    }
+
+    [Fact]
+    public void BuildLlmUsageMetadata_WithoutCost_OmitsCostUsd()
+    {
+        var envelope = new ClaudeCodeJsonEnvelope(
+            Type: "result",
+            Subtype: "success",
+            IsError: false,
+            Result: "some result",
+            Usage: new ClaudeCodeUsage(InputTokens: 1, OutputTokens: 1, CacheReadInputTokens: null, CacheCreationInputTokens: null),
+            TotalCostUsd: null
+        );
+
+        var metadata = ClaudeCodeAgent.BuildLlmUsageMetadata(envelope, 0);
+
+        Assert.False(metadata.ContainsKey("cost_usd"));
+    }
+
+    [Fact]
+    public void BuildLlmUsageMetadata_VendorParameter_OverridesDefault()
+    {
+        var envelope = new ClaudeCodeJsonEnvelope(
+            Type: "result",
+            Subtype: "success",
+            IsError: false,
+            Result: "some result",
+            Usage: new ClaudeCodeUsage(InputTokens: 1, OutputTokens: 1, CacheReadInputTokens: null, CacheCreationInputTokens: null),
+            TotalCostUsd: null
+        );
+
+        var metadata = ClaudeCodeAgent.BuildLlmUsageMetadata(envelope, 0, vendor: "test-vendor");
+
+        Assert.Equal("test-vendor", metadata["vendor"]);
     }
 }
 
