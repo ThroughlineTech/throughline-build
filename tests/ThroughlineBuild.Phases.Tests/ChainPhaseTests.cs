@@ -539,6 +539,7 @@ public class ChainPhaseTests
         }
 
         public string Name => "fake";
+        public IWorkerProgressDigester? Digester => null;
 
         public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
         {

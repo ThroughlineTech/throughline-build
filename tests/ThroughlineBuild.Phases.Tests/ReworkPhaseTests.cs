@@ -237,6 +237,7 @@ public class ReworkPhaseTests
         public int CallCount { get; private set; }
         public FakeWorkerAgent(WorkerResult result) { _result = result; }
         public string Name => "fake";
+        public IWorkerProgressDigester? Digester => null;
         public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
         {
             CallCount++;

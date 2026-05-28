@@ -16,6 +16,7 @@ public class WorkerAgentReviewerTests
         private readonly WorkerResult _result;
 
         public string Name => "stub";
+        public IWorkerProgressDigester? Digester => null;
 
         // Captured call args
         public Brief? CapturedBrief { get; private set; }

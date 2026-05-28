@@ -154,6 +154,7 @@ public class PlanPhaseUsageTests
         private readonly WorkerResult _result;
         public FakeWorkerAgent(WorkerResult result) { _result = result; }
         public string Name => "fake";
+        public IWorkerProgressDigester? Digester => null;
         public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct) =>
             Task.FromResult(_result);
     }
