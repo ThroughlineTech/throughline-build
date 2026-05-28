@@ -20,6 +20,7 @@
     <ProjectReference Include="..\ThroughlineBuild.Anthropic\ThroughlineBuild.Anthropic.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.Workers.ClaudeCode\ThroughlineBuild.Workers.ClaudeCode.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.Workers.Codex\ThroughlineBuild.Workers.Codex.csproj" />
+    <ProjectReference Include="..\ThroughlineBuild.Workers.Gemini\ThroughlineBuild.Workers.Gemini.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.EventLog\ThroughlineBuild.EventLog.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.Helpers\ThroughlineBuild.Helpers.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.Verification\ThroughlineBuild.Verification.csproj" />

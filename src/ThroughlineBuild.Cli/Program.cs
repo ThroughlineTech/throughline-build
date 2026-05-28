@@ -15,6 +15,7 @@ using ThroughlineBuild.Scaffold;
 using ThroughlineBuild.Verification;
 using ThroughlineBuild.Workers.ClaudeCode;
 using ThroughlineBuild.Workers.Codex;
+using ThroughlineBuild.Workers.Gemini;
 
 return await RunAsync(args);
 
@@ -676,6 +677,13 @@ static async Task<int> RunAsync(string[] args)
         var capturedName = agentName;
         factoryEntries[agentName] = () =>
         {
+            if (capturedName == "gemini")
+                return new GeminiAgent(new GeminiOptions
+                {
+                    ExecutablePath = capturedCfg.Executable,
+                    MaxOutputTokens = capturedCfg.MaxOutputTokens,
+                    Sizes = capturedCfg.Sizes
+                });
             if (capturedName == "codex")
                 return new CodexAgent(new CodexOptions
                 {
