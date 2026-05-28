@@ -2,6 +2,7 @@ using Tomlyn;
 using Tomlyn.Model;
 using ThroughlineBuild.Briefs;
 using ThroughlineBuild.Contracts;
+using ThroughlineBuild.Contracts.Models;
 
 namespace ThroughlineBuild.Cli;
 
@@ -20,7 +21,7 @@ public record LlmConfig(
     string AnthropicApiKeyEnv,
     string? AnthropicApiKey = null);
 
-public record AgentConfig(string Executable, int? MaxOutputTokens);
+public record AgentConfig(string Executable, int? MaxOutputTokens, IReadOnlyDictionary<WorkerSize, string> Sizes);
 
 public record WorkersConfig(
     string DefaultAgent,
@@ -247,7 +248,25 @@ public static class BuildConfigLoader
                 if (motVal is long l) maxOutputTokens = (int)l;
                 else if (motVal is int i) maxOutputTokens = i;
             }
-            agents[kv.Key] = new AgentConfig(executable, maxOutputTokens);
+
+            var sizes = new Dictionary<WorkerSize, string>();
+            if (!subTable.TryGetValue("sizes", out var sizesVal) || sizesVal is not TomlTable sizesTable)
+                throw new ConfigException(
+                    $"missing required [workers.{kv.Key}.sizes] sub-table in config; " +
+                    "must map small, medium, and large to model ids");
+            var required = new[] { ("small", WorkerSize.Small), ("medium", WorkerSize.Medium), ("large", WorkerSize.Large) };
+            var missing = new List<string>();
+            foreach (var (key, ws) in required)
+            {
+                if (sizesTable.TryGetValue(key, out var mVal) && mVal is string mStr && !string.IsNullOrEmpty(mStr))
+                    sizes[ws] = mStr;
+                else
+                    missing.Add(key);
+            }
+            if (missing.Count > 0)
+                throw new ConfigException(
+                    $"[workers.{kv.Key}.sizes] is missing required size keys: {string.Join(", ", missing)}");
+            agents[kv.Key] = new AgentConfig(executable, maxOutputTokens, sizes.AsReadOnly());
         }
 
         return new WorkersConfig(

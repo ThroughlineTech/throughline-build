@@ -139,6 +139,11 @@ public class ImplementCliTests
                 "[workers.claude-code]\n" +
                 "executable = \"claude\"\n" +
                 "\n" +
+                "[workers.claude-code.sizes]\n" +
+                "small = \"claude-haiku-4-5-20251001\"\n" +
+                "medium = \"claude-sonnet-4-6\"\n" +
+                "large = \"claude-opus-4-7\"\n" +
+                "\n" +
                 "[events]\n" +
                 "log_directory = \".build/events\"\n";
 
@@ -221,6 +226,11 @@ public class ImplementCliTests
                 "\n" +
                 "[workers.claude-code]\n" +
                 "executable = \"claude\"\n" +
+                "\n" +
+                "[workers.claude-code.sizes]\n" +
+                "small = \"claude-haiku-4-5-20251001\"\n" +
+                "medium = \"claude-sonnet-4-6\"\n" +
+                "large = \"claude-opus-4-7\"\n" +
                 "\n" +
                 "[events]\n" +
                 "log_directory = \".build/events\"\n";

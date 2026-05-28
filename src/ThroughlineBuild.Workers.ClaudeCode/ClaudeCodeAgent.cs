@@ -36,7 +36,8 @@ public class ClaudeCodeAgent : IWorkerAgent
         var args = new List<string> { "--print", "--verbose", "--output-format", "stream-json" };
         if (options.AllowedTools is { Count: > 0 })
             args.AddRange(new[] { "--allowedTools", string.Join(",", options.AllowedTools) });
-        var modelArg = NormalizeModel(_options.Model);
+        _options.Sizes.TryGetValue(options.Size, out var resolvedModelRaw);
+        var modelArg = NormalizeModel(resolvedModelRaw);
         if (modelArg is not null)
             args.AddRange(new[] { "--model", modelArg });
         foreach (var extra in _options.ExtraArgs)
@@ -129,13 +130,7 @@ public class ClaudeCodeAgent : IWorkerAgent
         var stdout = stdoutBuilder.ToString();
         var stderr = stderrBuilder.ToString();
 
-        // Strip vendor prefix from DefaultModel (e.g. "anthropic:claude-sonnet-4-6" -> "claude-sonnet-4-6")
-        // so the fallback model matches the bare form reported by the stream system event.
-        var rawDefaultModel = _options.DefaultModel;
-        var fallbackModel = rawDefaultModel is not null && rawDefaultModel.Contains(':')
-            ? rawDefaultModel.Substring(rawDefaultModel.IndexOf(':') + 1)
-            : rawDefaultModel;
-
+        var fallbackModel = NormalizeModel(resolvedModelRaw);
         var result = ParseStdoutEnvelope(stdout, process.ExitCode, stderr, stopwatch.ElapsedMilliseconds, fallbackModel);
 
         if (options.DebugCaptureDirectory is not null)
