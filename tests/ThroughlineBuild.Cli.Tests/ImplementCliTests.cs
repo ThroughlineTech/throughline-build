@@ -135,7 +135,9 @@ public class ImplementCliTests
                 "\n" +
                 "[workers]\n" +
                 "default_agent = \"claude-code\"\n" +
-                "claude_code_executable = \"claude\"\n" +
+                "\n" +
+                "[workers.claude-code]\n" +
+                "executable = \"claude\"\n" +
                 "\n" +
                 "[events]\n" +
                 "log_directory = \".build/events\"\n";
@@ -216,7 +218,9 @@ public class ImplementCliTests
                 "\n" +
                 "[workers]\n" +
                 "default_agent = \"claude-code\"\n" +
-                "claude_code_executable = \"claude\"\n" +
+                "\n" +
+                "[workers.claude-code]\n" +
+                "executable = \"claude\"\n" +
                 "\n" +
                 "[events]\n" +
                 "log_directory = \".build/events\"\n";

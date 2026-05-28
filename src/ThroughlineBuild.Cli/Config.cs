@@ -20,11 +20,12 @@ public record LlmConfig(
     string AnthropicApiKeyEnv,
     string? AnthropicApiKey = null);
 
+public record AgentConfig(string Executable, int? MaxOutputTokens);
+
 public record WorkersConfig(
     string DefaultAgent,
-    string ClaudeCodeExecutable,
     int TimeoutMinutes,
-    int MaxOutputTokens);
+    IReadOnlyDictionary<string, AgentConfig> Agents);
 
 public record EventsConfig(string LogDirectory);
 
@@ -199,11 +200,40 @@ public static class BuildConfigLoader
     private static WorkersConfig ReadWorkersSection(TomlTable root)
     {
         var t = RequireSection(root, "workers");
+
+        // Hard-break: old flat keys are not supported; throw a migration error.
+        if (t.ContainsKey("claude_code_executable"))
+            throw new ConfigException(
+                "key 'claude_code_executable' in [workers] is no longer supported. " +
+                "Move it to [workers.<agent-name>] as 'executable = ...' (e.g. [workers.claude-code]).");
+        if (t.ContainsKey("max_output_tokens"))
+            throw new ConfigException(
+                "key 'max_output_tokens' in [workers] is no longer supported. " +
+                "Move it to [workers.<agent-name>] as 'max_output_tokens = ...' (e.g. [workers.claude-code]).");
+
+        var defaultAgent = RequireString(t, "workers", "default_agent");
+        var timeoutMinutes = OptionalInt(t, "timeout_minutes", 30);
+
+        // Enumerate sub-tables as agent configs.
+        var agents = new Dictionary<string, AgentConfig>(StringComparer.Ordinal);
+        foreach (var kv in t)
+        {
+            if (kv.Value is not TomlTable agentTable)
+                continue;
+            var executable = RequireString(agentTable, $"workers.{kv.Key}", "executable");
+            int? maxOutputTokens = null;
+            if (agentTable.TryGetValue("max_output_tokens", out var motVal))
+            {
+                if (motVal is long l) maxOutputTokens = (int)l;
+                else if (motVal is int i) maxOutputTokens = i;
+            }
+            agents[kv.Key] = new AgentConfig(executable, maxOutputTokens);
+        }
+
         return new WorkersConfig(
-            DefaultAgent: RequireString(t, "workers", "default_agent"),
-            ClaudeCodeExecutable: RequireString(t, "workers", "claude_code_executable"),
-            TimeoutMinutes: OptionalInt(t, "timeout_minutes", 30),
-            MaxOutputTokens: OptionalInt(t, "max_output_tokens", 32000));
+            DefaultAgent: defaultAgent,
+            TimeoutMinutes: timeoutMinutes,
+            Agents: agents);
     }
 
     private static EventsConfig ReadEventsSection(TomlTable root)

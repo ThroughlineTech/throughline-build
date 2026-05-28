@@ -28,8 +28,10 @@ anthropic_api_key_env = "ANTHROPIC_KEY"
 
 [workers]
 default_agent = "claude-code"
-claude_code_executable = "claude"
 timeout_minutes = 20
+
+[workers.claude-code]
+executable = "claude"
 
 [events]
 log_directory = ".build/events"
@@ -51,7 +53,7 @@ log_directory = ".build/events"
             Assert.Equal("anthropic:claude-opus-4-7", config.Llm.DefaultModel);
             Assert.Equal("ANTHROPIC_KEY", config.Llm.AnthropicApiKeyEnv);
             Assert.Equal("claude-code", config.Workers.DefaultAgent);
-            Assert.Equal("claude", config.Workers.ClaudeCodeExecutable);
+            Assert.Equal("claude", config.Workers.Agents["claude-code"].Executable);
             Assert.Equal(20, config.Workers.TimeoutMinutes);
             Assert.Equal(".build/events", config.Events.LogDirectory);
         }
@@ -73,7 +75,9 @@ plane_api_token_env = "TOK"
 
 [workers]
 default_agent = "claude-code"
-claude_code_executable = "claude"
+
+[workers.claude-code]
+executable = "claude"
 
 [events]
 log_directory = ".build/events"
@@ -158,14 +162,112 @@ log_directory = ".build/events"
     }
 
     [Fact]
-    public void Load_WorkersSectionWithoutMaxOutputTokens_DefaultsTo32000()
+    public void Load_NewAgentSubTable_ParsesCorrectly()
     {
         var path = WriteToml(ValidToml);
         try
         {
             var config = BuildConfigLoader.Load(path);
 
-            Assert.Equal(32000, config.Workers.MaxOutputTokens);
+            Assert.True(config.Workers.Agents.ContainsKey("claude-code"));
+            Assert.Equal("claude", config.Workers.Agents["claude-code"].Executable);
+            Assert.Null(config.Workers.Agents["claude-code"].MaxOutputTokens);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_AgentSubTableWithMaxOutputTokens_ParsesValue()
+    {
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "abc-123"
+plane_api_token_env = "PLANE_TOKEN"
+
+[workers]
+default_agent = "claude-code"
+
+[workers.claude-code]
+executable = "claude"
+max_output_tokens = 16000
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            Assert.Equal(16000, config.Workers.Agents["claude-code"].MaxOutputTokens);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_OldFlatKeyClaudeCodeExecutable_ThrowsConfigException()
+    {
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "abc-123"
+plane_api_token_env = "PLANE_TOKEN"
+
+[workers]
+default_agent = "claude-code"
+claude_code_executable = "claude"
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var ex = Assert.Throws<ConfigException>(() => BuildConfigLoader.Load(path));
+            Assert.Contains("claude_code_executable", ex.Message);
+            Assert.Contains("workers.", ex.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_OldFlatKeyMaxOutputTokens_ThrowsConfigException()
+    {
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "abc-123"
+plane_api_token_env = "PLANE_TOKEN"
+
+[workers]
+default_agent = "claude-code"
+max_output_tokens = 32000
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var ex = Assert.Throws<ConfigException>(() => BuildConfigLoader.Load(path));
+            Assert.Contains("max_output_tokens", ex.Message);
+            Assert.Contains("workers.", ex.Message);
         }
         finally
         {

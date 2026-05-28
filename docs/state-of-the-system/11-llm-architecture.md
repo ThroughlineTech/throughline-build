@@ -188,7 +188,7 @@ A complete map of every site that invokes an LLM:
 |---|---|---|---|
 | [src/ThroughlineBuild.Cli/Program.cs:1135](../../src/ThroughlineBuild.Cli/Program.cs#L1135) (`WireUpConditionalCommands`) | `ILlmClient` via `AnthropicClient` | `AnthropicOptions.ApiKey` from `secrets.AnthropicApiKey`; model hardcoded in `ReasonTranslator.ModelId` | yes - direct `new AnthropicClient(...)` |
 | [src/ThroughlineBuild.JudgmentSlots/ReasonTranslator.cs:14, 22](../../src/ThroughlineBuild.JudgmentSlots/ReasonTranslator.cs#L14) | `ILlmClient` | hardcoded `claude-haiku-4-5-20251001` | model id is Claude-specific |
-| [src/ThroughlineBuild.Cli/Program.cs:640-646](../../src/ThroughlineBuild.Cli/Program.cs#L640-L646) (every phase) | `IWorkerAgent` via `ClaudeCodeAgent` | `config.workers.claude_code_executable`, `config.llm.default_model` | yes - direct `new ClaudeCodeAgent(...)` |
+| [src/ThroughlineBuild.Cli/Program.cs:640-646](../../src/ThroughlineBuild.Cli/Program.cs#L640-L646) (every phase) | `IWorkerAgent` via `ClaudeCodeAgent` | `config.workers["claude-code"].executable`, `config.llm.default_model` | yes - direct `new ClaudeCodeAgent(...)` |
 | [src/ThroughlineBuild.Cli/Program.cs:424-430](../../src/ThroughlineBuild.Cli/Program.cs#L424-L430) (`build new` draft mode) | `IWorkerAgent` via separate `ClaudeCodeAgent` for `DraftPhase` | same | yes |
 | [src/ThroughlineBuild.Verification/ClaudeCodeReviewer.cs](../../src/ThroughlineBuild.Verification/ClaudeCodeReviewer.cs) (the `IVerifier`) | `IWorkerAgent` (wraps it) | passed-in worker - typically same `ClaudeCodeAgent` | named for Claude but the agent is injected |
 

@@ -421,13 +421,15 @@ static async Task<int> RunAsync(string[] args)
         }
 
         // Build a real worker for draft mode.
+        if (!config2.Workers.Agents.TryGetValue(config2.Workers.DefaultAgent, out var draftAgentCfg))
+            throw new ConfigException($"missing [workers.{config2.Workers.DefaultAgent}] sub-table in config");
         var draftWorkerFactory = new WorkerAgentFactory(
             new Dictionary<string, Func<IWorkerAgent>>(StringComparer.Ordinal)
             {
-                ["claude-code"] = () => new ClaudeCodeAgent(new ClaudeCodeOptions
+                [config2.Workers.DefaultAgent] = () => new ClaudeCodeAgent(new ClaudeCodeOptions
                 {
-                    ExecutablePath = config2.Workers.ClaudeCodeExecutable,
-                    MaxOutputTokens = config2.Workers.MaxOutputTokens,
+                    ExecutablePath = draftAgentCfg.Executable,
+                    MaxOutputTokens = draftAgentCfg.MaxOutputTokens,
                     Model = config2.Llm.DefaultModel,
                     DefaultModel = config2.Llm.DefaultModel
                 })
@@ -642,13 +644,15 @@ static async Task<int> RunAsync(string[] args)
         ProjectId = config2.Ticketing.PlaneProjectId,
         ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
     });
+    if (!config2.Workers.Agents.TryGetValue(config2.Workers.DefaultAgent, out var agentCfg))
+        throw new ConfigException($"missing [workers.{config2.Workers.DefaultAgent}] sub-table in config");
     var workerFactory = new WorkerAgentFactory(
         new Dictionary<string, Func<IWorkerAgent>>(StringComparer.Ordinal)
         {
-            ["claude-code"] = () => new ClaudeCodeAgent(new ClaudeCodeOptions
+            [config2.Workers.DefaultAgent] = () => new ClaudeCodeAgent(new ClaudeCodeOptions
             {
-                ExecutablePath = config2.Workers.ClaudeCodeExecutable,
-                MaxOutputTokens = config2.Workers.MaxOutputTokens,
+                ExecutablePath = agentCfg.Executable,
+                MaxOutputTokens = agentCfg.MaxOutputTokens,
                 Model = config2.Llm.DefaultModel,
                 DefaultModel = config2.Llm.DefaultModel
             })

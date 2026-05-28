@@ -44,11 +44,18 @@ If section absent, all defaults are empty strings ([src/ThroughlineBuild.Cli/Con
 | Key | Required | Default |
 |---|---|---|
 | `default_agent` | yes | - |
-| `claude_code_executable` | yes | - (typically `"claude"`) |
 | `timeout_minutes` | no | `30` |
-| `max_output_tokens` | no | `32000` |
 
-`default_agent` is read into `BuildOptions.WorkerName` and only one value (`"claude-code"`) is meaningful today; no agent registry exists ([src/ThroughlineBuild.Cli/Config.cs:199-207](../../src/ThroughlineBuild.Cli/Config.cs#L199-L207)). `max_output_tokens` becomes the `CLAUDE_CODE_MAX_OUTPUT_TOKENS` env var passed to the worker subprocess ([src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs:378](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L378)).
+Vendor-specific options live under `[workers.<agent-name>]` sub-tables. `default_agent` is read into `BuildOptions.WorkerName`; the named sub-table must exist or the CLI throws a `ConfigException`.
+
+### `[workers.<agent-name>]` (one per agent, required for default agent)
+
+| Key | Required | Default |
+|---|---|---|
+| `executable` | yes | - (typically `"claude"`) |
+| `max_output_tokens` | no | - (`null`) |
+
+Example: `[workers.claude-code]`. `max_output_tokens` becomes the `CLAUDE_CODE_MAX_OUTPUT_TOKENS` env var passed to the worker subprocess when set ([src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs:378](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L378)).
 
 ### `[events]` (required section)
 

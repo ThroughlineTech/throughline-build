@@ -20,8 +20,10 @@ anthropic_api_key_env = "ANTHROPIC_KEY"
 
 [workers]
 default_agent = "claude-code"
-claude_code_executable = "claude"
 timeout_minutes = 20
+
+[workers.claude-code]
+executable = "claude"
 
 [events]
 log_directory = ".build/events"
