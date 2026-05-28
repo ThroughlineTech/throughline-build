@@ -196,12 +196,21 @@ public sealed class PlaneTicketingClient : ITicketing
             .Select(uid => labelsById[uid])
             .ToList();
 
+        var sizeLabel = resolvedLabels.FirstOrDefault(
+            l => l.StartsWith("size:", StringComparison.OrdinalIgnoreCase));
+        var ticketSize = sizeLabel?.ToLowerInvariant() switch
+        {
+            "size:s" => Size.S,
+            "size:l" => Size.L,
+            _ => Size.M
+        };
+
         return new Ticket(
             Id: issue.Id,
             Title: issue.Name,
             Type: issue.Type ?? string.Empty,
             State: ticketState,
-            Size: Size.M,
+            Size: ticketSize,
             Risk: Risk.Medium,
             DescriptionHtml: issue.DescriptionHtml ?? string.Empty,
             Relations: [],

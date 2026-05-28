@@ -480,6 +480,58 @@ public class GetRelationsAsyncTests
     }
 }
 
+public class TicketSizeResolutionTests
+{
+    public const string SizeLLabelUuid = "cccccccc-0000-0000-0000-000000000010";
+
+    private static string LabelListWithSizeLJson() =>
+        $$"""
+        {
+          "results": [
+            { "id": "{{SizeLLabelUuid}}", "name": "size:l" }
+          ]
+        }
+        """;
+
+    private static string LabelListNoSizeJson() =>
+        """
+        {
+          "results": [
+            { "id": "cccccccc-0000-0000-0000-000000000020", "name": "risk:low" }
+          ]
+        }
+        """;
+
+    [Fact]
+    public async Task GetAsync_SizeLLabel_ReturnsTicketWithSizeL()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(
+            TestData.IssueListJson(labelIdsJson: $"[\"{SizeLLabelUuid}\"]")));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(LabelListWithSizeLJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var ticket = await client.GetAsync("TLB-24", CancellationToken.None);
+
+        Assert.Equal(Size.L, ticket.Size);
+    }
+
+    [Fact]
+    public async Task GetAsync_NoSizeLabel_FallsBackToSizeM()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson(labelIdsJson: "[]")));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(LabelListNoSizeJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var ticket = await client.GetAsync("TLB-24", CancellationToken.None);
+
+        Assert.Equal(Size.M, ticket.Size);
+    }
+}
+
 public class PlaneApiExceptionTests
 {
     [Fact]

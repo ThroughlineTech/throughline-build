@@ -144,8 +144,12 @@ public class ReviewPhase : IWorkflowPhase
         var checkResults = await runner.RunAsync(_reviewOptions.Checks, worktreeNames.WorktreePath, ct).ConfigureAwait(false);
 
         // Step 8: Construct verifier
+        var effectiveVerifierOptions = _reviewOptions.VerifierWorkerOptions with
+        {
+            Size = WorkerSizeMapper.FromTicketSize(ticket.Size)
+        };
         var verifier = _verifierOverride
-            ?? new WorkerAgentReviewer(_verifierWorker, ticket, checkResults, _reviewOptions.VerifierWorkerOptions, workingDirectory, _project);
+            ?? new WorkerAgentReviewer(_verifierWorker, ticket, checkResults, effectiveVerifierOptions, workingDirectory, _project);
 
         // Step 9: Emit WorkerSpawn (role = verifier)
         await EmitAsync(EventKind.WorkerSpawn, ticketId, new Dictionary<string, object>
