@@ -25,7 +25,8 @@ public record AgentConfig(string Executable, int? MaxOutputTokens);
 public record WorkersConfig(
     string DefaultAgent,
     int TimeoutMinutes,
-    IReadOnlyDictionary<string, AgentConfig> Agents);
+    IReadOnlyDictionary<string, AgentConfig> Agents,
+    IReadOnlyDictionary<string, string> Phases);
 
 public record EventsConfig(string LogDirectory);
 
@@ -214,15 +215,34 @@ public static class BuildConfigLoader
         var defaultAgent = RequireString(t, "workers", "default_agent");
         var timeoutMinutes = OptionalInt(t, "timeout_minutes", 30);
 
-        // Enumerate sub-tables as agent configs.
+        // Enumerate sub-tables as agent configs; handle "phases" sub-table separately.
         var agents = new Dictionary<string, AgentConfig>(StringComparer.Ordinal);
+        var phases = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var kv in t)
         {
-            if (kv.Value is not TomlTable agentTable)
+            if (kv.Value is not TomlTable subTable)
                 continue;
-            var executable = RequireString(agentTable, $"workers.{kv.Key}", "executable");
+
+            if (kv.Key == "phases")
+            {
+                // Parse phases: each value must be one of the known phase keys.
+                var knownPhases = new HashSet<string>(StringComparer.Ordinal) { "plan", "implement", "review" };
+                foreach (var phaseKv in subTable)
+                {
+                    if (!knownPhases.Contains(phaseKv.Key))
+                        throw new ConfigException(
+                            $"unknown phase key '{phaseKv.Key}' in [workers.phases]; allowed keys are: plan, implement, review");
+                    if (phaseKv.Value is not string agentName || string.IsNullOrEmpty(agentName))
+                        throw new ConfigException(
+                            $"value for '{phaseKv.Key}' in [workers.phases] must be a non-empty string");
+                    phases[phaseKv.Key] = agentName;
+                }
+                continue;
+            }
+
+            var executable = RequireString(subTable, $"workers.{kv.Key}", "executable");
             int? maxOutputTokens = null;
-            if (agentTable.TryGetValue("max_output_tokens", out var motVal))
+            if (subTable.TryGetValue("max_output_tokens", out var motVal))
             {
                 if (motVal is long l) maxOutputTokens = (int)l;
                 else if (motVal is int i) maxOutputTokens = i;
@@ -233,7 +253,8 @@ public static class BuildConfigLoader
         return new WorkersConfig(
             DefaultAgent: defaultAgent,
             TimeoutMinutes: timeoutMinutes,
-            Agents: agents);
+            Agents: agents,
+            Phases: phases);
     }
 
     private static EventsConfig ReadEventsSection(TomlTable root)

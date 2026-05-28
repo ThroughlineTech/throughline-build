@@ -420,13 +420,16 @@ static async Task<int> RunAsync(string[] args)
             }
         }
 
-        // Build a real worker for draft mode.
-        if (!config2.Workers.Agents.TryGetValue(config2.Workers.DefaultAgent, out var draftAgentCfg))
-            throw new ConfigException($"missing [workers.{config2.Workers.DefaultAgent}] sub-table in config");
+        // Build a real worker for draft mode using the implement phase agent (or default).
+        var draftImplementAgentName = config2.Workers.Phases.TryGetValue("implement", out var draftPhaseName)
+            ? draftPhaseName
+            : config2.Workers.DefaultAgent;
+        if (!config2.Workers.Agents.TryGetValue(draftImplementAgentName, out var draftAgentCfg))
+            throw new ConfigException($"missing [workers.{draftImplementAgentName}] sub-table in config");
         var draftWorkerFactory = new WorkerAgentFactory(
             new Dictionary<string, Func<IWorkerAgent>>(StringComparer.Ordinal)
             {
-                [config2.Workers.DefaultAgent] = () => new ClaudeCodeAgent(new ClaudeCodeOptions
+                [draftImplementAgentName] = () => new ClaudeCodeAgent(new ClaudeCodeOptions
                 {
                     ExecutablePath = draftAgentCfg.Executable,
                     MaxOutputTokens = draftAgentCfg.MaxOutputTokens,
@@ -434,7 +437,7 @@ static async Task<int> RunAsync(string[] args)
                     DefaultModel = config2.Llm.DefaultModel
                 })
             });
-        var draftWorker = draftWorkerFactory.Create(config2.Workers.DefaultAgent);
+        var draftWorker = draftWorkerFactory.Create(draftImplementAgentName);
 
         var draftPhase = new DraftPhase(draftWorker, buildOptions2);
         var draftSw = System.Diagnostics.Stopwatch.StartNew();
@@ -646,18 +649,31 @@ static async Task<int> RunAsync(string[] args)
     });
     if (!config2.Workers.Agents.TryGetValue(config2.Workers.DefaultAgent, out var agentCfg))
         throw new ConfigException($"missing [workers.{config2.Workers.DefaultAgent}] sub-table in config");
-    var workerFactory = new WorkerAgentFactory(
-        new Dictionary<string, Func<IWorkerAgent>>(StringComparer.Ordinal)
+
+    // Collect all agent names referenced by phases (plus default) and register them.
+    var allAgentNames = new HashSet<string>(StringComparer.Ordinal) { config2.Workers.DefaultAgent };
+    foreach (var phaseName in config2.Workers.Phases.Values)
+        allAgentNames.Add(phaseName);
+
+    var factoryEntries = new Dictionary<string, Func<IWorkerAgent>>(StringComparer.Ordinal);
+    foreach (var agentName in allAgentNames)
+    {
+        if (!config2.Workers.Agents.TryGetValue(agentName, out var aCfg))
+            throw new ConfigException($"missing [workers.{agentName}] sub-table in config");
+        var capturedCfg = aCfg;
+        factoryEntries[agentName] = () => new ClaudeCodeAgent(new ClaudeCodeOptions
         {
-            [config2.Workers.DefaultAgent] = () => new ClaudeCodeAgent(new ClaudeCodeOptions
-            {
-                ExecutablePath = agentCfg.Executable,
-                MaxOutputTokens = agentCfg.MaxOutputTokens,
-                Model = config2.Llm.DefaultModel,
-                DefaultModel = config2.Llm.DefaultModel
-            })
+            ExecutablePath = capturedCfg.Executable,
+            MaxOutputTokens = capturedCfg.MaxOutputTokens,
+            Model = config2.Llm.DefaultModel,
+            DefaultModel = config2.Llm.DefaultModel
         });
-    var worker = workerFactory.Create(config2.Workers.DefaultAgent);
+    }
+    var workerFactory = new WorkerAgentFactory(factoryEntries);
+
+    // Helper: resolve the agent name for a given phase, falling back to default_agent.
+    string AgentFor(string phase) =>
+        config2.Workers.Phases.TryGetValue(phase, out var n) ? n : config2.Workers.DefaultAgent;
     await using var jsonlEventSink = new JsonlEventSink(new EventLogOptions
     {
         BaseDirectory = ResolveLogDir(config2.Events.LogDirectory),
@@ -700,7 +716,7 @@ static async Task<int> RunAsync(string[] args)
 
     if (verb == "plan")
     {
-        var phase = new PlanPhase(ticketing, worker, eventSink, buildOptions, project: config2.Project);
+        var phase = new PlanPhase(ticketing, workerFactory.Create(AgentFor("plan")), eventSink, buildOptions, project: config2.Project);
         PlanResult result;
         try
         {
@@ -751,7 +767,7 @@ static async Task<int> RunAsync(string[] args)
     }
     else if (verb == "implement")
     {
-        var phase = new ImplementPhase(ticketing, worker, eventSink, buildOptions, project: config2.Project);
+        var phase = new ImplementPhase(ticketing, workerFactory.Create(AgentFor("implement")), eventSink, buildOptions, project: config2.Project);
         ImplementResult result;
         try
         {
@@ -912,10 +928,10 @@ static async Task<int> RunAsync(string[] args)
     {
         // Construct per-phase factories for ChainPhase.
         var planPhaseFactory = (BuildOptions buildOpts) =>
-            new PlanPhase(ticketing, worker, eventSink, buildOpts, project: config2.Project);
+            new PlanPhase(ticketing, workerFactory.Create(AgentFor("plan")), eventSink, buildOpts, project: config2.Project);
 
         var implementPhaseFactory = (BuildOptions buildOpts, ImplementPhaseOptions implOpts) =>
-            new ImplementPhase(ticketing, worker, eventSink, buildOpts, project: config2.Project);
+            new ImplementPhase(ticketing, workerFactory.Create(AgentFor("implement")), eventSink, buildOpts, project: config2.Project);
 
         var reviewPhaseFactory = (BuildOptions buildOpts) =>
         {
@@ -927,7 +943,7 @@ static async Task<int> RunAsync(string[] args)
                 LiveStderrSink: debugMode ? Console.Error : null,
                 ProgressDigestSink: enableDigest ? Console.Error : null);
             var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
-            return new ReviewPhase(ticketing, worker, eventSink, buildOpts, reviewOptions, project: config2.Project);
+            return new ReviewPhase(ticketing, workerFactory.Create(AgentFor("review")), eventSink, buildOpts, reviewOptions, project: config2.Project);
         };
 
         var shipPhaseFactory = (BuildOptions buildOpts) =>
@@ -1016,7 +1032,7 @@ static async Task<int> RunAsync(string[] args)
 
         var reworkPhase = new ReworkPhase(
             ticketing,
-            worker,
+            workerFactory.Create(AgentFor("implement")),
             eventSink,
             buildOptions,
             retriever,
@@ -1072,7 +1088,7 @@ static async Task<int> RunAsync(string[] args)
             LiveStderrSink: debugMode ? Console.Error : null,
             ProgressDigestSink: enableDigest ? Console.Error : null);
         var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
-        var phase = new ReviewPhase(ticketing, worker, eventSink, buildOptions, reviewOptions, project: config2.Project);
+        var phase = new ReviewPhase(ticketing, workerFactory.Create(AgentFor("review")), eventSink, buildOptions, reviewOptions, project: config2.Project);
         ReviewResult result;
         try
         {
