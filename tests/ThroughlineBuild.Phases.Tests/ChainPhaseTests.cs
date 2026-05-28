@@ -522,6 +522,9 @@ public class ChainPhaseTests
             string title, string type, string descriptionHtml,
             IReadOnlyList<string>? initialLabelNames, CancellationToken ct) =>
             throw new NotImplementedException();
+
+        public Task SetParentAsync(string childUuid, string parentUuid, CancellationToken ct) =>
+            Task.CompletedTask;
     }
 
     private sealed class FakeWorkerAgent : IWorkerAgent

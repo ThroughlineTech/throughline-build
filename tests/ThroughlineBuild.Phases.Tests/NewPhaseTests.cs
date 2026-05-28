@@ -432,6 +432,9 @@ Content with acceptance.
             CreatedTickets.Add((title, type, descriptionHtml, initialLabelNames));
             return Task.FromResult(new NewTicketResult("TLB-42", "uuid-123", DateTime.UtcNow));
         }
+
+        public Task SetParentAsync(string childUuid, string parentUuid, CancellationToken ct) =>
+            Task.CompletedTask;
     }
 
     private sealed class FakeEventSink : IEventSink

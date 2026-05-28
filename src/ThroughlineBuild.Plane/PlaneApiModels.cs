@@ -110,6 +110,10 @@ public record PlaneCreateIssueResponse(
     [property: JsonPropertyName("created_at")] DateTime CreatedAt
 );
 
+public record SetParentRequest(
+    [property: JsonPropertyName("parent")] string Parent
+);
+
 [JsonSerializable(typeof(PlaneIssue))]
 [JsonSerializable(typeof(PlaneIssueList))]
 [JsonSerializable(typeof(PlaneState))]
@@ -131,6 +135,7 @@ public record PlaneCreateIssueResponse(
 [JsonSerializable(typeof(ApplyLabelsRequest))]
 [JsonSerializable(typeof(CreateIssueRequest))]
 [JsonSerializable(typeof(PlaneCreateIssueResponse))]
+[JsonSerializable(typeof(SetParentRequest))]
 [JsonSerializable(typeof(List<PlaneState>))]
 [JsonSerializable(typeof(List<PlaneLabel>))]
 [JsonSerializable(typeof(List<PlaneRelationItem>))]
