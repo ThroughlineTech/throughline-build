@@ -107,7 +107,7 @@ public class ReviewPhase : IWorkflowPhase
         // Step 5: Build RepoState and implementer brief
         var topLevelEntries = Directory.EnumerateFileSystemEntries(workingDirectory).ToList().AsReadOnly();
         var repoState = new RepoState(mainSha, topLevelEntries);
-        var implementerBrief = ImplementBriefBuilder.Build(ticket, repoState, worktreeNames.BranchName, worktreeNames.WorktreePath, _project);
+        var implementerBrief = ImplementBriefBuilder.Build(_verifierWorker.Name, ticket, repoState, worktreeNames.BranchName, worktreeNames.WorktreePath, _project);
 
         // Step 6a: Reconstruct implementer commit SHA from [implemented_at: <sha>] marker
         var comments = await _ticketing.GetCommentsAsync(ticketId, ct).ConfigureAwait(false);

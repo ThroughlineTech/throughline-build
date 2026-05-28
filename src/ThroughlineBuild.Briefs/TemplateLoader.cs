@@ -11,17 +11,21 @@ public static class TemplateLoader
         new(() => new HashSet<string>(_assembly.GetManifestResourceNames()));
     private static readonly ConcurrentDictionary<string, string> _cache = new();
 
-    public static string Load(string templateName)
+    public static string Load(string agentName, string templateName)
     {
-        return _cache.GetOrAdd(templateName, name =>
+        var cacheKey = $"{agentName}.{templateName}";
+        return _cache.GetOrAdd(cacheKey, _ =>
         {
-            var resourceName = $"{_assemblyName}.Templates.{name}";
+            // MSBuild converts hyphens to underscores in embedded resource names when subdirectory
+            // names contain hyphens (e.g. "claude-code" becomes "claude_code" in the resource path).
+            var resourceSegment = agentName.Replace('-', '_');
+            var resourceName = $"{_assemblyName}.Templates.{resourceSegment}.{templateName}";
             using var stream = _assembly.GetManifestResourceStream(resourceName);
             if (stream is null)
             {
                 var available = string.Join(", ", _allNames.Value.Order());
                 throw new InvalidOperationException(
-                    $"Template '{name}' not found. Available resources: {available}");
+                    $"Template '{templateName}' for agent '{agentName}' not found. Available resources: {available}");
             }
             using var reader = new StreamReader(stream);
             return reader.ReadToEnd();

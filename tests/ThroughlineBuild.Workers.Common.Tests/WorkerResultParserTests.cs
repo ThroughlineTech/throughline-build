@@ -131,7 +131,7 @@ public class WorkerResultParserTemplateRoundTripTests
         );
 
         // Build the brief (this renders the template).
-        var brief = PlanBriefBuilder.Build(ticket, repo);
+        var brief = PlanBriefBuilder.Build("claude-code", ticket, repo);
 
         // Locate the WORKER_RESULT block: it is inside a triple-backtick fence.
         // Pattern: ```NEWLINE WORKER_RESULT NEWLINE {...JSON...} NEWLINE```

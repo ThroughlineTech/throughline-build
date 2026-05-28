@@ -28,7 +28,7 @@ public class PlanBriefBuilderTests
         var ticket = MinimalTicket();
         var repo = MinimalRepo();
 
-        var brief = PlanBriefBuilder.Build(ticket, repo);
+        var brief = PlanBriefBuilder.Build("claude-code", ticket, repo);
 
         Assert.Equal(Phase.Plan, brief.Phase);
         Assert.Empty(brief.AllowedWrites);
@@ -41,7 +41,7 @@ public class PlanBriefBuilderTests
         var ticket = MinimalTicket();
         var repo = MinimalRepo();
 
-        var brief = PlanBriefBuilder.Build(ticket, repo);
+        var brief = PlanBriefBuilder.Build("claude-code", ticket, repo);
 
         Assert.Contains("WORKER_RESULT", brief.Instruction);
     }
@@ -52,7 +52,7 @@ public class PlanBriefBuilderTests
         var ticket = MinimalTicket();
         var repo = MinimalRepo();
 
-        var brief = PlanBriefBuilder.Build(ticket, repo);
+        var brief = PlanBriefBuilder.Build("claude-code", ticket, repo);
 
         Assert.Contains("plan_html", brief.Instruction);
         Assert.Contains("risk_label", brief.Instruction);
@@ -66,7 +66,7 @@ public class PlanBriefBuilderTests
         var ticket = MinimalTicket() with { DescriptionHtml = "" };
         var repo = MinimalRepo();
 
-        var exception = Record.Exception(() => PlanBriefBuilder.Build(ticket, repo));
+        var exception = Record.Exception(() => PlanBriefBuilder.Build("claude-code", ticket, repo));
 
         Assert.Null(exception);
     }
@@ -77,7 +77,7 @@ public class PlanBriefBuilderTests
         var ticket = MinimalTicket();
         var repo = MinimalRepo() with { TopLevelEntries = Array.Empty<string>() };
 
-        var exception = Record.Exception(() => PlanBriefBuilder.Build(ticket, repo));
+        var exception = Record.Exception(() => PlanBriefBuilder.Build("claude-code", ticket, repo));
 
         Assert.Null(exception);
     }
@@ -88,7 +88,7 @@ public class PlanBriefBuilderTests
         var ticket = MinimalTicket();
         var repo = MinimalRepo();
 
-        var brief = PlanBriefBuilder.Build(ticket, repo);
+        var brief = PlanBriefBuilder.Build("claude-code", ticket, repo);
 
         Assert.Empty(brief.AllowedWrites);
     }
@@ -99,7 +99,7 @@ public class PlanBriefBuilderTests
         var ticket = MinimalTicket();
         var repo = MinimalRepo() with { MainSha = "deadbeef" };
 
-        var brief = PlanBriefBuilder.Build(ticket, repo);
+        var brief = PlanBriefBuilder.Build("claude-code", ticket, repo);
 
         Assert.Equal("deadbeef", brief.Context["main_sha"]);
     }
@@ -110,7 +110,7 @@ public class PlanBriefBuilderTests
         var ticket = MinimalTicket() with { Id = "TLB-99" };
         var repo = MinimalRepo();
 
-        var brief = PlanBriefBuilder.Build(ticket, repo);
+        var brief = PlanBriefBuilder.Build("claude-code", ticket, repo);
 
         Assert.Equal("TLB-99", brief.TicketId);
     }
@@ -120,7 +120,7 @@ public class PlanBriefBuilderTests
     {
         var expected = SnapshotLoader.Load("plan-enriched.txt");
 
-        var brief = PlanBriefBuilder.Build(SnapshotFixtures.Ticket(), SnapshotFixtures.Repo());
+        var brief = PlanBriefBuilder.Build("claude-code", SnapshotFixtures.Ticket(), SnapshotFixtures.Repo());
 
         Assert.Equal(expected, brief.Instruction);
     }
@@ -132,7 +132,7 @@ public class PlanBriefBuilderTests
         var repo = MinimalRepo();
         var project = ProjectContext.Empty with { Notes = "Some project notes here" };
 
-        var brief = PlanBriefBuilder.Build(ticket, repo, project);
+        var brief = PlanBriefBuilder.Build("claude-code", ticket, repo, project);
 
         Assert.Contains("## Project notes", brief.Instruction);
         Assert.Contains("Some project notes here", brief.Instruction);
@@ -144,7 +144,7 @@ public class PlanBriefBuilderTests
         var ticket = MinimalTicket();
         var repo = MinimalRepo();
 
-        var brief = PlanBriefBuilder.Build(ticket, repo);
+        var brief = PlanBriefBuilder.Build("claude-code", ticket, repo);
 
         Assert.DoesNotContain("## Project notes", brief.Instruction);
     }
@@ -156,7 +156,7 @@ public class PlanBriefBuilderTests
         var repo = MinimalRepo();
         var project = ProjectContext.Empty with { Notes = "   \n\t  " };
 
-        var brief = PlanBriefBuilder.Build(ticket, repo, project);
+        var brief = PlanBriefBuilder.Build("claude-code", ticket, repo, project);
 
         Assert.DoesNotContain("## Project notes", brief.Instruction);
     }
@@ -164,7 +164,7 @@ public class PlanBriefBuilderTests
     [Fact]
     public void Build_TemplateLoadable_NameIsRegistered()
     {
-        var ex = Record.Exception(() => TemplateLoader.Load("plan.md"));
+        var ex = Record.Exception(() => TemplateLoader.Load("claude-code", "plan.md"));
 
         Assert.Null(ex);
     }
@@ -176,7 +176,7 @@ public class PlanBriefBuilderTests
         var repo = MinimalRepo();
         var project = ProjectContext.Empty with { WorkflowTool = "build" };
 
-        var brief = PlanBriefBuilder.Build(ticket, repo, project);
+        var brief = PlanBriefBuilder.Build("claude-code", ticket, repo, project);
 
         Assert.Contains("build", brief.Instruction.ToLower());
     }
@@ -188,7 +188,7 @@ public class PlanBriefBuilderTests
         var repo = MinimalRepo();
         var project = ProjectContext.Empty with { WorkflowTool = "claude-config" };
 
-        var brief = PlanBriefBuilder.Build(ticket, repo, project);
+        var brief = PlanBriefBuilder.Build("claude-code", ticket, repo, project);
 
         Assert.Contains("/ticket-", brief.Instruction);
     }

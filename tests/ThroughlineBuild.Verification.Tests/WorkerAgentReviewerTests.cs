@@ -15,7 +15,7 @@ public class WorkerAgentReviewerTests
     {
         private readonly WorkerResult _result;
 
-        public string Name => "stub";
+        public string Name => "claude-code";
         public IWorkerProgressDigester? Digester => null;
 
         // Captured call args

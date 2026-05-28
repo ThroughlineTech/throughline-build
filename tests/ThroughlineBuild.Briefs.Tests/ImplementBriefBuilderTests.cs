@@ -28,7 +28,7 @@ public class ImplementBriefBuilderTests
     [Fact]
     public void Build_MinimalTicket_ReturnsImplementBrief()
     {
-        var brief = ImplementBriefBuilder.Build(MinimalTicket(), MinimalRepo(), Branch, Worktree);
+        var brief = ImplementBriefBuilder.Build("claude-code", MinimalTicket(), MinimalRepo(), Branch, Worktree);
 
         Assert.Equal(Phase.Implement, brief.Phase);
         Assert.Equal("TLB-1", brief.TicketId);
@@ -41,7 +41,7 @@ public class ImplementBriefBuilderTests
     {
         var repo = MinimalRepo() with { MainSha = "deadbeef" };
 
-        var brief = ImplementBriefBuilder.Build(MinimalTicket(), repo, Branch, Worktree);
+        var brief = ImplementBriefBuilder.Build("claude-code", MinimalTicket(), repo, Branch, Worktree);
 
         Assert.Equal("deadbeef", brief.Context["main_sha"]);
         Assert.Equal(Branch, brief.Context["branch"]);
@@ -51,7 +51,7 @@ public class ImplementBriefBuilderTests
     [Fact]
     public void Build_Instruction_ContainsWorkerResultEnvelopeWithRequiredMetadataKeys()
     {
-        var brief = ImplementBriefBuilder.Build(MinimalTicket(), MinimalRepo(), Branch, Worktree);
+        var brief = ImplementBriefBuilder.Build("claude-code", MinimalTicket(), MinimalRepo(), Branch, Worktree);
 
         Assert.Contains("WORKER_RESULT", brief.Instruction);
         Assert.Contains("commit_sha", brief.Instruction);
@@ -66,7 +66,7 @@ public class ImplementBriefBuilderTests
             DescriptionHtml = "<h3>Goal</h3><p>Do the thing</p><ul><li>Step one</li></ul>"
         };
 
-        var brief = ImplementBriefBuilder.Build(ticket, MinimalRepo(), Branch, Worktree);
+        var brief = ImplementBriefBuilder.Build("claude-code", ticket, MinimalRepo(), Branch, Worktree);
 
         Assert.Contains("<h3>Goal</h3>", brief.Instruction);
         Assert.Contains("<p>Do the thing</p>", brief.Instruction);
@@ -76,7 +76,7 @@ public class ImplementBriefBuilderTests
     [Fact]
     public void Build_Instruction_ForbidsForcePushRebaseAndWritesOutsideWorktree()
     {
-        var brief = ImplementBriefBuilder.Build(MinimalTicket(), MinimalRepo(), Branch, Worktree);
+        var brief = ImplementBriefBuilder.Build("claude-code", MinimalTicket(), MinimalRepo(), Branch, Worktree);
 
         Assert.Contains("force-push", brief.Instruction);
         Assert.Contains("rebase", brief.Instruction);
@@ -86,7 +86,7 @@ public class ImplementBriefBuilderTests
     [Fact]
     public void Build_Instruction_NamesBranchAndWorktreePath()
     {
-        var brief = ImplementBriefBuilder.Build(MinimalTicket(), MinimalRepo(), Branch, Worktree);
+        var brief = ImplementBriefBuilder.Build("claude-code", MinimalTicket(), MinimalRepo(), Branch, Worktree);
 
         Assert.Contains(Branch, brief.Instruction);
         Assert.Contains(Worktree, brief.Instruction);
@@ -104,7 +104,7 @@ public class ImplementBriefBuilderTests
             }
         };
 
-        var brief = ImplementBriefBuilder.Build(ticket, MinimalRepo(), Branch, Worktree);
+        var brief = ImplementBriefBuilder.Build("claude-code", ticket, MinimalRepo(), Branch, Worktree);
 
         Assert.Contains("TLB-5", brief.Instruction);
         Assert.Contains("blocks", brief.Instruction);
@@ -117,7 +117,7 @@ public class ImplementBriefBuilderTests
     {
         var ticket = MinimalTicket() with { DescriptionHtml = "" };
 
-        var exception = Record.Exception(() => ImplementBriefBuilder.Build(ticket, MinimalRepo(), Branch, Worktree));
+        var exception = Record.Exception(() => ImplementBriefBuilder.Build("claude-code", ticket, MinimalRepo(), Branch, Worktree));
 
         Assert.Null(exception);
     }
@@ -125,7 +125,7 @@ public class ImplementBriefBuilderTests
     [Fact]
     public void Build_AllowedWrites_IsAlwaysEmpty()
     {
-        var brief = ImplementBriefBuilder.Build(MinimalTicket(), MinimalRepo(), Branch, Worktree);
+        var brief = ImplementBriefBuilder.Build("claude-code", MinimalTicket(), MinimalRepo(), Branch, Worktree);
 
         Assert.Empty(brief.AllowedWrites);
     }
@@ -135,7 +135,7 @@ public class ImplementBriefBuilderTests
     {
         var ticket = MinimalTicket() with { Id = "TLB-99" };
 
-        var brief = ImplementBriefBuilder.Build(ticket, MinimalRepo(), Branch, Worktree);
+        var brief = ImplementBriefBuilder.Build("claude-code", ticket, MinimalRepo(), Branch, Worktree);
 
         Assert.Equal("TLB-99", brief.TicketId);
     }
@@ -145,7 +145,7 @@ public class ImplementBriefBuilderTests
     {
         var ticket = MinimalTicket() with { DescriptionHtml = "<p>Short plan</p>" };
 
-        var brief = ImplementBriefBuilder.Build(ticket, MinimalRepo(), Branch, Worktree);
+        var brief = ImplementBriefBuilder.Build("claude-code", ticket, MinimalRepo(), Branch, Worktree);
 
         // Rough sanity cap. The ~1500 token guideline -> ~6000 chars is a soft ceiling
         // assuming the ticket description itself is small.
@@ -159,6 +159,7 @@ public class ImplementBriefBuilderTests
         var expected = SnapshotLoader.Load("implement-original.txt");
 
         var brief = ImplementBriefBuilder.Build(
+            "claude-code",
             SnapshotFixtures.Ticket(),
             SnapshotFixtures.Repo(),
             SnapshotFixtures.FixtureBranch,
@@ -170,7 +171,7 @@ public class ImplementBriefBuilderTests
     [Fact]
     public void Build_TemplateLoadable_NameIsRegistered()
     {
-        var ex = Record.Exception(() => TemplateLoader.Load("implement.md"));
+        var ex = Record.Exception(() => TemplateLoader.Load("claude-code", "implement.md"));
 
         Assert.Null(ex);
     }
@@ -181,6 +182,7 @@ public class ImplementBriefBuilderTests
         var expected = SnapshotLoader.Load("implement-rework.txt");
 
         var brief = ImplementBriefBuilder.Build(
+            "claude-code",
             SnapshotFixtures.Ticket(),
             SnapshotFixtures.Repo(),
             SnapshotFixtures.FixtureBranch,

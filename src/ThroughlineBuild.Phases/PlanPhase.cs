@@ -74,7 +74,7 @@ public class PlanPhase : IWorkflowPhase
             .AsReadOnly();
 
         var repoState = new RepoState(mainSha, topLevelEntries);
-        var brief = PlanBriefBuilder.Build(ticket, repoState, _project);
+        var brief = PlanBriefBuilder.Build(_worker.Name, ticket, repoState, _project);
 
         await EmitAsync(EventKind.WorkerSpawn, ticketId, new Dictionary<string, object>
         {

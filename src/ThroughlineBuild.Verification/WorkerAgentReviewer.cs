@@ -55,7 +55,7 @@ public sealed class WorkerAgentReviewer : IVerifier
         // implementerBrief is on the public surface for future use; not forwarded in v1
         _ = implementerBrief;
 
-        var reviewBrief = ReviewBriefBuilder.Build(_ticket, diff, implementerResult, _checkResults, _project);
+        var reviewBrief = ReviewBriefBuilder.Build(_worker.Name, _ticket, diff, implementerResult, _checkResults, _project);
 
         var workerResult = await _worker.ExecuteAsync(reviewBrief, _workingDirectory, _workerOptions, ct)
             .ConfigureAwait(false);

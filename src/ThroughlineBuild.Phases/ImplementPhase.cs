@@ -116,7 +116,7 @@ public class ImplementPhase : IWorkflowPhase
         var repoState = new RepoState(mainSha, topLevelEntries);
 
         // Step 7: Build brief
-        var brief = ImplementBriefBuilder.Build(ticket, repoState, worktreeNames.BranchName, worktreeNames.WorktreePath, _project, _phaseOptions.ReviewFeedback);
+        var brief = ImplementBriefBuilder.Build(_worker.Name, ticket, repoState, worktreeNames.BranchName, worktreeNames.WorktreePath, _project, _phaseOptions.ReviewFeedback);
 
         // Step 8: Create worktree
         var createResult = await _git.CreateWorktreeAsync(
