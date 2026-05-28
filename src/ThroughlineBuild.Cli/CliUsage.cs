@@ -20,6 +20,7 @@ Usage:
   If it looks like a path (contains / or \, or ends in .md/.txt) but no file exists, a stderr notice
   is printed and a brief pause allows Ctrl-C before proceeding in draft mode. Multiple positional args
   are joined with spaces as draft text (e.g. build new fix the readme typo).
+  build rework <ticket-id> [--feedback "..."] [--debug]                               Re-implement a ticket that returned Rework verdict (single ticket only)
   build scaffold <op-doc-path> [--validate-only] [--dry-run] [--accept-warnings] [--debug]  Scaffold an op-doc into Plane (creates plan-tickets and brief-tickets with parent links)
   build amend <ticket-id> [--size S|M|L] [--note "..."]           Amend an existing ticket (at least one flag required)
   build close <ticket-id> <reason>                                Close a ticket (reason required)
@@ -70,6 +71,12 @@ Exit codes:
   5  StoppedAtReview (review returned Fail)
   6  ReworkCapExceeded (review returned Rework more than the cap)
   7  StoppedAtShip (ship gate failed)
+
+  For 'build rework' verb only (overrides global codes 2 and 4):
+  0  Implemented (rework implement succeeded; ticket transitioned to InReview)
+  2  TicketNotInProgress (ticket is not in InProgress state)
+  3  NoFeedbackAvailable (no Rework verdict found in event log; use --feedback to override)
+  4  ImplementFailed (implement phase failed during rework)
 
   For 'build scaffold' verb only (overrides global codes 2 and 3):
   0  Clean creation (all plans and briefs created successfully)
