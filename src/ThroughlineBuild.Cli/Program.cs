@@ -49,7 +49,7 @@ static async Task<int> RunAsync(string[] args)
 
     // Arg validation for phase verbs happens BEFORE config load so a missing id
     // surfaces a usage error (exit 2) rather than a config-not-found error.
-    if (verb == "plan" || verb == "implement" || verb == "review" || verb == "ship" || verb == "chain")
+    if (verb == "plan" || verb == "implement" || verb == "review" || verb == "ship" || verb == "chain" || verb == "rework")
     {
         if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]))
         {
@@ -65,6 +65,16 @@ static async Task<int> RunAsync(string[] args)
             if (!args[2].StartsWith("--"))
             {
                 Console.Error.WriteLine("Error: build chain accepts exactly one ticket ID in v1; multi-ticket dispatch is planned for a future release.");
+                return 2;
+            }
+        }
+
+        // For rework: reject multiple positional ticket IDs (single ticket only).
+        if (verb == "rework" && args.Length > 2)
+        {
+            if (!args[2].StartsWith("--"))
+            {
+                Console.Error.WriteLine("Error: build rework accepts exactly one ticket ID; multi-ticket dispatch is not supported.");
                 return 2;
             }
         }
@@ -562,7 +572,7 @@ static async Task<int> RunAsync(string[] args)
         }
     }
 
-    if (verb != "plan" && verb != "implement" && verb != "review" && verb != "ship" && verb != "chain")
+    if (verb != "plan" && verb != "implement" && verb != "review" && verb != "ship" && verb != "chain" && verb != "rework")
     {
         Console.Error.WriteLine($"Unknown subcommand: {verb}");
         Console.Error.WriteLine(CliUsage.UsageText);
@@ -934,6 +944,76 @@ static async Task<int> RunAsync(string[] args)
             return 1;
         }
     }
+    else if (verb == "rework")
+    {
+        // Parse --feedback "text" from remaining args.
+        string? feedbackText = null;
+        for (int i = 2; i < args.Length; i++)
+        {
+            if (args[i] == "--feedback" && i + 1 < args.Length)
+            {
+                feedbackText = args[i + 1];
+                i++; // skip value
+            }
+        }
+
+        var reworkPhaseOptions = new ReworkPhaseOptions(
+            TicketId: ticketId,
+            ManualFeedback: feedbackText,
+            ReworkRoundNumber: 1,
+            Debug: debugMode);
+
+        var retriever = new ReviewFeedbackRetrieverAdapter(
+            new ReviewFeedbackRetriever(ResolveLogDir(config2.Events.LogDirectory)));
+
+        var reworkPhase = new ReworkPhase(
+            ticketing,
+            worker,
+            eventSink,
+            buildOptions,
+            retriever,
+            reworkPhaseOptions,
+            gitClient: new ThroughlineBuild.Git.ProcessGitClient(cwd),
+            project: config2.Project);
+
+        var reworkRunner = new DefaultReworkRunner(reworkPhase, cwd);
+        var reworkCommand = new ReworkCommand(reworkRunner, cwd);
+
+        var reworkArgs = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["debug"] = debugMode ? "true" : "false"
+        };
+        if (feedbackText is not null)
+            reworkArgs["feedback"] = feedbackText;
+
+        var reworkCtx = new TicketCommandContext(ticketId, reworkArgs);
+
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+            var cmdResult = await reworkCommand.ExecuteAsync(reworkCtx, cts.Token).ConfigureAwait(false);
+
+            if (reworkCommand.LastReworkResult is not null)
+            {
+                return reworkCommand.LastReworkResult.Outcome switch
+                {
+                    ReworkOutcome.Implemented => 0,
+                    ReworkOutcome.TicketNotInProgress => 2,
+                    ReworkOutcome.NoFeedbackAvailable => 3,
+                    ReworkOutcome.ImplementFailed => 4,
+                    _ => 1
+                };
+            }
+
+            return cmdResult.Success ? 0 : 1;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+    }
     else // review
     {
         var verifierWorkerOptions = new WorkerOptions(
@@ -1054,4 +1134,20 @@ static string? WireUpConditionalCommands(
     }
 
     return null;
+}
+
+// Adapter: wraps ReviewFeedbackRetriever (EventLog) so it satisfies
+// IReviewFeedbackRetriever (Phases). EventLog cannot directly reference Phases,
+// so this thin wrapper lives in the Cli entry point that references both.
+sealed class ReviewFeedbackRetrieverAdapter : IReviewFeedbackRetriever
+{
+    private readonly ReviewFeedbackRetriever _inner;
+
+    public ReviewFeedbackRetrieverAdapter(ReviewFeedbackRetriever inner)
+    {
+        _inner = inner;
+    }
+
+    public ReviewFeedback? GetLatestRework(string ticketId) =>
+        _inner.GetLatestRework(ticketId);
 }
