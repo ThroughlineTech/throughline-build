@@ -329,6 +329,61 @@ public class ReviewPhaseTests
     }
 
     [Fact]
+    public async Task RunAsync_ReworkVerdict_VerifierVerdictEventContainsRationaleAndChecksFailed()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        ticketing.SeedComment($"<p>[implemented_at: {ImplementedSha}]</p>");
+        var worker = new FakeWorkerAgent();
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, includeWorktreeMatching: true);
+        var verifier = new FakeVerifier(new Verdict(VerdictKind.Rework, "needs tests", new[] { "unit-tests", "lint" }));
+        var phase = new ReviewPhase(ticketing, worker, events, MakeBuildOptions(), MakeReviewOptions(),
+            git, verifierOverride: verifier);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(VerdictKind.Rework, result.Verdict);
+
+        var verdictEvents = events.Events.Where(e => e.Kind == EventKind.VerifierVerdict).ToList();
+        Assert.Single(verdictEvents);
+
+        var data = verdictEvents[0].Data;
+        Assert.Equal("Rework", data["kind"].ToString());
+        Assert.Equal("needs tests", data["rationale"].ToString());
+        Assert.True(data.ContainsKey("checks_failed"), "VerifierVerdict Data must contain checks_failed");
+        var checksFailed = data["checks_failed"] as IReadOnlyList<string>;
+        Assert.NotNull(checksFailed);
+        Assert.Equal(new[] { "unit-tests", "lint" }, checksFailed);
+    }
+
+    [Fact]
+    public async Task RunAsync_PassVerdict_VerifierVerdictEventContainsRationaleAndEmptyChecksFailed()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        ticketing.SeedComment($"<p>[implemented_at: {ImplementedSha}]</p>");
+        var worker = new FakeWorkerAgent();
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, includeWorktreeMatching: true);
+        var verifier = new FakeVerifier(new Verdict(VerdictKind.Pass, "all good", Array.Empty<string>()));
+        var phase = new ReviewPhase(ticketing, worker, events, MakeBuildOptions(), MakeReviewOptions(),
+            git, verifierOverride: verifier);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(VerdictKind.Pass, result.Verdict);
+
+        var verdictEvents = events.Events.Where(e => e.Kind == EventKind.VerifierVerdict).ToList();
+        Assert.Single(verdictEvents);
+
+        var data = verdictEvents[0].Data;
+        Assert.Equal("Pass", data["kind"].ToString());
+        Assert.Equal("all good", data["rationale"].ToString());
+        Assert.True(data.ContainsKey("checks_failed"), "VerifierVerdict Data must contain checks_failed");
+    }
+
+    [Fact]
     public async Task RunAsync_VerifierWorkerHasNoLlmUsage_NoLlmCallEventEmitted()
     {
         var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
