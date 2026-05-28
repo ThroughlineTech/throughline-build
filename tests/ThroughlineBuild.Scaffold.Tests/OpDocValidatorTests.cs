@@ -329,6 +329,63 @@ public class OpDocValidatorTests
     }
 
     [Fact]
+    public void GloballySequentialBriefNumbering_MultiplePlans_PassesWithoutGapErrors()
+    {
+        // Plan A: 01-04, Plan B: 05-07 - the established globally-sequential convention
+        var planA = MakePlan(id: "A", briefs: new List<Brief>
+        {
+            MakeBrief(number: 1), MakeBrief(number: 2), MakeBrief(number: 3), MakeBrief(number: 4)
+        });
+        var planB = MakePlan(id: "B", name: "Plan B", goal: "Complete Y", briefs: new List<Brief>
+        {
+            MakeBrief(number: 5), MakeBrief(number: 6), MakeBrief(number: 7)
+        });
+        var dispatchOrder = new List<DispatchEntry>
+        {
+            MakeDispatchEntry(planId: "A"),
+            MakeDispatchEntry(planId: "B", name: "Plan B", dependsOn: "A")
+        };
+        var opDoc = MakeValidOpDoc(
+            dispatchOrder: dispatchOrder,
+            plans: new List<Plan> { planA, planB });
+
+        var result = OpDocValidator.Validate(opDoc);
+
+        Assert.True(result.IsValid);
+        Assert.Empty(result.Errors.Where(e => e.Code == "BRIEF_NUMBER_GAP"));
+        Assert.Empty(result.Warnings.Where(w => w.Code == "BRIEF_PLAN_GAP"));
+    }
+
+    [Fact]
+    public void CrossPlanBriefNumberingGap_ProducesWarning()
+    {
+        // Plan A ends at 4, Plan B starts at 6 - skips 5
+        var planA = MakePlan(id: "A", briefs: new List<Brief>
+        {
+            MakeBrief(number: 1), MakeBrief(number: 2), MakeBrief(number: 3), MakeBrief(number: 4)
+        });
+        var planB = MakePlan(id: "B", name: "Plan B", goal: "Complete Y", briefs: new List<Brief>
+        {
+            MakeBrief(number: 6), MakeBrief(number: 7)
+        });
+        var dispatchOrder = new List<DispatchEntry>
+        {
+            MakeDispatchEntry(planId: "A"),
+            MakeDispatchEntry(planId: "B", name: "Plan B", dependsOn: "A")
+        };
+        var opDoc = MakeValidOpDoc(
+            dispatchOrder: dispatchOrder,
+            plans: new List<Plan> { planA, planB });
+
+        var result = OpDocValidator.Validate(opDoc);
+
+        var warning = result.Warnings.FirstOrDefault(w => w.Code == "BRIEF_PLAN_GAP");
+        Assert.NotNull(warning);
+        Assert.Equal("Plans[B].Briefs[06]", warning.Path);
+        Assert.Contains("05", warning.Message);
+    }
+
+    [Fact]
     public void InvalidDependsOnReference_ProducesError()
     {
         var entry = MakeDispatchEntry(planId: "A", dependsOn: "Z"); // Z doesn't exist
