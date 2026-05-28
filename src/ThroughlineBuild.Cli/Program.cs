@@ -14,6 +14,7 @@ using ThroughlineBuild.Plane;
 using ThroughlineBuild.Scaffold;
 using ThroughlineBuild.Verification;
 using ThroughlineBuild.Workers.ClaudeCode;
+using ThroughlineBuild.Workers.Codex;
 
 return await RunAsync(args);
 
@@ -672,12 +673,23 @@ static async Task<int> RunAsync(string[] args)
         if (!config2.Workers.Agents.TryGetValue(agentName, out var aCfg))
             throw new ConfigException($"missing [workers.{agentName}] sub-table in config");
         var capturedCfg = aCfg;
-        factoryEntries[agentName] = () => new ClaudeCodeAgent(new ClaudeCodeOptions
+        var capturedName = agentName;
+        factoryEntries[agentName] = () =>
         {
-            ExecutablePath = capturedCfg.Executable,
-            MaxOutputTokens = capturedCfg.MaxOutputTokens,
-            Sizes = capturedCfg.Sizes
-        });
+            if (capturedName == "codex")
+                return new CodexAgent(new CodexOptions
+                {
+                    ExecutablePath = capturedCfg.Executable,
+                    MaxOutputTokens = capturedCfg.MaxOutputTokens,
+                    Sizes = capturedCfg.Sizes
+                });
+            return new ClaudeCodeAgent(new ClaudeCodeOptions
+            {
+                ExecutablePath = capturedCfg.Executable,
+                MaxOutputTokens = capturedCfg.MaxOutputTokens,
+                Sizes = capturedCfg.Sizes
+            });
+        };
     }
     var workerFactory = new WorkerAgentFactory(factoryEntries);
 
