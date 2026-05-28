@@ -6,12 +6,12 @@ using ThroughlineBuild.Contracts.Models;
 namespace ThroughlineBuild.Verification;
 
 /// <summary>
-/// IVerifier implementation that dispatches a ClaudeCode worker against a review brief
+/// IVerifier implementation that dispatches a worker agent against a review brief
 /// and maps the WORKER_RESULT envelope into a typed Verdict.
 /// The review brief is passed in by the caller (ReviewPhase) via the brief parameter of VerifyAsync.
 /// Constructor captures the worker, worker options, and working directory used for dispatch.
 /// </summary>
-public sealed class ClaudeCodeReviewer : IVerifier
+public sealed class WorkerAgentReviewer : IVerifier
 {
     private readonly IWorkerAgent _worker;
     private readonly Ticket _ticket;
@@ -22,7 +22,7 @@ public sealed class ClaudeCodeReviewer : IVerifier
 
     public WorkerResult? LastWorkerResult { get; private set; }
 
-    public ClaudeCodeReviewer(
+    public WorkerAgentReviewer(
         IWorkerAgent worker,
         Ticket ticket,
         IReadOnlyList<CheckResult> checkResults,
@@ -136,50 +136,6 @@ public sealed class ClaudeCodeReviewer : IVerifier
         }
 
         return Array.Empty<string>();
-    }
-
-    private static IReadOnlyDictionary<string, object>? FlattenLlmUsage(object usageObj)
-    {
-        var result = new Dictionary<string, object>();
-
-        if (usageObj is IDictionary<string, object?> dict)
-        {
-            foreach (var kvp in dict)
-            {
-                if (kvp.Value is not null)
-                {
-                    result[kvp.Key] = UnwrapJsonElement(kvp.Value);
-                }
-            }
-            return result;
-        }
-
-        if (usageObj is JsonElement je && je.ValueKind == JsonValueKind.Object)
-        {
-            foreach (var prop in je.EnumerateObject())
-            {
-                result[prop.Name] = UnwrapJsonElement(prop.Value);
-            }
-            return result;
-        }
-
-        return null;
-    }
-
-    private static object UnwrapJsonElement(object value)
-    {
-        if (value is not JsonElement je)
-            return value;
-
-        return je.ValueKind switch
-        {
-            JsonValueKind.String => je.GetString() ?? "",
-            JsonValueKind.Number => je.TryGetInt32(out var intVal) ? intVal : je.GetInt64(),
-            JsonValueKind.True => true,
-            JsonValueKind.False => false,
-            JsonValueKind.Null => (object?)null ?? "",
-            _ => value
-        };
     }
 
     private static string? TryGetString(IReadOnlyDictionary<string, object> metadata, string key)

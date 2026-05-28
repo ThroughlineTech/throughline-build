@@ -6,7 +6,7 @@ using Xunit;
 
 namespace ThroughlineBuild.Verification.Tests;
 
-public class ClaudeCodeReviewerTests
+public class WorkerAgentReviewerTests
 {
     // -------------------------------------------------------------------------
     // Stub IWorkerAgent - records call args; returns a configured WorkerResult
@@ -79,13 +79,13 @@ public class ClaudeCodeReviewerTests
     private static WorkerResult OkResultWithMetadata(Dictionary<string, object> metadata) =>
         new WorkerResult(Status.Ok, "review complete", Array.Empty<string>(), null, metadata);
 
-    private static ClaudeCodeReviewer BuildReviewer(
+    private static WorkerAgentReviewer BuildReviewer(
         StubWorkerAgent agent,
         string workingDir = "/repo",
         WorkerOptions? options = null)
     {
         options ??= new WorkerOptions(TimeSpan.FromMinutes(5));
-        return new ClaudeCodeReviewer(
+        return new WorkerAgentReviewer(
             agent,
             BuildTicket(),
             EmptyChecks(),
