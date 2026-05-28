@@ -86,7 +86,7 @@ public class PlanPhase : IWorkflowPhase
             LiveStdoutSink: _options.LiveStdoutSink,
             LiveStderrSink: _options.LiveStderrSink,
             ProgressDigestSink: _options.ProgressDigestSink,
-            Size: WorkerSize.Small);
+            Size: WorkerSizeMapper.FromTicketSize(ticket.Size));
         var workerResult = await _worker.ExecuteAsync(brief, workingDirectory, workerOptions, ct).ConfigureAwait(false);
 
         await _ticketing.TransitionAsync(ticketId, TicketState.Planning, ct).ConfigureAwait(false);

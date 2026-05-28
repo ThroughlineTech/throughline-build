@@ -147,15 +147,18 @@ internal static class WorkerResultParser
         if (!IsOpeningFence(firstLine)) return payload;
 
         var rest = payload.Substring(newlineIdx + 1);
-        var trimmedRest = rest.TrimEnd();
-        if (trimmedRest.EndsWith("```", StringComparison.Ordinal))
+
+        // Find the first standalone closing fence line. Content after it (e.g., model
+        // narration emitted after the fence) is discarded rather than passed to the
+        // JSON parser, which would choke on the backtick.
+        var restLines = rest.Split('\n');
+        for (int i = 0; i < restLines.Length; i++)
         {
-            int closeStart = trimmedRest.Length - 3;
-            // Closing fence must be on its own line: either start-of-payload or preceded by \n.
-            if (closeStart == 0 || trimmedRest[closeStart - 1] == '\n')
-                trimmedRest = trimmedRest.Substring(0, closeStart).TrimEnd('\n', '\r');
+            if (restLines[i].TrimEnd() == "```")
+                return string.Join("\n", restLines, 0, i).TrimEnd('\n', '\r');
         }
-        return trimmedRest;
+
+        return rest.TrimEnd();
     }
 
     private static bool IsOpeningFence(string line)
