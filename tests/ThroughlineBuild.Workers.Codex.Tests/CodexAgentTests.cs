@@ -14,10 +14,10 @@ public class CodexAgentTests
     }
 
     [Fact]
-    public void Digester_IsNull()
+    public void Digester_IsNotNull()
     {
         var agent = new CodexAgent();
-        Assert.Null(agent.Digester);
+        Assert.NotNull(agent.Digester);
     }
 
     [Fact]

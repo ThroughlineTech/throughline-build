@@ -10,12 +10,13 @@ namespace ThroughlineBuild.Workers.Codex;
 public class CodexAgent : IWorkerAgent
 {
     private readonly CodexOptions _options;
+    private readonly CodexProgressDigester _digester = new();
 
     public CodexAgent(CodexOptions options) => _options = options;
     public CodexAgent() : this(new CodexOptions()) { }
 
     public string Name => "codex";
-    public IWorkerProgressDigester? Digester => null;
+    public IWorkerProgressDigester? Digester => _digester;
 
     public async Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
     {
@@ -58,7 +59,15 @@ public class CodexAgent : IWorkerAgent
             if (e.Data != null)
             {
                 stdoutBuilder.AppendLine(e.Data);
-                WriteWorkerLine(options.LiveStdoutSink, "worker> ", e.Data);
+                if (options.LiveStdoutSink is not null)
+                {
+                    WriteWorkerLine(options.LiveStdoutSink, "worker> ", e.Data);
+                }
+                else if (options.ProgressDigestSink is not null)
+                {
+                    var dl = _digester.FormatLine(e.Data);
+                    if (dl != null) options.ProgressDigestSink.WriteLine(dl);
+                }
             }
         };
         process.ErrorDataReceived += (_, e) =>
@@ -70,6 +79,7 @@ public class CodexAgent : IWorkerAgent
             }
         };
 
+        _digester.ResetStart();
         process.Start();
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
