@@ -46,6 +46,7 @@ log_directory = ".build/events"
     {
         public StubWorkerAgent(string name) => Name = name;
         public string Name { get; }
+        public IWorkerProgressDigester? Digester => null;
         public Task<WorkerResult> ExecuteAsync(
             Brief brief,
             string workingDirectory,

@@ -395,6 +395,7 @@ public class ImplementCliTests
     private sealed class StubWorker : IWorkerAgent
     {
         public string Name => "stub";
+        public IWorkerProgressDigester? Digester => null;
         public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct) =>
             throw new NotImplementedException();
     }

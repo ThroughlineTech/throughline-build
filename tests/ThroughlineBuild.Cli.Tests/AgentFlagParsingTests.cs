@@ -212,6 +212,7 @@ public class AgentFlagParsingTests
     private sealed class StubWorkerAgent : IWorkerAgent
     {
         public string Name { get; }
+        public IWorkerProgressDigester? Digester => null;
         public StubWorkerAgent(string name) => Name = name;
         public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
             => throw new NotImplementedException();

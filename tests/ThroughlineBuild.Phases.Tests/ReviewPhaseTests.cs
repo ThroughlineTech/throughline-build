@@ -471,6 +471,7 @@ public class ReviewPhaseTests
         private readonly IReadOnlyDictionary<string, object>? _metadata;
 
         public string Name => "fake-verifier";
+        public IWorkerProgressDigester? Digester => null;
 
         public FakeWorkerAgent(IReadOnlyDictionary<string, object>? metadata = null)
         {
@@ -506,6 +507,7 @@ public class ReviewPhaseTests
         private readonly IReadOnlyDictionary<string, object>? _metadata;
         public WorkerOptions? LastOptions { get; private set; }
         public string Name => "capturing-fake-verifier";
+        public IWorkerProgressDigester? Digester => null;
         public CapturingWorkerAgent(IReadOnlyDictionary<string, object>? metadata = null) { _metadata = metadata; }
         public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
         {
@@ -652,6 +654,7 @@ public class ReviewPhaseDebugCaptureTests
         private readonly IReadOnlyDictionary<string, object>? _metadata;
         public WorkerOptions? LastOptions { get; private set; }
         public string Name => "capturing-fake-verifier";
+        public IWorkerProgressDigester? Digester => null;
         public CapturingWorkerAgent(IReadOnlyDictionary<string, object>? metadata = null) { _metadata = metadata; }
         public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
         {

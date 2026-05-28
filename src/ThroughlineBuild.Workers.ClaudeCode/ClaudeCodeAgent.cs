@@ -11,11 +11,13 @@ namespace ThroughlineBuild.Workers.ClaudeCode;
 public class ClaudeCodeAgent : IWorkerAgent
 {
     private readonly ClaudeCodeOptions _options;
+    private readonly ClaudeCodeProgressDigester _digester = new();
 
     public ClaudeCodeAgent(ClaudeCodeOptions options) => _options = options;
     public ClaudeCodeAgent() : this(new ClaudeCodeOptions()) { }
 
     public string Name => "claude-code";
+    public IWorkerProgressDigester? Digester => _digester;
 
     public async Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
     {
@@ -62,7 +64,7 @@ public class ClaudeCodeAgent : IWorkerAgent
         var stopwatch = Stopwatch.StartNew();
 
         var process = new Process { StartInfo = psi };
-        var digestStart = DateTimeOffset.UtcNow;
+        _digester.ResetStart();
         process.OutputDataReceived += (_, e) =>
         {
             if (e.Data != null)
@@ -77,7 +79,8 @@ public class ClaudeCodeAgent : IWorkerAgent
                 {
                     // Default path: per-event digest. Best-effort - a malformed line or
                     // unexpected schema must not crash the worker dispatch.
-                    TryEmitDigestLine(e.Data, options.ProgressDigestSink, digestStart);
+                    var dl = _digester.FormatLine(e.Data);
+                    if (dl != null) options.ProgressDigestSink.WriteLine(dl);
                 }
             }
         };
@@ -228,7 +231,7 @@ public class ClaudeCodeAgent : IWorkerAgent
         return null;
     }
 
-    // Best-effort: parse a single NDJSON line via WorkerProgressDigest and write
+    // Best-effort: parse a single NDJSON line via ClaudeCodeProgressDigester and write
     // the formatted digest line to the sink. Any exception (malformed JSON,
     // unexpected schema, sink-write failure) is swallowed: digest emission must
     // never crash the worker dispatch.
@@ -237,7 +240,8 @@ public class ClaudeCodeAgent : IWorkerAgent
         try
         {
             using var doc = JsonDocument.Parse(ndjsonLine);
-            var formatted = WorkerProgressDigest.FormatLine(doc.RootElement, startTime);
+            var digester = new ClaudeCodeProgressDigester();
+            var formatted = digester.FormatLine(doc.RootElement, startTime);
             if (formatted is not null)
                 sink.WriteLine(formatted);
         }

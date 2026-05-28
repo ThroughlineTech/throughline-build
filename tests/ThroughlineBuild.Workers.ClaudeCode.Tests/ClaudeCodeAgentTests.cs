@@ -900,7 +900,7 @@ public class ClaudeCodeAgentModelExtractionTests
     }
 }
 
-public class WorkerProgressDigestTests
+public class ClaudeCodeProgressDigesterTests
 {
     // Tests use TimeSpan-based offsets so they are deterministic regardless of
     // wall-clock skew. The DateTimeOffset overload is exercised indirectly via
@@ -917,7 +917,7 @@ public class WorkerProgressDigestTests
     {
         var el = Parse("{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"abc12345-6789-aaaa-bbbb-ccccddddeeee\",\"model\":\"claude-opus-4-6\"}");
 
-        var line = WorkerProgressDigest.FormatLine(el, TimeSpan.FromSeconds(3));
+        var line = new ClaudeCodeProgressDigester().FormatLine(el, TimeSpan.FromSeconds(3));
 
         Assert.NotNull(line);
         Assert.StartsWith("[0:03] ", line);
@@ -931,7 +931,7 @@ public class WorkerProgressDigestTests
     {
         var el = Parse("{\"type\":\"assistant\",\"message\":{\"model\":\"x\",\"content\":[{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{\"file_path\":\"docs/foo.md\"}}]}}");
 
-        var line = WorkerProgressDigest.FormatLine(el, TimeSpan.FromMinutes(1).Add(TimeSpan.FromSeconds(15)));
+        var line = new ClaudeCodeProgressDigester().FormatLine(el, TimeSpan.FromMinutes(1).Add(TimeSpan.FromSeconds(15)));
 
         Assert.NotNull(line);
         Assert.StartsWith("[1:15] ", line);
@@ -945,7 +945,7 @@ public class WorkerProgressDigestTests
     {
         var el = Parse("{\"type\":\"assistant\",\"message\":{\"model\":\"x\",\"content\":[{\"type\":\"tool_use\",\"name\":\"Grep\",\"input\":{\"pattern\":\"plan-enriched\"}}]}}");
 
-        var line = WorkerProgressDigest.FormatLine(el, TimeSpan.FromSeconds(8));
+        var line = new ClaudeCodeProgressDigester().FormatLine(el, TimeSpan.FromSeconds(8));
 
         Assert.NotNull(line);
         Assert.StartsWith("[0:08] ", line);
@@ -958,7 +958,7 @@ public class WorkerProgressDigestTests
     {
         var el = Parse("{\"type\":\"assistant\",\"message\":{\"model\":\"x\",\"content\":[{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"git status\"}}]}}");
 
-        var line = WorkerProgressDigest.FormatLine(el, TimeSpan.FromMinutes(2));
+        var line = new ClaudeCodeProgressDigester().FormatLine(el, TimeSpan.FromMinutes(2));
 
         Assert.NotNull(line);
         Assert.StartsWith("[2:00] ", line);
@@ -973,7 +973,7 @@ public class WorkerProgressDigestTests
         // (no per-block deltas at default verbosity).
         var el = Parse("{\"type\":\"assistant\",\"message\":{\"model\":\"x\",\"content\":[{\"type\":\"text\",\"text\":\"some response text\"}]}}");
 
-        var line = WorkerProgressDigest.FormatLine(el, TimeSpan.FromSeconds(47));
+        var line = new ClaudeCodeProgressDigester().FormatLine(el, TimeSpan.FromSeconds(47));
 
         Assert.NotNull(line);
         Assert.StartsWith("[0:47] ", line);
@@ -986,7 +986,7 @@ public class WorkerProgressDigestTests
     {
         var el = Parse("{\"type\":\"assistant\",\"message\":{\"model\":\"x\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"reasoning...\"}]}}");
 
-        var line = WorkerProgressDigest.FormatLine(el, TimeSpan.FromSeconds(5));
+        var line = new ClaudeCodeProgressDigester().FormatLine(el, TimeSpan.FromSeconds(5));
 
         Assert.NotNull(line);
         Assert.Contains("assistant", line);
@@ -998,7 +998,7 @@ public class WorkerProgressDigestTests
     {
         var el = Parse("{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"usage\":{\"input_tokens\":3,\"output_tokens\":23888,\"cache_read_input_tokens\":317000}}");
 
-        var line = WorkerProgressDigest.FormatLine(el, new TimeSpan(0, 7, 30));
+        var line = new ClaudeCodeProgressDigester().FormatLine(el, new TimeSpan(0, 7, 30));
 
         Assert.NotNull(line);
         Assert.StartsWith("[7:30] ", line);
@@ -1013,7 +1013,7 @@ public class WorkerProgressDigestTests
     {
         var el = Parse("{\"type\":\"result\",\"subtype\":\"error\",\"is_error\":true,\"usage\":{\"output_tokens\":0,\"cache_read_input_tokens\":0}}");
 
-        var line = WorkerProgressDigest.FormatLine(el, TimeSpan.FromSeconds(12));
+        var line = new ClaudeCodeProgressDigester().FormatLine(el, TimeSpan.FromSeconds(12));
 
         Assert.NotNull(line);
         Assert.Contains("err", line);
@@ -1025,7 +1025,7 @@ public class WorkerProgressDigestTests
         // Unknown / decoration event must not produce a digest line.
         var el = Parse("{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed\"}}");
 
-        var line = WorkerProgressDigest.FormatLine(el, TimeSpan.FromSeconds(1));
+        var line = new ClaudeCodeProgressDigester().FormatLine(el, TimeSpan.FromSeconds(1));
 
         Assert.Null(line);
     }
@@ -1036,7 +1036,7 @@ public class WorkerProgressDigestTests
         // The user event (tool_result echo) is not surfaced today.
         var el = Parse("{\"type\":\"user\",\"message\":{\"role\":\"user\"}}");
 
-        var line = WorkerProgressDigest.FormatLine(el, TimeSpan.FromSeconds(1));
+        var line = new ClaudeCodeProgressDigester().FormatLine(el, TimeSpan.FromSeconds(1));
 
         Assert.Null(line);
     }
@@ -1050,13 +1050,13 @@ public class WorkerProgressDigestTests
         var longPath = new string('x', 120);
         var el = Parse("{\"type\":\"assistant\",\"message\":{\"model\":\"x\",\"content\":[{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{\"file_path\":\"" + longPath + "\"}}]}}");
 
-        var line = WorkerProgressDigest.FormatLine(el, TimeSpan.FromSeconds(3));
+        var line = new ClaudeCodeProgressDigester().FormatLine(el, TimeSpan.FromSeconds(3));
 
         Assert.NotNull(line);
         Assert.Contains("...", line);
         // The bare "x" run after the prefix must be at most 80 chars.
         // We assert the rendered line is no longer than the prefix + max payload.
-        var maxLine = "[0:03] ".Length + 10 + 1 + WorkerProgressDigest.MaxPayloadChars;
+        var maxLine = "[0:03] ".Length + 10 + 1 + ClaudeCodeProgressDigester.MaxPayloadChars;
         Assert.True(line.Length <= maxLine,
             $"line too long: {line.Length} > {maxLine}: '{line}'");
     }
@@ -1071,7 +1071,7 @@ public class WorkerProgressDigestTests
             "{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{\"file_path\":\"b.cs\"}}" +
             "]}}");
 
-        var line = WorkerProgressDigest.FormatLine(el, TimeSpan.FromSeconds(5));
+        var line = new ClaudeCodeProgressDigester().FormatLine(el, TimeSpan.FromSeconds(5));
 
         Assert.NotNull(line);
         var subLines = line.Split('\n');
@@ -1089,7 +1089,7 @@ public class WorkerProgressDigestTests
     {
         var ts = new TimeSpan(0, minutes, seconds);
 
-        var actual = WorkerProgressDigest.FormatOffset(ts);
+        var actual = ClaudeCodeProgressDigester.FormatOffset(ts);
 
         Assert.Equal(expected, actual);
     }
@@ -1099,9 +1099,43 @@ public class WorkerProgressDigestTests
     {
         var ts = new TimeSpan(1, 5, 30);
 
-        var actual = WorkerProgressDigest.FormatOffset(ts);
+        var actual = ClaudeCodeProgressDigester.FormatOffset(ts);
 
         Assert.Equal("1:05:30", actual);
+    }
+
+    [Fact]
+    public void FormatLine_MalformedJson_ReturnsNull()
+    {
+        // The public FormatLine(string) must not throw on malformed input.
+        var digester = new ClaudeCodeProgressDigester();
+        var result = digester.FormatLine("not valid json {{{");
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void ClaudeCodeAgent_Digester_ReturnsNonNullClaudeCodeProgressDigesterInstance()
+    {
+        var agent = new ClaudeCodeAgent();
+        var digester = agent.Digester;
+        Assert.NotNull(digester);
+        Assert.IsType<ClaudeCodeProgressDigester>(digester);
+    }
+
+    [Fact]
+    public void NullDigester_ProgressDigestSink_ReceivesNoLines()
+    {
+        // Confirm that when IWorkerProgressDigester is null, no digest lines are written
+        // and no exception is thrown. We simulate the phase-level call pattern.
+        IWorkerProgressDigester? digester = null;
+        var sink = new System.IO.StringWriter();
+        var rawLine = "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"usage\":{\"output_tokens\":5,\"cache_read_input_tokens\":0}}";
+
+        // This is the exact call pattern that phases and the OutputDataReceived handler use.
+        var formatted = digester?.FormatLine(rawLine);
+        if (formatted != null) sink.WriteLine(formatted);
+
+        Assert.Equal(string.Empty, sink.ToString());
     }
 }
 
