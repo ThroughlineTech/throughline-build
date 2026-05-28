@@ -1273,6 +1273,88 @@ public class ClaudeCodeAgentDigestRoutingTests
     }
 }
 
+public class ClaudeCodeAgentSizeMapTests
+{
+    [Fact]
+    public void NormalizeModel_VendorPrefixStripped_ReturnsBareName()
+    {
+        // NormalizeModel is the same helper used when resolving from Sizes.
+        // Confirms vendor prefix is stripped so --model receives bare id.
+        var result = ClaudeCodeAgent.NormalizeModel("anthropic:claude-sonnet-4-6");
+
+        Assert.Equal("claude-sonnet-4-6", result);
+    }
+
+    [Fact]
+    public void NormalizeModel_NoPrefixModel_ReturnedAsIs()
+    {
+        var result = ClaudeCodeAgent.NormalizeModel("claude-haiku-4-5-20251001");
+
+        Assert.Equal("claude-haiku-4-5-20251001", result);
+    }
+
+    [Fact]
+    public void NormalizeModel_NullInput_ReturnsNull()
+    {
+        var result = ClaudeCodeAgent.NormalizeModel(null);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void NormalizeModel_EmptyInput_ReturnsNull()
+    {
+        var result = ClaudeCodeAgent.NormalizeModel("");
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void Size_Small_ResolvesToHaikuModel_ViaNormalizeModel()
+    {
+        // Simulates the resolution path: Sizes[Small] -> NormalizeModel -> --model value.
+        var sizes = new Dictionary<WorkerSize, string>
+        {
+            [WorkerSize.Small] = "claude-haiku-4-5-20251001",
+            [WorkerSize.Medium] = "anthropic:claude-sonnet-4-6",
+            [WorkerSize.Large] = "claude-opus-4-7"
+        };
+
+        sizes.TryGetValue(WorkerSize.Small, out var rawModel);
+        var modelArg = ClaudeCodeAgent.NormalizeModel(rawModel);
+
+        Assert.Equal("claude-haiku-4-5-20251001", modelArg);
+    }
+
+    [Fact]
+    public void Size_Medium_WithVendorPrefix_StripsPrefix()
+    {
+        var sizes = new Dictionary<WorkerSize, string>
+        {
+            [WorkerSize.Small] = "claude-haiku-4-5-20251001",
+            [WorkerSize.Medium] = "anthropic:claude-sonnet-4-6",
+            [WorkerSize.Large] = "claude-opus-4-7"
+        };
+
+        sizes.TryGetValue(WorkerSize.Medium, out var rawModel);
+        var modelArg = ClaudeCodeAgent.NormalizeModel(rawModel);
+
+        Assert.Equal("claude-sonnet-4-6", modelArg);
+    }
+
+    [Fact]
+    public void EmptySizesDict_NullResolvedModel_NormalizeModelReturnsNull()
+    {
+        // When Sizes is empty, TryGetValue returns false and resolvedModelRaw is null.
+        // NormalizeModel(null) must return null so no --model flag is appended.
+        var sizes = new Dictionary<WorkerSize, string>();
+        sizes.TryGetValue(WorkerSize.Medium, out var resolvedModelRaw);
+        var modelArg = ClaudeCodeAgent.NormalizeModel(resolvedModelRaw);
+
+        Assert.Null(modelArg);
+    }
+}
+
 public class WriteCancellationCaptureTests
 {
     [Fact]

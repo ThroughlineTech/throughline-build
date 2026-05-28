@@ -438,8 +438,7 @@ static async Task<int> RunAsync(string[] args)
                 {
                     ExecutablePath = draftAgentCfg.Executable,
                     MaxOutputTokens = draftAgentCfg.MaxOutputTokens,
-                    Model = config2.Llm.DefaultModel,
-                    DefaultModel = config2.Llm.DefaultModel
+                    Sizes = draftAgentCfg.Sizes
                 })
             });
         var draftWorker = draftWorkerFactory.Create(draftImplementAgentName);
@@ -677,8 +676,7 @@ static async Task<int> RunAsync(string[] args)
         {
             ExecutablePath = capturedCfg.Executable,
             MaxOutputTokens = capturedCfg.MaxOutputTokens,
-            Model = config2.Llm.DefaultModel,
-            DefaultModel = config2.Llm.DefaultModel
+            Sizes = capturedCfg.Sizes
         });
     }
     var workerFactory = new WorkerAgentFactory(factoryEntries);

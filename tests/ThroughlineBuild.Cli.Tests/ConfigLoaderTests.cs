@@ -33,6 +33,11 @@ timeout_minutes = 20
 [workers.claude-code]
 executable = "claude"
 
+[workers.claude-code.sizes]
+small  = "claude-haiku-4-5-20251001"
+medium = "claude-sonnet-4-6"
+large  = "claude-opus-4-7"
+
 [events]
 log_directory = ".build/events"
 """;
@@ -78,6 +83,11 @@ default_agent = "claude-code"
 
 [workers.claude-code]
 executable = "claude"
+
+[workers.claude-code.sizes]
+small  = "claude-haiku-4-5-20251001"
+medium = "claude-sonnet-4-6"
+large  = "claude-opus-4-7"
 
 [events]
 log_directory = ".build/events"
@@ -196,6 +206,11 @@ default_agent = "claude-code"
 [workers.claude-code]
 executable = "claude"
 max_output_tokens = 16000
+
+[workers.claude-code.sizes]
+small  = "claude-haiku-4-5-20251001"
+medium = "claude-sonnet-4-6"
+large  = "claude-opus-4-7"
 
 [events]
 log_directory = ".build/events"
@@ -395,6 +410,95 @@ log_directory = ".build/events"
             Assert.Contains("workflow_tool", ex.Message);
             Assert.Contains("build", ex.Message);
             Assert.Contains("claude-config", ex.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Sizes_are_parsed_per_agent()
+    {
+        var path = WriteToml(ValidToml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            var sizes = config.Workers.Agents["claude-code"].Sizes;
+            Assert.NotNull(sizes);
+            Assert.Equal("claude-haiku-4-5-20251001", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Small]);
+            Assert.Equal("claude-sonnet-4-6", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Medium]);
+            Assert.Equal("claude-opus-4-7", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Large]);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Missing_sizes_table_throws_ConfigException()
+    {
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "abc-123"
+plane_api_token_env = "PLANE_TOKEN"
+
+[workers]
+default_agent = "claude-code"
+
+[workers.claude-code]
+executable = "claude"
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var ex = Assert.Throws<ConfigException>(() => BuildConfigLoader.Load(path));
+            Assert.Contains("sizes", ex.Message);
+            Assert.Contains("workers.claude-code", ex.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Missing_individual_size_key_throws_ConfigException()
+    {
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "abc-123"
+plane_api_token_env = "PLANE_TOKEN"
+
+[workers]
+default_agent = "claude-code"
+
+[workers.claude-code]
+executable = "claude"
+
+[workers.claude-code.sizes]
+small  = "claude-haiku-4-5-20251001"
+medium = "claude-sonnet-4-6"
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var ex = Assert.Throws<ConfigException>(() => BuildConfigLoader.Load(path));
+            Assert.Contains("large", ex.Message);
         }
         finally
         {
