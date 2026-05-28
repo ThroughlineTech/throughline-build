@@ -660,7 +660,16 @@ public static class OpDocParser
                     if (string.IsNullOrWhiteSpace(notes)) notes = null;
                     break;
                 case "oos":
-                    oos.AddRange(ExtractBullets(currentLines));
+                    var oosBullets = ExtractBullets(currentLines);
+                    if (oosBullets.Count > 0)
+                        oos.AddRange(oosBullets);
+                    else
+                    {
+                        // Prose OOS (no bullet markers) - treat the whole text as one item
+                        var prose = string.Join(" ", currentLines.Select(l => l.Trim())).Trim();
+                        if (!string.IsNullOrEmpty(prose))
+                            oos.Add(prose);
+                    }
                     break;
             }
         }
