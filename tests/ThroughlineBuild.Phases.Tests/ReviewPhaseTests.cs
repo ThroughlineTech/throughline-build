@@ -506,15 +506,44 @@ public class ReviewPhaseTests
     {
         private readonly IReadOnlyDictionary<string, object>? _metadata;
         public WorkerOptions? LastOptions { get; private set; }
+        public string? LastWorkingDirectory { get; private set; }
         public string Name => "claude-code";
         public IWorkerProgressDigester? Digester => null;
         public CapturingWorkerAgent(IReadOnlyDictionary<string, object>? metadata = null) { _metadata = metadata; }
         public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
         {
             LastOptions = options;
+            LastWorkingDirectory = workingDirectory;
             return Task.FromResult(new WorkerResult(Status.Ok, "noop", Array.Empty<string>(), null,
                 _metadata ?? new Dictionary<string, object>()));
         }
+    }
+
+    [Fact]
+    public async Task RunAsync_VerifierWorkerRunsInWorktreeNotMainDirectory()
+    {
+        // Verifier must run in the feature worktree, not workingDirectory.
+        // Running in main dirties tracked files and blocks ShipPhase's pre-flight dirty check.
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        ticketing.SeedComment($"<p>[implemented_at: {ImplementedSha}]</p>");
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, includeWorktreeMatching: true);
+        var metadata = new Dictionary<string, object>
+        {
+            ["verdict"] = "Pass",
+            ["rationale"] = "looks good",
+            ["checks_failed"] = new List<string>()
+        };
+        var capturingWorker = new CapturingWorkerAgent(metadata);
+        var phase = new ReviewPhase(ticketing, capturingWorker, events, MakeBuildOptions(), MakeReviewOptions(), git);
+        var mainDir = MakeWorkingDir();
+
+        var result = await phase.RunAsync(TicketId, mainDir, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(capturingWorker.LastWorkingDirectory);
+        Assert.NotEqual(mainDir, capturingWorker.LastWorkingDirectory);
+        Assert.Equal("/some/worktree/path", capturingWorker.LastWorkingDirectory);
     }
 
     private sealed class FakeGitClient : IGitClient

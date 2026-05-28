@@ -39,7 +39,7 @@ public sealed class WorkerAgentReviewer : IVerifier
     }
 
     /// <summary>
-    /// Builds a review brief via ReviewBriefBuilder and dispatches the worker against the main worktree.
+    /// Builds a review brief via ReviewBriefBuilder and dispatches the worker against the feature worktree.
     /// Maps the resulting WORKER_RESULT metadata into a typed Verdict.
     /// </summary>
     /// <param name="implementerBrief">The implementer brief (retained on the public surface; not forwarded to the worker in v1).</param>

@@ -71,10 +71,12 @@ public class ReviewPhase : IWorkflowPhase
         var worktreeNames = PhaseWorktreeLayout.Compute(ticketId, ticket.Title, workingDirectory);
         var worktrees = await _git.ListWorktreesAsync(ct).ConfigureAwait(false);
         bool worktreeFound = false;
+        string canonicalWorktreePath = worktreeNames.WorktreePath;
         foreach (var w in worktrees)
         {
             if (w.Branch == worktreeNames.BranchName)
             {
+                canonicalWorktreePath = w.Path;
                 worktreeFound = true;
                 break;
             }
@@ -83,6 +85,7 @@ public class ReviewPhase : IWorkflowPhase
             catch { wPathFull = w.Path; }
             if (string.Equals(wPathFull, worktreeNames.WorktreePath, StringComparison.OrdinalIgnoreCase))
             {
+                canonicalWorktreePath = w.Path;
                 worktreeFound = true;
                 break;
             }
@@ -141,15 +144,16 @@ public class ReviewPhase : IWorkflowPhase
 
         // Step 7: Run automated checks (failures do not short-circuit; verifier sees them)
         var runner = _checksRunner ?? new AutomatedChecksRunner();
-        var checkResults = await runner.RunAsync(_reviewOptions.Checks, worktreeNames.WorktreePath, ct).ConfigureAwait(false);
+        var checkResults = await runner.RunAsync(_reviewOptions.Checks, canonicalWorktreePath, ct).ConfigureAwait(false);
 
-        // Step 8: Construct verifier
+        // Step 8: Construct verifier - must run in the feature worktree, not the main working directory,
+        // so the worker cannot dirty tracked files in main and block the subsequent ship pre-flight check.
         var effectiveVerifierOptions = _reviewOptions.VerifierWorkerOptions with
         {
             Size = WorkerSizeMapper.FromTicketSize(ticket.Size)
         };
         var verifier = _verifierOverride
-            ?? new WorkerAgentReviewer(_verifierWorker, ticket, checkResults, effectiveVerifierOptions, workingDirectory, _project);
+            ?? new WorkerAgentReviewer(_verifierWorker, ticket, checkResults, effectiveVerifierOptions, canonicalWorktreePath, _project);
 
         // Step 9: Emit WorkerSpawn (role = verifier)
         await EmitAsync(EventKind.WorkerSpawn, ticketId, new Dictionary<string, object>
