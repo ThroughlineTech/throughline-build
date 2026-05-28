@@ -82,7 +82,8 @@ public class ImplementPhaseTests
         var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
 
         Assert.False(result.Success);
-        Assert.Contains("Ready", result.FailureReason ?? "");
+        Assert.Contains("did you mean to invoke rework", result.FailureReason ?? "");
+        Assert.Contains("Backlog", result.FailureReason ?? "");
         Assert.Empty(ticketing.Transitions);
         Assert.Empty(events.Events);
         Assert.Equal(0, git.CreateWorktreeCalls);
@@ -251,8 +252,8 @@ public class ImplementPhaseTests
             Assert.True(File.Exists(manifestPath), $"Expected phase-status.json at {manifestPath}");
 
             var content = File.ReadAllText(manifestPath);
-            Assert.Contains("Ready", content);
-            Assert.Contains("ticket not in Ready state", content);
+            Assert.Contains("Backlog", content);
+            Assert.Contains("did you mean to invoke rework", content);
         }
         finally
         {
