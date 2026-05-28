@@ -145,7 +145,7 @@ public class ReviewPhase : IWorkflowPhase
 
         // Step 8: Construct verifier
         var verifier = _verifierOverride
-            ?? new ClaudeCodeReviewer(_verifierWorker, ticket, checkResults, _reviewOptions.VerifierWorkerOptions, workingDirectory, _project);
+            ?? new WorkerAgentReviewer(_verifierWorker, ticket, checkResults, _reviewOptions.VerifierWorkerOptions, workingDirectory, _project);
 
         // Step 9: Emit WorkerSpawn (role = verifier)
         await EmitAsync(EventKind.WorkerSpawn, ticketId, new Dictionary<string, object>
@@ -167,7 +167,7 @@ public class ReviewPhase : IWorkflowPhase
         }, ct).ConfigureAwait(false);
 
         // Step 12: LlmCall event if verifier worker reported usage
-        if (_verifierOverride is null && verifier is ClaudeCodeReviewer ccr && ccr.LastWorkerResult is { } verifierResult && verifierResult.Metadata.TryGetValue("llm_usage", out var usageObj))
+        if (_verifierOverride is null && verifier is WorkerAgentReviewer ccr && ccr.LastWorkerResult is { } verifierResult && verifierResult.Metadata.TryGetValue("llm_usage", out var usageObj))
         {
             var llmData = Flatten(usageObj);
             if (llmData is not null)
