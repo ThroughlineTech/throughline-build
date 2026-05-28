@@ -20,11 +20,6 @@ public sealed record ReworkPhaseOptions(
     int ReworkRoundNumber,
     bool Debug);
 
-public interface IReviewFeedbackRetriever
-{
-    ReviewFeedback? GetLatestRework(string ticketId);
-}
-
 public sealed class ReworkPhase : IWorkflowPhase
 {
     private readonly ITicketing _ticketing;

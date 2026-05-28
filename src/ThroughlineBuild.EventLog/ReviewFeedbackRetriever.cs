@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 
 namespace ThroughlineBuild.EventLog;
@@ -8,7 +9,7 @@ namespace ThroughlineBuild.EventLog;
 /// and reconstructs a ReviewFeedback record when the verdict was Rework.
 /// Thread-safe: all scans are read-only; no instance state is mutated after construction.
 /// </summary>
-public sealed class ReviewFeedbackRetriever
+public sealed class ReviewFeedbackRetriever : IReviewFeedbackRetriever
 {
     private readonly string _eventsDirectory;
     private static readonly int VerifierVerdictKind = (int)EventKind.VerifierVerdict;

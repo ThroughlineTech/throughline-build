@@ -161,6 +161,14 @@ static async Task<int> RunAsync(string[] args)
     if (verb == "amend" || verb == "close" || verb == "defer" || verb == "reopen")
     {
         var sessionId2 = Guid.NewGuid().ToString("N");
+        var verbTicketIdForName = args.Length >= 2 ? args[1] : null;
+        var fileStem2 = SessionFileNameBuilder.Build(
+            projectName: config2.Ticketing.PlaneProjectName,
+            projectIdentifier: config2.Ticketing.PlaneProjectIdentifier,
+            verb: verb,
+            ticketId: verbTicketIdForName,
+            extraSlug: null,
+            timestamp: DateTimeOffset.Now);
         var http2 = new HttpClient();
         var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
         {
@@ -173,7 +181,8 @@ static async Task<int> RunAsync(string[] args)
         await using var jsonlEventSink2 = new JsonlEventSink(new EventLogOptions
         {
             BaseDirectory = ResolveLogDir(config2.Events.LogDirectory),
-            SessionId = sessionId2
+            SessionId = sessionId2,
+            FileNameStem = fileStem2
         }, sessionContext);
         var eventSink2 = new RecordingEventSink(jsonlEventSink2);
 
@@ -240,6 +249,13 @@ static async Task<int> RunAsync(string[] args)
     if (verb == "new")
     {
         var sessionId2 = Guid.NewGuid().ToString("N");
+        var fileStem2 = SessionFileNameBuilder.Build(
+            projectName: config2.Ticketing.PlaneProjectName,
+            projectIdentifier: config2.Ticketing.PlaneProjectIdentifier,
+            verb: verb,
+            ticketId: null,
+            extraSlug: null,
+            timestamp: DateTimeOffset.Now);
         var http2 = new HttpClient();
         var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
         {
@@ -252,7 +268,8 @@ static async Task<int> RunAsync(string[] args)
         await using var jsonlEventSink2 = new JsonlEventSink(new EventLogOptions
         {
             BaseDirectory = ResolveLogDir(config2.Events.LogDirectory),
-            SessionId = sessionId2
+            SessionId = sessionId2,
+            FileNameStem = fileStem2
         }, sessionContext);
         var eventSink2 = new RecordingEventSink(jsonlEventSink2);
 
@@ -264,7 +281,7 @@ static async Task<int> RunAsync(string[] args)
                         || classification.Kind == NewVerbKind.StdinDraftMode;
 
         string? debugCaptureDir2 = debugMode
-            ? Path.GetFullPath(Path.Combine(cwd2, ".build", "sessions", sessionId2))
+            ? Path.GetFullPath(Path.Combine(cwd2, ".build", "sessions", fileStem2))
             : null;
         if (debugCaptureDir2 is not null)
             Directory.CreateDirectory(debugCaptureDir2);
@@ -367,20 +384,20 @@ static async Task<int> RunAsync(string[] args)
                 {
                     Console.Error.WriteLine($"Command 'new' failed: {verbResult.Message}");
                     if (buildOptions2.DebugCaptureDirectory is not null)
-                        Console.WriteLine($"Debug capture: .build/sessions/{sessionId2}/");
+                        Console.WriteLine($"Debug capture: .build/sessions/{fileStem2}/");
                     return 1;
                 }
                 if (!string.IsNullOrEmpty(verbResult.Message))
                     Console.WriteLine(verbResult.Message);
                 if (buildOptions2.DebugCaptureDirectory is not null)
-                    Console.WriteLine($"Debug capture: .build/sessions/{sessionId2}/");
+                    Console.WriteLine($"Debug capture: .build/sessions/{fileStem2}/");
                 return 0;
             }
             catch (OperationCanceledException)
             {
                 Console.Error.WriteLine("Cancelled.");
                 if (buildOptions2.DebugCaptureDirectory is not null)
-                    Console.WriteLine($"Debug capture: .build/sessions/{sessionId2}/");
+                    Console.WriteLine($"Debug capture: .build/sessions/{fileStem2}/");
                 return 1;
             }
         }
@@ -426,7 +443,7 @@ static async Task<int> RunAsync(string[] args)
         {
             Console.Error.WriteLine("Cancelled.");
             if (buildOptions2.DebugCaptureDirectory is not null)
-                Console.WriteLine($"Debug capture: .build/sessions/{sessionId2}/");
+                Console.WriteLine($"Debug capture: .build/sessions/{fileStem2}/");
             return 1;
         }
         draftSw.Stop();
@@ -435,7 +452,7 @@ static async Task<int> RunAsync(string[] args)
         {
             Console.Error.WriteLine($"draft failed: {draftResult.FailureReason}");
             if (buildOptions2.DebugCaptureDirectory is not null)
-                Console.WriteLine($"Debug capture: .build/sessions/{sessionId2}/");
+                Console.WriteLine($"Debug capture: .build/sessions/{fileStem2}/");
             return 1;
         }
 
@@ -478,20 +495,20 @@ static async Task<int> RunAsync(string[] args)
                 {
                     Console.Error.WriteLine($"Command 'new' failed: {verbResult.Message}");
                     if (buildOptions2.DebugCaptureDirectory is not null)
-                        Console.WriteLine($"Debug capture: .build/sessions/{sessionId2}/");
+                        Console.WriteLine($"Debug capture: .build/sessions/{fileStem2}/");
                     return 1;
                 }
                 if (!string.IsNullOrEmpty(verbResult.Message))
                     Console.WriteLine(verbResult.Message);
                 if (buildOptions2.DebugCaptureDirectory is not null)
-                    Console.WriteLine($"Debug capture: .build/sessions/{sessionId2}/");
+                    Console.WriteLine($"Debug capture: .build/sessions/{fileStem2}/");
                 return 0;
             }
             catch (OperationCanceledException)
             {
                 Console.Error.WriteLine("Cancelled.");
                 if (buildOptions2.DebugCaptureDirectory is not null)
-                    Console.WriteLine($"Debug capture: .build/sessions/{sessionId2}/");
+                    Console.WriteLine($"Debug capture: .build/sessions/{fileStem2}/");
                 return 1;
             }
         }
@@ -504,6 +521,14 @@ static async Task<int> RunAsync(string[] args)
     if (verb == "scaffold")
     {
         var scaffoldSessionId = Guid.NewGuid().ToString("N");
+        var opDocStem = Path.GetFileNameWithoutExtension(args[1]);
+        var scaffoldFileStem = SessionFileNameBuilder.Build(
+            projectName: config2.Ticketing.PlaneProjectName,
+            projectIdentifier: config2.Ticketing.PlaneProjectIdentifier,
+            verb: verb,
+            ticketId: null,
+            extraSlug: opDocStem,
+            timestamp: DateTimeOffset.Now);
         var scaffoldHttp = new HttpClient();
         var scaffoldTicketing = new PlaneTicketingClient(scaffoldHttp, new PlaneClientOptions
         {
@@ -516,7 +541,8 @@ static async Task<int> RunAsync(string[] args)
         await using var scaffoldJsonlSink = new JsonlEventSink(new EventLogOptions
         {
             BaseDirectory = ResolveLogDir(config2.Events.LogDirectory),
-            SessionId = scaffoldSessionId
+            SessionId = scaffoldSessionId,
+            FileNameStem = scaffoldFileStem
         }, sessionContext);
         var scaffoldEventSink = new RecordingEventSink(scaffoldJsonlSink);
 
@@ -583,13 +609,21 @@ static async Task<int> RunAsync(string[] args)
     var cwd = resolvedCwd;
 
     var sessionId = Guid.NewGuid().ToString("N");
+    var fileStem = SessionFileNameBuilder.Build(
+        projectName: config2.Ticketing.PlaneProjectName,
+        projectIdentifier: config2.Ticketing.PlaneProjectIdentifier,
+        verb: verb,
+        ticketId: ticketId,
+        extraSlug: null,
+        timestamp: DateTimeOffset.Now);
 
-    // --debug: capture worker stdin/stdout/stderr/envelope into .build/sessions/<session-id>/
-    // The same session-id is shared with the JSONL event sink so the two sinks correlate.
+    // --debug: capture worker stdin/stdout/stderr/envelope into .build/sessions/<file-stem>/
+    // The stem is shared with the JSONL event sink so the two artifacts sort together.
+    // Inside the JSONL, the SessionId field still carries the GUID as the correlation key.
     // Create the dir eagerly so the "Debug capture:" line at exit always points somewhere
     // real, even when the phase fails before the worker spawns (e.g. early git errors).
     string? debugCaptureDir = debugMode
-        ? Path.GetFullPath(Path.Combine(cwd, ".build", "sessions", sessionId))
+        ? Path.GetFullPath(Path.Combine(cwd, ".build", "sessions", fileStem))
         : null;
     if (debugCaptureDir is not null)
         Directory.CreateDirectory(debugCaptureDir);
@@ -613,7 +647,8 @@ static async Task<int> RunAsync(string[] args)
     await using var jsonlEventSink = new JsonlEventSink(new EventLogOptions
     {
         BaseDirectory = ResolveLogDir(config2.Events.LogDirectory),
-        SessionId = sessionId
+        SessionId = sessionId,
+        FileNameStem = fileStem
     }, sessionContext);
     // Digest is default-on when stderr is a TTY and the user has not opted out
     // via --quiet or replaced it with the --debug raw firehose. When stderr is
@@ -637,8 +672,8 @@ static async Task<int> RunAsync(string[] args)
     var summaryGit = new ProcessGitClient(cwd);
     string PlaneUrl() => BuildPlaneUrl(config2.Project.PlaneProjectUrl, ticketId);
     string? ArtifactsPath() => debugCaptureDir is not null
-        ? $".build/sessions/{sessionId}/"
-        : $".build/events/{sessionId}.jsonl";
+        ? $".build/sessions/{fileStem}/"
+        : $".build/events/{fileStem}.jsonl";
 
     void WriteSummary(PhaseSummary summary)
     {
@@ -692,12 +727,12 @@ static async Task<int> RunAsync(string[] args)
         {
             Console.Error.WriteLine($"Plan phase failed: {result.FailureReason}");
             if (debugCaptureDir is not null)
-                Console.WriteLine($"Debug capture: .build/sessions/{sessionId}/");
+                Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
             return 1;
         }
 
         if (debugCaptureDir is not null)
-            Console.WriteLine($"Debug capture: .build/sessions/{sessionId}/");
+            Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
         return 0;
     }
     else if (verb == "implement")
@@ -757,12 +792,12 @@ static async Task<int> RunAsync(string[] args)
         {
             Console.Error.WriteLine($"Implement phase failed: {result.FailureReason}");
             if (debugCaptureDir is not null)
-                Console.WriteLine($"Debug capture: .build/sessions/{sessionId}/");
+                Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
             return 1;
         }
 
         if (debugCaptureDir is not null)
-            Console.WriteLine($"Debug capture: .build/sessions/{sessionId}/");
+            Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
         return 0;
     }
     else if (verb == "ship")
@@ -963,8 +998,7 @@ static async Task<int> RunAsync(string[] args)
             ReworkRoundNumber: 1,
             Debug: debugMode);
 
-        var retriever = new ReviewFeedbackRetrieverAdapter(
-            new ReviewFeedbackRetriever(ResolveLogDir(config2.Events.LogDirectory)));
+        var retriever = new ReviewFeedbackRetriever(ResolveLogDir(config2.Events.LogDirectory));
 
         var reworkPhase = new ReworkPhase(
             ticketing,
@@ -1059,12 +1093,12 @@ static async Task<int> RunAsync(string[] args)
         {
             Console.Error.WriteLine($"Review phase failed: {result.FailureReason}");
             if (debugCaptureDir is not null)
-                Console.WriteLine($"Debug capture: .build/sessions/{sessionId}/");
+                Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
             return 4;
         }
 
         if (debugCaptureDir is not null)
-            Console.WriteLine($"Debug capture: .build/sessions/{sessionId}/");
+            Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
 
         return result.Verdict == ThroughlineBuild.Contracts.Models.VerdictKind.Pass ? 0 : 1;
     }
@@ -1136,18 +1170,3 @@ static string? WireUpConditionalCommands(
     return null;
 }
 
-// Adapter: wraps ReviewFeedbackRetriever (EventLog) so it satisfies
-// IReviewFeedbackRetriever (Phases). EventLog cannot directly reference Phases,
-// so this thin wrapper lives in the Cli entry point that references both.
-sealed class ReviewFeedbackRetrieverAdapter : IReviewFeedbackRetriever
-{
-    private readonly ReviewFeedbackRetriever _inner;
-
-    public ReviewFeedbackRetrieverAdapter(ReviewFeedbackRetriever inner)
-    {
-        _inner = inner;
-    }
-
-    public ReviewFeedback? GetLatestRework(string ticketId) =>
-        _inner.GetLatestRework(ticketId);
-}
