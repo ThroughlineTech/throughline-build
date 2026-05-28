@@ -421,13 +421,18 @@ static async Task<int> RunAsync(string[] args)
         }
 
         // Build a real worker for draft mode.
-        var draftWorker = new ClaudeCodeAgent(new ClaudeCodeOptions
-        {
-            ExecutablePath = config2.Workers.ClaudeCodeExecutable,
-            MaxOutputTokens = config2.Workers.MaxOutputTokens,
-            Model = config2.Llm.DefaultModel,
-            DefaultModel = config2.Llm.DefaultModel
-        });
+        var draftWorkerFactory = new WorkerAgentFactory(
+            new Dictionary<string, Func<IWorkerAgent>>(StringComparer.Ordinal)
+            {
+                ["claude-code"] = () => new ClaudeCodeAgent(new ClaudeCodeOptions
+                {
+                    ExecutablePath = config2.Workers.ClaudeCodeExecutable,
+                    MaxOutputTokens = config2.Workers.MaxOutputTokens,
+                    Model = config2.Llm.DefaultModel,
+                    DefaultModel = config2.Llm.DefaultModel
+                })
+            });
+        var draftWorker = draftWorkerFactory.Create(config2.Workers.DefaultAgent);
 
         var draftPhase = new DraftPhase(draftWorker, buildOptions2);
         var draftSw = System.Diagnostics.Stopwatch.StartNew();
@@ -637,13 +642,18 @@ static async Task<int> RunAsync(string[] args)
         ProjectId = config2.Ticketing.PlaneProjectId,
         ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
     });
-    var worker = new ClaudeCodeAgent(new ClaudeCodeOptions
-    {
-        ExecutablePath = config2.Workers.ClaudeCodeExecutable,
-        MaxOutputTokens = config2.Workers.MaxOutputTokens,
-        Model = config2.Llm.DefaultModel,
-        DefaultModel = config2.Llm.DefaultModel
-    });
+    var workerFactory = new WorkerAgentFactory(
+        new Dictionary<string, Func<IWorkerAgent>>(StringComparer.Ordinal)
+        {
+            ["claude-code"] = () => new ClaudeCodeAgent(new ClaudeCodeOptions
+            {
+                ExecutablePath = config2.Workers.ClaudeCodeExecutable,
+                MaxOutputTokens = config2.Workers.MaxOutputTokens,
+                Model = config2.Llm.DefaultModel,
+                DefaultModel = config2.Llm.DefaultModel
+            })
+        });
+    var worker = workerFactory.Create(config2.Workers.DefaultAgent);
     await using var jsonlEventSink = new JsonlEventSink(new EventLogOptions
     {
         BaseDirectory = ResolveLogDir(config2.Events.LogDirectory),
