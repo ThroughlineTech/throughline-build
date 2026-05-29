@@ -1177,6 +1177,16 @@ static async Task<int> RunAsync(string[] args)
     }
     else if (verb == "decompose")
     {
+        // For decompose: reject multiple positional ticket IDs (single ticket only).
+        if (args.Length > 2)
+        {
+            if (!args[2].StartsWith("--"))
+            {
+                Console.Error.WriteLine("Error: build decompose accepts exactly one ticket ID; multi-ticket dispatch is not supported.");
+                return 2;
+            }
+        }
+
         Ticket ticket;
         try
         {
