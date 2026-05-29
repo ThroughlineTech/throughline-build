@@ -23,7 +23,8 @@ public record PlanResult(
     string? RiskLabel,
     string? SizeLabel,
     string? PlannedAtSha,
-    string? FailureReason);
+    string? FailureReason,
+    WorkerResult? EscalationWorkerResult = null);
 
 public class PlanPhase : IWorkflowPhase
 {
@@ -98,7 +99,8 @@ public class PlanPhase : IWorkflowPhase
 
         if (workerResult.Status != Status.Ok)
             return new PlanResult(false, ticketId, null, null, null,
-                workerResult.FailureReason ?? workerResult.Status.ToString());
+                workerResult.FailureReason ?? workerResult.Status.ToString(),
+                workerResult.Status == Status.Escalate ? workerResult : null);
 
         if (workerResult.Metadata.TryGetValue("llm_usage", out var usageObj))
         {

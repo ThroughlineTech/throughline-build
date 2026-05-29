@@ -5,4 +5,5 @@ public record ChainResult(
     IReadOnlyList<ChainStep> Steps,
     ChainOutcome Outcome,
     TimeSpan TotalDuration,
-    string? FinalRationale);
+    string? FinalRationale,
+    SubsumedByEvidence? SubsumedBy = null);

@@ -74,6 +74,7 @@ Exit codes:
 
   For 'build chain' verb only (see separate exit code mapping):
   0  ChainOutcome.Completed
+  0  ChainOutcome.RatifiedObsolete (obsolete claim verified; prior work satisfies acceptance criteria)
   2  RefusedInitialState (ticket state does not permit chain)
   3  StoppedAtPlan (planning failed)
   4  StoppedAtImplement (implementation failed before review)

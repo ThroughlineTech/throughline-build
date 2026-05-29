@@ -16,7 +16,8 @@ public record ImplementResult(
     string? BranchName,
     string? WorktreePath,
     string? FailureReason,
-    int ReworkRoundNumber = 0);
+    int ReworkRoundNumber = 0,
+    WorkerResult? EscalationWorkerResult = null);
 
 public class ImplementPhase : IWorkflowPhase
 {
@@ -192,7 +193,8 @@ public class ImplementPhase : IWorkflowPhase
         // Step 14: If worker failed, leave in InProgress
         if (workerResult.Status != Status.Ok)
             return new ImplementResult(false, ticketId, null, worktreeNames.BranchName, worktreeNames.WorktreePath,
-                workerResult.FailureReason ?? workerResult.Status.ToString());
+                workerResult.FailureReason ?? workerResult.Status.ToString(),
+                EscalationWorkerResult: workerResult.Status == Status.Escalate ? workerResult : null);
 
         // Step 15: Extract commit_sha from metadata
         var metadataCommitSha = TryGetString(workerResult.Metadata, "commit_sha");

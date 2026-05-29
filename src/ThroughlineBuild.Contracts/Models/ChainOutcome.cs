@@ -8,5 +8,6 @@ public enum ChainOutcome
     StoppedAtReview,
     StoppedAtShip,
     ReworkCapExceeded,
-    RefusedInitialState
+    RefusedInitialState,
+    RatifiedObsolete
 }

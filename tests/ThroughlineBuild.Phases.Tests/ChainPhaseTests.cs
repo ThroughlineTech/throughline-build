@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Helpers;
@@ -74,11 +75,12 @@ public class ChainPhaseTests
 
     private ChainPhase BuildChain(
         ChainFakeTicketing ticketing,
-        FakeWorkerAgent planWorker,
-        FakeWorkerAgent implWorker,
+        IWorkerAgent planWorker,
+        IWorkerAgent implWorker,
         Queue<IVerifier> verifierQueue,
-        FakeWorkerAgent? shipWorker = null,
-        FakeGitClientChain? git = null)
+        IWorkerAgent? shipWorker = null,
+        FakeGitClientChain? git = null,
+        Func<BuildOptions, IObsoleteRatifier>? ratifierFactory = null)
     {
         _sessionCounter = 0;
         var events = new FakeEventSinkChain();
@@ -110,7 +112,8 @@ public class ChainPhaseTests
             ticketing, events, baseOpts,
             planFactory, implFactory, reviewFactory, shipFactory,
             sessionIdGenerator: NextSessionId,
-            workingDirectory: WorkDir);
+            workingDirectory: WorkDir,
+            ratifierFactory: ratifierFactory);
     }
 
     [Fact]
@@ -603,6 +606,178 @@ public class ChainPhaseTests
         public FakeDecrufterChain(IGitClient git) : base(git) { }
         public new Task<DecruftResult> DecruftAsync(string featureWorktreePath, string mainWorktreePath, CancellationToken ct) =>
             Task.FromResult(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()));
+    }
+
+    // -------------------------------------------------------------------------
+    // Ratification test helpers
+    // -------------------------------------------------------------------------
+
+    private static WorkerResult ObsoleteEscalateWorkerResult(string commit = "abc123obsolete") =>
+        new WorkerResult(
+            Status.Escalate,
+            "ticket is obsolete",
+            Array.Empty<string>(),
+            null,
+            new Dictionary<string, object>
+            {
+                ["escalation"] = JsonSerializer.Deserialize<JsonElement>($$"""
+                    {
+                      "reason": "obsolete",
+                      "subsumed_by": {
+                        "commit": "{{commit}}",
+                        "files": ["src/Foo.cs"],
+                        "rationale": "already done in prior commit"
+                      }
+                    }
+                    """)
+            });
+
+    private static WorkerResult NonObsoleteEscalateWorkerResult() =>
+        new WorkerResult(
+            Status.Escalate,
+            "ticket is blocked",
+            Array.Empty<string>(),
+            null,
+            new Dictionary<string, object>
+            {
+                ["escalation"] = JsonSerializer.Deserialize<JsonElement>("""{"reason":"blocked"}""")
+            });
+
+    private sealed class EscalateWorkerAgent : IWorkerAgent
+    {
+        private readonly WorkerResult _result;
+        public string Name => "claude-code";
+        public IWorkerProgressDigester? Digester => null;
+        public EscalateWorkerAgent(WorkerResult result) { _result = result; }
+        public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct) =>
+            Task.FromResult(_result);
+    }
+
+    private sealed class FakeObsoleteRatifier : IObsoleteRatifier
+    {
+        private readonly Verdict _verdict;
+        public bool WasCalled { get; private set; }
+        public FakeObsoleteRatifier(Verdict verdict) { _verdict = verdict; }
+        public Task<Verdict> RatifyAsync(Ticket ticket, WorkerResult escalateResult, CancellationToken ct)
+        {
+            WasCalled = true;
+            return Task.FromResult(_verdict);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Ratification tests
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task RunAsync_PlanObsoleteEscalation_RatifiedByRatifier_RatifiedObsoleteOutcome_SubsumedByCarried()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new EscalateWorkerAgent(ObsoleteEscalateWorkerResult("abc123def"));
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var verifiers = new Queue<IVerifier>();
+
+        var ratifier = new FakeObsoleteRatifier(
+            new Verdict(VerdictKind.Pass, "prior work satisfies acceptance criteria", Array.Empty<string>()));
+        Func<BuildOptions, IObsoleteRatifier> ratifierFactory = _ => ratifier;
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, ratifierFactory: ratifierFactory);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.RatifiedObsolete, result.Outcome);
+        Assert.True(ratifier.WasCalled);
+        Assert.NotNull(result.SubsumedBy);
+        Assert.Equal("abc123def", result.SubsumedBy.Commit);
+        // Steps: plan + ratify
+        Assert.Equal(2, result.Steps.Count);
+        Assert.Equal("plan", result.Steps[0].PhaseName);
+        Assert.Equal("ratify", result.Steps[1].PhaseName);
+        Assert.Equal(Status.Ok, result.Steps[1].Status);
+    }
+
+    [Fact]
+    public async Task RunAsync_PlanObsoleteEscalation_RejectedByRatifier_StoppedAtPlan()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new EscalateWorkerAgent(ObsoleteEscalateWorkerResult());
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var verifiers = new Queue<IVerifier>();
+
+        var ratifier = new FakeObsoleteRatifier(
+            new Verdict(VerdictKind.Fail, "acceptance criteria not satisfied", Array.Empty<string>()));
+        Func<BuildOptions, IObsoleteRatifier> ratifierFactory = _ => ratifier;
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, ratifierFactory: ratifierFactory);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.StoppedAtPlan, result.Outcome);
+        Assert.True(ratifier.WasCalled);
+        Assert.Null(result.SubsumedBy);
+    }
+
+    [Fact]
+    public async Task RunAsync_ImplementObsoleteEscalation_RatifiedByRatifier_RatifiedObsoleteOutcome()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var implWorker = new EscalateWorkerAgent(ObsoleteEscalateWorkerResult("deadbeef"));
+        var verifiers = new Queue<IVerifier>();
+
+        var ratifier = new FakeObsoleteRatifier(
+            new Verdict(VerdictKind.Pass, "prior work satisfies acceptance criteria", Array.Empty<string>()));
+        Func<BuildOptions, IObsoleteRatifier> ratifierFactory = _ => ratifier;
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, ratifierFactory: ratifierFactory);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.RatifiedObsolete, result.Outcome);
+        Assert.True(ratifier.WasCalled);
+        Assert.NotNull(result.SubsumedBy);
+        Assert.Equal("deadbeef", result.SubsumedBy.Commit);
+        // Steps: plan + implement + ratify
+        Assert.Equal(3, result.Steps.Count);
+        Assert.Equal("ratify", result.Steps[2].PhaseName);
+        Assert.Equal(Status.Ok, result.Steps[2].Status);
+    }
+
+    [Fact]
+    public async Task RunAsync_ImplementObsoleteEscalation_RejectedByRatifier_StoppedAtImplement()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var implWorker = new EscalateWorkerAgent(ObsoleteEscalateWorkerResult());
+        var verifiers = new Queue<IVerifier>();
+
+        var ratifier = new FakeObsoleteRatifier(
+            new Verdict(VerdictKind.Fail, "acceptance criteria not satisfied", Array.Empty<string>()));
+        Func<BuildOptions, IObsoleteRatifier> ratifierFactory = _ => ratifier;
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, ratifierFactory: ratifierFactory);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.StoppedAtImplement, result.Outcome);
+        Assert.True(ratifier.WasCalled);
+        Assert.Null(result.SubsumedBy);
+    }
+
+    [Fact]
+    public async Task RunAsync_NonObsoleteEscalation_RatifierNotCalled_StoppedAtPlan()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new EscalateWorkerAgent(NonObsoleteEscalateWorkerResult());
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var verifiers = new Queue<IVerifier>();
+
+        var ratifier = new FakeObsoleteRatifier(
+            new Verdict(VerdictKind.Pass, "should not be called", Array.Empty<string>()));
+        Func<BuildOptions, IObsoleteRatifier> ratifierFactory = _ => ratifier;
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, ratifierFactory: ratifierFactory);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.StoppedAtPlan, result.Outcome);
+        Assert.False(ratifier.WasCalled);
+        Assert.Null(result.SubsumedBy);
     }
 
     private sealed class FakeGitClientChain : IGitClient

@@ -1081,6 +1081,7 @@ static async Task<int> RunAsync(string[] args)
                     return chainCommand.LastChainResult.Outcome switch
                     {
                         ChainOutcome.Completed => 0,
+                        ChainOutcome.RatifiedObsolete => 0,
                         ChainOutcome.RefusedInitialState => 2,
                         ChainOutcome.StoppedAtPlan => 3,
                         ChainOutcome.StoppedAtImplement => 4,
