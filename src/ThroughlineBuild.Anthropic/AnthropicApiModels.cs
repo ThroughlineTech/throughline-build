@@ -53,6 +53,56 @@ public record AnthropicModelClientResponse(
     [property: JsonPropertyName("usage")] AnthropicUsage Usage
 );
 
+public record AnthropicStreamRequest(
+    [property: JsonPropertyName("model")] string Model,
+    [property: JsonPropertyName("max_tokens")] int MaxTokens,
+    [property: JsonPropertyName("messages")] List<AnthropicMessage> Messages,
+    [property: JsonPropertyName("stream")] bool Stream,
+    [property: JsonPropertyName("temperature")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    double? Temperature,
+    [property: JsonPropertyName("system")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? System = null
+);
+
+public record AnthropicSseMessageStart(
+    [property: JsonPropertyName("type")] string Type,
+    [property: JsonPropertyName("message")] AnthropicSseMessage? Message
+);
+
+public record AnthropicSseMessage(
+    [property: JsonPropertyName("model")] string? Model,
+    [property: JsonPropertyName("usage")] AnthropicSseStartUsage? Usage
+);
+
+public record AnthropicSseStartUsage(
+    [property: JsonPropertyName("input_tokens")] int InputTokens
+);
+
+public record AnthropicSseContentBlockDelta(
+    [property: JsonPropertyName("index")] int Index,
+    [property: JsonPropertyName("delta")] AnthropicSseDelta? Delta
+);
+
+public record AnthropicSseDelta(
+    [property: JsonPropertyName("type")] string? Type,
+    [property: JsonPropertyName("text")] string? Text
+);
+
+public record AnthropicSseMessageDelta(
+    [property: JsonPropertyName("delta")] AnthropicSseDeltaInfo? Delta,
+    [property: JsonPropertyName("usage")] AnthropicSseDeltaUsage? Usage
+);
+
+public record AnthropicSseDeltaInfo(
+    [property: JsonPropertyName("stop_reason")] string? StopReason
+);
+
+public record AnthropicSseDeltaUsage(
+    [property: JsonPropertyName("output_tokens")] int OutputTokens
+);
+
 [JsonSerializable(typeof(AnthropicRequest))]
 [JsonSerializable(typeof(AnthropicResponse))]
 [JsonSerializable(typeof(AnthropicMessage))]
@@ -62,4 +112,13 @@ public record AnthropicModelClientResponse(
 [JsonSerializable(typeof(List<AnthropicContentBlock>))]
 [JsonSerializable(typeof(AnthropicModelClientRequest))]
 [JsonSerializable(typeof(AnthropicModelClientResponse))]
+[JsonSerializable(typeof(AnthropicStreamRequest))]
+[JsonSerializable(typeof(AnthropicSseMessageStart))]
+[JsonSerializable(typeof(AnthropicSseMessage))]
+[JsonSerializable(typeof(AnthropicSseStartUsage))]
+[JsonSerializable(typeof(AnthropicSseContentBlockDelta))]
+[JsonSerializable(typeof(AnthropicSseDelta))]
+[JsonSerializable(typeof(AnthropicSseMessageDelta))]
+[JsonSerializable(typeof(AnthropicSseDeltaInfo))]
+[JsonSerializable(typeof(AnthropicSseDeltaUsage))]
 public partial class AnthropicJsonContext : JsonSerializerContext { }
