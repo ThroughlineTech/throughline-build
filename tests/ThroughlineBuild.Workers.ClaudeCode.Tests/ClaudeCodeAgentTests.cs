@@ -1099,12 +1099,11 @@ public class ClaudeCodeProgressDigesterTests
     }
 
     [Fact]
-    public void FormatLine_TruncatesPayloadOver80Chars()
+    public void FormatLine_TruncatesPayloadOverMaxChars()
     {
-        // Build a file_path longer than 80 chars and verify the digest line
-        // truncates with an ellipsis. The line carries [m:ss] + kind padding
-        // + payload; the payload itself is truncated, not the whole line.
-        var longPath = new string('x', 120);
+        // Build a file_path longer than MaxPayloadChars (no slashes, so LastSegments
+        // leaves it unchanged) and verify the digest line truncates with an ellipsis.
+        var longPath = new string('x', ClaudeCodeProgressDigester.MaxPayloadChars + 20);
         var el = Parse("{\"type\":\"assistant\",\"message\":{\"model\":\"x\",\"content\":[{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{\"file_path\":\"" + longPath + "\"}}]}}");
 
         var line = new ClaudeCodeProgressDigester().FormatLine(el, TimeSpan.FromSeconds(3));

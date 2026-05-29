@@ -20,7 +20,7 @@ namespace ThroughlineBuild.Workers.ClaudeCode;
 // it will not throw on malformed input. The internal overloads are used by tests.
 public sealed class ClaudeCodeProgressDigester : IWorkerProgressDigester
 {
-    internal const int MaxPayloadChars = 80;
+    internal const int MaxPayloadChars = 120;
 
     private DateTimeOffset _startTime = DateTimeOffset.UtcNow;
 
@@ -104,7 +104,7 @@ public sealed class ClaudeCodeProgressDigester : IWorkerProgressDigester
             if (blockType == "tool_use")
             {
                 var name = TryGetString(block, "name") ?? "?";
-                var argSummary = SummarizeToolInput(block);
+                var argSummary = SummarizeToolInput(block, name);
                 var payload = string.IsNullOrEmpty(argSummary) ? name : $"{name}  {argSummary}";
                 toolLines.Add($"[{offset}] {PadKind("tool_use")} {Truncate(payload)}");
             }
@@ -142,26 +142,33 @@ public sealed class ClaudeCodeProgressDigester : IWorkerProgressDigester
     }
 
     // Surfaces the first interesting argument from a tool_use input block.
-    // For Read: file_path; for Grep: pattern; for Bash: command; for others,
-    // a compact joined rendering of the input object. Result is unbounded
-    // length - the caller truncates the full payload.
-    private static string SummarizeToolInput(JsonElement block)
+    // For Bash: strips leading "cd <worktree> && " so the actual command is visible.
+    // For Read/Glob/path: shows just the last 2 path segments.
+    // For Grep: shows the pattern.
+    // Result is unbounded length - the caller truncates the full payload.
+    private static string SummarizeToolInput(JsonElement block, string toolName)
     {
         if (!block.TryGetProperty("input", out var input) || input.ValueKind != JsonValueKind.Object)
             return "";
 
-        // Common-case fast paths for the high-signal tools.
+        // Bash: strip the common "cd <worktree-path> && " prefix so the actual command is legible.
+        if (toolName == "Bash")
+        {
+            var command = TryGetString(input, "command");
+            if (!string.IsNullOrEmpty(command)) return StripWorktreePrefix(command!);
+        }
+
         var fp = TryGetString(input, "file_path");
-        if (!string.IsNullOrEmpty(fp)) return fp!;
+        if (!string.IsNullOrEmpty(fp)) return LastSegments(fp!, 2);
 
         var pattern = TryGetString(input, "pattern");
         if (!string.IsNullOrEmpty(pattern)) return pattern!;
 
-        var command = TryGetString(input, "command");
-        if (!string.IsNullOrEmpty(command)) return command!;
+        var command2 = TryGetString(input, "command");
+        if (!string.IsNullOrEmpty(command2)) return command2!;
 
         var path = TryGetString(input, "path");
-        if (!string.IsNullOrEmpty(path)) return path!;
+        if (!string.IsNullOrEmpty(path)) return LastSegments(path!, 2);
 
         var url = TryGetString(input, "url");
         if (!string.IsNullOrEmpty(url)) return url!;
@@ -180,6 +187,24 @@ public sealed class ClaudeCodeProgressDigester : IWorkerProgressDigester
             }
         }
         return sb.ToString();
+    }
+
+    // Strip leading "cd <path> && " from a bash command so the actual command is visible.
+    // Handles one level of cd-and-run; leaves all other commands untouched.
+    private static string StripWorktreePrefix(string command)
+    {
+        if (!command.StartsWith("cd ", StringComparison.Ordinal)) return command;
+        var idx = command.IndexOf(" && ", StringComparison.Ordinal);
+        if (idx < 0) return command;
+        return command[(idx + 4)..].TrimStart();
+    }
+
+    // Return the last N slash- or backslash-separated segments of a path.
+    private static string LastSegments(string path, int n)
+    {
+        var parts = path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length <= n) return path;
+        return string.Join("/", parts[^n..]);
     }
 
     private static string? TryGetString(JsonElement el, string name)
