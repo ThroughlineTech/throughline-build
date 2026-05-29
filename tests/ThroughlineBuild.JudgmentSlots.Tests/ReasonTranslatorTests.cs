@@ -102,4 +102,15 @@ public class ReasonTranslatorTests
 
         Assert.Equal("hello", result);
     }
+
+    [Fact]
+    public async Task TwoArgConstructor_PassesSuppliedModelId()
+    {
+        var fake = new FakeLlmClient("hello");
+        var translator = new ReasonTranslator(fake, "custom-model-id");
+
+        await translator.TranslateAsync("hello", CancellationToken.None);
+
+        Assert.Equal("custom-model-id", fake.CapturedModelId);
+    }
 }
