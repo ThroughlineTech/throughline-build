@@ -103,7 +103,31 @@ public interface ITicketing
     /// Replace a ticket's description with the given HTML.
     /// </summary>
     Task UpdateDescriptionAsync(string id, string html, CancellationToken ct);
+
+    /// <summary>
+    /// Create child tickets under a parent ticket in a single batched operation.
+    /// Individual failures are captured and returned; this method never throws.
+    /// </summary>
+    Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+        string parentUuid,
+        IReadOnlyList<ChildTicketSpec> children,
+        CancellationToken ct);
 }
+
+/// <summary>
+/// Specification for a single child ticket to be created.
+/// </summary>
+public record ChildTicketSpec(string Title, string DescriptionHtml, IReadOnlyList<string> LabelNames);
+
+/// <summary>
+/// Identifies a successfully created child ticket.
+/// </summary>
+public record CreatedChild(string Id, string Uuid);
+
+/// <summary>
+/// Result of a CreateChildTicketsAsync call.
+/// </summary>
+public record CreateChildTicketsResult(IReadOnlyList<CreatedChild> Created, IReadOnlyList<string> Failures);
 
 /// <summary>
 /// A single comment on a ticket.

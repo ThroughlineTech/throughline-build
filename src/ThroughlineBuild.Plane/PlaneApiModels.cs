@@ -111,7 +111,12 @@ public record CreateIssueRequest(
     [property: JsonPropertyName("description_html")] string DescriptionHtml,
     [property: JsonPropertyName("type"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Type,
     [property: JsonPropertyName("label_ids")] List<string> LabelIds
-);
+)
+{
+    [JsonPropertyName("parent")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ParentId { get; init; }
+}
 
 public record PlaneCreateIssueResponse(
     [property: JsonPropertyName("id")] string Id,

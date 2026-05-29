@@ -58,6 +58,8 @@ public class DecomposePhaseTests
         Assert.NotNull(result.ChildSpecs);
         Assert.Equal(2, result.ChildSpecs!.Count);
         Assert.Null(result.FailureReason);
+        Assert.NotNull(result.CreatedIds);
+        Assert.Equal(2, result.CreatedIds!.Count);
     }
 
     [Fact]
@@ -77,6 +79,8 @@ public class DecomposePhaseTests
         Assert.Equal("Child 1", result.ChildSpecs[0].Title);
         Assert.Equal("Child 2", result.ChildSpecs[1].Title);
         Assert.Equal("Child 3", result.ChildSpecs[2].Title);
+        Assert.NotNull(result.CreatedIds);
+        Assert.Equal(3, result.CreatedIds!.Count);
     }
 
     [Fact]
@@ -120,6 +124,8 @@ public class DecomposePhaseTests
         Assert.Equal("Must pass all auth tests", first.AcceptanceCriteria);
         Assert.Equal("M", first.Size);
         Assert.Equal("No authorization logic", first.ScopeBoundary);
+        Assert.NotNull(result.CreatedIds);
+        Assert.Equal(2, result.CreatedIds!.Count);
     }
 
     // ------------------------------------------------------------------
@@ -361,6 +367,7 @@ public class DecomposePhaseTests
         public List<(string id, string html)> AppendDescriptions { get; } = new();
         public List<(string id, IReadOnlyList<string> labels)> ApplyLabels { get; } = new();
         public List<(string id, string html)> Comments { get; } = new();
+        public List<(string parentUuid, IReadOnlyList<ChildTicketSpec> children)> CreateChildTicketsCalls { get; } = new();
 
         public FakeTicketing(Ticket ticket) { _ticket = ticket; }
 
@@ -405,6 +412,16 @@ public class DecomposePhaseTests
             Task.CompletedTask;
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             Task.CompletedTask;
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+            string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct)
+        {
+            CreateChildTicketsCalls.Add((parentUuid, children));
+            var created = children
+                .Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}"))
+                .ToList()
+                .AsReadOnly();
+            return Task.FromResult(new CreateChildTicketsResult(created, Array.Empty<string>()));
+        }
     }
 
     private sealed class FakeWorkerAgent : IWorkerAgent

@@ -18,7 +18,8 @@ public record DecomposeResult(
     bool Success,
     string TicketId,
     IReadOnlyList<ChildSpec>? ChildSpecs,
-    string? FailureReason);
+    string? FailureReason,
+    IReadOnlyList<string>? CreatedIds = null);
 
 public class DecomposePhase : IWorkflowPhase
 {
@@ -105,7 +106,23 @@ public class DecomposePhase : IWorkflowPhase
             return new DecomposeResult(false, ticketId, null,
                 $"worker returned {childSpecs.Count} child spec(s); at least 2 are required");
 
-        return new DecomposeResult(true, ticketId, childSpecs, null);
+        // Map ChildSpec -> ChildTicketSpec and create sub-issues in Plane
+        var childTicketSpecs = childSpecs.Select(cs =>
+        {
+            var descHtml = BuildChildDescriptionHtml(cs.Description, cs.AcceptanceCriteria);
+            var labelNames = SizeLabelNames(cs.Size);
+            return new ChildTicketSpec(cs.Title, descHtml, labelNames);
+        }).ToList().AsReadOnly();
+
+        var createResult = await _ticketing.CreateChildTicketsAsync(
+            ticket.Id, childTicketSpecs, ct).ConfigureAwait(false);
+
+        if (createResult.Created.Count == 0 && createResult.Failures.Count > 0)
+            return new DecomposeResult(false, ticketId, childSpecs,
+                $"all child ticket creations failed: {string.Join("; ", createResult.Failures)}");
+
+        var createdIds = createResult.Created.Select(c => c.Id).ToList().AsReadOnly();
+        return new DecomposeResult(true, ticketId, childSpecs, null, createdIds);
     }
 
     async Task<PhaseResult> IWorkflowPhase.RunAsync(string ticketId, string workingDirectory, CancellationToken ct)
@@ -129,6 +146,31 @@ public class DecomposePhase : IWorkflowPhase
             ticketId,
             Phase.Decompose,
             data), ct).ConfigureAwait(false);
+    }
+
+    private static string BuildChildDescriptionHtml(string description, string acceptanceCriteria)
+    {
+        if (string.IsNullOrEmpty(description) && string.IsNullOrEmpty(acceptanceCriteria))
+            return string.Empty;
+        if (string.IsNullOrEmpty(acceptanceCriteria))
+            return $"<p>{description}</p>";
+        if (string.IsNullOrEmpty(description))
+            return $"<h3>Acceptance criteria</h3><p>{acceptanceCriteria}</p>";
+        return $"<p>{description}</p><h3>Acceptance criteria</h3><p>{acceptanceCriteria}</p>";
+    }
+
+    private static IReadOnlyList<string> SizeLabelNames(string size)
+    {
+        var label = size.ToLowerInvariant() switch
+        {
+            "s" => "size:s",
+            "m" => "size:m",
+            "l" => "size:l",
+            _ => null
+        };
+        return label is null
+            ? Array.Empty<string>()
+            : new[] { label };
     }
 
     private static IReadOnlyList<ChildSpec>? TryExtractChildSpecs(IReadOnlyDictionary<string, object> metadata)
