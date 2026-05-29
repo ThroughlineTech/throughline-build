@@ -18,6 +18,7 @@
     <ProjectReference Include="..\ThroughlineBuild.Phases\ThroughlineBuild.Phases.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.Plane\ThroughlineBuild.Plane.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.Anthropic\ThroughlineBuild.Anthropic.csproj" />
+    <ProjectReference Include="..\ThroughlineBuild.ModelClient\ThroughlineBuild.ModelClient.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.Workers.ClaudeCode\ThroughlineBuild.Workers.ClaudeCode.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.Workers.Codex\ThroughlineBuild.Workers.Codex.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.Workers.Copilot\ThroughlineBuild.Workers.Copilot.csproj" />
