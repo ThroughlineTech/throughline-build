@@ -29,7 +29,7 @@ public class EnumExhaustivenessTests
             EventKind.StateTransition, EventKind.LlmCall, EventKind.WorkerSpawn,
             EventKind.VerifierVerdict, EventKind.GateFailure, EventKind.TicketWrite,
             EventKind.ChainStart, EventKind.ChainEnd, EventKind.ReworkRound,
-            EventKind.TicketSubsumed
+            EventKind.TicketSubsumed, EventKind.MainAutoRebased
         };
         Assert.Equal(expected.OrderBy(x => (int)x), Enum.GetValues<EventKind>().OrderBy(x => (int)x));
     }
