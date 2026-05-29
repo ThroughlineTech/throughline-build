@@ -167,6 +167,48 @@ static async Task<int> RunAsync(string[] args)
         WorkspaceSlug: config2.Ticketing.PlaneWorkspaceSlug,
         BuildVersion: buildVersion);
 
+    if (verb == "list")
+    {
+        var http2 = new HttpClient();
+        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
+        {
+            BaseUrl = config2.Ticketing.PlaneBaseUrl,
+            ApiToken = secrets2.PlaneApiToken,
+            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
+            ProjectId = config2.Ticketing.PlaneProjectId,
+            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
+        });
+
+        var cmd = new ListCommand(ticketing2, Console.Out);
+        var extraArgs = new Dictionary<string, string>(StringComparer.Ordinal);
+        for (int i = 1; i + 1 < args.Length; i += 2)
+        {
+            var key = args[i];
+            if (key.StartsWith("--"))
+                key = key.Substring(2);
+            extraArgs[key] = args[i + 1];
+        }
+        var ctx = new TicketCommandContext("", extraArgs);
+
+        try
+        {
+            using var verbCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+            var verbResult = await cmd.ExecuteAsync(ctx, verbCts.Token);
+            if (!verbResult.Success)
+            {
+                Console.Error.WriteLine($"Command 'list' failed: {verbResult.Message}");
+                return 1;
+            }
+            return 0;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+    }
+
     if (verb == "amend" || verb == "close" || verb == "defer" || verb == "reopen")
     {
         var sessionId2 = Guid.NewGuid().ToString("N");
