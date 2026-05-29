@@ -108,7 +108,7 @@ public class GeminiAgent : IWorkerAgent
 
             try
             {
-                WriteCancellationCapture(options.DebugCaptureDirectory, brief.Instruction,
+                WriteCancellationCapture(options.DebugCaptureDirectory,
                     stdoutBuilder.ToString(), stderrBuilder.ToString());
             }
             catch { }
@@ -143,7 +143,7 @@ public class GeminiAgent : IWorkerAgent
 
         if (options.DebugCaptureDirectory is not null)
         {
-            WriteDebugCapture(options.DebugCaptureDirectory, brief.Instruction, stdout, stderr, envelopeForDebug, result);
+            WriteDebugCapture(options.DebugCaptureDirectory, stdout, stderr, envelopeForDebug, result);
         }
 
         return result;
@@ -257,7 +257,7 @@ public class GeminiAgent : IWorkerAgent
     // vendor is always "google". cost_usd is always null (Gemini CLI does not
     // report USD cost). input_tokens is sourced from usage.Tokens.Total (the
     // Gemini CLI reports a combined token total, not a split); output_tokens is
-    // 0 as a placeholder until the CLI exposes a separate output-token field.
+    // 0 because the Gemini CLI reports a combined token total, not a split input/output count.
     internal static Dictionary<string, object> BuildLlmUsageMetadata(
         GeminiUsage? usage, long wallClockMs, string? model)
     {
@@ -275,7 +275,6 @@ public class GeminiAgent : IWorkerAgent
 
     internal static void WriteDebugCapture(
         string directory,
-        string briefInstruction,
         string stdout,
         string stderr,
         GeminiResultEnvelope? envelope,
@@ -313,7 +312,6 @@ public class GeminiAgent : IWorkerAgent
 
     internal static void WriteCancellationCapture(
         string? captureDir,
-        string briefInstruction,
         string partialStdout,
         string partialStderr)
     {
