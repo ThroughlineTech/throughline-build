@@ -21,6 +21,7 @@ Usage:
   is printed and a brief pause allows Ctrl-C before proceeding in draft mode. Multiple positional args
   are joined with spaces as draft text (e.g. build new fix the readme typo).
   build rework <ticket-id> [--feedback "..."] [--debug]                               Re-implement a ticket that returned Rework verdict (single ticket only)
+  build decompose <ticket-id> [--agent <name>] [--debug|--quiet] [--summary-json]     Decompose a ticket into independently-shippable sub-tickets
   build scaffold <op-doc-path> [--validate-only] [--dry-run] [--accept-warnings] [--debug]  Scaffold an op-doc into Plane (creates plan-tickets and brief-tickets with parent links)
   build list [--state <name>] [--parent <id>] [--type <name>]     List tickets with optional filters
   build amend <ticket-id> [--size S|M|L] [--note "..."] [--description <path|->] [--ac <path|->]  Amend an existing ticket (at least one flag required)

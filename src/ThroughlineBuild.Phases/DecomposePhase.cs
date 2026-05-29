@@ -19,7 +19,8 @@ public record DecomposeResult(
     string TicketId,
     IReadOnlyList<ChildSpec>? ChildSpecs,
     string? FailureReason,
-    IReadOnlyList<string>? CreatedIds = null);
+    IReadOnlyList<string>? CreatedIds = null,
+    IReadOnlyList<string>? VerdictFailures = null);
 
 public class DecomposePhase : IWorkflowPhase
 {
@@ -106,6 +107,24 @@ public class DecomposePhase : IWorkflowPhase
             return new DecomposeResult(false, ticketId, null,
                 $"worker returned {childSpecs.Count} child spec(s); at least 2 are required");
 
+        // Apply verdict checks on child specs
+        var verdictFailures = DecomposeVerdict.Check(childSpecs);
+        if (verdictFailures.Count > 0)
+        {
+            await EmitAsync(EventKind.VerifierVerdict, ticketId, new Dictionary<string, object>
+            {
+                ["status"] = "VerdictFailed",
+                ["checks_failed"] = verdictFailures
+            }, ct).ConfigureAwait(false);
+            return new DecomposeResult(false, ticketId, childSpecs,
+                string.Join("; ", verdictFailures), VerdictFailures: verdictFailures);
+        }
+
+        await EmitAsync(EventKind.VerifierVerdict, ticketId, new Dictionary<string, object>
+        {
+            ["status"] = "VerdictPassed"
+        }, ct).ConfigureAwait(false);
+
         // Map ChildSpec -> ChildTicketSpec and create sub-issues in Plane
         var childTicketSpecs = childSpecs.Select(cs =>
         {
@@ -127,7 +146,7 @@ public class DecomposePhase : IWorkflowPhase
             ct).ConfigureAwait(false);
 
         var createdIds = createResult.Created.Select(c => c.Id).ToList().AsReadOnly();
-        return new DecomposeResult(true, ticketId, childSpecs, null, createdIds);
+        return new DecomposeResult(true, ticketId, childSpecs, null, createdIds, VerdictFailures: Array.Empty<string>());
     }
 
     async Task<PhaseResult> IWorkflowPhase.RunAsync(string ticketId, string workingDirectory, CancellationToken ct)

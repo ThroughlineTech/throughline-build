@@ -24,6 +24,7 @@ public static class PhaseSummaryRenderer
             ImplementPhaseSummary i => RenderImplement(i),
             ReviewPhaseSummary r => RenderReview(r),
             ShipPhaseSummary s => RenderShip(s),
+            DecomposePhaseSummary d => RenderDecompose(d),
             _ => RenderGeneric(summary),
         };
     }
@@ -38,6 +39,7 @@ public static class PhaseSummaryRenderer
             ImplementPhaseSummary i => JsonSerializer.Serialize(i, JsonOptions),
             ReviewPhaseSummary r => JsonSerializer.Serialize(r, JsonOptions),
             ShipPhaseSummary s => JsonSerializer.Serialize(s, JsonOptions),
+            DecomposePhaseSummary d => JsonSerializer.Serialize(d, JsonOptions),
             _ => JsonSerializer.Serialize(summary, JsonOptions),
         };
     }
@@ -169,6 +171,39 @@ public static class PhaseSummaryRenderer
             sb.AppendLine();
             sb.AppendLine($"Plane: {s.PlaneUrl}");
         }
+        return sb.ToString();
+    }
+
+    private static string RenderDecompose(DecomposePhaseSummary d)
+    {
+        var sb = new StringBuilder();
+        if (!d.Success)
+        {
+            sb.AppendLine($"{d.TicketId} Decompose Failed");
+            sb.AppendLine();
+            AppendFailureLines(sb, d);
+            return sb.ToString().TrimEnd() + "\n";
+        }
+
+        sb.AppendLine($"{d.TicketId} Decomposed");
+        sb.AppendLine();
+        sb.AppendLine($"Children: {d.ChildCount}");
+        for (int i = 0; i < d.CreatedIds.Count; i++)
+        {
+            var id = d.CreatedIds[i];
+            var size = i < d.ChildSizes.Count ? d.ChildSizes[i] : "?";
+            sb.AppendLine($"  {id} (size:{size})");
+        }
+        if (!string.IsNullOrEmpty(d.StateFrom) || !string.IsNullOrEmpty(d.StateTo))
+            sb.AppendLine($"State: {d.StateFrom ?? "?"} -> {d.StateTo ?? "?"}");
+        AppendWorkerLine(sb, d);
+        if (!string.IsNullOrEmpty(d.PlaneUrl))
+        {
+            sb.AppendLine();
+            sb.AppendLine($"Plane: {d.PlaneUrl}");
+        }
+        if (d.CreatedIds.Count > 0)
+            sb.AppendLine($"Next: build chain {d.CreatedIds[0]}");
         return sb.ToString();
     }
 

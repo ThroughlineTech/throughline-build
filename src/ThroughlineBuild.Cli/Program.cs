@@ -57,7 +57,7 @@ static async Task<int> RunAsync(string[] args)
 
     // Arg validation for phase verbs happens BEFORE config load so a missing id
     // surfaces a usage error (exit 2) rather than a config-not-found error.
-    if (verb == "plan" || verb == "implement" || verb == "review" || verb == "ship" || verb == "chain" || verb == "rework")
+    if (verb == "plan" || verb == "implement" || verb == "review" || verb == "ship" || verb == "chain" || verb == "rework" || verb == "decompose")
     {
         if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]))
         {
@@ -657,7 +657,7 @@ static async Task<int> RunAsync(string[] args)
         }
     }
 
-    if (verb != "plan" && verb != "implement" && verb != "review" && verb != "ship" && verb != "chain" && verb != "rework")
+    if (verb != "plan" && verb != "implement" && verb != "review" && verb != "ship" && verb != "chain" && verb != "rework" && verb != "decompose")
     {
         Console.Error.WriteLine($"Unknown subcommand: {verb}");
         Console.Error.WriteLine(CliUsage.UsageText);
@@ -1192,6 +1192,71 @@ static async Task<int> RunAsync(string[] args)
             Console.Error.WriteLine("Cancelled.");
             return 1;
         }
+    }
+    else if (verb == "decompose")
+    {
+        // For decompose: reject multiple positional ticket IDs (single ticket only).
+        if (args.Length > 2)
+        {
+            if (!args[2].StartsWith("--"))
+            {
+                Console.Error.WriteLine("Error: build decompose accepts exactly one ticket ID; multi-ticket dispatch is not supported.");
+                return 2;
+            }
+        }
+
+        Ticket ticket;
+        try
+        {
+            ticket = await ticketing.GetAsync(ticketId, CancellationToken.None);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            Console.Error.WriteLine($"Ticket not found: {ex.Message}");
+            return 2;
+        }
+
+        var phase = new DecomposePhase(ticketing, workerFactory.Create(EffectiveAgentFor("decompose")), eventSink, buildOptions);
+        DecomposeResult result;
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+            result = await phase.RunAsync(ticketId, cwd, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+
+        var childSizes = result.ChildSpecs is not null
+            ? result.ChildSpecs.Select(cs => cs.Size).ToList()
+            : new List<string>();
+        var childSizesReadOnly = (IReadOnlyList<string>)childSizes;
+
+        var decomposeSummary = PhaseSummaryBuilder.BuildDecompose(
+            ticketId: result.TicketId,
+            success: result.Success,
+            failureReason: result.FailureReason,
+            createdIds: result.CreatedIds ?? Array.Empty<string>(),
+            childSizes: childSizesReadOnly,
+            events: eventSink.Snapshot(),
+            planeUrl: PlaneUrl(),
+            sessionArtifactsPath: ArtifactsPath());
+        WriteSummary(decomposeSummary);
+
+        if (!result.Success)
+        {
+            Console.Error.WriteLine($"Decompose phase failed: {result.FailureReason}");
+            if (debugCaptureDir is not null)
+                Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
+            return 1;
+        }
+
+        if (debugCaptureDir is not null)
+            Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
+        return 0;
     }
     else // review
     {

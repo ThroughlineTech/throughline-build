@@ -409,6 +409,218 @@ public class DecomposePhaseTests
     }
 
     // ------------------------------------------------------------------
+    // Verdict check integration: fails when coverage_check fails
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public async Task RunAsync_VerdictFailure_MissingScope_ReturnsFailure()
+    {
+        var json = """
+            [
+              {
+                "title":"Child 1",
+                "description":"Desc 1",
+                "acceptance_criteria":"AC 1",
+                "size":"S",
+                "scope_boundary":"Scope 1"
+              },
+              {
+                "title":"Child 2",
+                "description":"Desc 2",
+                "acceptance_criteria":"AC 2",
+                "size":"M",
+                "scope_boundary":""
+              }
+            ]
+            """;
+        var metadata = new Dictionary<string, object>
+        {
+            ["child_specs"] = JsonDocument.Parse(json).RootElement.Clone()
+        };
+        var ticketing = new FakeTicketing(MakeTicket());
+        var worker = new FakeWorkerAgent(new WorkerResult(
+            Status.Ok, "ok", Array.Empty<string>(), null, metadata));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient("abc123");
+        var phase = new DecomposePhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.VerdictFailures);
+        Assert.NotEmpty(result.VerdictFailures!);
+        Assert.Single(result.VerdictFailures.Where(f => f.Contains("coverage_check")));
+        Assert.NotNull(result.FailureReason);
+        Assert.Contains("coverage_check", result.FailureReason);
+        // No child tickets created on verdict failure
+        Assert.Empty(ticketing.CreateChildTicketsCalls);
+    }
+
+    [Fact]
+    public async Task RunAsync_VerdictFailure_DuplicateTitle_ReturnsFailure()
+    {
+        var json = """
+            [
+              {
+                "title":"Auth",
+                "description":"Desc 1",
+                "acceptance_criteria":"AC 1",
+                "size":"S",
+                "scope_boundary":"Scope 1"
+              },
+              {
+                "title":"Auth",
+                "description":"Desc 2",
+                "acceptance_criteria":"AC 2",
+                "size":"M",
+                "scope_boundary":"Scope 2"
+              }
+            ]
+            """;
+        var metadata = new Dictionary<string, object>
+        {
+            ["child_specs"] = JsonDocument.Parse(json).RootElement.Clone()
+        };
+        var ticketing = new FakeTicketing(MakeTicket());
+        var worker = new FakeWorkerAgent(new WorkerResult(
+            Status.Ok, "ok", Array.Empty<string>(), null, metadata));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient("abc123");
+        var phase = new DecomposePhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.VerdictFailures);
+        Assert.Single(result.VerdictFailures.Where(f => f.Contains("uniqueness_check")));
+        Assert.Empty(ticketing.CreateChildTicketsCalls);
+    }
+
+    [Fact]
+    public async Task RunAsync_VerdictFailure_BadSize_ReturnsFailure()
+    {
+        var json = """
+            [
+              {
+                "title":"Child 1",
+                "description":"Desc 1",
+                "acceptance_criteria":"AC 1",
+                "size":"XL",
+                "scope_boundary":"Scope 1"
+              },
+              {
+                "title":"Child 2",
+                "description":"Desc 2",
+                "acceptance_criteria":"AC 2",
+                "size":"M",
+                "scope_boundary":"Scope 2"
+              }
+            ]
+            """;
+        var metadata = new Dictionary<string, object>
+        {
+            ["child_specs"] = JsonDocument.Parse(json).RootElement.Clone()
+        };
+        var ticketing = new FakeTicketing(MakeTicket());
+        var worker = new FakeWorkerAgent(new WorkerResult(
+            Status.Ok, "ok", Array.Empty<string>(), null, metadata));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient("abc123");
+        var phase = new DecomposePhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.VerdictFailures);
+        Assert.Single(result.VerdictFailures.Where(f => f.Contains("size_check")));
+        Assert.Empty(ticketing.CreateChildTicketsCalls);
+    }
+
+    [Fact]
+    public async Task RunAsync_VerdictPass_CreatesChildTickets()
+    {
+        var ticketing = new FakeTicketing(MakeTicket());
+        var worker = new FakeWorkerAgent(new WorkerResult(
+            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata(2)));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient("abc123");
+        var phase = new DecomposePhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.VerdictFailures);
+        Assert.Empty(result.VerdictFailures!);
+        // Child tickets created successfully
+        Assert.Single(ticketing.CreateChildTicketsCalls);
+        Assert.Equal(2, ticketing.CreateChildTicketsCalls[0].children.Count);
+    }
+
+    [Fact]
+    public async Task RunAsync_VerdictPass_EmitsPassedEvent()
+    {
+        var ticketing = new FakeTicketing(MakeTicket());
+        var worker = new FakeWorkerAgent(new WorkerResult(
+            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata(2)));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient("abc123");
+        var phase = new DecomposePhase(ticketing, worker, events, MakeOptions(), git);
+
+        await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        // Look for VerifierVerdict event with status VerdictPassed
+        var verdictEvents = events.Events.Where(e => e.Kind == EventKind.VerifierVerdict).ToList();
+        Assert.NotEmpty(verdictEvents);
+        var lastVerdictEvent = verdictEvents.Last();
+        Assert.True(lastVerdictEvent.Data.TryGetValue("status", out var status));
+        Assert.Equal("VerdictPassed", status.ToString());
+    }
+
+    [Fact]
+    public async Task RunAsync_VerdictFail_EmitsFailedEvent()
+    {
+        var json = """
+            [
+              {
+                "title":"Child 1",
+                "description":"Desc 1",
+                "acceptance_criteria":"AC 1",
+                "size":"S",
+                "scope_boundary":""
+              },
+              {
+                "title":"Child 2",
+                "description":"Desc 2",
+                "acceptance_criteria":"AC 2",
+                "size":"M",
+                "scope_boundary":"Scope 2"
+              }
+            ]
+            """;
+        var metadata = new Dictionary<string, object>
+        {
+            ["child_specs"] = JsonDocument.Parse(json).RootElement.Clone()
+        };
+        var ticketing = new FakeTicketing(MakeTicket());
+        var worker = new FakeWorkerAgent(new WorkerResult(
+            Status.Ok, "ok", Array.Empty<string>(), null, metadata));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient("abc123");
+        var phase = new DecomposePhase(ticketing, worker, events, MakeOptions(), git);
+
+        await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        // Look for VerifierVerdict event with status VerdictFailed
+        var verdictEvents = events.Events.Where(e => e.Kind == EventKind.VerifierVerdict).ToList();
+        Assert.NotEmpty(verdictEvents);
+        var lastVerdictEvent = verdictEvents.Last();
+        Assert.True(lastVerdictEvent.Data.TryGetValue("status", out var status));
+        Assert.Equal("VerdictFailed", status.ToString());
+        Assert.True(lastVerdictEvent.Data.TryGetValue("checks_failed", out var failures));
+        Assert.NotNull(failures);
+    }
+
+    // ------------------------------------------------------------------
     // Private fakes
     // ------------------------------------------------------------------
 
