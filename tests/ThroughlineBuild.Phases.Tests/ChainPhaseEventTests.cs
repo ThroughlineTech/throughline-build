@@ -14,7 +14,15 @@ public class ChainPhaseEventTests
     private const string BranchName = "ticket/tlb-1-test-ticket";
     private const string MainSha = "0123456789abcdef0123456789abcdef01234567";
     private const string CommitSha = "ffffffffffffffffffffffffffffffffffffffff";
-    private static string WorkDir => Directory.GetCurrentDirectory();
+    private static string WorkDir
+    {
+        get
+        {
+            var dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            return dir;
+        }
+    }
 
     private static Ticket MakeTicket(TicketState state) => new Ticket(
         Id: TicketId,
@@ -394,8 +402,11 @@ public class ChainPhaseEventTests
         public Task<IReadOnlyList<string>> GetBranchesNotMergedAsync(string pattern, string baseBranch, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
 
-        public Task<WorktreeCreateResult> CreateWorktreeAsync(string worktreePath, string newBranch, string fromRef, string mainWorktreePath, CancellationToken ct) =>
-            Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
+        public Task<WorktreeCreateResult> CreateWorktreeAsync(string worktreePath, string newBranch, string fromRef, string mainWorktreePath, CancellationToken ct)
+        {
+            Directory.CreateDirectory(worktreePath);
+            return Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
+        }
 
         public Task<string> HeadShaAsync(string worktreePath, CancellationToken ct) =>
             Task.FromResult(CommitSha);

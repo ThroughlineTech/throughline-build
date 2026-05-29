@@ -118,19 +118,31 @@ public class ImplementPhase : IWorkflowPhase
         // Step 7: Build brief
         var brief = ImplementBriefBuilder.Build(_worker.Name, ticket, repoState, worktreeNames.BranchName, worktreeNames.WorktreePath, _project, _phaseOptions.ReviewFeedback);
 
-        // Step 8: Create worktree
-        var createResult = await _git.CreateWorktreeAsync(
-            worktreeNames.WorktreePath,
-            worktreeNames.BranchName,
-            baseRef,
-            workingDirectory,
-            ct).ConfigureAwait(false);
-        if (!createResult.Success)
+        // Step 8: Create worktree (initial only; rework reuses the existing one)
+        if (isRework)
         {
-            var failureReason = $"worktree create failed: {createResult.FailureReason}";
-            EarlyExitManifest.Write(_options.DebugCaptureDirectory, Phase.Implement.ToString(), ticketId, failureReason);
-            return new ImplementResult(false, ticketId, null, worktreeNames.BranchName, worktreeNames.WorktreePath,
-                failureReason);
+            if (!Directory.Exists(worktreeNames.WorktreePath))
+            {
+                var failureReason = $"rework expected existing worktree at {worktreeNames.WorktreePath} but it does not exist";
+                EarlyExitManifest.Write(_options.DebugCaptureDirectory, Phase.Implement.ToString(), ticketId, failureReason);
+                return new ImplementResult(false, ticketId, null, worktreeNames.BranchName, worktreeNames.WorktreePath, failureReason);
+            }
+        }
+        else
+        {
+            var createResult = await _git.CreateWorktreeAsync(
+                worktreeNames.WorktreePath,
+                worktreeNames.BranchName,
+                baseRef,
+                workingDirectory,
+                ct).ConfigureAwait(false);
+            if (!createResult.Success)
+            {
+                var failureReason = $"worktree create failed: {createResult.FailureReason}";
+                EarlyExitManifest.Write(_options.DebugCaptureDirectory, Phase.Implement.ToString(), ticketId, failureReason);
+                return new ImplementResult(false, ticketId, null, worktreeNames.BranchName, worktreeNames.WorktreePath,
+                    failureReason);
+            }
         }
 
         // Step 9: Transition Ready -> InProgress (initial round only; rework starts already InProgress)

@@ -1,5 +1,6 @@
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Helpers;
 using ThroughlineBuild.Phases;
 using Xunit;
 
@@ -41,9 +42,21 @@ public class ImplementPhaseReworkTests
         ChecksFailed: new[] { "tests_pass", "coverage_ok" },
         ReworkRoundNumber: round);
 
+    // Creates a temp directory and pre-creates the worktree subdirectory inside it,
+    // simulating a ticket whose initial implement already ran.
+    private static string CreateTempWorkingDirWithWorktree()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var names = PhaseWorktreeLayout.Compute("TLB-1", "Test ticket", root);
+        Directory.CreateDirectory(names.WorktreePath);
+        return root;
+    }
+
     [Fact]
     public async Task RunAsync_ReworkRound_InProgressWithFeedback_Succeeds()
     {
+        var workingDir = CreateTempWorkingDirWithWorktree();
         var ticketing = new FakeTicketing(MakeTicket(TicketState.InProgress));
         var worker = new FakeWorkerAgent(OkWorkerResult());
         var events = new FakeEventSink();
@@ -51,7 +64,7 @@ public class ImplementPhaseReworkTests
         var phaseOptions = new ImplementPhaseOptions(MakeReviewFeedback(1));
         var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git, phaseOptions: phaseOptions);
 
-        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+        var result = await phase.RunAsync("TLB-1", workingDir, CancellationToken.None);
 
         Assert.True(result.Success);
         Assert.Equal(CommitSha, result.CommitSha);
@@ -62,6 +75,7 @@ public class ImplementPhaseReworkTests
     [Fact]
     public async Task RunAsync_ReworkRound_SkipsStartTransitionAndEndsInReview()
     {
+        var workingDir = CreateTempWorkingDirWithWorktree();
         var ticketing = new FakeTicketing(MakeTicket(TicketState.InProgress));
         var worker = new FakeWorkerAgent(OkWorkerResult());
         var events = new FakeEventSink();
@@ -69,7 +83,7 @@ public class ImplementPhaseReworkTests
         var phaseOptions = new ImplementPhaseOptions(MakeReviewFeedback(1));
         var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git, phaseOptions: phaseOptions);
 
-        await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+        await phase.RunAsync("TLB-1", workingDir, CancellationToken.None);
 
         Assert.Single(ticketing.Transitions);
         Assert.Equal(TicketState.InReview, ticketing.Transitions[0].state);
@@ -131,6 +145,7 @@ public class ImplementPhaseReworkTests
     [Fact]
     public async Task RunAsync_ReworkRound_ReworkRoundNumberPropagatesFromFeedbackToResult()
     {
+        var workingDir = CreateTempWorkingDirWithWorktree();
         var ticketing = new FakeTicketing(MakeTicket(TicketState.InProgress));
         var worker = new FakeWorkerAgent(OkWorkerResult());
         var events = new FakeEventSink();
@@ -138,10 +153,46 @@ public class ImplementPhaseReworkTests
         var phaseOptions = new ImplementPhaseOptions(MakeReviewFeedback(2));
         var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git, phaseOptions: phaseOptions);
 
-        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+        var result = await phase.RunAsync("TLB-1", workingDir, CancellationToken.None);
 
         Assert.True(result.Success);
         Assert.Equal(2, result.ReworkRoundNumber);
+    }
+
+    [Fact]
+    public async Task RunAsync_ReworkRound_NeverCallsCreateWorktree()
+    {
+        var workingDir = CreateTempWorkingDirWithWorktree();
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InProgress));
+        var worker = new FakeWorkerAgent(OkWorkerResult());
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha);
+        var phaseOptions = new ImplementPhaseOptions(MakeReviewFeedback(1));
+        var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git, phaseOptions: phaseOptions);
+
+        await phase.RunAsync("TLB-1", workingDir, CancellationToken.None);
+
+        Assert.False(git.CreateWorktreeCalled);
+    }
+
+    [Fact]
+    public async Task RunAsync_ReworkRound_MissingWorktree_FailsClearly()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InProgress));
+        var worker = new FakeWorkerAgent(OkWorkerResult());
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha);
+        var phaseOptions = new ImplementPhaseOptions(MakeReviewFeedback(1));
+        var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git, phaseOptions: phaseOptions);
+
+        var result = await phase.RunAsync("TLB-1", tempRoot, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("does not exist", result.FailureReason ?? "");
+        Assert.False(git.CreateWorktreeCalled);
+        Assert.Empty(ticketing.Transitions);
     }
 
     private sealed class FakeTicketing : ITicketing
@@ -203,6 +254,7 @@ public class ImplementPhaseReworkTests
     {
         private readonly string _mainSha;
         private readonly string _headSha;
+        public bool CreateWorktreeCalled { get; private set; }
 
         public FakeGitClient(string mainSha, string headSha)
         {
@@ -218,8 +270,11 @@ public class ImplementPhaseReworkTests
             Task.FromResult(new WorktreeRemoveResult(true, null));
         public Task<IReadOnlyList<string>> GetBranchesNotMergedAsync(string pattern, string baseBranch, CancellationToken ct) =>
             Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
-        public Task<WorktreeCreateResult> CreateWorktreeAsync(string worktreePath, string newBranch, string fromRef, string mainWorktreePath, CancellationToken ct) =>
-            Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
+        public Task<WorktreeCreateResult> CreateWorktreeAsync(string worktreePath, string newBranch, string fromRef, string mainWorktreePath, CancellationToken ct)
+        {
+            CreateWorktreeCalled = true;
+            return Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
+        }
         public Task<string> HeadShaAsync(string worktreePath, CancellationToken ct) =>
             Task.FromResult(_headSha);
         public Task<GitDiff> DiffAsync(string fromRef, string toRef, string mainWorktreePath, bool includePatchContent, CancellationToken ct) =>

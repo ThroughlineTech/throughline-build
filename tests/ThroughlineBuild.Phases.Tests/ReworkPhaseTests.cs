@@ -1,6 +1,7 @@
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Git;
+using ThroughlineBuild.Helpers;
 using ThroughlineBuild.Phases;
 using Xunit;
 
@@ -49,9 +50,19 @@ public class ReworkPhaseTests
         int reworkRoundNumber = 1) =>
         new ReworkPhaseOptions("TLB-1", manualFeedback, reworkRoundNumber, false);
 
+    private static string CreateTempWorkingDirWithWorktree()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var names = PhaseWorktreeLayout.Compute("TLB-1", "Test ticket", root);
+        Directory.CreateDirectory(names.WorktreePath);
+        return root;
+    }
+
     [Fact]
     public async Task RunAsync_HappyPath_TicketInProgress_RetrieverReturnsRework_ImplementSucceeds_OutcomeImplemented()
     {
+        var workingDir = CreateTempWorkingDirWithWorktree();
         var ticketing = new FakeTicketing(MakeTicket(TicketState.InProgress));
         var worker = new FakeWorkerAgent(OkWorkerResult());
         var events = new FakeEventSink();
@@ -59,7 +70,7 @@ public class ReworkPhaseTests
         var retriever = new FakeRetriever(MakeFeedback());
         var phase = new ReworkPhase(ticketing, worker, events, MakeOptions(), retriever, MakePhaseOptions(), git);
 
-        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+        var result = await phase.RunAsync("TLB-1", workingDir, CancellationToken.None);
 
         Assert.Equal(ReworkOutcome.Implemented, result.Outcome);
         Assert.Equal("event-log", result.FeedbackSource);
@@ -77,11 +88,12 @@ public class ReworkPhaseTests
         var events = new FakeEventSink();
         var git = new FakeGitClient(MainSha, CommitSha);
         var retriever = new FakeRetriever(MakeFeedback());
+        var workingDir = CreateTempWorkingDirWithWorktree();
         var phase = new ReworkPhase(
             ticketing, worker, events, MakeOptions(), retriever,
             MakePhaseOptions(manualFeedback: "Please fix the null ref on line 42"), git);
 
-        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+        var result = await phase.RunAsync("TLB-1", workingDir, CancellationToken.None);
 
         Assert.Equal(ReworkOutcome.Implemented, result.Outcome);
         Assert.Equal("manual", result.FeedbackSource);
@@ -149,6 +161,7 @@ public class ReworkPhaseTests
     [Fact]
     public async Task RunAsync_ImplementFails_ReturnsImplementFailed_WithFailureReason()
     {
+        var workingDir = CreateTempWorkingDirWithWorktree();
         var ticketing = new FakeTicketing(MakeTicket(TicketState.InProgress));
         var worker = new FakeWorkerAgent(FailedWorkerResult());
         var events = new FakeEventSink();
@@ -156,7 +169,7 @@ public class ReworkPhaseTests
         var retriever = new FakeRetriever(MakeFeedback());
         var phase = new ReworkPhase(ticketing, worker, events, MakeOptions(), retriever, MakePhaseOptions(), git);
 
-        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+        var result = await phase.RunAsync("TLB-1", workingDir, CancellationToken.None);
 
         Assert.Equal(ReworkOutcome.ImplementFailed, result.Outcome);
         Assert.NotNull(result.FailureReason);
@@ -177,11 +190,12 @@ public class ReworkPhaseTests
         var events = new FakeEventSink();
         var git = new FakeGitClient(MainSha, CommitSha);
         var retriever = new FakeRetriever(MakeFeedback(roundNumber: 1));
+        var workingDir = CreateTempWorkingDirWithWorktree();
         var phase = new ReworkPhase(
             ticketing, worker, events, MakeOptions(), retriever,
             MakePhaseOptions(reworkRoundNumber: 2), git);
 
-        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+        var result = await phase.RunAsync("TLB-1", workingDir, CancellationToken.None);
 
         Assert.Equal(ReworkOutcome.Implemented, result.Outcome);
         Assert.NotNull(result.ImplementResult);

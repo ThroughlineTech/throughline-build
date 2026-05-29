@@ -978,7 +978,7 @@ static async Task<int> RunAsync(string[] args)
             new PlanPhase(ticketing, workerFactory.Create(EffectiveAgentFor("plan")), eventSink, buildOpts, project: config2.Project);
 
         var implementPhaseFactory = (BuildOptions buildOpts, ImplementPhaseOptions implOpts) =>
-            new ImplementPhase(ticketing, workerFactory.Create(EffectiveAgentFor("implement")), eventSink, buildOpts, project: config2.Project);
+            new ImplementPhase(ticketing, workerFactory.Create(EffectiveAgentFor("implement")), eventSink, buildOpts, project: config2.Project, phaseOptions: implOpts);
 
         var reviewPhaseFactory = (BuildOptions buildOpts) =>
         {
