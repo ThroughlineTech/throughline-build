@@ -11,6 +11,7 @@ internal static class SnapshotFixtures
 
     public static Ticket Ticket() => new Ticket(
         Id: "TLB-SNAP",
+        Uuid: "snapshot-uuid-1",
         Title: "Snapshot fixture ticket",
         Type: "feature",
         State: TicketState.Ready,

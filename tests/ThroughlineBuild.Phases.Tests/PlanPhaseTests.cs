@@ -9,6 +9,7 @@ public class PlanPhaseTests
 {
     private static Ticket MakeTicket(TicketState state, IReadOnlyList<string>? labels = null) => new Ticket(
         Id: "TLB-1",
+        Uuid: "ticket-uuid-1",
         Title: "Test ticket",
         Type: "feature",
         State: state,
@@ -369,7 +370,7 @@ public class PlanPhaseTests
 public class PlanPhaseDebugCaptureTests
 {
     private static Ticket MakeTicket() => new Ticket(
-        Id: "TLB-1", Title: "Test ticket", Type: "feature", State: TicketState.Backlog,
+        Id: "TLB-1", Uuid: "ticket-uuid-1", Title: "Test ticket", Type: "feature", State: TicketState.Backlog,
         Size: Size.S, Risk: Risk.Low, DescriptionHtml: "<p>desc</p>",
         Relations: Array.Empty<Relation>(), Labels: Array.Empty<string>(), ParentId: null);
 

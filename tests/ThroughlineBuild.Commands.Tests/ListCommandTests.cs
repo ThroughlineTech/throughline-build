@@ -15,6 +15,7 @@ public class ListCommandTests
         TicketState state = TicketState.Ready,
         string? parentId = null) => new Ticket(
         Id: id,
+        Uuid: "test-uuid-1",
         Title: title,
         Type: type,
         State: state,

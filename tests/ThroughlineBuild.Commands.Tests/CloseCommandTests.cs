@@ -14,6 +14,7 @@ public class CloseCommandTests
         TicketState state = TicketState.Ready,
         IReadOnlyList<string>? labels = null) => new Ticket(
         Id: "TLB-1",
+        Uuid: "test-uuid-1",
         Title: "Test ticket",
         Type: "feature",
         State: state,

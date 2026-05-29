@@ -10,6 +10,7 @@ public class DecomposePhaseTests
 {
     private static Ticket MakeTicket() => new Ticket(
         Id: "TLB-1",
+        Uuid: "parent-uuid-1",
         Title: "Test parent ticket",
         Type: "feature",
         State: TicketState.Backlog,
@@ -298,8 +299,57 @@ public class DecomposePhaseTests
 
         Assert.Empty(ticketing.Transitions);
         Assert.Empty(ticketing.AppendDescriptions);
-        Assert.Empty(ticketing.Comments);
         Assert.Empty(ticketing.ApplyLabels);
+    }
+
+    [Fact]
+    public async Task RunAsync_HappyPath_PostsDecomposedAtComment()
+    {
+        var ticketing = new FakeTicketing(MakeTicket());
+        var worker = new FakeWorkerAgent(new WorkerResult(
+            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata(2)));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient("abc123");
+        var phase = new DecomposePhase(ticketing, worker, events, MakeOptions(), git);
+
+        await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.Single(ticketing.Comments);
+        var comment = ticketing.Comments[0];
+        Assert.Equal("TLB-1", comment.id);
+        Assert.Contains("[decomposed_at:", comment.html);
+    }
+
+    [Fact]
+    public async Task RunAsync_HappyPath_CreatedChildIdsPopulated()
+    {
+        var ticketing = new FakeTicketing(MakeTicket());
+        var worker = new FakeWorkerAgent(new WorkerResult(
+            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata(2)));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient("abc123");
+        var phase = new DecomposePhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.CreatedIds);
+        Assert.Equal(2, result.CreatedIds!.Count);
+    }
+
+    [Fact]
+    public async Task RunAsync_ParentRemainsBacklog_NoTransitionCalled()
+    {
+        var ticketing = new FakeTicketing(MakeTicket());
+        var worker = new FakeWorkerAgent(new WorkerResult(
+            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata(2)));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient("abc123");
+        var phase = new DecomposePhase(ticketing, worker, events, MakeOptions(), git);
+
+        await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.Empty(ticketing.Transitions);
     }
 
     // ------------------------------------------------------------------
@@ -336,6 +386,8 @@ public class DecomposePhaseTests
         Assert.Equal(Phase.Decompose, result.Phase);
         Assert.True(result.Outputs.TryGetValue("child_spec_count", out var count));
         Assert.Equal("2", count);
+        Assert.True(result.Outputs.TryGetValue("created_child_count", out var createdCount));
+        Assert.Equal("2", createdCount);
     }
 
     [Fact]

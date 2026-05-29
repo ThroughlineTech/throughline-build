@@ -15,6 +15,7 @@ public class ReviewPhaseTests
 
     private static Ticket MakeTicket(TicketState state) => new Ticket(
         Id: TicketId,
+        Uuid: "ticket-uuid-1",
         Title: TicketTitle,
         Type: "feature",
         State: state,
@@ -633,7 +634,7 @@ public class ReviewPhaseDebugCaptureTests
     private const string BranchName = "ticket/tlb-1-test-ticket";
 
     private static Ticket MakeTicket() => new Ticket(
-        Id: TicketId, Title: TicketTitle, Type: "feature", State: TicketState.InReview,
+        Id: TicketId, Uuid: "ticket-uuid-1", Title: TicketTitle, Type: "feature", State: TicketState.InReview,
         Size: Size.S, Risk: Risk.Low, DescriptionHtml: "<p>plan</p>",
         Relations: Array.Empty<Relation>(), Labels: Array.Empty<string>(), ParentId: null);
 

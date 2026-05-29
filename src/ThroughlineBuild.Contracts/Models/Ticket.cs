@@ -2,6 +2,7 @@ namespace ThroughlineBuild.Contracts.Models;
 
 public record Ticket(
     string Id,
+    string Uuid,
     string Title,
     string Type,
     TicketState State,

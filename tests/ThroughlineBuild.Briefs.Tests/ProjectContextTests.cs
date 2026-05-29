@@ -9,6 +9,7 @@ public class ProjectContextTests
 {
     private static Ticket MinimalTicket() => new Ticket(
         Id: "TLB-1",
+        Uuid: "test-uuid-1",
         Title: "Test ticket",
         Type: "feature",
         State: TicketState.Ready,
