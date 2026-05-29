@@ -1,0 +1,1 @@
+{"response":"Implemented GeminiAgent.ExecuteAsync.\n\nWORKER_RESULT\n{\"status\":\"Ok\",\"summary\":\"Implemented GeminiAgent.ExecuteAsync with full process spawn, envelope parse, and debug capture\",\"files_changed\":[\"src/ThroughlineBuild.Workers.Gemini/GeminiAgent.cs\"],\"failure_reason\":null,\"metadata\":{}}","stats":{"tokens":{"total":1234},"tools":null}}
