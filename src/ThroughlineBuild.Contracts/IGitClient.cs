@@ -19,6 +19,15 @@ public record RebaseResult(
     IReadOnlyList<string> ConflictingPaths,
     string? FailureReason);
 
+public enum DivergenceState
+{
+    Clean,
+    LocalAhead,
+    RemoteAhead,
+    DivergedNoConflict,
+    DivergedWithConflict
+}
+
 public interface IGitClient
 {
     Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct);
@@ -63,4 +72,10 @@ public interface IGitClient
     // Default returns success so existing test fakes remain unchanged (TLB-293).
     Task<GitOpResult> PushAsync(string remote, string branch, string workingDirectory, CancellationToken ct) =>
         Task.FromResult(new GitOpResult(true, null));
+
+    // Returns the divergence category between local baseBranch and remote/baseBranch.
+    // Safe default is DivergedWithConflict so existing fakes remain unchanged (TLB-296).
+    // Never throws - any error returns DivergedWithConflict.
+    Task<DivergenceState> ProbeDivergenceAsync(string mainWorktreePath, string baseBranch, string remote, CancellationToken ct) =>
+        Task.FromResult(DivergenceState.DivergedWithConflict);
 }

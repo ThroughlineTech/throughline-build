@@ -820,6 +820,54 @@ public sealed class ProcessGitClient : IGitClient
         }
     }
 
+    public async Task<DivergenceState> ProbeDivergenceAsync(string mainWorktreePath, string baseBranch, string remote, CancellationToken ct)
+    {
+        try
+        {
+            var localRef = baseBranch;
+            var remoteRef = $"{remote}/{baseBranch}";
+
+            var localIsAncestorOfRemote = await IsAncestorAsync(localRef, remoteRef, mainWorktreePath, ct).ConfigureAwait(false);
+            var remoteIsAncestorOfLocal = await IsAncestorAsync(remoteRef, localRef, mainWorktreePath, ct).ConfigureAwait(false);
+
+            if (localIsAncestorOfRemote && remoteIsAncestorOfLocal)
+                return DivergenceState.Clean;
+            if (localIsAncestorOfRemote)
+                return DivergenceState.RemoteAhead;
+            if (remoteIsAncestorOfLocal)
+                return DivergenceState.LocalAhead;
+
+            // Diverged - use merge-tree to check for conflicts without mutating anything.
+            var psi = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = mainWorktreePath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("merge-tree");
+            psi.ArgumentList.Add("--write-tree");
+            psi.ArgumentList.Add(localRef);
+            psi.ArgumentList.Add(remoteRef);
+
+            using var proc = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start git process");
+
+            // Consume stdout and stderr concurrently before WaitForExitAsync to prevent pipe deadlock.
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync(ct);
+            var stderrTask = proc.StandardError.ReadToEndAsync(ct);
+            await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
+            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+
+            return proc.ExitCode == 0 ? DivergenceState.DivergedNoConflict : DivergenceState.DivergedWithConflict;
+        }
+        catch
+        {
+            return DivergenceState.DivergedWithConflict;
+        }
+    }
+
     private static async Task<string> RunGitAsync(
         string workingDirectory,
         string[] args,
