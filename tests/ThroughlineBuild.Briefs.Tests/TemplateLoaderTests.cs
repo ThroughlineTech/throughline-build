@@ -34,4 +34,36 @@ public class TemplateLoaderTests
 
         Assert.Equal(first, second);
     }
+
+    [Fact]
+    public void Load_GeminiDraft_ReturnsNonEmptyContent()
+    {
+        var content = TemplateLoader.Load("gemini", "draft.md");
+
+        Assert.False(string.IsNullOrEmpty(content));
+    }
+
+    [Fact]
+    public void Load_GeminiPlan_ReturnsNonEmptyContent()
+    {
+        var content = TemplateLoader.Load("gemini", "plan.md");
+
+        Assert.False(string.IsNullOrEmpty(content));
+    }
+
+    [Fact]
+    public void Load_GeminiImplement_ReturnsNonEmptyContent()
+    {
+        var content = TemplateLoader.Load("gemini", "implement.md");
+
+        Assert.False(string.IsNullOrEmpty(content));
+    }
+
+    [Fact]
+    public void Load_GeminiReview_ReturnsNonEmptyContent()
+    {
+        var content = TemplateLoader.Load("gemini", "review.md");
+
+        Assert.False(string.IsNullOrEmpty(content));
+    }
 }

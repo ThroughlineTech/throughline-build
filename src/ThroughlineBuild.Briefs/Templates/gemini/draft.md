@@ -1,0 +1,87 @@
+# Draft Ticket Brief
+
+You are drafting a ticket body from a free-form operator description. Your job is to expand the
+operator's text into the standard ticket template format without inventing scope the operator did
+not state.
+
+## Operator input
+
+{{operator_text}}
+
+## Target template structure
+
+Fill in each section below using the operator input above. Output the completed ticket body in the
+WORKER_RESULT envelope defined in the Output format section.
+
+```
+# <Title - concise and descriptive, <=80 chars where possible>
+
+**Type:** <task|feature|bug>
+
+## Description
+
+<Expand the operator's intent into one to three factual paragraphs. Do not pad.>
+
+## Acceptance criteria
+
+- [ ] <Observable outcome the operator stated or clearly implied>
+- [ ] <Additional observable outcome if applicable>
+
+## Out of scope
+
+- <Only include if the operator explicitly mentioned an exclusion; otherwise omit this section>
+
+## Notes
+
+<Optional: design decisions, references, or ambiguity flags. If the operator text is ambiguous
+about scope, note it here: "Operator did not specify X; suggest clarifying or accepting default Y".>
+```
+
+## Constraints
+
+1. Preserve operator intent verbatim where possible - do not paraphrase without cause.
+2. Do not invent acceptance criteria the operator did not state or clearly imply.
+3. Do not invent out-of-scope items unless the operator explicitly mentioned exclusions.
+4. When operator text is terse, the description should be terse - do not pad with filler sentences.
+5. When operator text is ambiguous about scope, note the ambiguity in the Notes section using the
+   pattern: "Operator did not specify X; suggest clarifying or accepting default Y."
+6. Infer Type from text: use "bug" for defects or issues; "feature" for new capability; "task" as
+   the safe default when the type is unclear.
+7. Title should be concise and descriptive. Target <=80 characters; this is a soft limit - do not
+   truncate meaning to hit it.
+8. Use single hyphens only - no em-dashes or en-dashes anywhere in the output.
+9. Acceptance criteria are observable outcomes, not implementation steps. "Widget renders on
+   sidebar" is valid; "Call AddWidget() in Sidebar.cs" is not.
+
+## Output format
+
+Emit exactly one WORKER_RESULT block at the end of your response:
+
+WORKER_RESULT
+{"status":"Ok","summary":"<one-line summary of the draft>","filesChanged":[],"failureReason":null,"metadata":{"body_markdown":"<the completed ticket body as a single JSON-escaped string>"}}
+
+## Examples
+
+### Example 1 - terse input
+
+Operator input:
+```
+Add a widget to the sidebar
+```
+
+Output:
+
+WORKER_RESULT
+{"status":"Ok","summary":"Drafted ticket: Add widget to sidebar","filesChanged":[],"failureReason":null,"metadata":{"body_markdown":"# Add widget to sidebar\n\n**Type:** feature\n\n## Description\n\nAdd a widget to the sidebar.\n\n## Acceptance criteria\n\n- [ ] Widget appears in the sidebar.\n\n## Notes\n\nOperator did not specify widget type or content; suggest clarifying before filing."}}
+
+### Example 2 - ambiguous input
+
+Operator input:
+```
+The login sometimes fails when the network is slow - fix it
+```
+
+Output:
+
+WORKER_RESULT
+{"status":"Ok","summary":"Drafted ticket: Fix intermittent login failure on slow network","filesChanged":[],"failureReason":null,"metadata":{"body_markdown":"# Fix intermittent login failure on slow network\n\n**Type:** bug\n\n## Description\n\nLogin fails intermittently when the network is slow. The root cause has not been identified; this ticket covers investigation and fix.\n\n## Acceptance criteria\n\n- [ ] Login succeeds reliably under degraded network conditions.\n\n## Notes\n\nOperator did not specify the failure mode (timeout, error response, or UI hang); suggest reproducing the issue before narrowing the fix scope."}}
