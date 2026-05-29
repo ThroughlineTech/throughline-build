@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Diagnostics;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Workers.Copilot;
@@ -172,5 +173,87 @@ public class CopilotAgentTests
     {
         var meta = CopilotAgent.BuildLlmUsageMetadata(0L, null);
         Assert.Equal("", meta["model"]);
+    }
+
+    [Fact]
+    public void ConfigureEnvironment_NullEnvironmentVariables_NoChanges()
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo();
+        var originalEnvCount = psi.Environment.Count;
+        var agent = new CopilotAgent();
+        var options = new WorkerOptions(System.TimeSpan.FromSeconds(10), EnvironmentVariables: null);
+
+        agent.ConfigureEnvironment(psi, options);
+
+        // No changes made
+        Assert.Equal(originalEnvCount, psi.Environment.Count);
+    }
+
+    [Fact]
+    public void ConfigureEnvironment_WithEnvironmentVariables_AppliesThem()
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo();
+        var envVars = new Dictionary<string, string> { { "GH_TOKEN", "token123" }, { "CUSTOM_VAR", "value" } };
+        var agent = new CopilotAgent();
+        var options = new WorkerOptions(System.TimeSpan.FromSeconds(10), EnvironmentVariables: envVars);
+
+        agent.ConfigureEnvironment(psi, options);
+
+        Assert.Equal("token123", psi.Environment["GH_TOKEN"]);
+        Assert.Equal("value", psi.Environment["CUSTOM_VAR"]);
+    }
+
+    [Fact]
+    public void ConfigureEnvironment_PreservesExistingVars()
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo();
+        psi.Environment["EXISTING_VAR"] = "existing_value";
+        var envVars = new Dictionary<string, string> { { "NEW_VAR", "new_value" } };
+        var agent = new CopilotAgent();
+        var options = new WorkerOptions(System.TimeSpan.FromSeconds(10), EnvironmentVariables: envVars);
+
+        agent.ConfigureEnvironment(psi, options);
+
+        Assert.Equal("existing_value", psi.Environment["EXISTING_VAR"]);
+        Assert.Equal("new_value", psi.Environment["NEW_VAR"]);
+    }
+
+    [Fact]
+    public void BuildLlmUsageMetadata_CostUsdIsNull()
+    {
+        var meta = CopilotAgent.BuildLlmUsageMetadata(1000L, "gpt-4o");
+        Assert.Null(meta["cost_usd"]);
+    }
+
+    [Fact]
+    public void WorkerOptions_AllowedTools_CanBeNull()
+    {
+        // Verify that WorkerOptions.AllowedTools can be null (safe default: no tool flags)
+        var options = new WorkerOptions(System.TimeSpan.FromSeconds(10), AllowedTools: null);
+        Assert.Null(options.AllowedTools);
+    }
+
+    [Fact]
+    public void WorkerOptions_AllowedTools_CanBeEmpty()
+    {
+        // Verify that WorkerOptions.AllowedTools can be an empty list
+        var tools = new List<string>();
+        var options = new WorkerOptions(System.TimeSpan.FromSeconds(10), AllowedTools: tools);
+        Assert.NotNull(options.AllowedTools);
+        Assert.Empty(options.AllowedTools);
+    }
+
+    [Fact]
+    public void WorkerOptions_AllowedTools_CanHaveMultipleTools()
+    {
+        // Verify that WorkerOptions.AllowedTools accepts a list of tool names
+        // These map to --allow-tool flags in ExecuteAsync
+        var tools = new List<string> { "file_editor", "bash" };
+        var options = new WorkerOptions(System.TimeSpan.FromSeconds(10), AllowedTools: tools);
+
+        Assert.NotNull(options.AllowedTools);
+        Assert.Equal(2, options.AllowedTools.Count);
+        Assert.Contains("file_editor", options.AllowedTools);
+        Assert.Contains("bash", options.AllowedTools);
     }
 }

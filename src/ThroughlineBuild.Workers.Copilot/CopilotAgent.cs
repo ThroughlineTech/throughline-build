@@ -19,7 +19,7 @@ public class CopilotAgent : IWorkerAgent
 
     public async Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
     {
-        // Build args: copilot -p "<brief>" -s --no-ask-user [ExtraArgs] [--model <model>]
+        // Build args: copilot -p "<brief>" -s --no-ask-user [ExtraArgs] [--model <model>] [--allow-tool <tool> ...]
         // Brief is delivered via -p arg (stdin is ignored when -p is present).
         var args = new List<string> { "-p", brief.Instruction, "-s", "--no-ask-user" };
         foreach (var extra in _options.ExtraArgs)
@@ -29,6 +29,10 @@ public class CopilotAgent : IWorkerAgent
         var modelArg = NormalizeModel(resolvedModelRaw);
         if (modelArg is not null)
             args.AddRange(new[] { "--model", modelArg });
+        // Map AllowedTools to --allow-tool flags (copilot uses per-tool flags, not a comma list)
+        if (options.AllowedTools is { Count: > 0 })
+            foreach (var tool in options.AllowedTools)
+                args.AddRange(new[] { "--allow-tool", tool });
 
         var stdoutBuilder = new StringBuilder();
         var stderrBuilder = new StringBuilder();
