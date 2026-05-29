@@ -51,6 +51,20 @@ internal partial class WorkersCommonJsonContext : JsonSerializerContext { }
 ///       files_changed  (string array) - list of paths modified by the worker
 ///       failure_reason (string or null) - root cause when status != Ok
 ///       metadata       (object) - arbitrary key/value pairs (values as JsonElement)
+///   - metadata.escalation (object, optional):
+///       Present when the worker sets status Escalate and wants to convey structured
+///       escalation context. Fields:
+///         reason      (string) - why the worker escalated. Recognized values:
+///                       "obsolete" - this ticket is superseded by another commit/ticket.
+///                     Unknown reasons are accepted without parser failure; the
+///                     orchestrator treats them as "unknown escalation reason - no auto-resolve".
+///         subsumed_by (object, required when reason == "obsolete"):
+///           commit    (string, non-empty) - SHA of the commit that subsumes this ticket
+///           files     (string array, non-empty) - paths already handled by that commit
+///           rationale (string, non-empty) - explanation of why the ticket is now obsolete
+///       Parser rule: if reason == "obsolete" and subsumed_by is missing or incomplete
+///       (any of commit/files/rationale absent, empty, or the wrong type), the parse fails
+///       with ValidationError. Unknown reasons pass through without a subsumed_by check.
 ///   - Multiple markers are tolerated; the LAST valid envelope wins (the first
 ///     marker is often a template echo with placeholder text).
 /// </summary>
@@ -104,6 +118,35 @@ internal static class WorkerResultParser
                     lastFailure = WorkerResultParseOutcome.DeserializeFailed("ValidationError",
                         $"WORKER_RESULT JSON missing or empty 'summary' field. Payload: {json}");
                     continue;
+                }
+
+                // Validate metadata.escalation when present.
+                // Only "obsolete" reason requires the subsumed_by block; unknown reasons pass through.
+                if (dto.Metadata is not null
+                    && dto.Metadata.TryGetValue("escalation", out var escalationEl)
+                    && escalationEl.ValueKind == JsonValueKind.Object
+                    && escalationEl.TryGetProperty("reason", out var reasonEl)
+                    && reasonEl.ValueKind == JsonValueKind.String
+                    && string.Equals(reasonEl.GetString(), "obsolete", StringComparison.OrdinalIgnoreCase))
+                {
+                    bool subsumedByOk =
+                        escalationEl.TryGetProperty("subsumed_by", out var subsumedByEl)
+                        && subsumedByEl.ValueKind == JsonValueKind.Object
+                        && subsumedByEl.TryGetProperty("commit", out var commitEl)
+                        && commitEl.ValueKind == JsonValueKind.String
+                        && !string.IsNullOrWhiteSpace(commitEl.GetString())
+                        && subsumedByEl.TryGetProperty("files", out var filesEl)
+                        && filesEl.ValueKind == JsonValueKind.Array
+                        && filesEl.GetArrayLength() > 0
+                        && subsumedByEl.TryGetProperty("rationale", out var rationaleEl)
+                        && rationaleEl.ValueKind == JsonValueKind.String
+                        && !string.IsNullOrWhiteSpace(rationaleEl.GetString());
+                    if (!subsumedByOk)
+                    {
+                        lastFailure = WorkerResultParseOutcome.DeserializeFailed("ValidationError",
+                            "metadata.escalation.reason is 'obsolete' but subsumed_by is missing or incomplete (requires commit string, non-empty files array, and rationale string)");
+                        continue;
+                    }
                 }
 
                 IReadOnlyList<string> files = dto.FilesChanged ?? new List<string>();

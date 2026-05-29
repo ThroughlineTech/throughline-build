@@ -86,7 +86,7 @@ public sealed class ChainCommand : ITicketCommand
         Console.WriteLine(finalLine);
 
         // Emit operator triage suggestions if the chain did not complete.
-        if (result.Outcome != ChainOutcome.Completed)
+        if (result.Outcome != ChainOutcome.Completed && result.Outcome != ChainOutcome.RatifiedObsolete)
         {
             var triage = GetOperatorTriageSuggestions(ticketId, result, initialTicket);
             if (!string.IsNullOrEmpty(triage))
@@ -96,9 +96,9 @@ public sealed class ChainCommand : ITicketCommand
             }
         }
 
-        // Return success only if outcome is Completed.
+        // Return success for Completed and RatifiedObsolete.
         return new CommandResult(
-            result.Outcome == ChainOutcome.Completed,
+            result.Outcome == ChainOutcome.Completed || result.Outcome == ChainOutcome.RatifiedObsolete,
             string.Empty);
     }
 
@@ -132,6 +132,9 @@ public sealed class ChainCommand : ITicketCommand
         {
             ChainOutcome.Completed =>
                 $"[{ticketId}] chain complete ({durationStr})",
+
+            ChainOutcome.RatifiedObsolete =>
+                $"[{ticketId}] chain complete: obsolete claim ratified ({durationStr})",
 
             ChainOutcome.RefusedInitialState =>
                 $"[{ticketId}] chain stopped: initial state does not allow chain execution",

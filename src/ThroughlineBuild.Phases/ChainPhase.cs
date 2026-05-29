@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 
@@ -19,6 +20,7 @@ public class ChainPhase
     private readonly Func<string> _sessionIdGenerator;
     private readonly string _workingDirectory;
     private readonly BuildOptions _baseOptions;
+    private readonly Func<BuildOptions, IObsoleteRatifier>? _ratifierFactory;
 
     public ChainPhase(
         ITicketing ticketing,
@@ -29,7 +31,8 @@ public class ChainPhase
         Func<BuildOptions, ReviewPhase> reviewFactory,
         Func<BuildOptions, ShipPhase> shipFactory,
         Func<string>? sessionIdGenerator = null,
-        string? workingDirectory = null)
+        string? workingDirectory = null,
+        Func<BuildOptions, IObsoleteRatifier>? ratifierFactory = null)
     {
         _ticketing = ticketing;
         _events = events;
@@ -40,6 +43,7 @@ public class ChainPhase
         _shipFactory = shipFactory;
         _sessionIdGenerator = sessionIdGenerator ?? (() => Guid.NewGuid().ToString("N"));
         _workingDirectory = workingDirectory ?? Directory.GetCurrentDirectory();
+        _ratifierFactory = ratifierFactory;
     }
 
     public async Task<ChainResult> RunAsync(ChainPhaseOptions options, CancellationToken ct)
@@ -111,6 +115,23 @@ public class ChainPhase
 
             if (!planResult.Success)
             {
+                if (_ratifierFactory is not null &&
+                    planResult.EscalationWorkerResult is not null &&
+                    IsObsoleteEscalation(planResult.EscalationWorkerResult))
+                {
+                    var ratifyVerdict = await RunRatificationAsync(options, steps, planResult.EscalationWorkerResult, ct)
+                        .ConfigureAwait(false);
+                    if (ratifyVerdict.Kind == VerdictKind.Pass)
+                    {
+                        var evidence = ExtractSubsumedByEvidence(planResult.EscalationWorkerResult);
+                        totalSw.Stop();
+                        var ratified = new ChainResult(options.TicketId, steps, ChainOutcome.RatifiedObsolete,
+                            totalSw.Elapsed, null, evidence);
+                        await EmitChainEndAsync(ratified, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
+                        return ratified;
+                    }
+                    // Ratifier rejected - fall through to StoppedAtPlan
+                }
                 totalSw.Stop();
                 var stoppedAtPlan = new ChainResult(options.TicketId, steps, ChainOutcome.StoppedAtPlan,
                     totalSw.Elapsed, null);
@@ -121,7 +142,7 @@ public class ChainPhase
 
         if (startPhase == StartPhase.Plan || startPhase == StartPhase.Implement)
         {
-            var chainResult = await RunImplementReviewLoopAsync(options, steps, chainSessionId, 0, null, ct)
+            var chainResult = await RunImplementReviewLoopAsync(options, steps, chainSessionId, 0, null, totalSw, ct)
                 .ConfigureAwait(false);
             if (chainResult is not null)
             {
@@ -133,7 +154,7 @@ public class ChainPhase
         }
         else
         {
-            var chainResult = await RunReviewBranchAsync(options, steps, chainSessionId, 0, ct)
+            var chainResult = await RunReviewBranchAsync(options, steps, chainSessionId, 0, totalSw, ct)
                 .ConfigureAwait(false);
             if (chainResult is not null)
             {
@@ -205,6 +226,7 @@ public class ChainPhase
         string chainSessionId,
         int startRound,
         ReviewFeedback? initialFeedback,
+        Stopwatch totalSw,
         CancellationToken ct)
     {
         int round = startRound;
@@ -232,8 +254,25 @@ public class ChainPhase
             options.OnStep?.Invoke(implStep);
 
             if (!implResult.Success)
+            {
+                if (_ratifierFactory is not null &&
+                    implResult.EscalationWorkerResult is not null &&
+                    IsObsoleteEscalation(implResult.EscalationWorkerResult))
+                {
+                    var ratifyVerdict = await RunRatificationAsync(options, steps, implResult.EscalationWorkerResult, ct)
+                        .ConfigureAwait(false);
+                    if (ratifyVerdict.Kind == VerdictKind.Pass)
+                    {
+                        var evidence = ExtractSubsumedByEvidence(implResult.EscalationWorkerResult);
+                        totalSw.Stop();
+                        return new ChainResult(options.TicketId, steps, ChainOutcome.RatifiedObsolete,
+                            totalSw.Elapsed, null, evidence);
+                    }
+                    // Ratifier rejected - fall through to StoppedAtImplement
+                }
                 return new ChainResult(options.TicketId, steps, ChainOutcome.StoppedAtImplement,
                     TimeSpan.Zero, null);
+            }
 
             var reviewResult = await RunOneReviewAsync(options, steps, ct).ConfigureAwait(false);
 
@@ -279,6 +318,7 @@ public class ChainPhase
         List<ChainStep> steps,
         string chainSessionId,
         int round,
+        Stopwatch totalSw,
         CancellationToken ct)
     {
         var reviewResult = await RunOneReviewAsync(options, steps, ct).ConfigureAwait(false);
@@ -308,7 +348,7 @@ public class ChainPhase
                 ["verdict_that_triggered"] = "Rework",
                 ["rationale_preview"] = RationalePreview(rv.Rationale) ?? ""
             }), ct).ConfigureAwait(false);
-        return await RunImplementReviewLoopAsync(options, steps, chainSessionId, round + 1, feedback, ct)
+        return await RunImplementReviewLoopAsync(options, steps, chainSessionId, round + 1, feedback, totalSw, ct)
             .ConfigureAwait(false);
     }
 
@@ -359,6 +399,81 @@ public class ChainPhase
         if (string.IsNullOrEmpty(rationale))
             return null;
         return rationale.Length <= 200 ? rationale : rationale.Substring(0, 200);
+    }
+
+    private static bool IsObsoleteEscalation(WorkerResult r)
+    {
+        if (r.Status != Status.Escalate) return false;
+        if (!r.Metadata.TryGetValue("escalation", out var escalationObj)) return false;
+        if (escalationObj is not JsonElement escalationElem ||
+            escalationElem.ValueKind != JsonValueKind.Object) return false;
+        if (!escalationElem.TryGetProperty("reason", out var reasonElem)) return false;
+        if (reasonElem.ValueKind != JsonValueKind.String) return false;
+        return string.Equals(reasonElem.GetString(), "obsolete", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static SubsumedByEvidence? ExtractSubsumedByEvidence(WorkerResult r)
+    {
+        if (!r.Metadata.TryGetValue("escalation", out var escalationObj)) return null;
+        if (escalationObj is not JsonElement escalationElem ||
+            escalationElem.ValueKind != JsonValueKind.Object) return null;
+        if (!escalationElem.TryGetProperty("subsumed_by", out var subsumedByElem) ||
+            subsumedByElem.ValueKind != JsonValueKind.Object) return null;
+
+        var commit = subsumedByElem.TryGetProperty("commit", out var commitElem) &&
+                     commitElem.ValueKind == JsonValueKind.String
+            ? commitElem.GetString() : null;
+        var rationale = subsumedByElem.TryGetProperty("rationale", out var rationaleElem) &&
+                        rationaleElem.ValueKind == JsonValueKind.String
+            ? rationaleElem.GetString() : null;
+
+        if (string.IsNullOrEmpty(commit) || string.IsNullOrEmpty(rationale)) return null;
+
+        var files = new List<string>();
+        if (subsumedByElem.TryGetProperty("files", out var filesElem) &&
+            filesElem.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var fileElem in filesElem.EnumerateArray())
+            {
+                if (fileElem.ValueKind == JsonValueKind.String)
+                {
+                    var f = fileElem.GetString();
+                    if (!string.IsNullOrEmpty(f)) files.Add(f);
+                }
+            }
+        }
+
+        return new SubsumedByEvidence(commit, files.AsReadOnly(), rationale);
+    }
+
+    private async Task<Verdict> RunRatificationAsync(
+        ChainPhaseOptions options,
+        List<ChainStep> steps,
+        WorkerResult escalateResult,
+        CancellationToken ct)
+    {
+        var sessionId = _sessionIdGenerator();
+        var buildOpts = _baseOptions with { SessionId = sessionId };
+        var ratifier = _ratifierFactory!(buildOpts);
+
+        var ticket = await _ticketing.GetAsync(options.TicketId, ct).ConfigureAwait(false);
+
+        var sw = Stopwatch.StartNew();
+        var verdict = await ratifier.RatifyAsync(ticket, escalateResult, ct).ConfigureAwait(false);
+        sw.Stop();
+
+        var ratifyStep = new ChainStep(
+            PhaseName: "ratify",
+            ReworkRoundNumber: -1,
+            Status: verdict.Kind == VerdictKind.Pass ? Status.Ok : Status.Failed,
+            FailureReason: verdict.Kind != VerdictKind.Pass ? verdict.Rationale : null,
+            Verdict: verdict.Kind,
+            Duration: sw.Elapsed,
+            PhaseSessionId: sessionId);
+        steps.Add(ratifyStep);
+        options.OnStep?.Invoke(ratifyStep);
+
+        return verdict;
     }
 
     private enum StartPhase { Plan, Implement, Review, Refused }

@@ -428,6 +428,9 @@ public class ShipPhaseTests
         // fetch must be skipped
         Assert.Equal(0, git.FetchCallCount);
 
+        // push must also be skipped (no remote)
+        Assert.Equal(0, git.PushCallCount);
+
         // rebase must use local base branch, not remote/baseBranch
         Assert.Equal(1, git.RebaseCallCount);
         Assert.Single(git.RebaseOntoRefs);
@@ -693,6 +696,36 @@ public class ShipPhaseTests
         Assert.DoesNotContain(stateTransitions, t => t.Data["to"].ToString() == "Done");
     }
 
+    [Fact]
+    public async Task RunAsync_PushFails_HaltsBeforePostCommentAndDoneTransition()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true)
+        {
+            PushResult = new GitOpResult(false, "remote: Permission denied")
+        };
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ShipFailureStage.Push, result.FailedAt);
+        Assert.Contains("remote: Permission denied", result.FailureReason ?? "");
+
+        // ticket must remain InReview - no Done transition, no shipped_at comment
+        Assert.Empty(ticketing.Transitions);
+        Assert.Empty(ticketing.Comments);
+        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.StateTransition));
+
+        // FF merge must have succeeded (push comes after)
+        Assert.Equal(1, git.FastForwardCallCount);
+        Assert.Equal(1, git.PushCallCount);
+    }
+
     // ---------- Fakes ----------
 
     private sealed class FakeTicketing : ITicketing
@@ -775,10 +808,12 @@ public class ShipPhaseTests
         public Dictionary<string, IReadOnlyList<string>> TrackedChangesByPath { get; } = new(StringComparer.OrdinalIgnoreCase);
         public Dictionary<(string ancestor, string descendant), bool> AncestryResponses { get; } = new();
 
+        public GitOpResult PushResult { get; set; } = new GitOpResult(true, null);
         public int FetchCallCount { get; private set; }
         public int RebaseCallCount { get; private set; }
         public int RebaseAbortCallCount { get; private set; }
         public int FastForwardCallCount { get; private set; }
+        public int PushCallCount { get; private set; }
         public List<(string branch, bool force)> DeleteBranchCalls { get; } = new();
         public List<string> RebaseOntoRefs { get; } = new();
 
@@ -853,6 +888,12 @@ public class ShipPhaseTests
         {
             DeleteBranchCalls.Add((branch, force));
             return Task.FromResult(DeleteBranchResult);
+        }
+
+        public Task<GitOpResult> PushAsync(string remote, string branch, string workingDirectory, CancellationToken ct)
+        {
+            PushCallCount++;
+            return Task.FromResult(PushResult);
         }
 
         public Task<IReadOnlyList<string>> GetTrackedChangesAsync(string workingDirectory, CancellationToken ct)

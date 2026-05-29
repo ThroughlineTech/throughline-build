@@ -485,6 +485,29 @@ public sealed class ProcessGitClient : IGitClient
         return new GitOpResult(true, null);
     }
 
+    public async Task<GitOpResult> PushAsync(string remote, string branch, string workingDirectory, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        psi.ArgumentList.Add("push");
+        psi.ArgumentList.Add(remote);
+        psi.ArgumentList.Add(branch);
+
+        using var proc = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start git process");
+        var stderr = await proc.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
+        await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+        if (proc.ExitCode != 0)
+            return new GitOpResult(false, stderr.Trim());
+        return new GitOpResult(true, null);
+    }
+
     public async Task<RebaseResult> RebaseAsync(string ontoRef, string featureWorktreePath, CancellationToken ct)
     {
         var psi = new ProcessStartInfo("git")

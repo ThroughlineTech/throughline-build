@@ -16,7 +16,7 @@ Decompose is a first-class capability across all worker agents - claude-code, co
 | ---- | ---- | ---------- | ------ |
 | A | Decompose phase + template | - | M |
 | B | Plane parent-child integration + parent-state handling | A | M |
-| C | CLI command + structured result + decomposition verdict | A, B | M |
+| C | CLI command + structured result + decomposition verdict | B | M |
 
 A then B then C. A builds the phase and prompt; B persists the children and decides parent state; C exposes the verb and judges decomposition quality.
 
@@ -55,7 +55,11 @@ Acceptance:
 
 Notes: Reuses the shared parser and per-agent selection - no new worker contract.
 
-OOS: Plane creation (B04); parent-state handling (B05); CLI verb (B06); verdict (B07).
+OOS:
+- Plane creation (B04)
+- parent-state handling (B05)
+- CLI verb (B06)
+- verdict (B07)
 
 #### Brief 02: decompose-template-claude-code
 
@@ -74,7 +78,10 @@ Acceptance:
 
 Notes: This brief defines the canon. The agent-variant brief depends on it.
 
-OOS: Other agents' variants (B03); template inheritance/macros.
+OOS:
+- Other agents' variants (B03)
+- template inheritance/macros
+- Decomposition-quality heuristics in the prompt beyond the sizing rules (B07 verdict)
 
 #### Brief 03: decompose-template-agent-variants
 
@@ -96,7 +103,10 @@ Acceptance:
 
 Notes: Brief 03 depends on the corresponding agent op-docs having shipped (or at least their template directories existing). If an agent op-doc has not shipped at decompose time, drop that agent's variant from this brief and have the agent's own op-doc create the variant when it ships. Future agents added after decompose create their `decompose.md` as part of their initial template set.
 
-OOS: Variants for agents not yet shipped; altering the canonical content (B02 owns that); altering claude-code templates not related to decompose.
+OOS:
+- Variants for agents not yet shipped
+- altering the canonical content (B02 owns that)
+- altering claude-code templates not related to decompose
 
 ## Plan B: Plane parent-child integration + parent-state
 
@@ -132,7 +142,10 @@ Acceptance:
 
 Notes: Edits `PlaneTicketingClient.cs` (shared with op-14 B11 and the lifecycle op-doc) - coordinate ordering.
 
-OOS: Parent-state handling (B05); CLI verb (B06).
+OOS:
+- Parent-state handling (B05)
+- CLI verb (B06)
+- Rollback of partially-created children (report the partial state; the operator decides)
 
 #### Brief 05: parent-state-handling
 
@@ -151,7 +164,10 @@ Acceptance:
 
 Notes: This is the one genuine design decision in decompose - flag the chosen state to Dan rather than picking silently if the default is not obviously right.
 
-OOS: Tree-aware parent workflows (tree-aware op-doc).
+OOS:
+- Tree-aware parent workflows (tree-aware op-doc)
+- Label updates on the parent beyond the state transition (separate concern)
+- Notifying watchers/assignees on the parent (Plane's own notifications cover this)
 
 ## Plan C: CLI + result + verdict
 
@@ -184,7 +200,10 @@ Acceptance:
 - [ ] `--agent` selection works
 - [ ] Usage documents the verb
 
-OOS: Recursive decomposition (decompose-on-parent is a tree-aware concern); multi-ticket decompose (multi-ticket op-doc).
+OOS:
+- Recursive decomposition (decompose-on-parent is a tree-aware concern)
+- multi-ticket decompose (multi-ticket op-doc)
+- Dry-run mode (preview children without creating) - add as a flag later if requested
 
 #### Brief 07: decompose-verdict
 
@@ -201,7 +220,10 @@ Acceptance:
 
 Notes: Keep this light - decompose is not implement; a full reviewer loop is likely overkill for v1. Flag the choice.
 
-OOS: A full rework loop on decomposition; per-child review (that is the children's own implement/review flow).
+OOS:
+- A full rework loop on decomposition
+- per-child review (that is the children's own implement/review flow)
+- Decomposition-rework workflow (re-running decompose with feedback; separate op-doc if/when needed)
 
 ## What done looks like
 
