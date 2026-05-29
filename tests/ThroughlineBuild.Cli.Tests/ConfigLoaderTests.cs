@@ -505,4 +505,161 @@ log_directory = ".build/events"
             File.Delete(path);
         }
     }
+
+    [Fact]
+    public void Load_GeminiAgentSubTable_ParsesExecutableAndSizes()
+    {
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "abc-123"
+plane_api_token_env = "PLANE_TOKEN"
+
+[llm]
+default_model = "anthropic:claude-opus-4-7"
+anthropic_api_key_env = "ANTHROPIC_KEY"
+
+[workers]
+default_agent = "claude-code"
+timeout_minutes = 20
+
+[workers.claude-code]
+executable = "claude"
+
+[workers.claude-code.sizes]
+small  = "claude-haiku-4-5-20251001"
+medium = "claude-sonnet-4-6"
+large  = "claude-opus-4-7"
+
+[workers.gemini]
+executable = "gemini"
+
+[workers.gemini.sizes]
+small  = "gemini-2.0-flash"
+medium = "gemini-2.5-flash"
+large  = "gemini-2.5-pro"
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            Assert.True(config.Workers.Agents.ContainsKey("gemini"));
+            Assert.Equal("gemini", config.Workers.Agents["gemini"].Executable);
+            var sizes = config.Workers.Agents["gemini"].Sizes;
+            Assert.NotNull(sizes);
+            Assert.Equal("gemini-2.0-flash", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Small]);
+            Assert.Equal("gemini-2.5-flash", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Medium]);
+            Assert.Equal("gemini-2.5-pro", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Large]);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_GeminiAgentSubTable_MissingSizes_ThrowsConfigException()
+    {
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "abc-123"
+plane_api_token_env = "PLANE_TOKEN"
+
+[llm]
+default_model = "anthropic:claude-opus-4-7"
+anthropic_api_key_env = "ANTHROPIC_KEY"
+
+[workers]
+default_agent = "claude-code"
+timeout_minutes = 20
+
+[workers.claude-code]
+executable = "claude"
+
+[workers.claude-code.sizes]
+small  = "claude-haiku-4-5-20251001"
+medium = "claude-sonnet-4-6"
+large  = "claude-opus-4-7"
+
+[workers.gemini]
+executable = "gemini"
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var ex = Assert.Throws<ConfigException>(() => BuildConfigLoader.Load(path));
+            Assert.Contains("gemini", ex.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_GeminiAgentSubTable_WithGooglePrefixSizes_ParsesRawString()
+    {
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "abc-123"
+plane_api_token_env = "PLANE_TOKEN"
+
+[llm]
+default_model = "anthropic:claude-opus-4-7"
+anthropic_api_key_env = "ANTHROPIC_KEY"
+
+[workers]
+default_agent = "claude-code"
+timeout_minutes = 20
+
+[workers.claude-code]
+executable = "claude"
+
+[workers.claude-code.sizes]
+small  = "claude-haiku-4-5-20251001"
+medium = "claude-sonnet-4-6"
+large  = "claude-opus-4-7"
+
+[workers.gemini]
+executable = "gemini"
+
+[workers.gemini.sizes]
+small  = "google:gemini-2.0-flash"
+medium = "google:gemini-2.5-flash"
+large  = "google:gemini-2.5-pro"
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            var sizes = config.Workers.Agents["gemini"].Sizes;
+            Assert.NotNull(sizes);
+            Assert.Equal("google:gemini-2.0-flash", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Small]);
+            Assert.Equal("google:gemini-2.5-flash", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Medium]);
+            Assert.Equal("google:gemini-2.5-pro", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Large]);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }
