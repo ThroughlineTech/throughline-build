@@ -142,6 +142,28 @@ public class AnthropicModelClientStreamingTests
         Assert.IsType<ErrorEvent>(events[1]);
     }
 
+    [Fact]
+    public async Task StreamAsync_FixtureSse_YieldsCorrectEventSequence()
+    {
+        var fixtureContent = System.IO.File.ReadAllText(System.IO.Path.Combine(AppContext.BaseDirectory, "Fixtures", "anthropic-sse-basic.txt"));
+        var handler = new SseHandler(HttpStatusCode.OK, fixtureContent);
+        var client = new AnthropicModelClient(new HttpClient(handler), MakeConfig());
+
+        var events = new List<ModelStreamEvent>();
+        await foreach (var evt in client.StreamAsync(MakeRequest()))
+            events.Add(evt);
+
+        var hasTextDelta = events.OfType<ContentDeltaEvent>().Any(e =>
+        {
+            var textContent = e.Delta as TextContent;
+            return textContent?.Text == "Hello!";
+        });
+        Assert.True(hasTextDelta, "Expected at least one TextDelta event with text 'Hello!'");
+
+        var hasMessageStop = events.OfType<MessageStopEvent>().Any();
+        Assert.True(hasMessageStop, "Expected a MessageStop event at the end");
+    }
+
     private class SseHandler : HttpMessageHandler
     {
         private readonly HttpStatusCode _status;
