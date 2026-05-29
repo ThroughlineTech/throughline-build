@@ -16,9 +16,9 @@ Additive only: existing Escalate behavior is preserved. Any Escalate without rec
 | ---- | ---- | ---------- | ------ |
 | A | Worker convention: escalation-metadata schema + template instructions | - | M |
 | B | Orchestrator + reviewer: ratification + auto-resolve-and-continue | A | M |
-| C | Visibility: event-log + analyzer surfacing | A, B | S |
+| C | Visibility: event-log + analyzer surfacing | B | S |
 
-A first; B depends on A's schema; C is small and depends on A and B.
+A first; B depends on A's schema. C is small and depends on B (and transitively A).
 
 ## Plan A: Worker convention
 
@@ -67,7 +67,11 @@ Acceptance:
 
 Notes: Stays under `metadata` so no DTO changes or `JsonSerializerContext` additions are needed - the parser already accepts arbitrary metadata.
 
-OOS: Template instructions (B02, B03); reviewer ratification (B04); orchestrator branching (B05); analyzer surfacing (C06).
+OOS:
+- Template instructions (B02, B03)
+- reviewer ratification (B04)
+- orchestrator branching (B05)
+- analyzer surfacing (C06)
 
 #### Brief 02: claude-code-template-obsolete-instructions
 
@@ -82,14 +86,17 @@ Outputs:
 - Existing Escalate behavior for other reasons (e.g. atomic parent in `decompose.md`) is unchanged - workers keep using bare Escalate for those, and the orchestrator continues to stop.
 
 Acceptance:
-- [ ] `Templates/claude-code/plan.md` and `Templates/claude-code/implement.md` include obsolete-detection instructions and an example envelope
+- [ ] A claude-code plan or implement run against a brief whose work is already complete in a prior commit emits a `WORKER_RESULT` with `Status=Escalate` and a populated `metadata.escalation = { reason: "obsolete", subsumed_by: { commit, files, rationale } }`
 - [ ] Existing non-obsolete Escalate guidance is unchanged
 - [ ] A real claude-code plan run against a subsumed brief emits the structured escalation
 - [ ] Detection bar is explicit (acceptance criteria met, not just file existence)
 
 Notes: This is the canon. The agent variants (B03) port from here.
 
-OOS: Other agents' variants (B03); other phase templates (out of scope this op-doc; adopt later as needed).
+OOS:
+- Other agents' variants (B03)
+- other phase templates (out of scope this op-doc; adopt later as needed)
+- Obsolete-detection heuristics in code (the worker decides; we don't pre-check)
 
 #### Brief 03: per-agent-template-variants
 
@@ -108,7 +115,10 @@ Acceptance:
 
 Notes: Verbatim copies are acceptable for v1 if no agent-specific tuning is obviously needed - the canon is already mostly agent-neutral. File targeted tuning tickets later if a real run on a non-claude agent produces poor obsolete detection.
 
-OOS: Other phase templates (review, ship, draft, decompose); altering claude-code templates beyond B02's scope.
+OOS:
+- Other phase templates (review, ship, draft, decompose)
+- altering claude-code templates beyond B02's scope
+- Per-agent obsolete-detection tuning beyond the canonical instructions
 
 ## Plan B: Orchestrator + reviewer
 
@@ -138,7 +148,7 @@ Outputs:
 - For escalations with no recognized reason or no `metadata.escalation` at all, the reviewer skips the ratification path entirely and the existing Escalate flow proceeds (chain stops for operator triage).
 
 Acceptance:
-- [ ] Obsolete escalations arriving from plan or implement are routed to the ratification path
+- [ ] Obsolete escalations from plan or implement never bypass the reviewer - every one produces a ratify/reject verdict
 - [ ] Ratification checks: cited commit exists, cited files exist, prior work satisfies the current brief's acceptance criteria
 - [ ] Verdict is ratified or rejected with a rationale; rejected uses the existing NeedsRework/Failed flow
 - [ ] Ratified verdict carries `subsumed_by` evidence forward
@@ -147,7 +157,10 @@ Acceptance:
 
 Notes: Ratification is the gate that keeps a hallucinated obsolete claim from auto-resolving difficult work. The cost of running it is a model call; the cost of skipping it is a wrongly-closed ticket. Always ratify.
 
-OOS: Chain branching and transition (B05); event-log entries (C06); ratification on phases other than plan/implement.
+OOS:
+- Chain branching and transition (B05)
+- event-log entries (C06)
+- ratification on phases other than plan/implement
 
 #### Brief 05: chain-auto-resolve-and-continue
 
@@ -173,7 +186,10 @@ Acceptance:
 
 Notes: This is the brief that converts the user-facing automation experience. Once it lands, multi-ticket chains absorb legitimate subsumption without operator intervention.
 
-OOS: Event-kind addition (C06); analyzer surfacing (C06); ratification logic (B04).
+OOS:
+- Event-kind addition (C06)
+- analyzer surfacing (C06)
+- ratification logic (B04)
 
 ## Plan C: Visibility
 
@@ -209,7 +225,10 @@ Acceptance:
 
 Notes: This is the audit trail. Without it, an automated chain that subsumes several tickets leaves no clean record of why. Small brief but load-bearing for ops trust in the auto-resolve.
 
-OOS: Cross-run subsumption analytics; web/JSON output formats; alerting on high subsumption rates.
+OOS:
+- Cross-run subsumption analytics
+- web/JSON output formats
+- alerting on high subsumption rates
 
 ## What done looks like
 

@@ -125,7 +125,7 @@ public sealed class ScaffoldPhase
         string opStage = "op_create";
         try
         {
-            string opTitle = opDoc.Title;
+            string opTitle = $"Operation: {opDoc.OperationSlug}";
             string opHtml = BriefHtmlRenderer.RenderOpDoc(opDoc);
             var opResult = await _ticketing.CreateTicketAsync(
                 opTitle,
