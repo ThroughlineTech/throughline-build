@@ -18,9 +18,11 @@ public sealed class AmendCommand : ITicketCommand
     {
         var hasSize = ctx.Args.TryGetValue("size", out var sizeArg);
         var hasNote = ctx.Args.TryGetValue("note", out var noteArg);
+        var hasDescription = ctx.Args.TryGetValue("description", out var descriptionArg);
+        var hasAc = ctx.Args.TryGetValue("ac", out var acArg);
 
-        if (!hasSize && !hasNote)
-            return new CommandResult(false, "at least one of --size or --note is required");
+        if (!hasSize && !hasNote && !hasDescription && !hasAc)
+            return new CommandResult(false, "at least one of --size, --note, --description, or --ac is required");
 
         if (hasSize)
         {
@@ -73,6 +75,76 @@ public sealed class AmendCommand : ITicketCommand
                 {
                     ["action"] = "append_description",
                     ["detail"] = "note"
+                }), ct).ConfigureAwait(false);
+        }
+
+        if (hasDescription)
+        {
+            string descriptionHtml;
+            try
+            {
+                if (descriptionArg == "-")
+                {
+                    using var reader = new System.IO.StreamReader(Console.OpenStandardInput());
+                    descriptionHtml = await reader.ReadToEndAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    descriptionHtml = await System.IO.File.ReadAllTextAsync(descriptionArg!, ct).ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex)
+            {
+                return new CommandResult(false, $"failed to read description file: {ex.Message}");
+            }
+
+            await _ticketing.UpdateDescriptionAsync(ctx.TicketId, descriptionHtml, ct).ConfigureAwait(false);
+
+            await _events.EmitAsync(new WorkflowEvent(
+                string.Empty,
+                DateTimeOffset.UtcNow,
+                EventKind.TicketWrite,
+                ctx.TicketId,
+                Phase.Command,
+                new Dictionary<string, object>
+                {
+                    ["action"] = "update_description",
+                    ["detail"] = "description"
+                }), ct).ConfigureAwait(false);
+        }
+
+        if (hasAc)
+        {
+            string acHtml;
+            try
+            {
+                if (acArg == "-")
+                {
+                    using var reader = new System.IO.StreamReader(Console.OpenStandardInput());
+                    acHtml = await reader.ReadToEndAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    acHtml = await System.IO.File.ReadAllTextAsync(acArg!, ct).ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex)
+            {
+                return new CommandResult(false, $"failed to read ac file: {ex.Message}");
+            }
+
+            await _ticketing.UpdateDescriptionAsync(ctx.TicketId, acHtml, ct).ConfigureAwait(false);
+
+            await _events.EmitAsync(new WorkflowEvent(
+                string.Empty,
+                DateTimeOffset.UtcNow,
+                EventKind.TicketWrite,
+                ctx.TicketId,
+                Phase.Command,
+                new Dictionary<string, object>
+                {
+                    ["action"] = "update_description",
+                    ["detail"] = "ac"
                 }), ct).ConfigureAwait(false);
         }
 

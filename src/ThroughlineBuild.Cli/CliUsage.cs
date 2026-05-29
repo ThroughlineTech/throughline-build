@@ -22,7 +22,8 @@ Usage:
   are joined with spaces as draft text (e.g. build new fix the readme typo).
   build rework <ticket-id> [--feedback "..."] [--debug]                               Re-implement a ticket that returned Rework verdict (single ticket only)
   build scaffold <op-doc-path> [--validate-only] [--dry-run] [--accept-warnings] [--debug]  Scaffold an op-doc into Plane (creates plan-tickets and brief-tickets with parent links)
-  build amend <ticket-id> [--size S|M|L] [--note "..."]           Amend an existing ticket (at least one flag required)
+  build list [--state <name>] [--parent <id>] [--type <name>]     List tickets with optional filters
+  build amend <ticket-id> [--size S|M|L] [--note "..."] [--description <path|->] [--ac <path|->]  Amend an existing ticket (at least one flag required)
   build close <ticket-id> <reason>                                Close a ticket (reason required)
   build defer <ticket-id> <reason>                                Defer a ticket (reason required)
   build reopen <ticket-id> [reason]                               Reopen a previously closed or deferred ticket (reason optional)

@@ -9,6 +9,7 @@ using ThroughlineBuild.EventLog;
 using ThroughlineBuild.Git;
 using ThroughlineBuild.Helpers;
 using ThroughlineBuild.JudgmentSlots;
+using ThroughlineBuild.ModelClient;
 using ThroughlineBuild.Phases;
 using ThroughlineBuild.Plane;
 using ThroughlineBuild.Scaffold;
@@ -165,6 +166,48 @@ static async Task<int> RunAsync(string[] args)
         ProjectName: string.IsNullOrEmpty(config2.Ticketing.PlaneProjectName) ? null : config2.Ticketing.PlaneProjectName,
         WorkspaceSlug: config2.Ticketing.PlaneWorkspaceSlug,
         BuildVersion: buildVersion);
+
+    if (verb == "list")
+    {
+        var http2 = new HttpClient();
+        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
+        {
+            BaseUrl = config2.Ticketing.PlaneBaseUrl,
+            ApiToken = secrets2.PlaneApiToken,
+            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
+            ProjectId = config2.Ticketing.PlaneProjectId,
+            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
+        });
+
+        var cmd = new ListCommand(ticketing2, Console.Out);
+        var extraArgs = new Dictionary<string, string>(StringComparer.Ordinal);
+        for (int i = 1; i + 1 < args.Length; i += 2)
+        {
+            var key = args[i];
+            if (key.StartsWith("--"))
+                key = key.Substring(2);
+            extraArgs[key] = args[i + 1];
+        }
+        var ctx = new TicketCommandContext("", extraArgs);
+
+        try
+        {
+            using var verbCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+            var verbResult = await cmd.ExecuteAsync(ctx, verbCts.Token);
+            if (!verbResult.Success)
+            {
+                Console.Error.WriteLine($"Command 'list' failed: {verbResult.Message}");
+                return 1;
+            }
+            return 0;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+    }
 
     if (verb == "amend" || verb == "close" || verb == "defer" || verb == "reopen")
     {
@@ -1214,7 +1257,18 @@ static string? WireUpConditionalCommands(
         return "anthropic api key required for close/defer/reopen (reason translation)";
     }
 
-    var anthropicClient = new AnthropicClient(http, new AnthropicOptions { ApiKey = secrets.AnthropicApiKey });
+    var providerConfig = new ProviderConfig(
+        BaseUrl: "https://api.anthropic.com",
+        AuthScheme: "x-api-key",
+        ExtraHeaders: new Dictionary<string, string>
+        {
+            ["x-api-key"] = secrets.AnthropicApiKey,
+            ["anthropic-version"] = "2023-06-01"
+        },
+        Vendor: "anthropic",
+        DefaultTimeout: TimeSpan.FromSeconds(30));
+    var modelClient = new AnthropicModelClient(http, providerConfig);
+    var anthropicClient = new ModelClientLlmAdapter(modelClient);
     var translator = new ReasonTranslator(anthropicClient);
 
     if (verb == "close")

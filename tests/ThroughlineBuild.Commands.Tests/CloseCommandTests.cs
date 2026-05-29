@@ -49,7 +49,7 @@ public class CloseCommandTests
     }
 
     [Fact]
-    public async Task HappyPath_posts_wontfix_comment_transitions_to_cancelled()
+    public async Task HappyPath_calls_TransitionLifecycleAsync_with_Close()
     {
         using var tmp = new TempDir();
         var (cmd, ticketing, events, _, _, _) = BuildCommand(MakeTicket(), tmp.Path);
@@ -58,11 +58,9 @@ public class CloseCommandTests
         var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.True(result.Success);
-        Assert.Single(ticketing.Comments);
-        // Comment body must be LITERALLY the wontfix marker.
-        Assert.Equal("<p><strong>wontfix:</strong> translated reason</p>", ticketing.Comments[0].html);
-        Assert.Single(ticketing.Transitions);
-        Assert.Equal(TicketState.Cancelled, ticketing.Transitions[0].state);
+        Assert.Single(ticketing.LifecycleTransitions);
+        Assert.Equal(LifecycleTransition.Close, ticketing.LifecycleTransitions[0].transition);
+        Assert.Equal("translated reason", ticketing.LifecycleTransitions[0].reason);
         Assert.Equal(1, ticketing.RollupCalls);
         // No worktree directory present, so decrufter should not be invoked.
         // (We assert this indirectly: no ListWorktrees call from decrufter.)
@@ -80,8 +78,7 @@ public class CloseCommandTests
 
         Assert.False(result.Success);
         Assert.Equal("reason is required", result.Message);
-        Assert.Empty(ticketing.Comments);
-        Assert.Empty(ticketing.Transitions);
+        Assert.Empty(ticketing.LifecycleTransitions);
         Assert.Equal(0, ticketing.RollupCalls);
         Assert.Empty(events.Events);
     }
@@ -97,8 +94,7 @@ public class CloseCommandTests
 
         Assert.False(result.Success);
         Assert.Equal("reason is required", result.Message);
-        Assert.Empty(ticketing.Comments);
-        Assert.Empty(ticketing.Transitions);
+        Assert.Empty(ticketing.LifecycleTransitions);
     }
 
     [Fact]
@@ -113,8 +109,7 @@ public class CloseCommandTests
 
         Assert.False(result.Success);
         Assert.Equal("already terminal", result.Message);
-        Assert.Empty(ticketing.Comments);
-        Assert.Empty(ticketing.Transitions);
+        Assert.Empty(ticketing.LifecycleTransitions);
         Assert.Equal(0, ticketing.RollupCalls);
         Assert.Empty(events.Events);
     }
@@ -131,8 +126,7 @@ public class CloseCommandTests
 
         Assert.False(result.Success);
         Assert.Equal("already terminal", result.Message);
-        Assert.Empty(ticketing.Comments);
-        Assert.Empty(ticketing.Transitions);
+        Assert.Empty(ticketing.LifecycleTransitions);
         Assert.Equal(0, ticketing.RollupCalls);
         Assert.Empty(events.Events);
     }
@@ -160,10 +154,9 @@ public class CloseCommandTests
 
         Assert.Contains("ticket/tlb-1-foo", swErr.ToString());
         Assert.Contains("WARNING", swErr.ToString());
-        // Action still proceeded to Cancelled.
-        Assert.Single(ticketing.Transitions);
-        Assert.Equal(TicketState.Cancelled, ticketing.Transitions[0].state);
-        Assert.Single(ticketing.Comments);
+        // Action still proceeded to TransitionLifecycleAsync with Close.
+        Assert.Single(ticketing.LifecycleTransitions);
+        Assert.Equal(LifecycleTransition.Close, ticketing.LifecycleTransitions[0].transition);
     }
 
     [Fact]
@@ -177,9 +170,8 @@ public class CloseCommandTests
         var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.True(result.Success);
-        Assert.Single(ticketing.Transitions);
-        Assert.Equal(TicketState.Cancelled, ticketing.Transitions[0].state);
-        Assert.Single(ticketing.Comments);
+        Assert.Single(ticketing.LifecycleTransitions);
+        Assert.Equal(LifecycleTransition.Close, ticketing.LifecycleTransitions[0].transition);
         // Rollup attempted (and threw) - command should still have completed.
         Assert.Equal(1, ticketing.RollupCalls);
     }
@@ -203,7 +195,7 @@ public class CloseCommandTests
     }
 
     [Fact]
-    public async Task Marker_is_wontfix_not_deferred()
+    public async Task Transition_is_Close_not_Defer()
     {
         using var tmp = new TempDir();
         var (cmd, ticketing, _, _, _, _) = BuildCommand(MakeTicket(), tmp.Path);
@@ -212,11 +204,9 @@ public class CloseCommandTests
         var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.True(result.Success);
-        Assert.Single(ticketing.Comments);
-        var body = ticketing.Comments[0].html;
-        Assert.Contains("<strong>wontfix:</strong>", body);
-        Assert.DoesNotContain("<strong>deferred:</strong>", body);
-        Assert.DoesNotContain("<strong>reopened:</strong>", body);
+        Assert.Single(ticketing.LifecycleTransitions);
+        Assert.Equal(LifecycleTransition.Close, ticketing.LifecycleTransitions[0].transition);
+        Assert.NotEqual(LifecycleTransition.Defer, ticketing.LifecycleTransitions[0].transition);
     }
 
     // ---------- Fakes ----------
@@ -244,6 +234,7 @@ public class CloseCommandTests
 
         public List<(string id, string html)> Comments { get; } = new();
         public List<(string id, TicketState state)> Transitions { get; } = new();
+        public List<(string id, LifecycleTransition transition, string? reason)> LifecycleTransitions { get; } = new();
         public int RollupCalls { get; private set; }
         public bool RollupThrows { get; set; }
         // Track-through count for IGitClient calls observed via the decrufter
@@ -301,6 +292,18 @@ public class CloseCommandTests
             throw new NotImplementedException();
 
         public Task SetParentAsync(string childUuid, string parentUuid, CancellationToken ct) =>
+            Task.CompletedTask;
+
+        public Task<IReadOnlyList<Ticket>> QueryAsync(TicketQuery query, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<Ticket>>(Array.Empty<Ticket>());
+
+        public Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct)
+        {
+            LifecycleTransitions.Add((id, transition, reason));
+            return Task.CompletedTask;
+        }
+
+        public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             Task.CompletedTask;
     }
 

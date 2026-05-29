@@ -9,5 +9,6 @@
   <ItemGroup>
     <PackageReference Include="Polly" Version="8.*" />
     <ProjectReference Include="..\ThroughlineBuild.Contracts\ThroughlineBuild.Contracts.csproj" />
+    <ProjectReference Include="..\ThroughlineBuild.ModelClient\ThroughlineBuild.ModelClient.csproj" />
   </ItemGroup>
 </Project>

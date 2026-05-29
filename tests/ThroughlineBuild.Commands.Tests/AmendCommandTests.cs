@@ -172,6 +172,136 @@ public class AmendCommandTests
         Assert.Empty(events.Events);
     }
 
+    [Fact]
+    public async Task DescriptionOnly_calls_UpdateDescriptionAsync()
+    {
+        var ticket = MakeTicket();
+        var ticketing = new FakeTicketing(ticket);
+        var events = new FakeEventSink();
+        var cmd = new AmendCommand(ticketing, events);
+
+        var tempFile = System.IO.Path.GetTempFileName();
+        try
+        {
+            await System.IO.File.WriteAllTextAsync(tempFile, "<p>new description</p>");
+            var ctx = MakeCtx(args: new Dictionary<string, string> { ["description"] = tempFile });
+            var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
+
+            Assert.True(result.Success);
+            Assert.Single(ticketing.UpdateDescriptions);
+            Assert.Equal("<p>new description</p>", ticketing.UpdateDescriptions[0].html);
+            Assert.Empty(ticketing.ApplyLabels);
+            Assert.Empty(ticketing.AppendDescriptions);
+            Assert.Single(events.Events);
+            Assert.Equal(EventKind.TicketWrite, events.Events[0].Kind);
+        }
+        finally
+        {
+            System.IO.File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public async Task AcOnly_calls_UpdateDescriptionAsync()
+    {
+        var ticket = MakeTicket();
+        var ticketing = new FakeTicketing(ticket);
+        var events = new FakeEventSink();
+        var cmd = new AmendCommand(ticketing, events);
+
+        var tempFile = System.IO.Path.GetTempFileName();
+        try
+        {
+            await System.IO.File.WriteAllTextAsync(tempFile, "<h3>Acceptance Criteria</h3><ul><li>foo</li></ul>");
+            var ctx = MakeCtx(args: new Dictionary<string, string> { ["ac"] = tempFile });
+            var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
+
+            Assert.True(result.Success);
+            Assert.Single(ticketing.UpdateDescriptions);
+            Assert.Equal("<h3>Acceptance Criteria</h3><ul><li>foo</li></ul>", ticketing.UpdateDescriptions[0].html);
+            Assert.Empty(ticketing.ApplyLabels);
+            Assert.Empty(ticketing.AppendDescriptions);
+            Assert.Single(events.Events);
+            Assert.Equal(EventKind.TicketWrite, events.Events[0].Kind);
+        }
+        finally
+        {
+            System.IO.File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public async Task DescriptionAndSize_size_then_description()
+    {
+        var ticket = MakeTicket(labels: new[] { "plan-ticket" });
+        var ticketing = new FakeTicketing(ticket);
+        var events = new FakeEventSink();
+        var cmd = new AmendCommand(ticketing, events);
+
+        var tempFile = System.IO.Path.GetTempFileName();
+        try
+        {
+            await System.IO.File.WriteAllTextAsync(tempFile, "<p>updated desc</p>");
+            var ctx = MakeCtx(args: new Dictionary<string, string>
+            {
+                ["size"] = "M",
+                ["description"] = tempFile
+            });
+            var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
+
+            Assert.True(result.Success);
+            Assert.Single(ticketing.ApplyLabels);
+            Assert.Single(ticketing.UpdateDescriptions);
+            Assert.Empty(ticketing.AppendDescriptions);
+
+            // Verify order: size (ApplyLabels) was called before description (UpdateDescriptions).
+            Assert.True(ticketing.ApplyLabels[0].sequence < ticketing.UpdateDescriptions[0].sequence,
+                "ApplyLabels must be called before UpdateDescriptions");
+            Assert.Equal(2, events.Events.Count);
+            Assert.All(events.Events, e => Assert.Equal(EventKind.TicketWrite, e.Kind));
+        }
+        finally
+        {
+            System.IO.File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public async Task MissingDescriptionFile_produces_error()
+    {
+        var ticket = MakeTicket();
+        var ticketing = new FakeTicketing(ticket);
+        var events = new FakeEventSink();
+        var cmd = new AmendCommand(ticketing, events);
+
+        var ctx = MakeCtx(args: new Dictionary<string, string> { ["description"] = "/nonexistent/path/file.txt" });
+        var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.Message);
+        Assert.Contains("failed to read description file", result.Message);
+        Assert.Empty(ticketing.UpdateDescriptions);
+        Assert.Empty(events.Events);
+    }
+
+    [Fact]
+    public async Task MissingAcFile_produces_error()
+    {
+        var ticket = MakeTicket();
+        var ticketing = new FakeTicketing(ticket);
+        var events = new FakeEventSink();
+        var cmd = new AmendCommand(ticketing, events);
+
+        var ctx = MakeCtx(args: new Dictionary<string, string> { ["ac"] = "/nonexistent/path/ac.txt" });
+        var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.Message);
+        Assert.Contains("failed to read ac file", result.Message);
+        Assert.Empty(ticketing.UpdateDescriptions);
+        Assert.Empty(events.Events);
+    }
+
     // ---------- Fakes ----------
 
     private sealed class FakeTicketing : ITicketing
@@ -181,6 +311,7 @@ public class AmendCommandTests
 
         public List<(string id, IReadOnlyList<string> labels, int sequence)> ApplyLabels { get; } = new();
         public List<(string id, string html, int sequence)> AppendDescriptions { get; } = new();
+        public List<(string id, string html, int sequence)> UpdateDescriptions { get; } = new();
 
         public FakeTicketing(Ticket ticket) { _ticket = ticket; }
 
@@ -229,6 +360,18 @@ public class AmendCommandTests
 
         public Task SetParentAsync(string childUuid, string parentUuid, CancellationToken ct) =>
             Task.CompletedTask;
+
+        public Task<IReadOnlyList<Ticket>> QueryAsync(TicketQuery query, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<Ticket>>(Array.Empty<Ticket>());
+
+        public Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct) =>
+            Task.CompletedTask;
+
+        public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct)
+        {
+            UpdateDescriptions.Add((id, html, ++_seq));
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FakeEventSink : IEventSink

@@ -147,6 +147,15 @@ public class PlanPhaseUsageTests
 
         public Task SetParentAsync(string childUuid, string parentUuid, CancellationToken ct) =>
             Task.CompletedTask;
+
+        public Task<IReadOnlyList<Ticket>> QueryAsync(TicketQuery query, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<Ticket>>(Array.Empty<Ticket>());
+
+        public Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct) =>
+            Task.CompletedTask;
+
+        public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
+            Task.CompletedTask;
     }
 
     private sealed class FakeWorkerAgent : IWorkerAgent
