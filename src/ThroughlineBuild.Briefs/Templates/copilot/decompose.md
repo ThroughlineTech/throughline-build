@@ -37,7 +37,6 @@ Analyze the parent ticket content and produce a structured list of child specs. 
 When decomposition is complete, emit the envelope as the LAST output. A bare `WORKER_RESULT` marker on its own line, followed by JSON:
 Under -s --no-ask-user the block appears on clean stdout with session metadata suppressed.
 
-```
 WORKER_RESULT
 {
   "status": "Ok",
@@ -63,7 +62,6 @@ WORKER_RESULT
     ]
   }
 }
-```
 
 ## Rules
 

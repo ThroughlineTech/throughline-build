@@ -37,7 +37,6 @@ Analyze the parent ticket content and produce a structured list of child specs. 
 When decomposition is complete, emit the envelope as the LAST output. A bare `WORKER_RESULT` marker on its own line, followed by JSON:
 In --output-format text mode the block appears on stdout. In --output-format json mode the block lands in the .response field and survives intact.
 
-```
 WORKER_RESULT
 {
   "status": "Ok",
@@ -63,7 +62,6 @@ WORKER_RESULT
     ]
   }
 }
-```
 
 ## Rules
 

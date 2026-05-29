@@ -180,6 +180,12 @@ internal static class WorkerResultParser
     // survives unchanged. Workers - particularly Sonnet - mirror the template's
     // fenced example layout when emitting their real envelope; without this
     // strip the deserializer sees a backtick at byte 0 and aborts.
+    //
+    // Also handles the "whole block in a fence" case: if the model wraps the
+    // WORKER_RESULT marker itself in a code fence (e.g. ```\nWORKER_RESULT\n{...}\n```),
+    // the marker scanner lands on the line inside the fence and the substring
+    // passed here starts with "{" - no opening fence, but a trailing "```" is
+    // left over. StripTrailingFence removes it.
     private static string StripCodeFence(string payload)
     {
         if (payload.Length == 0) return payload;
@@ -187,7 +193,8 @@ internal static class WorkerResultParser
         int newlineIdx = payload.IndexOf('\n');
         if (newlineIdx < 0) return payload;
         var firstLine = payload.Substring(0, newlineIdx).TrimEnd('\r');
-        if (!IsOpeningFence(firstLine)) return payload;
+        if (!IsOpeningFence(firstLine))
+            return StripTrailingFence(payload);
 
         var rest = payload.Substring(newlineIdx + 1);
 
@@ -202,6 +209,24 @@ internal static class WorkerResultParser
         }
 
         return rest.TrimEnd();
+    }
+
+    // Scans from the end of the payload, skipping blank lines, and strips a lone
+    // closing fence ("```") if it is the last non-blank content. This handles the
+    // case where the model wraps the WORKER_RESULT block (including the marker) in
+    // a code fence that opened before the marker line.
+    private static string StripTrailingFence(string payload)
+    {
+        var lines = payload.Split('\n');
+        for (int i = lines.Length - 1; i >= 0; i--)
+        {
+            var line = lines[i].TrimEnd('\r', ' ', '\t');
+            if (line == "```")
+                return string.Join("\n", lines, 0, i).TrimEnd('\n', '\r');
+            if (line.Length > 0)
+                break;
+        }
+        return payload;
     }
 
     private static bool IsOpeningFence(string line)

@@ -37,7 +37,6 @@ Before making any changes, check whether the plan's acceptance criteria are alre
 
 Emit `Status=Escalate` with a populated `metadata.escalation` block. Do not make any changes.
 
-```json
 WORKER_RESULT
 {
   "status": "Escalate",
@@ -55,7 +54,6 @@ WORKER_RESULT
     }
   }
 }
-```
 
 ## Required output
 Emit exactly one WORKER_RESULT block at the end of your response:
