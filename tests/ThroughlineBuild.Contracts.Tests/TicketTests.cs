@@ -7,6 +7,7 @@ public class TicketTests
 {
     private static Ticket MakeTicket(string id = "TLB-1") => new Ticket(
         Id: id,
+        Uuid: "test-uuid-1",
         Title: "Test ticket",
         Type: "feature",
         State: TicketState.Ready,

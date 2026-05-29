@@ -26,6 +26,7 @@ public class ITicketingStubTests
             // Initialize with a test ticket
             var testTicket = new Ticket(
                 Id: "TLB-1",
+                Uuid: "test-uuid-1",
                 Title: "Test ticket",
                 Type: "feature",
                 State: TicketState.Ready,
@@ -128,6 +129,11 @@ public class ITicketingStubTests
 
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             Task.CompletedTask;
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+            string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+            Task.FromResult(new CreateChildTicketsResult(
+                children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
+                Array.Empty<string>()));
     }
 
     [Fact]

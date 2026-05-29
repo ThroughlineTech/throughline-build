@@ -187,7 +187,8 @@ public class GetAsyncTests
         var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
         var ticket = await client.GetAsync("TLB-24", CancellationToken.None);
 
-        Assert.Equal(TestData.IssueUuid, ticket.Id);
+        Assert.Equal("TLB-24", ticket.Id);
+        Assert.Equal(TestData.IssueUuid, ticket.Uuid);
         Assert.Equal("plane-client", ticket.Title);
         Assert.Equal(TicketState.Backlog, ticket.State);
         Assert.Equal("<p>desc</p>", ticket.DescriptionHtml);
@@ -204,7 +205,8 @@ public class GetAsyncTests
         var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
         var ticket = await client.GetAsync("24", CancellationToken.None);
 
-        Assert.Equal(TestData.IssueUuid, ticket.Id);
+        Assert.Equal("TLB-24", ticket.Id);
+        Assert.Equal(TestData.IssueUuid, ticket.Uuid);
     }
 
     [Fact]
@@ -699,5 +701,127 @@ public class RollupParentAsyncTests
         Assert.False(result.ParentTransitioned);
         Assert.NotNull(result.FailureReason);
         Assert.NotEmpty(result.FailureReason);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CreateChildTicketsAsync tests
+// ---------------------------------------------------------------------------
+internal static class CreateChildTestData
+{
+    public const string ParentUuid = "11111111-0000-0000-0000-000000000001";
+    public const string Child1Uuid = "22222222-0000-0000-0000-000000000001";
+    public const string Child2Uuid = "22222222-0000-0000-0000-000000000002";
+    public const string SizeSLabelUuid = "33333333-0000-0000-0000-000000000001";
+
+    public static string LabelListJson() =>
+        $$"""
+        {
+          "results": [
+            { "id": "{{SizeSLabelUuid}}", "name": "size:s" }
+          ]
+        }
+        """;
+
+    public static string CreateIssueResponseJson(string uuid, int seqId) =>
+        $$"""{"id":"{{uuid}}","sequence_id":{{seqId}},"created_at":"2025-01-01T00:00:00Z"}""";
+
+    public static IReadOnlyList<ChildTicketSpec> TwoChildren() =>
+        new[]
+        {
+            new ChildTicketSpec("Child A", "<p>desc A</p>", new[] { "size:s" }),
+            new ChildTicketSpec("Child B", "<p>desc B</p>", Array.Empty<string>())
+        };
+}
+
+public class CreateChildTicketsAsyncTests
+{
+    [Fact]
+    public async Task HappyPath_TwoChildren_ReturnsBothCreated()
+    {
+        var handler = new FakeMessageHandler();
+        // label cache
+        handler.Enqueue(FakeMessageHandler.OkJson(CreateChildTestData.LabelListJson()));
+        // POST child A
+        handler.Enqueue(FakeMessageHandler.OkJson(
+            CreateChildTestData.CreateIssueResponseJson(CreateChildTestData.Child1Uuid, 100)));
+        // POST child B
+        handler.Enqueue(FakeMessageHandler.OkJson(
+            CreateChildTestData.CreateIssueResponseJson(CreateChildTestData.Child2Uuid, 101)));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var result = await client.CreateChildTicketsAsync(
+            CreateChildTestData.ParentUuid,
+            CreateChildTestData.TwoChildren(),
+            CancellationToken.None);
+
+        Assert.Equal(2, result.Created.Count);
+        Assert.Empty(result.Failures);
+        Assert.Equal("TLB-100", result.Created[0].Id);
+        Assert.Equal(CreateChildTestData.Child1Uuid, result.Created[0].Uuid);
+        Assert.Equal("TLB-101", result.Created[1].Id);
+        Assert.Equal(CreateChildTestData.Child2Uuid, result.Created[1].Uuid);
+    }
+
+    [Fact]
+    public async Task HappyPath_ParentFieldInPostBody()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(CreateChildTestData.LabelListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(
+            CreateChildTestData.CreateIssueResponseJson(CreateChildTestData.Child1Uuid, 100)));
+        handler.Enqueue(FakeMessageHandler.OkJson(
+            CreateChildTestData.CreateIssueResponseJson(CreateChildTestData.Child2Uuid, 101)));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        await client.CreateChildTicketsAsync(
+            CreateChildTestData.ParentUuid,
+            CreateChildTestData.TwoChildren(),
+            CancellationToken.None);
+
+        // Both POST requests should contain the parent UUID
+        var postRequests = handler.Requests.Where(r => r.Method == HttpMethod.Post).ToList();
+        Assert.Equal(2, postRequests.Count);
+        foreach (var req in postRequests)
+            Assert.Contains(CreateChildTestData.ParentUuid, req.Body);
+    }
+
+    [Fact]
+    public async Task PartialFailure_SecondPostReturns422_FirstCreatedNoThrow()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(CreateChildTestData.LabelListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(
+            CreateChildTestData.CreateIssueResponseJson(CreateChildTestData.Child1Uuid, 100)));
+        handler.Enqueue(FakeMessageHandler.ErrorJson(422, "unprocessable entity"));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var result = await client.CreateChildTicketsAsync(
+            CreateChildTestData.ParentUuid,
+            CreateChildTestData.TwoChildren(),
+            CancellationToken.None);
+
+        Assert.Single(result.Created);
+        Assert.Single(result.Failures);
+        Assert.Equal("TLB-100", result.Created[0].Id);
+        Assert.Contains("Child B", result.Failures[0]);
+    }
+
+    [Fact]
+    public async Task AllFail_ReturnsEmptyCreatedNoThrow()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(CreateChildTestData.LabelListJson()));
+        handler.Enqueue(FakeMessageHandler.ErrorJson(500, "server error"));
+        handler.Enqueue(FakeMessageHandler.ErrorJson(500, "server error"));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var result = await client.CreateChildTicketsAsync(
+            CreateChildTestData.ParentUuid,
+            CreateChildTestData.TwoChildren(),
+            CancellationToken.None);
+
+        Assert.Empty(result.Created);
+        Assert.Equal(2, result.Failures.Count);
     }
 }

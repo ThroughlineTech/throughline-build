@@ -47,6 +47,7 @@ public class WorkerAgentReviewerTests
     private static Ticket BuildTicket() =>
         new Ticket(
             "TLB-99",
+            "ticket-uuid-99",
             "Test Ticket",
             "Feature",
             TicketState.InReview,

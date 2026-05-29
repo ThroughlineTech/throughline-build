@@ -231,7 +231,8 @@ public sealed class PlaneTicketingClient : ITicketing
         };
 
         return new Ticket(
-            Id: issue.Id,
+            Id: $"{_options.ProjectIdentifier}-{issue.SequenceId}",
+            Uuid: issue.Id,
             Title: issue.Name,
             Type: issue.Type ?? string.Empty,
             State: ticketState,
@@ -642,6 +643,77 @@ public sealed class PlaneTicketingClient : ITicketing
                 PlaneJsonContext.Default,
                 token).ConfigureAwait(false);
         }, ct).ConfigureAwait(false);
+    }
+
+    public async Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+        string parentUuid,
+        IReadOnlyList<ChildTicketSpec> children,
+        CancellationToken ct)
+    {
+        var created = new List<CreatedChild>();
+        var failures = new List<string>();
+
+        // Resolve label cache once up front; catch failures per-child below
+        Dictionary<string, string>? labelsByName = null;
+        try
+        {
+            labelsByName = await GetLabelsByNameAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // If we cannot load labels at all, record a failure for every child and return
+            foreach (var child in children)
+                failures.Add($"{child.Title}: failed to load label cache: {ex.Message}");
+            return new CreateChildTicketsResult(created.AsReadOnly(), failures.AsReadOnly());
+        }
+
+        foreach (var child in children)
+        {
+            try
+            {
+                var labelIds = new List<string>();
+                foreach (var labelName in child.LabelNames)
+                {
+                    if (labelsByName.TryGetValue(labelName, out var labelId))
+                        labelIds.Add(labelId);
+                    // Unknown label names are silently skipped for child creation
+                }
+
+                var request = new CreateIssueRequest(
+                    Name: child.Title,
+                    DescriptionHtml: child.DescriptionHtml,
+                    Type: null,
+                    LabelIds: labelIds)
+                {
+                    ParentId = parentUuid
+                };
+
+                var responseBody = await PostJsonAsync(
+                    IssuesBase,
+                    request,
+                    PlaneJsonContext.Default,
+                    ct).ConfigureAwait(false);
+
+                var response = (PlaneCreateIssueResponse?)JsonSerializer.Deserialize(
+                    responseBody, typeof(PlaneCreateIssueResponse), PlaneJsonContext.Default);
+
+                if (response is null)
+                {
+                    failures.Add($"{child.Title}: deserialized null response");
+                    continue;
+                }
+
+                created.Add(new CreatedChild(
+                    Id: $"{_options.ProjectIdentifier}-{response.SequenceId}",
+                    Uuid: response.Id));
+            }
+            catch (Exception ex)
+            {
+                failures.Add($"{child.Title}: {ex.Message}");
+            }
+        }
+
+        return new CreateChildTicketsResult(created.AsReadOnly(), failures.AsReadOnly());
     }
 
     // ------------------------------------------------------------------ rollup helpers

@@ -15,6 +15,7 @@ public class ListCommandTests
         TicketState state = TicketState.Ready,
         string? parentId = null) => new Ticket(
         Id: id,
+        Uuid: "test-uuid-1",
         Title: title,
         Type: type,
         State: state,
@@ -287,6 +288,9 @@ public class ListCommandTests
 
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             throw new NotImplementedException();
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+            string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+            throw new NotImplementedException();
     }
 
     private sealed class FakeTicketingThrows : ITicketing
@@ -338,6 +342,9 @@ public class ListCommandTests
             throw new NotImplementedException();
 
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
+            throw new NotImplementedException();
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+            string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
             throw new NotImplementedException();
     }
 }

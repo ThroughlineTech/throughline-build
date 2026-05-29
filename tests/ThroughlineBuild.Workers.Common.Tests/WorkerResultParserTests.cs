@@ -114,6 +114,7 @@ public class WorkerResultParserTemplateRoundTripTests
         // Build a minimal fixture ticket and repo state.
         var ticket = new Ticket(
             Id: "TEST-001",
+            Uuid: "test-uuid-1",
             Title: "Test ticket",
             Type: "feature",
             State: TicketState.Backlog,

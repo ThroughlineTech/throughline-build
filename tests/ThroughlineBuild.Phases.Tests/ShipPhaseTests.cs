@@ -16,6 +16,7 @@ public class ShipPhaseTests
 
     private static Ticket MakeTicket(TicketState state) => new Ticket(
         Id: TicketId,
+        Uuid: "ticket-uuid-1",
         Title: TicketTitle,
         Type: "feature",
         State: state,
@@ -744,6 +745,11 @@ public class ShipPhaseTests
 
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             Task.CompletedTask;
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+            string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+            Task.FromResult(new CreateChildTicketsResult(
+                children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
+                Array.Empty<string>()));
     }
 
     private sealed class FakeEventSink : IEventSink

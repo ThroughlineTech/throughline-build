@@ -15,6 +15,7 @@ public class ReviewPhaseTests
 
     private static Ticket MakeTicket(TicketState state) => new Ticket(
         Id: TicketId,
+        Uuid: "ticket-uuid-1",
         Title: TicketTitle,
         Type: "feature",
         State: state,
@@ -473,6 +474,11 @@ public class ReviewPhaseTests
 
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             Task.CompletedTask;
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+            string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+            Task.FromResult(new CreateChildTicketsResult(
+                children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
+                Array.Empty<string>()));
     }
 
     private sealed class FakeWorkerAgent : IWorkerAgent
@@ -628,7 +634,7 @@ public class ReviewPhaseDebugCaptureTests
     private const string BranchName = "ticket/tlb-1-test-ticket";
 
     private static Ticket MakeTicket() => new Ticket(
-        Id: TicketId, Title: TicketTitle, Type: "feature", State: TicketState.InReview,
+        Id: TicketId, Uuid: "ticket-uuid-1", Title: TicketTitle, Type: "feature", State: TicketState.InReview,
         Size: Size.S, Risk: Risk.Low, DescriptionHtml: "<p>plan</p>",
         Relations: Array.Empty<Relation>(), Labels: Array.Empty<string>(), ParentId: null);
 
@@ -743,6 +749,11 @@ public class ReviewPhaseDebugCaptureTests
 
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             Task.CompletedTask;
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+            string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+            Task.FromResult(new CreateChildTicketsResult(
+                children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
+                Array.Empty<string>()));
     }
 
     private sealed class FakeEventSink : IEventSink

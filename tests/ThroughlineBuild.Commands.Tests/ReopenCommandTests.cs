@@ -12,6 +12,7 @@ public class ReopenCommandTests
         TicketState state,
         string descriptionHtml = "<p>desc</p>") => new Ticket(
         Id: "TLB-1",
+        Uuid: "test-uuid-1",
         Title: "Test ticket",
         Type: "feature",
         State: state,
@@ -296,6 +297,11 @@ public class ReopenCommandTests
 
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             Task.CompletedTask;
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+            string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+            Task.FromResult(new CreateChildTicketsResult(
+                children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
+                Array.Empty<string>()));
     }
 
     private sealed class FakeEventSink : IEventSink
