@@ -1,0 +1,6 @@
+> copilot -p "Implement the changes described in the plan." -s --no-ask-user --model claude-3.5-sonnet
+
+Error: Model 'claude-3.5-sonnet' is not available in your current Copilot subscription.
+Available models: gpt-4o, gpt-4o-mini
+
+To use Claude models, upgrade to a Copilot Enterprise plan or provide a BYOK token via GH_TOKEN.
