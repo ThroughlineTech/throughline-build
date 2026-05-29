@@ -49,7 +49,7 @@ public class DeferCommandTests
     }
 
     [Fact]
-    public async Task HappyPath_posts_deferred_comment_transitions_to_cancelled()
+    public async Task HappyPath_calls_TransitionLifecycleAsync_with_Defer()
     {
         using var tmp = new TempDir();
         var (cmd, ticketing, events, _, _, _) = BuildCommand(MakeTicket(), tmp.Path);
@@ -58,11 +58,9 @@ public class DeferCommandTests
         var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.True(result.Success);
-        Assert.Single(ticketing.Comments);
-        // Comment body must be LITERALLY the deferred marker.
-        Assert.Equal("<p><strong>deferred:</strong> translated reason</p>", ticketing.Comments[0].html);
-        Assert.Single(ticketing.Transitions);
-        Assert.Equal(TicketState.Cancelled, ticketing.Transitions[0].state);
+        Assert.Single(ticketing.LifecycleTransitions);
+        Assert.Equal(LifecycleTransition.Defer, ticketing.LifecycleTransitions[0].transition);
+        Assert.Equal("translated reason", ticketing.LifecycleTransitions[0].reason);
         Assert.Equal(1, ticketing.RollupCalls);
         // No worktree directory present, so decrufter should not be invoked.
         // (We assert this indirectly: no ListWorktrees call from decrufter.)
@@ -80,8 +78,7 @@ public class DeferCommandTests
 
         Assert.False(result.Success);
         Assert.Equal("reason is required", result.Message);
-        Assert.Empty(ticketing.Comments);
-        Assert.Empty(ticketing.Transitions);
+        Assert.Empty(ticketing.LifecycleTransitions);
         Assert.Equal(0, ticketing.RollupCalls);
         Assert.Empty(events.Events);
     }
@@ -98,8 +95,7 @@ public class DeferCommandTests
 
         Assert.False(result.Success);
         Assert.Equal("already terminal", result.Message);
-        Assert.Empty(ticketing.Comments);
-        Assert.Empty(ticketing.Transitions);
+        Assert.Empty(ticketing.LifecycleTransitions);
         Assert.Equal(0, ticketing.RollupCalls);
         Assert.Empty(events.Events);
     }
@@ -116,8 +112,7 @@ public class DeferCommandTests
 
         Assert.False(result.Success);
         Assert.Equal("already terminal", result.Message);
-        Assert.Empty(ticketing.Comments);
-        Assert.Empty(ticketing.Transitions);
+        Assert.Empty(ticketing.LifecycleTransitions);
         Assert.Equal(0, ticketing.RollupCalls);
         Assert.Empty(events.Events);
     }
@@ -145,10 +140,9 @@ public class DeferCommandTests
 
         Assert.Contains("ticket/tlb-1-foo", swErr.ToString());
         Assert.Contains("WARNING", swErr.ToString());
-        // Action still proceeded to Cancelled.
-        Assert.Single(ticketing.Transitions);
-        Assert.Equal(TicketState.Cancelled, ticketing.Transitions[0].state);
-        Assert.Single(ticketing.Comments);
+        // Action still proceeded to TransitionLifecycleAsync with Defer.
+        Assert.Single(ticketing.LifecycleTransitions);
+        Assert.Equal(LifecycleTransition.Defer, ticketing.LifecycleTransitions[0].transition);
     }
 
     [Fact]
@@ -162,9 +156,8 @@ public class DeferCommandTests
         var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.True(result.Success);
-        Assert.Single(ticketing.Transitions);
-        Assert.Equal(TicketState.Cancelled, ticketing.Transitions[0].state);
-        Assert.Single(ticketing.Comments);
+        Assert.Single(ticketing.LifecycleTransitions);
+        Assert.Equal(LifecycleTransition.Defer, ticketing.LifecycleTransitions[0].transition);
         // Rollup attempted (and threw) - command should still have completed.
         Assert.Equal(1, ticketing.RollupCalls);
     }
@@ -188,7 +181,7 @@ public class DeferCommandTests
     }
 
     [Fact]
-    public async Task Marker_is_deferred_not_wontfix()
+    public async Task Transition_is_Defer_not_Close()
     {
         using var tmp = new TempDir();
         var (cmd, ticketing, _, _, _, _) = BuildCommand(MakeTicket(), tmp.Path);
@@ -197,10 +190,8 @@ public class DeferCommandTests
         var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.True(result.Success);
-        Assert.Single(ticketing.Comments);
-        var body = ticketing.Comments[0].html;
-        Assert.Contains("<strong>deferred:</strong>", body);
-        Assert.DoesNotContain("<strong>wontfix:</strong>", body);
-        Assert.DoesNotContain("<strong>reopened:</strong>", body);
+        Assert.Single(ticketing.LifecycleTransitions);
+        Assert.Equal(LifecycleTransition.Defer, ticketing.LifecycleTransitions[0].transition);
+        Assert.NotEqual(LifecycleTransition.Close, ticketing.LifecycleTransitions[0].transition);
     }
 }

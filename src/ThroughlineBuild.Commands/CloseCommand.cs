@@ -53,23 +53,8 @@ public sealed class CloseCommand : ITicketCommand
         // (d) translate reason to English
         var translated = await _translator.TranslateAsync(reason, ct).ConfigureAwait(false);
 
-        // (e) post wontfix comment - marker string is load-bearing
-        var body = $"<p><strong>wontfix:</strong> {translated}</p>";
-        await _ticketing.CreateCommentAsync(ctx.TicketId, body, ct).ConfigureAwait(false);
-        await _events.EmitAsync(new WorkflowEvent(
-            string.Empty,
-            DateTimeOffset.UtcNow,
-            EventKind.TicketWrite,
-            ctx.TicketId,
-            Phase.Command,
-            new Dictionary<string, object>
-            {
-                ["action"] = "create_comment",
-                ["detail"] = "wontfix"
-            }), ct).ConfigureAwait(false);
-
-        // (f) transition to Cancelled
-        await _ticketing.TransitionAsync(ctx.TicketId, TicketState.Cancelled, ct).ConfigureAwait(false);
+        // (e) transition to Cancelled via lifecycle method - handles comment posting internally
+        await _ticketing.TransitionLifecycleAsync(ctx.TicketId, LifecycleTransition.Close, translated, ct).ConfigureAwait(false);
         await _events.EmitAsync(new WorkflowEvent(
             string.Empty,
             DateTimeOffset.UtcNow,

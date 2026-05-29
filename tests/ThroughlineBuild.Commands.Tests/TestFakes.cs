@@ -36,6 +36,7 @@ internal sealed class FakeTicketing : ITicketing
 
     public List<(string id, string html)> Comments { get; } = new();
     public List<(string id, TicketState state)> Transitions { get; } = new();
+    public List<(string id, LifecycleTransition transition, string? reason)> LifecycleTransitions { get; } = new();
     public int RollupCalls { get; private set; }
     public bool RollupThrows { get; set; }
     // Track-through count for IGitClient calls observed via the decrufter
@@ -109,8 +110,11 @@ internal sealed class FakeTicketing : ITicketing
     public Task<IReadOnlyList<Ticket>> QueryAsync(TicketQuery query, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<Ticket>>(Array.Empty<Ticket>());
 
-    public Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct) =>
-        Task.CompletedTask;
+    public Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct)
+    {
+        LifecycleTransitions.Add((id, transition, reason));
+        return Task.CompletedTask;
+    }
 
     public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
         Task.CompletedTask;

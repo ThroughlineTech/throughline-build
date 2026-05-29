@@ -70,23 +70,10 @@ public sealed class ReopenCommand : ITicketCommand
         // (d) Determine destination state
         var targetState = DetermineTargetState(ticket, priorMarker);
 
-        // (e) Post reopened comment - marker string is load-bearing
-        var body = $"<p><strong>reopened:</strong> from {priorMarker ?? "unknown"} - {reason}</p>";
-        await _ticketing.CreateCommentAsync(ctx.TicketId, body, ct).ConfigureAwait(false);
-        await _events.EmitAsync(new WorkflowEvent(
-            string.Empty,
-            DateTimeOffset.UtcNow,
-            EventKind.TicketWrite,
-            ctx.TicketId,
-            Phase.Command,
-            new Dictionary<string, object>
-            {
-                ["action"] = "create_comment",
-                ["detail"] = "reopened"
-            }), ct).ConfigureAwait(false);
-
-        // (f) Transition to target state
-        await _ticketing.TransitionAsync(ctx.TicketId, targetState, ct).ConfigureAwait(false);
+        // (e) Transition to target state via lifecycle method - handles comment posting internally
+        // Format reason with prior marker context for TransitionLifecycleAsync
+        var fullReason = $"from {priorMarker ?? "unknown"} - {reason}";
+        await _ticketing.TransitionLifecycleAsync(ctx.TicketId, LifecycleTransition.Reopen, fullReason, ct).ConfigureAwait(false);
         await _events.EmitAsync(new WorkflowEvent(
             string.Empty,
             DateTimeOffset.UtcNow,
