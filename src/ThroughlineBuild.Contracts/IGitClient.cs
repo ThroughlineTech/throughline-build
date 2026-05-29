@@ -58,4 +58,9 @@ public interface IGitClient
     // Used to check if local main and origin/main have diverged (TLB-148).
     Task<bool> IsAncestorAsync(string ancestor, string descendant, string workingDirectory, CancellationToken ct) =>
         Task.FromResult(false);
+
+    // Pushes the specified local branch to the remote.
+    // Default returns success so existing test fakes remain unchanged (TLB-293).
+    Task<GitOpResult> PushAsync(string remote, string branch, string workingDirectory, CancellationToken ct) =>
+        Task.FromResult(new GitOpResult(true, null));
 }

@@ -28,6 +28,7 @@ public enum ShipFailureStage
     ConflictMarkerScan,
     RegressionChecks,
     FastForwardMerge,
+    Push,
     Decruft
 }
 
@@ -314,6 +315,16 @@ public class ShipPhase : IWorkflowPhase
             return (new ShipResult(false, ticketId, null,
                 $"fast-forward merge failed: {ffResult.FailureReason}",
                 ShipFailureStage.FastForwardMerge), worktreeNames, null);
+
+        // Step 8a: Push to remote (skipped when no remote is configured)
+        if (remoteExists)
+        {
+            var pushResult = await _git.PushAsync(remote, baseBranch, workingDirectory, ct).ConfigureAwait(false);
+            if (!pushResult.Success)
+                return (new ShipResult(false, ticketId, null,
+                    $"git push failed: {pushResult.FailureReason}",
+                    ShipFailureStage.Push), worktreeNames, null);
+        }
 
         // Step 9: Read merged HEAD sha
         var mergedSha = await _git.HeadShaAsync(workingDirectory, ct).ConfigureAwait(false);
