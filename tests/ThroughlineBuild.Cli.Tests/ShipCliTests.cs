@@ -219,6 +219,11 @@ public class ShipCliTests
         public Task<IReadOnlyList<Ticket>> QueryAsync(TicketQuery query, CancellationToken ct) => Task.FromResult<IReadOnlyList<Ticket>>(Array.Empty<Ticket>());
         public Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct) => Task.CompletedTask;
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) => Task.CompletedTask;
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+            string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+            Task.FromResult(new CreateChildTicketsResult(
+                children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
+                Array.Empty<string>()));
     }
 
     private sealed class StubSink : IEventSink
