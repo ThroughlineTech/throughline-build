@@ -13,5 +13,6 @@ public interface IChainRunner
         string ticketId,
         bool debug,
         Action<ChainStep> onStep,
-        CancellationToken ct);
+        CancellationToken ct,
+        bool noAutoResolve = false);
 }

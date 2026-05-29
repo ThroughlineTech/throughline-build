@@ -37,6 +37,9 @@ public sealed class ChainCommand : ITicketCommand
         // Extract --debug flag from args.
         bool debugMode = ctx.Args.TryGetValue("debug", out var debugStr) && debugStr == "true";
 
+        // Extract --no-auto-resolve flag from args.
+        bool noAutoResolve = ctx.Args.TryGetValue("no-auto-resolve", out var narStr) && narStr == "true";
+
         Ticket? initialTicket = null;
         try
         {
@@ -63,7 +66,8 @@ public sealed class ChainCommand : ITicketCommand
                 ticketId,
                 debugMode,
                 step => Console.WriteLine(FormatStepLine(ticketId, step)),
-                ct).ConfigureAwait(false);
+                ct,
+                noAutoResolve).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -134,7 +138,7 @@ public sealed class ChainCommand : ITicketCommand
                 $"[{ticketId}] chain complete ({durationStr})",
 
             ChainOutcome.RatifiedObsolete =>
-                $"[{ticketId}] chain complete: obsolete claim ratified ({durationStr})",
+                $"[{ticketId}] Subsumed by {result.SubsumedBy?.Commit ?? "(unknown)"} - continuing ({durationStr})",
 
             ChainOutcome.RefusedInitialState =>
                 $"[{ticketId}] chain stopped: initial state does not allow chain execution",

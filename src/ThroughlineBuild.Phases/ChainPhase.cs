@@ -1,11 +1,12 @@
 using System.Diagnostics;
+using System.Net;
 using System.Text.Json;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 
 namespace ThroughlineBuild.Phases;
 
-public record ChainPhaseOptions(string TicketId, bool Debug, Action<ChainStep>? OnStep = null);
+public record ChainPhaseOptions(string TicketId, bool Debug, Action<ChainStep>? OnStep = null, bool NoAutoResolve = false);
 
 public class ChainPhase
 {
@@ -115,7 +116,8 @@ public class ChainPhase
 
             if (!planResult.Success)
             {
-                if (_ratifierFactory is not null &&
+                if (!options.NoAutoResolve &&
+                    _ratifierFactory is not null &&
                     planResult.EscalationWorkerResult is not null &&
                     IsObsoleteEscalation(planResult.EscalationWorkerResult))
                 {
@@ -124,9 +126,12 @@ public class ChainPhase
                     if (ratifyVerdict.Kind == VerdictKind.Pass)
                     {
                         var evidence = ExtractSubsumedByEvidence(planResult.EscalationWorkerResult);
+                        var finalRationale = FormatSubsumedRationale(evidence);
+                        await _ticketing.TransitionAsync(options.TicketId, TicketState.Done, ct).ConfigureAwait(false);
+                        await _ticketing.CreateCommentAsync(options.TicketId, "<p>" + WebUtility.HtmlEncode(finalRationale) + "</p>", ct).ConfigureAwait(false);
                         totalSw.Stop();
                         var ratified = new ChainResult(options.TicketId, steps, ChainOutcome.RatifiedObsolete,
-                            totalSw.Elapsed, null, evidence);
+                            totalSw.Elapsed, finalRationale, evidence);
                         await EmitChainEndAsync(ratified, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
                         return ratified;
                     }
@@ -255,7 +260,8 @@ public class ChainPhase
 
             if (!implResult.Success)
             {
-                if (_ratifierFactory is not null &&
+                if (!options.NoAutoResolve &&
+                    _ratifierFactory is not null &&
                     implResult.EscalationWorkerResult is not null &&
                     IsObsoleteEscalation(implResult.EscalationWorkerResult))
                 {
@@ -264,9 +270,12 @@ public class ChainPhase
                     if (ratifyVerdict.Kind == VerdictKind.Pass)
                     {
                         var evidence = ExtractSubsumedByEvidence(implResult.EscalationWorkerResult);
+                        var finalRationale = FormatSubsumedRationale(evidence);
+                        await _ticketing.TransitionAsync(options.TicketId, TicketState.Done, ct).ConfigureAwait(false);
+                        await _ticketing.CreateCommentAsync(options.TicketId, "<p>" + WebUtility.HtmlEncode(finalRationale) + "</p>", ct).ConfigureAwait(false);
                         totalSw.Stop();
                         return new ChainResult(options.TicketId, steps, ChainOutcome.RatifiedObsolete,
-                            totalSw.Elapsed, null, evidence);
+                            totalSw.Elapsed, finalRationale, evidence);
                     }
                     // Ratifier rejected - fall through to StoppedAtImplement
                 }
@@ -392,6 +401,14 @@ public class ChainPhase
         options.OnStep?.Invoke(revStep);
 
         return (null, new Verdict(revResult.Verdict!.Value, revResult.VerdictRationale ?? "", revResult.ChecksFailed));
+    }
+
+    private static string FormatSubsumedRationale(SubsumedByEvidence? evidence)
+    {
+        var commit = evidence?.Commit ?? "(unknown)";
+        var rationale = evidence?.Rationale ?? "(no rationale)";
+        var files = evidence?.Files is { Count: > 0 } f ? string.Join(", ", f) : "(none)";
+        return $"Subsumed by {commit}: {rationale}; files: {files}";
     }
 
     private static string? RationalePreview(string? rationale)

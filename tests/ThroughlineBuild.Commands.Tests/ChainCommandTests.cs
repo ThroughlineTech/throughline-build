@@ -349,6 +349,27 @@ public class ChainCommandTests
         Assert.False(runner.LastDebug, "expected debug=false to be forwarded to runner");
     }
 
+    // --- outcome: RatifiedObsolete ---
+
+    [Fact]
+    public async Task RatifiedObsolete_final_line_contains_subsumed_commit()
+    {
+        var (cmd, runner, _) = BuildCommand();
+        runner.Result = new ChainResult(
+            TicketId: "TLB-1",
+            Steps: Array.Empty<ChainStep>(),
+            Outcome: ChainOutcome.RatifiedObsolete,
+            TotalDuration: TimeSpan.FromSeconds(5),
+            FinalRationale: "Subsumed by abc123: prior work satisfies acceptance criteria; files: src/Foo.cs",
+            SubsumedBy: new SubsumedByEvidence("abc123", new[] { "src/Foo.cs" }, "prior work satisfies acceptance criteria"));
+
+        var (result, output) = await RunCapturingStdout(cmd, MakeCtx());
+
+        Assert.True(result.Success);
+        Assert.Contains("Subsumed by abc123", output);
+        Assert.DoesNotContain("Failed", output);
+    }
+
     // --- onStep streaming ---
 
     [Fact]
@@ -424,7 +445,7 @@ internal sealed class FakeThrowingChainRunner : IChainRunner
 
     public FakeThrowingChainRunner(Exception exception) => _exception = exception;
 
-    public Task<ChainResult> RunAsync(string ticketId, bool debug, Action<ChainStep> onStep, CancellationToken ct)
+    public Task<ChainResult> RunAsync(string ticketId, bool debug, Action<ChainStep> onStep, CancellationToken ct, bool noAutoResolve = false)
         => throw _exception;
 }
 
@@ -448,7 +469,8 @@ internal sealed class FakeChainRunner : IChainRunner
         string ticketId,
         bool debug,
         Action<ChainStep> onStep,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool noAutoResolve = false)
     {
         LastTicketId = ticketId;
         LastDebug = debug;

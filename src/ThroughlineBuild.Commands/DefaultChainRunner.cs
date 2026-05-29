@@ -21,9 +21,10 @@ public sealed class DefaultChainRunner : IChainRunner
         string ticketId,
         bool debug,
         Action<ChainStep> onStep,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool noAutoResolve = false)
     {
-        var options = new ChainPhaseOptions(ticketId, debug, onStep);
+        var options = new ChainPhaseOptions(ticketId, debug, onStep, noAutoResolve);
         return _chainPhase.RunAsync(options, ct);
     }
 }

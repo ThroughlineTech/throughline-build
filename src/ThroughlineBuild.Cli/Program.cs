@@ -35,6 +35,7 @@ static async Task<int> RunAsync(string[] args)
     bool quietMode = false;
     bool summaryJson = false;
     bool errorLocation = false;
+    bool noAutoResolve = false;
     var filteredArgs = new List<string>(args.Length);
     foreach (var a in args)
     {
@@ -46,6 +47,8 @@ static async Task<int> RunAsync(string[] args)
             summaryJson = true;
         else if (a == "--error-location")
             errorLocation = true;
+        else if (a == "--no-auto-resolve")
+            noAutoResolve = true;
         else
             filteredArgs.Add(a);
     }
@@ -1091,7 +1094,8 @@ static async Task<int> RunAsync(string[] args)
         var chainCommand = new ChainCommand(chainRunner, ticketing);
         var chainCtx = new TicketCommandContext(ticketId, new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["debug"] = debugMode ? "true" : "false"
+            ["debug"] = debugMode ? "true" : "false",
+            ["no-auto-resolve"] = noAutoResolve ? "true" : "false"
         });
 
         try

@@ -480,6 +480,7 @@ public class ChainPhaseTests
         private Ticket _ticket;
         private readonly List<TicketComment> _seededComments = new();
         public List<(string id, TicketState state)> Transitions { get; } = new();
+        public List<(string id, string html)> PostedComments { get; } = new();
 
         public ChainFakeTicketing(Ticket ticket) { _ticket = ticket; }
 
@@ -515,6 +516,7 @@ public class ChainPhaseTests
 
         public Task<string> CreateCommentAsync(string id, string html, CancellationToken ct)
         {
+            PostedComments.Add((id, html));
             _seededComments.Add(new TicketComment(Guid.NewGuid().ToString(), html, DateTimeOffset.UtcNow));
             return Task.FromResult("comment-id");
         }
@@ -693,6 +695,10 @@ public class ChainPhaseTests
         Assert.Equal("plan", result.Steps[0].PhaseName);
         Assert.Equal("ratify", result.Steps[1].PhaseName);
         Assert.Equal(Status.Ok, result.Steps[1].Status);
+        // Done transition and rationale comment
+        Assert.Contains(ticketing.Transitions, t => t.state == TicketState.Done);
+        Assert.NotNull(result.FinalRationale);
+        Assert.Contains("abc123def", result.FinalRationale);
     }
 
     [Fact]
@@ -738,6 +744,10 @@ public class ChainPhaseTests
         Assert.Equal(3, result.Steps.Count);
         Assert.Equal("ratify", result.Steps[2].PhaseName);
         Assert.Equal(Status.Ok, result.Steps[2].Status);
+        // Done transition and rationale comment
+        Assert.Contains(ticketing.Transitions, t => t.state == TicketState.Done);
+        Assert.NotNull(result.FinalRationale);
+        Assert.Contains("deadbeef", result.FinalRationale);
     }
 
     [Fact]
@@ -758,6 +768,27 @@ public class ChainPhaseTests
         Assert.Equal(ChainOutcome.StoppedAtImplement, result.Outcome);
         Assert.True(ratifier.WasCalled);
         Assert.Null(result.SubsumedBy);
+    }
+
+    [Fact]
+    public async Task RunAsync_NoAutoResolve_SkipsRatifier_StoppedAtPlan()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new EscalateWorkerAgent(ObsoleteEscalateWorkerResult());
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var verifiers = new Queue<IVerifier>();
+
+        var ratifier = new FakeObsoleteRatifier(
+            new Verdict(VerdictKind.Pass, "should not be called", Array.Empty<string>()));
+        Func<BuildOptions, IObsoleteRatifier> ratifierFactory = _ => ratifier;
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, ratifierFactory: ratifierFactory);
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, null, NoAutoResolve: true), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.StoppedAtPlan, result.Outcome);
+        Assert.False(ratifier.WasCalled);
+        Assert.DoesNotContain(ticketing.Transitions, t => t.state == TicketState.Done);
     }
 
     [Fact]
