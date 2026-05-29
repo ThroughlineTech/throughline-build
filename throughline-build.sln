@@ -79,6 +79,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ThroughlineBuild.Workers.Co
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ThroughlineBuild.Workers.Copilot.Tests", "tests\ThroughlineBuild.Workers.Copilot.Tests\ThroughlineBuild.Workers.Copilot.Tests.csproj", "{0B64B100-D476-4DD9-A772-B8EA9E34DC4F}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ThroughlineBuild.ModelClient", "src\ThroughlineBuild.ModelClient\ThroughlineBuild.ModelClient.csproj", "{1C5DE619-6528-45F7-A30B-EC2F860222C1}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -521,6 +523,18 @@ Global
 		{0B64B100-D476-4DD9-A772-B8EA9E34DC4F}.Release|x64.Build.0 = Release|Any CPU
 		{0B64B100-D476-4DD9-A772-B8EA9E34DC4F}.Release|x86.ActiveCfg = Release|Any CPU
 		{0B64B100-D476-4DD9-A772-B8EA9E34DC4F}.Release|x86.Build.0 = Release|Any CPU
+		{1C5DE619-6528-45F7-A30B-EC2F860222C1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1C5DE619-6528-45F7-A30B-EC2F860222C1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1C5DE619-6528-45F7-A30B-EC2F860222C1}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{1C5DE619-6528-45F7-A30B-EC2F860222C1}.Debug|x64.Build.0 = Debug|Any CPU
+		{1C5DE619-6528-45F7-A30B-EC2F860222C1}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{1C5DE619-6528-45F7-A30B-EC2F860222C1}.Debug|x86.Build.0 = Debug|Any CPU
+		{1C5DE619-6528-45F7-A30B-EC2F860222C1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1C5DE619-6528-45F7-A30B-EC2F860222C1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1C5DE619-6528-45F7-A30B-EC2F860222C1}.Release|x64.ActiveCfg = Release|Any CPU
+		{1C5DE619-6528-45F7-A30B-EC2F860222C1}.Release|x64.Build.0 = Release|Any CPU
+		{1C5DE619-6528-45F7-A30B-EC2F860222C1}.Release|x86.ActiveCfg = Release|Any CPU
+		{1C5DE619-6528-45F7-A30B-EC2F860222C1}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -562,5 +576,6 @@ Global
 		{A16AA948-952F-4EE9-B4EC-728F82C5ACB4} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{FCA53FA0-46BF-40DB-8443-88E7923D81F3} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{0B64B100-D476-4DD9-A772-B8EA9E34DC4F} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{1C5DE619-6528-45F7-A30B-EC2F860222C1} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal
