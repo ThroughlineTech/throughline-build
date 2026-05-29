@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using ThroughlineBuild.Anthropic;
 using ThroughlineBuild.ModelClient;
 using Xunit;
@@ -102,6 +103,89 @@ public class AnthropicModelClientTests
 
         var ex = await Assert.ThrowsAsync<AnthropicApiException>(() => client.SendAsync(request));
         Assert.Equal(400, ex.Status);
+    }
+
+    [Fact]
+    public async Task SendAsync_FixtureResponse_MapsAllFields()
+    {
+        var fixtureContent = System.IO.File.ReadAllText(System.IO.Path.Combine(AppContext.BaseDirectory, "Fixtures", "anthropic-response-basic.json"));
+        var wireResponse = JsonSerializer.Deserialize<AnthropicModelClientResponse>(fixtureContent, AnthropicJsonContext.Default.AnthropicModelClientResponse);
+        var handler = new FakeHandler(HttpStatusCode.OK, wireResponse);
+        var client = new AnthropicModelClient(new HttpClient(handler), MakeConfig());
+
+        var request = new ModelRequest(
+            Model: "claude-haiku-4-5-20251001",
+            Messages: new[] { new ModelMessage("user", new[] { new TextContent("Hello") }) },
+            MaxTokens: 256
+        );
+
+        var response = await client.SendAsync(request);
+
+        Assert.Single(response.Content);
+        Assert.IsType<TextContent>(response.Content[0]);
+        Assert.Equal("Hello! How can I assist you today?", ((TextContent)response.Content[0]).Text);
+        Assert.Equal("end_turn", response.StopReason);
+        Assert.Equal("claude-haiku-4-5-20251001", response.Model);
+        Assert.Equal(10, response.Usage.InputTokens);
+        Assert.Equal(12, response.Usage.OutputTokens);
+        Assert.Equal(5, response.Usage.CacheReadTokens);
+        Assert.Equal(3, response.Usage.CacheCreateTokens);
+    }
+
+    [Fact]
+    public async Task SendAsync_500Response_ThrowsAnthropicApiException()
+    {
+        var handler = new FakeHandler(HttpStatusCode.InternalServerError, null, "{\"error\":\"internal server error\"}");
+        var client = new AnthropicModelClient(new HttpClient(handler), MakeConfig());
+
+        var request = new ModelRequest(
+            Model: "claude-opus-4-5",
+            Messages: new[] { new ModelMessage("user", new[] { new TextContent("hi") }) },
+            MaxTokens: 10
+        );
+
+        var ex = await Assert.ThrowsAsync<AnthropicApiException>(() => client.SendAsync(request));
+        Assert.Equal(500, ex.Status);
+    }
+
+    [Fact]
+    public async Task SendAsync_MalformedBody_ThrowsException()
+    {
+        var handler = new FakeHandler(HttpStatusCode.OK, null, "\"not-valid-json\"");
+        var client = new AnthropicModelClient(new HttpClient(handler), MakeConfig());
+
+        var request = new ModelRequest(
+            Model: "claude-opus-4-5",
+            Messages: new[] { new ModelMessage("user", new[] { new TextContent("hi") }) },
+            MaxTokens: 10
+        );
+
+        await Assert.ThrowsAsync<JsonException>(() => client.SendAsync(request));
+    }
+
+    [Fact]
+    public async Task SendAsync_NoTemperature_OmitsTemperatureFromWireBody()
+    {
+        var wireResponse = new AnthropicModelClientResponse(
+            Content: new List<AnthropicContentBlock> { new("text", "ok") },
+            StopReason: "end_turn",
+            Model: "claude-opus-4-5",
+            Usage: new AnthropicUsage(5, 2, null, null)
+        );
+        var handler = new FakeHandler(HttpStatusCode.OK, wireResponse);
+        var client = new AnthropicModelClient(new HttpClient(handler), MakeConfig());
+
+        var request = new ModelRequest(
+            Model: "claude-opus-4-5",
+            Messages: new[] { new ModelMessage("user", new[] { new TextContent("hi") }) },
+            MaxTokens: 10
+            // No Temperature set
+        );
+
+        await client.SendAsync(request);
+
+        var body = handler.LastRequestBody;
+        Assert.DoesNotContain("\"temperature\"", body);
     }
 
     private class FakeHandler : HttpMessageHandler
