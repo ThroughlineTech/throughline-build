@@ -142,7 +142,7 @@ public class ChainPhase
 
         if (startPhase == StartPhase.Plan || startPhase == StartPhase.Implement)
         {
-            var chainResult = await RunImplementReviewLoopAsync(options, steps, chainSessionId, 0, null, ct)
+            var chainResult = await RunImplementReviewLoopAsync(options, steps, chainSessionId, 0, null, totalSw, ct)
                 .ConfigureAwait(false);
             if (chainResult is not null)
             {
@@ -154,7 +154,7 @@ public class ChainPhase
         }
         else
         {
-            var chainResult = await RunReviewBranchAsync(options, steps, chainSessionId, 0, ct)
+            var chainResult = await RunReviewBranchAsync(options, steps, chainSessionId, 0, totalSw, ct)
                 .ConfigureAwait(false);
             if (chainResult is not null)
             {
@@ -226,6 +226,7 @@ public class ChainPhase
         string chainSessionId,
         int startRound,
         ReviewFeedback? initialFeedback,
+        Stopwatch totalSw,
         CancellationToken ct)
     {
         int round = startRound;
@@ -263,8 +264,9 @@ public class ChainPhase
                     if (ratifyVerdict.Kind == VerdictKind.Pass)
                     {
                         var evidence = ExtractSubsumedByEvidence(implResult.EscalationWorkerResult);
+                        totalSw.Stop();
                         return new ChainResult(options.TicketId, steps, ChainOutcome.RatifiedObsolete,
-                            TimeSpan.Zero, null, evidence);
+                            totalSw.Elapsed, null, evidence);
                     }
                     // Ratifier rejected - fall through to StoppedAtImplement
                 }
@@ -316,6 +318,7 @@ public class ChainPhase
         List<ChainStep> steps,
         string chainSessionId,
         int round,
+        Stopwatch totalSw,
         CancellationToken ct)
     {
         var reviewResult = await RunOneReviewAsync(options, steps, ct).ConfigureAwait(false);
@@ -345,7 +348,7 @@ public class ChainPhase
                 ["verdict_that_triggered"] = "Rework",
                 ["rationale_preview"] = RationalePreview(rv.Rationale) ?? ""
             }), ct).ConfigureAwait(false);
-        return await RunImplementReviewLoopAsync(options, steps, chainSessionId, round + 1, feedback, ct)
+        return await RunImplementReviewLoopAsync(options, steps, chainSessionId, round + 1, feedback, totalSw, ct)
             .ConfigureAwait(false);
     }
 

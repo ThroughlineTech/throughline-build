@@ -1050,6 +1050,22 @@ static async Task<int> RunAsync(string[] args)
             return new ShipPhase(ticketing, eventSink, buildOpts, shipOptions, gitClient: gitClient, checksRunner: checksRunner);
         };
 
+        var ratifierFactory = (BuildOptions _) =>
+        {
+            var ratifierWorkerOptions = new WorkerOptions(
+                TimeSpan.FromMinutes(config2.Review.VerifierTimeoutMinutes),
+                config2.Review.VerifierAllowedTools,
+                DebugCaptureDirectory: debugCaptureDir,
+                LiveStdoutSink: debugMode ? Console.Out : null,
+                LiveStderrSink: debugMode ? Console.Error : null,
+                ProgressDigestSink: enableDigest ? Console.Error : null);
+            return (IObsoleteRatifier)new ObsoleteRatifier(
+                workerFactory.Create(EffectiveAgentFor("review")),
+                ratifierWorkerOptions,
+                cwd,
+                git: new ProcessGitClient(cwd));
+        };
+
         var chainPhase = new ChainPhase(
             ticketing,
             eventSink,
@@ -1058,7 +1074,8 @@ static async Task<int> RunAsync(string[] args)
             implementPhaseFactory,
             reviewPhaseFactory,
             shipPhaseFactory,
-            workingDirectory: cwd);
+            workingDirectory: cwd,
+            ratifierFactory: ratifierFactory);
 
         var chainRunner = new DefaultChainRunner(chainPhase);
         var chainCommand = new ChainCommand(chainRunner, ticketing, config2.Project.PlaneProjectUrl);
