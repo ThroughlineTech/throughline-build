@@ -2,6 +2,8 @@
 //
 // Run on .NET 10+ (file-based programs):
 //     dotnet run analyze_event_log.cs <event-log.jsonl> [more files...]
+//     dotnet run analyze_event_log.cs <directory>
+//     dotnet run analyze_event_log.cs <glob> [more globs/files/dirs...]
 //
 // Or compile a standalone exe:
 //     dotnet publish analyze_event_log.cs -c Release
@@ -11,10 +13,18 @@
 
 using System.Text.Json;
 
-if (args.Length < 1)
+if (args.Length == 0 || (args.Length > 0 && (args[0] == "--help" || args[0] == "-h")))
 {
-    Console.Error.WriteLine("Usage: dotnet run analyze_event_log.cs <event-log.jsonl> [more files...]");
-    return 1;
+    Console.WriteLine("Usage: analyze_event_log <event-log.jsonl | glob | dir> [more...]");
+    Console.WriteLine();
+    Console.WriteLine("  <file>        analyze a single event log JSONL file");
+    Console.WriteLine("  <dir>         analyze all *.jsonl files in a directory");
+    Console.WriteLine("  <glob>        e.g. 'TLB-3*' or '*' -- works even when the shell");
+    Console.WriteLine("                does not expand globs (cmd / PowerShell)");
+    Console.WriteLine("  [more...]     any combination of the above; output sorted oldest-first");
+    Console.WriteLine();
+    Console.WriteLine("  --help, -h    show this message");
+    return args.Length == 0 ? 1 : 0;
 }
 
 // USD per million tokens: (prefix, input, output, cache_read, cache_create).
@@ -36,16 +46,18 @@ var phaseNames = new Dictionary<int, string>
     [5] = "New",
 };
 
+var files = ResolveFiles(args);
+if (files.Count == 0)
+{
+    Console.Error.WriteLine("error: no matching .jsonl files");
+    return 1;
+}
+
 int fileCount = 0;
 var grand = new Bucket();
 
-foreach (var path in args)
+foreach (var path in files)
 {
-    if (!File.Exists(path))
-    {
-        Console.Error.WriteLine($"error: file not found: {path}");
-        continue;
-    }
     fileCount++;
     var totals = AnalyzeAndReport(path, pricing, phaseNames);
     grand.Add(totals);
@@ -208,6 +220,45 @@ static Bucket AnalyzeAndReport(
         Console.WriteLine("\n* cost is partial; one or more LlmCalls used a model not in the pricing table");
 
     return totals;
+}
+
+static List<string> ResolveFiles(string[] patterns)
+{
+    bool singleExplicitFile = patterns.Length == 1 && File.Exists(patterns[0]);
+    var found = new List<string>();
+
+    foreach (var pat in patterns)
+    {
+        if (File.Exists(pat))
+        {
+            found.Add(pat);
+        }
+        else if (Directory.Exists(pat))
+        {
+            found.AddRange(Directory.GetFiles(pat, "*.jsonl"));
+        }
+        else if (pat.Contains('*') || pat.Contains('?'))
+        {
+            var dir = Path.GetDirectoryName(pat);
+            var name = Path.GetFileName(pat);
+            if (string.IsNullOrEmpty(dir)) dir = Environment.CurrentDirectory;
+            if (Directory.Exists(dir))
+                found.AddRange(Directory.GetFiles(dir, name));
+        }
+        else
+        {
+            Console.Error.WriteLine($"warning: no match for '{pat}'");
+        }
+    }
+
+    IEnumerable<string> filtered = singleExplicitFile
+        ? found
+        : found.Where(f => f.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase));
+
+    return filtered
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(File.GetLastWriteTimeUtc)
+        .ToList();
 }
 
 static decimal? ComputeCost(
