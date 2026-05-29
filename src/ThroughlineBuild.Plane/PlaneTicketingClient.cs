@@ -231,7 +231,8 @@ public sealed class PlaneTicketingClient : ITicketing
         };
 
         return new Ticket(
-            Id: issue.Id,
+            Id: $"{_options.ProjectIdentifier}-{issue.SequenceId}",
+            Uuid: issue.Id,
             Title: issue.Name,
             Type: issue.Type ?? string.Empty,
             State: ticketState,

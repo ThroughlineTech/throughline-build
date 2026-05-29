@@ -14,6 +14,7 @@ public class ReworkPhaseTests
 
     private static Ticket MakeTicket(TicketState state) => new Ticket(
         Id: "TLB-1",
+        Uuid: "ticket-uuid-1",
         Title: "Test ticket",
         Type: "feature",
         State: state,

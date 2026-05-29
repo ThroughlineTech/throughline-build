@@ -15,6 +15,7 @@ public class ChainCommandTests
     private static Ticket MakeTicket(TicketState state = TicketState.Ready) =>
         new Ticket(
             Id: "TLB-1",
+            Uuid: "test-uuid-1",
             Title: "Test ticket",
             Type: "feature",
             State: state,

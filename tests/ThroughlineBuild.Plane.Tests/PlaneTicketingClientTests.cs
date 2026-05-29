@@ -187,7 +187,8 @@ public class GetAsyncTests
         var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
         var ticket = await client.GetAsync("TLB-24", CancellationToken.None);
 
-        Assert.Equal(TestData.IssueUuid, ticket.Id);
+        Assert.Equal("TLB-24", ticket.Id);
+        Assert.Equal(TestData.IssueUuid, ticket.Uuid);
         Assert.Equal("plane-client", ticket.Title);
         Assert.Equal(TicketState.Backlog, ticket.State);
         Assert.Equal("<p>desc</p>", ticket.DescriptionHtml);
@@ -204,7 +205,8 @@ public class GetAsyncTests
         var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
         var ticket = await client.GetAsync("24", CancellationToken.None);
 
-        Assert.Equal(TestData.IssueUuid, ticket.Id);
+        Assert.Equal("TLB-24", ticket.Id);
+        Assert.Equal(TestData.IssueUuid, ticket.Uuid);
     }
 
     [Fact]

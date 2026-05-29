@@ -115,11 +115,16 @@ public class DecomposePhase : IWorkflowPhase
         }).ToList().AsReadOnly();
 
         var createResult = await _ticketing.CreateChildTicketsAsync(
-            ticket.Id, childTicketSpecs, ct).ConfigureAwait(false);
+            ticket.Uuid, childTicketSpecs, ct).ConfigureAwait(false);
 
         if (createResult.Created.Count == 0 && createResult.Failures.Count > 0)
             return new DecomposeResult(false, ticketId, childSpecs,
                 $"all child ticket creations failed: {string.Join("; ", createResult.Failures)}");
+
+        await _ticketing.CreateCommentAsync(
+            ticketId,
+            $"<p>[decomposed_at: {mainSha}]</p>",
+            ct).ConfigureAwait(false);
 
         var createdIds = createResult.Created.Select(c => c.Id).ToList().AsReadOnly();
         return new DecomposeResult(true, ticketId, childSpecs, null, createdIds);
@@ -131,7 +136,8 @@ public class DecomposePhase : IWorkflowPhase
         var outputs = result.Success
             ? new Dictionary<string, string>
             {
-                ["child_spec_count"] = result.ChildSpecs!.Count.ToString()
+                ["child_spec_count"] = result.ChildSpecs!.Count.ToString(),
+                ["created_child_count"] = (result.CreatedIds?.Count ?? 0).ToString()
             } as IReadOnlyDictionary<string, string>
             : new Dictionary<string, string>() as IReadOnlyDictionary<string, string>;
         return new PhaseResult(result.Success, result.TicketId, Phase.Decompose, result.FailureReason, outputs);

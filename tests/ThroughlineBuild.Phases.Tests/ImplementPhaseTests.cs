@@ -12,6 +12,7 @@ public class ImplementPhaseTests
 
     private static Ticket MakeTicket(TicketState state, string descriptionHtml = "<p>plan</p>") => new Ticket(
         Id: "TLB-1",
+        Uuid: "ticket-uuid-1",
         Title: "Test ticket",
         Type: "feature",
         State: state,
@@ -476,7 +477,7 @@ public class ImplementPhaseDebugCaptureTests
     private const string CommitSha = "ffffffffffffffffffffffffffffffffffffffff";
 
     private static Ticket MakeTicket() => new Ticket(
-        Id: "TLB-1", Title: "Test ticket", Type: "feature", State: TicketState.Ready,
+        Id: "TLB-1", Uuid: "ticket-uuid-1", Title: "Test ticket", Type: "feature", State: TicketState.Ready,
         Size: Size.S, Risk: Risk.Low, DescriptionHtml: "<p>plan</p>",
         Relations: Array.Empty<Relation>(), Labels: Array.Empty<string>(), ParentId: null);
 

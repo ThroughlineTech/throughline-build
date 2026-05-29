@@ -26,6 +26,7 @@ public class ChainPhaseEventTests
 
     private static Ticket MakeTicket(TicketState state) => new Ticket(
         Id: TicketId,
+        Uuid: "ticket-uuid-1",
         Title: TicketTitle,
         Type: "feature",
         State: state,
