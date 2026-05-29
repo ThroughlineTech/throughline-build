@@ -18,5 +18,9 @@
     <ProjectReference Include="..\..\src\ThroughlineBuild.Workers.Gemini\ThroughlineBuild.Workers.Gemini.csproj" />
     <ProjectReference Include="..\..\src\ThroughlineBuild.Workers.Common\ThroughlineBuild.Workers.Common.csproj" />
     <ProjectReference Include="..\..\src\ThroughlineBuild.Contracts\ThroughlineBuild.Contracts.csproj" />
+    <ProjectReference Include="..\ThroughlineBuild.Workers.Common.Tests\ThroughlineBuild.Workers.Common.Tests.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Fixtures\**\*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
