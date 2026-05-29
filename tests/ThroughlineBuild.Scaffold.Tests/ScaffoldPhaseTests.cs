@@ -267,14 +267,14 @@ OOS:
             new ScaffoldOptions(path, DryRun: false, AcceptWarnings: true),
             CancellationToken.None);
 
-        // 2 plans + 3 briefs (2 in Plan A, 1 in Plan B) = 5 creates
+        // 1 op + 2 plans + 3 briefs (2 in Plan A, 1 in Plan B) = 6 creates
         Assert.False(result.WasAbortedByParseErrors);
         Assert.False(result.WasAbortedByValidationErrors);
         Assert.False(result.WasBlockedByWarnings);
         Assert.False(result.WasDryRun);
         Assert.Equal(2, result.PlansCreated);
         Assert.Equal(3, result.BriefsCreated);
-        Assert.Equal(5, result.CreatedTicketIds.Count);
+        Assert.Equal(6, result.CreatedTicketIds.Count);
         Assert.Empty(result.Failures);
     }
 
@@ -290,7 +290,7 @@ OOS:
             new ScaffoldOptions(path, DryRun: false, AcceptWarnings: true),
             CancellationToken.None);
 
-        // 5 create_ticket events (2 plans + 3 briefs) + 3 set_parent events = 8 total
+        // 6 create_ticket events (1 op + 2 plans + 3 briefs) + 5 set_parent events (2 plan->op + 3 brief->plan) = 11 total
         var createEvents = events.Events
             .Where(e => e.Data.TryGetValue("action", out var a) && a.ToString() == "create_ticket")
             .ToList();
@@ -298,8 +298,8 @@ OOS:
             .Where(e => e.Data.TryGetValue("action", out var a) && a.ToString() == "set_parent")
             .ToList();
 
-        Assert.Equal(5, createEvents.Count);
-        Assert.Equal(3, parentEvents.Count);
+        Assert.Equal(6, createEvents.Count);
+        Assert.Equal(5, parentEvents.Count);
         Assert.All(events.Events, e => Assert.Equal(EventKind.TicketWrite, e.Kind));
     }
 
@@ -315,12 +315,12 @@ OOS:
             new ScaffoldOptions(path, DryRun: false, AcceptWarnings: true),
             CancellationToken.None);
 
-        // First two creates should be plan tickets
+        // 3 creates with plan-ticket label: 1 operation + 2 plans
         var planCreates = ticketing.Calls
             .Where(c => c.LabelNames != null && c.LabelNames.Contains("plan-ticket"))
             .ToList();
 
-        Assert.Equal(2, planCreates.Count);
+        Assert.Equal(3, planCreates.Count);
         Assert.Contains(planCreates, c => c.Title == "Plan A: Plan Alpha");
         Assert.Contains(planCreates, c => c.Title == "Plan B: Plan Beta");
     }
@@ -337,14 +337,38 @@ OOS:
             new ScaffoldOptions(path, DryRun: false, AcceptWarnings: true),
             CancellationToken.None);
 
-        // SetParentAsync should have been called 3 times (once per brief)
-        Assert.Equal(3, ticketing.ParentLinks.Count);
+        // SetParentAsync should have been called 5 times (2 plans + 3 briefs)
+        Assert.Equal(5, ticketing.ParentLinks.Count);
         // All parent UUIDs should be valid (non-empty)
         Assert.All(ticketing.ParentLinks, link =>
         {
             Assert.False(string.IsNullOrEmpty(link.ChildUuid));
             Assert.False(string.IsNullOrEmpty(link.ParentUuid));
         });
+    }
+
+    [Fact]
+    public async Task HappyPath_PlanTicketsParentedToOpTicket()
+    {
+        var path = WriteOpDoc(ValidOpDoc);
+        var ticketing = new FakeTicketing();
+        var events = new FakeEventSink();
+        var phase = new ScaffoldPhase(ticketing, events, "session-1");
+
+        var result = await phase.RunAsync(
+            new ScaffoldOptions(path, DryRun: false, AcceptWarnings: true),
+            CancellationToken.None);
+
+        // Operation ticket should exist and be in CreatedTicketIds
+        Assert.NotNull(result.OpTicketId);
+        Assert.NotEmpty(result.OpTicketId);
+        Assert.Contains(result.OpTicketId, result.CreatedTicketIds);
+
+        // First two ParentLinks should be plan->op (plans 1 and 2 parented to op)
+        // The op ticket UUID is "uuid-0001" (first create)
+        var opUuid = "uuid-0001";
+        var planParentLinks = ticketing.ParentLinks.Where(l => l.ParentUuid == opUuid).ToList();
+        Assert.Equal(2, planParentLinks.Count);
     }
 
     [Fact]
@@ -441,8 +465,9 @@ OOS:
     public async Task BriefCreateFailure_ContinuesToNextBrief_RecordsFailure()
     {
         var path = WriteOpDoc(ValidOpDoc);
-        // Fail the second create call (first brief in plan A)
-        var ticketing = new FakeTicketing(throwOnCallNumber: 2);
+        // Fail the third create call (first brief in plan A)
+        // Call 1: op ticket, Call 2: plan A, Call 3: brief A.01 (fails)
+        var ticketing = new FakeTicketing(throwOnCallNumber: 3);
         var events = new FakeEventSink();
         var phase = new ScaffoldPhase(ticketing, events, "session-1");
 
@@ -462,7 +487,7 @@ OOS:
     public async Task SetParentFailure_ContinuesToNextBrief_RecordsFailure()
     {
         var path = WriteOpDoc(ValidOpDoc);
-        // Ticketing creates succeed; parent link throws on first call
+        // Ticketing creates succeed; parent link throws on first call (first plan->op link)
         var ticketing = new FakeTicketing(throwSetParentOnCallNumber: 1);
         var events = new FakeEventSink();
         var phase = new ScaffoldPhase(ticketing, events, "session-1");
@@ -476,8 +501,8 @@ OOS:
         Assert.Contains("parent_link", result.Failures[0].Stage);
         Assert.Equal(2, result.PlansCreated);
         Assert.Equal(3, result.BriefsCreated);
-        // Other parent links still proceeded
-        Assert.Equal(2, ticketing.ParentLinks.Count);
+        // Other parent links still proceeded: 1 remaining plan->op + 3 brief->plan = 4 total
+        Assert.Equal(4, ticketing.ParentLinks.Count);
     }
 
     // ---- Test doubles ----

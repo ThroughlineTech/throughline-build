@@ -50,7 +50,8 @@ public sealed class ScaffoldPhase
                 WasAbortedByParseErrors: true,
                 WasAbortedByValidationErrors: false,
                 WasBlockedByWarnings: false,
-                WasDryRun: false);
+                WasDryRun: false,
+                OpTicketId: null);
         }
 
         var opDoc = parseResult.Parsed;
@@ -68,7 +69,8 @@ public sealed class ScaffoldPhase
                 WasAbortedByParseErrors: false,
                 WasAbortedByValidationErrors: true,
                 WasBlockedByWarnings: false,
-                WasDryRun: false);
+                WasDryRun: false,
+                OpTicketId: null);
         }
 
         // --- Step 3: warning gate ---
@@ -82,7 +84,8 @@ public sealed class ScaffoldPhase
                 WasAbortedByParseErrors: false,
                 WasAbortedByValidationErrors: false,
                 WasBlockedByWarnings: true,
-                WasDryRun: false);
+                WasDryRun: false,
+                OpTicketId: null);
         }
 
         // --- Step 4: dry-run ---
@@ -106,7 +109,8 @@ public sealed class ScaffoldPhase
                 WasAbortedByParseErrors: false,
                 WasAbortedByValidationErrors: false,
                 WasBlockedByWarnings: false,
-                WasDryRun: true);
+                WasDryRun: true,
+                OpTicketId: null);
         }
 
         // --- Step 5: create tickets ---
@@ -114,6 +118,38 @@ public sealed class ScaffoldPhase
         int briefsCreated = 0;
         var createdIds = new List<string>();
         var failures = new List<ScaffoldFailure>();
+        string opTicketId = string.Empty;
+        string opTicketUuid = string.Empty;
+
+        // 5a: create operation ticket
+        string opStage = "op_create";
+        try
+        {
+            string opTitle = opDoc.Title;
+            string opHtml = BriefHtmlRenderer.RenderOpDoc(opDoc);
+            var opResult = await _ticketing.CreateTicketAsync(
+                opTitle,
+                null,
+                opHtml,
+                new[] { "plan-ticket" },
+                ct).ConfigureAwait(false);
+
+            opTicketId = opResult.Id;
+            opTicketUuid = opResult.Uuid;
+            createdIds.Add(opTicketId);
+
+            await EmitAsync(new Dictionary<string, object>
+            {
+                ["action"] = "create_ticket",
+                ["id"] = opTicketId,
+                ["role"] = "operation"
+            }, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            failures.Add(new ScaffoldFailure(opStage, ex.Message));
+            // Can't link plans without a parent - but we still attempt plan creation
+        }
 
         foreach (var entry in opDoc.DispatchOrder)
         {
@@ -154,6 +190,29 @@ public sealed class ScaffoldPhase
                 failures.Add(new ScaffoldFailure(planStage, ex.Message));
                 // Can't link briefs without a parent - but we still attempt brief creation
                 // (orphaned briefs are visible in the list; operator cleans up)
+            }
+
+            // Set parent link: plan -> operation ticket
+            if (!string.IsNullOrEmpty(opTicketUuid) && !string.IsNullOrEmpty(planTicketUuid))
+            {
+                string planParentStage = $"plan_{plan.Id}_parent_link";
+                try
+                {
+                    await _ticketing.SetParentAsync(planTicketUuid, opTicketUuid, ct)
+                        .ConfigureAwait(false);
+
+                    await EmitAsync(new Dictionary<string, object>
+                    {
+                        ["action"] = "set_parent",
+                        ["child"] = planTicketId,
+                        ["parent"] = opTicketId
+                    }, ct).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    failures.Add(new ScaffoldFailure(planParentStage, ex.Message));
+                    // Continue to next plan - parent link failure is logged, not fatal
+                }
             }
 
             // 5b: create brief-tickets
@@ -225,7 +284,8 @@ public sealed class ScaffoldPhase
             WasAbortedByParseErrors: false,
             WasAbortedByValidationErrors: false,
             WasBlockedByWarnings: false,
-            WasDryRun: false);
+            WasDryRun: false,
+            OpTicketId: !string.IsNullOrEmpty(opTicketId) ? opTicketId : null);
     }
 
     private Task EmitAsync(IReadOnlyDictionary<string, object> data, CancellationToken ct)

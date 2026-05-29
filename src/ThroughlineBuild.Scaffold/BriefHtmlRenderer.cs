@@ -10,6 +10,23 @@ namespace ThroughlineBuild.Scaffold;
 public static class BriefHtmlRenderer
 {
     /// <summary>
+    /// Render an operation's description as HTML for the op-ticket body.
+    /// Includes the operation why/rationale.
+    /// </summary>
+    public static string RenderOpDoc(OpDoc opDoc)
+    {
+        var sb = new StringBuilder();
+
+        if (!string.IsNullOrWhiteSpace(opDoc.Why))
+        {
+            sb.Append("<h3>Why</h3>");
+            sb.Append(RenderInlineMarkdown(opDoc.Why.Trim()));
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>
     /// Render a plan's description as HTML for the plan-ticket body.
     /// Includes the plan goal and a summary list of briefs in the plan.
     /// </summary>
