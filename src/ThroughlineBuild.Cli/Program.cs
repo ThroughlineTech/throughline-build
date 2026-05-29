@@ -9,6 +9,7 @@ using ThroughlineBuild.EventLog;
 using ThroughlineBuild.Git;
 using ThroughlineBuild.Helpers;
 using ThroughlineBuild.JudgmentSlots;
+using ThroughlineBuild.ModelClient;
 using ThroughlineBuild.Phases;
 using ThroughlineBuild.Plane;
 using ThroughlineBuild.Scaffold;
@@ -1214,7 +1215,18 @@ static string? WireUpConditionalCommands(
         return "anthropic api key required for close/defer/reopen (reason translation)";
     }
 
-    var anthropicClient = new AnthropicClient(http, new AnthropicOptions { ApiKey = secrets.AnthropicApiKey });
+    var providerConfig = new ProviderConfig(
+        BaseUrl: "https://api.anthropic.com",
+        AuthScheme: "x-api-key",
+        ExtraHeaders: new Dictionary<string, string>
+        {
+            ["x-api-key"] = secrets.AnthropicApiKey,
+            ["anthropic-version"] = "2023-06-01"
+        },
+        Vendor: "anthropic",
+        DefaultTimeout: TimeSpan.FromSeconds(30));
+    var modelClient = new AnthropicModelClient(http, providerConfig);
+    var anthropicClient = new ModelClientLlmAdapter(modelClient);
     var translator = new ReasonTranslator(anthropicClient);
 
     if (verb == "close")

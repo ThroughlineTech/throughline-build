@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Polly;
+using Polly.Retry;
 using ThroughlineBuild.ModelClient;
 
 namespace ThroughlineBuild.Anthropic;
@@ -7,11 +9,13 @@ public class AnthropicModelClient : IModelClient
 {
     private readonly HttpClient _httpClient;
     private readonly ProviderConfig _config;
+    private readonly IAsyncPolicy<HttpResponseMessage> _resiliencePipeline;
 
     public AnthropicModelClient(HttpClient httpClient, ProviderConfig config)
     {
         _httpClient = httpClient;
         _config = config;
+        _resiliencePipeline = BuildResiliencePipeline();
     }
 
     public async Task<ModelResponse> SendAsync(ModelRequest request, CancellationToken ct = default)
@@ -31,20 +35,15 @@ public class AnthropicModelClient : IModelClient
         );
 
         var json = JsonSerializer.Serialize(wireRequest, AnthropicJsonContext.Default.AnthropicModelClientRequest);
-        var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
-        var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{_config.BaseUrl}/v1/messages")
-        {
-            Content = content
-        };
 
-        httpRequest.Headers.Add(_config.AuthScheme, _config.ExtraHeaders.TryGetValue(_config.AuthScheme, out var apiKey) ? apiKey : string.Empty);
-        foreach (var header in _config.ExtraHeaders)
-        {
-            if (!httpRequest.Headers.Contains(header.Key))
-                httpRequest.Headers.TryAddWithoutValidation(header.Key, header.Value);
-        }
-
-        var response = await _httpClient.SendAsync(httpRequest, ct);
+        var response = await _resiliencePipeline.ExecuteAsync(
+            async _ =>
+            {
+                var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+                var httpRequest = BuildHttpRequest(content);
+                return await _httpClient.SendAsync(httpRequest, ct);
+            },
+            new Polly.Context());
 
         if (!response.IsSuccessStatusCode)
         {
@@ -100,20 +99,15 @@ public class AnthropicModelClient : IModelClient
         );
 
         var json = JsonSerializer.Serialize(wireRequest, AnthropicJsonContext.Default.AnthropicStreamRequest);
-        var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
-        var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{_config.BaseUrl}/v1/messages")
-        {
-            Content = content
-        };
 
-        httpRequest.Headers.Add(_config.AuthScheme, _config.ExtraHeaders.TryGetValue(_config.AuthScheme, out var apiKey) ? apiKey : string.Empty);
-        foreach (var header in _config.ExtraHeaders)
-        {
-            if (!httpRequest.Headers.Contains(header.Key))
-                httpRequest.Headers.TryAddWithoutValidation(header.Key, header.Value);
-        }
-
-        var response = await _httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, ct);
+        var response = await _resiliencePipeline.ExecuteAsync(
+            async _ =>
+            {
+                var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+                var httpRequest = BuildHttpRequest(content);
+                return await _httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, ct);
+            },
+            new Polly.Context());
 
         if (!response.IsSuccessStatusCode)
         {
@@ -183,5 +177,36 @@ public class AnthropicModelClient : IModelClient
             default:
                 return null;
         }
+    }
+
+    private HttpRequestMessage BuildHttpRequest(StringContent content)
+    {
+        var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{_config.BaseUrl}/v1/messages")
+        {
+            Content = content
+        };
+
+        httpRequest.Headers.Add(_config.AuthScheme, _config.ExtraHeaders.TryGetValue(_config.AuthScheme, out var apiKey) ? apiKey : string.Empty);
+        foreach (var header in _config.ExtraHeaders)
+        {
+            if (!httpRequest.Headers.Contains(header.Key))
+                httpRequest.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        }
+
+        return httpRequest;
+    }
+
+    private IAsyncPolicy<HttpResponseMessage> BuildResiliencePipeline()
+    {
+        var retryPolicy = Policy
+            .HandleResult<HttpResponseMessage>(r =>
+                r.StatusCode == System.Net.HttpStatusCode.TooManyRequests ||
+                (int)r.StatusCode >= 500)
+            .WaitAndRetryAsync(
+                retryCount: 3,
+                sleepDurationProvider: retryAttempt =>
+                    TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)));
+
+        return retryPolicy;
     }
 }
