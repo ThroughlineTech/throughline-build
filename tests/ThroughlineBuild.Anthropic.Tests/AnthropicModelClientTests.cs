@@ -104,21 +104,6 @@ public class AnthropicModelClientTests
         Assert.Equal(400, ex.Status);
     }
 
-    [Fact]
-    public void StreamAsync_ThrowsNotImplementedException()
-    {
-        var handler = new FakeHandler(HttpStatusCode.OK, null, string.Empty);
-        var client = new AnthropicModelClient(new HttpClient(handler), MakeConfig());
-
-        var request = new ModelRequest(
-            Model: "claude-opus-4-5",
-            Messages: new[] { new ModelMessage("user", new[] { new TextContent("hi") }) },
-            MaxTokens: 10
-        );
-
-        Assert.Throws<NotImplementedException>(() => client.StreamAsync(request));
-    }
-
     private class FakeHandler : HttpMessageHandler
     {
         private readonly HttpStatusCode _status;
