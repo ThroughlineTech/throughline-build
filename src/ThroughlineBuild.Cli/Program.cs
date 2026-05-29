@@ -726,14 +726,16 @@ static async Task<int> RunAsync(string[] args)
                 {
                     ExecutablePath = capturedCfg.Executable,
                     MaxOutputTokens = capturedCfg.MaxOutputTokens,
-                    Sizes = capturedCfg.Sizes
+                    Sizes = capturedCfg.Sizes,
+                    BypassPermissions = capturedCfg.BypassPermissions
                 });
             if (capturedName == "codex")
                 return new CodexAgent(new CodexOptions
                 {
                     ExecutablePath = capturedCfg.Executable,
                     MaxOutputTokens = capturedCfg.MaxOutputTokens,
-                    Sizes = capturedCfg.Sizes
+                    Sizes = capturedCfg.Sizes,
+                    BypassPermissions = capturedCfg.BypassPermissions
                 });
             if (capturedName == "copilot")
                 return new CopilotAgent(new CopilotOptions
@@ -746,7 +748,8 @@ static async Task<int> RunAsync(string[] args)
             {
                 ExecutablePath = capturedCfg.Executable,
                 MaxOutputTokens = capturedCfg.MaxOutputTokens,
-                Sizes = capturedCfg.Sizes
+                Sizes = capturedCfg.Sizes,
+                BypassPermissions = capturedCfg.BypassPermissions
             });
         };
     }

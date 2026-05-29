@@ -609,6 +609,64 @@ log_directory = ".build/events"
     }
 
     [Fact]
+    public void Load_BypassPermissionsDefaultsTrue_WhenAbsent()
+    {
+        // ValidToml has no bypass_permissions key under [workers.claude-code];
+        // the loader must default the AgentConfig field to true so the historic
+        // CLI behavior (passing the unattended-mode flag) is preserved.
+        var path = WriteToml(ValidToml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            Assert.True(config.Workers.Agents["claude-code"].BypassPermissions);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_BypassPermissionsFalse_ParsesAsFalse()
+    {
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "abc-123"
+plane_api_token_env = "PLANE_TOKEN"
+
+[workers]
+default_agent = "claude-code"
+
+[workers.claude-code]
+executable = "claude"
+bypass_permissions = false
+
+[workers.claude-code.sizes]
+small  = "claude-haiku-4-5-20251001"
+medium = "claude-sonnet-4-6"
+large  = "claude-opus-4-7"
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            Assert.False(config.Workers.Agents["claude-code"].BypassPermissions);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Load_GeminiAgentSubTable_WithGooglePrefixSizes_ParsesRawString()
     {
         var toml = """

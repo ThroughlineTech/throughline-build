@@ -1422,3 +1422,28 @@ public class WriteCancellationCaptureTests
         finally { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
     }
 }
+
+public class ClaudeCodeAgentBypassPermissionsTests
+{
+    [Fact]
+    public void BuildArgs_BypassPermissionsTrue_IncludesDangerouslySkipPermissions()
+    {
+        var options = new ClaudeCodeOptions { BypassPermissions = true };
+        var workerOptions = new WorkerOptions(TimeSpan.FromSeconds(30));
+
+        var args = ClaudeCodeAgent.BuildArgs(options, workerOptions);
+
+        Assert.Contains("--dangerously-skip-permissions", args);
+    }
+
+    [Fact]
+    public void BuildArgs_BypassPermissionsFalse_OmitsDangerouslySkipPermissions()
+    {
+        var options = new ClaudeCodeOptions { BypassPermissions = false };
+        var workerOptions = new WorkerOptions(TimeSpan.FromSeconds(30));
+
+        var args = ClaudeCodeAgent.BuildArgs(options, workerOptions);
+
+        Assert.DoesNotContain("--dangerously-skip-permissions", args);
+    }
+}

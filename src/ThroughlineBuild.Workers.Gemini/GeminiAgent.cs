@@ -21,15 +21,13 @@ public class GeminiAgent : IWorkerAgent
 
     public async Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
     {
-        // Build args: gemini -p "<brief>" --output-format json --yolo [--model <model>] [extra...]
+        // Build args: gemini -p "<brief>" --output-format json [--yolo] [--model <model>] [extra...]
         // Brief is delivered as the -p prompt argument (not stdin, not positional).
-        var args = new List<string> { "-p", brief.Instruction, "--output-format", "json", "--yolo" };
+        var args = BuildArgs(brief.Instruction, _options, options);
+        // modelArg is needed below for llm_usage metadata regardless of whether
+        // it was emitted on the CLI; resolve it here too.
         _options.Sizes.TryGetValue(options.Size, out var resolvedModelRaw);
         var modelArg = NormalizeModel(resolvedModelRaw);
-        if (modelArg is not null)
-            args.AddRange(new[] { "--model", modelArg });
-        foreach (var extra in _options.ExtraArgs)
-            args.Add(extra);
 
         var stdoutBuilder = new StringBuilder();
         var stderrBuilder = new StringBuilder();
@@ -216,6 +214,25 @@ public class GeminiAgent : IWorkerAgent
         Console.Error.WriteLine($"[GeminiAgent] {markerReason}");
         return new WorkerResult(Status.Failed, "No WORKER_RESULT found in output", Array.Empty<string>(),
             markerReason, new Dictionary<string, object>());
+    }
+
+    // Builds the argv passed to the gemini CLI.
+    //
+    // --yolo puts gemini into its unattended-execution mode (no permission
+    // gate). Emitted only when options.BypassPermissions is true. The brief
+    // is delivered as the -p prompt argument (not stdin, not positional).
+    internal static List<string> BuildArgs(string briefInstruction, GeminiOptions options, WorkerOptions workerOptions)
+    {
+        var args = new List<string> { "-p", briefInstruction, "--output-format", "json" };
+        if (options.BypassPermissions)
+            args.Add("--yolo");
+        options.Sizes.TryGetValue(workerOptions.Size, out var resolvedModelRaw);
+        var modelArg = NormalizeModel(resolvedModelRaw);
+        if (modelArg is not null)
+            args.AddRange(new[] { "--model", modelArg });
+        foreach (var extra in options.ExtraArgs)
+            args.Add(extra);
+        return args;
     }
 
     // Strips the optional "google:" vendor prefix from a configured model id so the

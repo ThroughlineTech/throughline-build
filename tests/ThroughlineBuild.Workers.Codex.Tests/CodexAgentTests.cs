@@ -1,3 +1,4 @@
+using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Workers.Codex;
 using Xunit;
@@ -64,5 +65,27 @@ public class CodexAgentTests
         var result = CodexAgent.ParseStdoutForWorkerResult(stdout, 0, "");
         Assert.Equal(Status.Failed, result.Status);
         Assert.NotNull(result.FailureReason);
+    }
+
+    [Fact]
+    public void BuildArgs_BypassPermissionsTrue_IncludesFullAuto()
+    {
+        var options = new CodexOptions { BypassPermissions = true };
+        var workerOptions = new WorkerOptions(TimeSpan.FromSeconds(30));
+
+        var args = CodexAgent.BuildArgs("the brief", options, workerOptions);
+
+        Assert.Contains("--full-auto", args);
+    }
+
+    [Fact]
+    public void BuildArgs_BypassPermissionsFalse_OmitsFullAuto()
+    {
+        var options = new CodexOptions { BypassPermissions = false };
+        var workerOptions = new WorkerOptions(TimeSpan.FromSeconds(30));
+
+        var args = CodexAgent.BuildArgs("the brief", options, workerOptions);
+
+        Assert.DoesNotContain("--full-auto", args);
     }
 }
