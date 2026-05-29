@@ -1,6 +1,5 @@
 using System.Net.Http;
 using System.Reflection;
-using ThroughlineBuild.Anthropic;
 using ThroughlineBuild.Cli;
 using ThroughlineBuild.Commands;
 using ThroughlineBuild.Contracts;
@@ -240,7 +239,7 @@ static async Task<int> RunAsync(string[] args)
         var registry = new TicketCommandRegistry();
         registry.Register("amend", new AmendCommand(ticketing2, eventSink2));
 
-        var wireUpError = WireUpConditionalCommands(verb, registry, secrets2, http2, ticketing2, eventSink2, cwd2);
+        var wireUpError = WireUpConditionalCommands(verb, registry, secrets2, config2.Llm, http2, ticketing2, eventSink2, cwd2);
         if (wireUpError is not null)
         {
             Console.Error.WriteLine($"Secret error: {wireUpError}");
@@ -1247,6 +1246,7 @@ static string? WireUpConditionalCommands(
     string verb,
     TicketCommandRegistry registry,
     BuildSecrets secrets,
+    LlmConfig llmConfig,
     HttpClient http,
     ITicketing ticketing,
     IEventSink eventSink,
@@ -1255,24 +1255,16 @@ static string? WireUpConditionalCommands(
     if (verb != "close" && verb != "defer" && verb != "reopen")
         return null;
 
-    if (string.IsNullOrEmpty(secrets.AnthropicApiKey))
+    ILlmClient llmClient;
+    try
     {
-        return "anthropic api key required for close/defer/reopen (reason translation)";
+        llmClient = LlmClientFactory.Create(llmConfig, secrets, http);
     }
-
-    var providerConfig = new ProviderConfig(
-        BaseUrl: "https://api.anthropic.com",
-        AuthScheme: "x-api-key",
-        ExtraHeaders: new Dictionary<string, string>
-        {
-            ["x-api-key"] = secrets.AnthropicApiKey,
-            ["anthropic-version"] = "2023-06-01"
-        },
-        Vendor: "anthropic",
-        DefaultTimeout: TimeSpan.FromSeconds(30));
-    var modelClient = new AnthropicModelClient(http, providerConfig);
-    var anthropicClient = new ModelClientLlmAdapter(modelClient);
-    var translator = new ReasonTranslator(anthropicClient);
+    catch (ConfigException ex)
+    {
+        return ex.Message;
+    }
+    var translator = new ReasonTranslator(llmClient);
 
     if (verb == "close")
     {
