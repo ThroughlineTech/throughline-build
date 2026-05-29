@@ -1,6 +1,6 @@
 # Plan: {{ticket_id}} - {{title}}
 
-You are investigating a ticket and writing an implementation plan. Investigation only. No code changes, no branches. The plan you produce will be appended to the ticket's description and serve as the contract for the implement phase.
+You are investigating a ticket and writing an implementation plan. Investigation only. No code changes, no branches. You do not need to build, run tests, or invoke other verification commands. Investigation is read-only. The plan you produce will be appended to the ticket's description and serve as the contract for the implement phase.
 
 ## Ticket
 
