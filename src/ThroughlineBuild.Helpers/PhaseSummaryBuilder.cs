@@ -194,6 +194,40 @@ public static class PhaseSummaryBuilder
         };
     }
 
+    public static DecomposePhaseSummary BuildDecompose(
+        string ticketId,
+        bool success,
+        string? failureReason,
+        IReadOnlyList<string> createdIds,
+        IReadOnlyList<string> childSizes,
+        IReadOnlyList<WorkflowEvent> events,
+        string? planeUrl,
+        string? sessionArtifactsPath)
+    {
+        var (from, to) = FindStateTransition(events, Phase.Decompose);
+        var (wallMs, outTok, cacheRead) = CollectWorkerStats(events, Phase.Decompose);
+
+        return new DecomposePhaseSummary
+        {
+            PhaseKind = "Decompose",
+            TicketId = ticketId,
+            Success = success,
+            FailureReason = failureReason,
+            FailedAt = success ? null : "worker",
+            SessionArtifactsPath = sessionArtifactsPath,
+            PlaneUrl = planeUrl,
+            ParentTicketId = ticketId,
+            ChildCount = createdIds.Count,
+            CreatedIds = createdIds,
+            ChildSizes = childSizes,
+            StateFrom = from,
+            StateTo = to,
+            WorkerWallMs = wallMs,
+            OutputTokens = outTok,
+            CacheReadTokens = cacheRead,
+        };
+    }
+
     // ---- shared helpers ----
 
     private static (string? from, string? to) FindStateTransition(

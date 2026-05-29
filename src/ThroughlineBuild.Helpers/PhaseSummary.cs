@@ -66,3 +66,13 @@ public sealed record ShipPhaseSummary : PhaseSummary
     public string? StateTo { get; init; }
     public bool Archived { get; init; }
 }
+
+public sealed record DecomposePhaseSummary : PhaseSummary
+{
+    public string? ParentTicketId { get; init; }
+    public int ChildCount { get; init; }
+    public IReadOnlyList<string> CreatedIds { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> ChildSizes { get; init; } = Array.Empty<string>();
+    public string? StateFrom { get; init; }
+    public string? StateTo { get; init; }
+}
