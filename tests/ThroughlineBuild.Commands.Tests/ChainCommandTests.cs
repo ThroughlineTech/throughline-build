@@ -42,7 +42,7 @@ public class ChainCommandTests
         var t = ticket ?? MakeTicket();
         var ticketing = new FakeTicketing(t);
         var runner = new FakeChainRunner();
-        var cmd = new ChainCommand(runner, ticketing, "https://plane.example.com/project");
+        var cmd = new ChainCommand(runner, ticketing);
         return (cmd, runner, ticketing);
     }
 
@@ -403,7 +403,7 @@ public class ChainCommandTests
         var t = MakeTicket();
         var ticketing = new FakeTicketing(t);
         var runner = new FakeThrowingChainRunner(new InvalidOperationException("chain failed internally"));
-        var cmd = new ChainCommand(runner, ticketing, "https://plane.example.com/project");
+        var cmd = new ChainCommand(runner, ticketing);
         var ctx = MakeCtx();
 
         var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);

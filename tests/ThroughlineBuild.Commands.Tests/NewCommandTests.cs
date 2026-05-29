@@ -40,7 +40,7 @@ Some body content.
                 WorkerTimeout: TimeSpan.Zero,
                 DebugCaptureDirectory: null);
             var phase = new NewPhase(ticketing, events, options);
-            var cmd = new NewCommand(phase, "https://plane.example.com/workspace", null);
+            var cmd = new NewCommand(phase, "https://plane.example.com", "workspace", null);
 
             var ctx = MakeCtx(new Dictionary<string, string> { ["body_path"] = tempBodyPath });
             var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
@@ -48,7 +48,7 @@ Some body content.
             Assert.True(result.Success);
             Assert.NotNull(result.Message);
             Assert.Contains("Created TLB-42 (uuid:", result.Message);
-            Assert.Contains("https://plane.example.com/workspace/browse/TLB-42/", result.Message);
+            Assert.Contains("https://plane.example.com/?next_path=/workspace/browse/TLB-42", result.Message);
             Assert.Contains("Warning:", result.Message);
         }
         finally
@@ -85,7 +85,7 @@ Body content.
                 WorkerTimeout: TimeSpan.Zero,
                 DebugCaptureDirectory: null);
             var phase = new NewPhase(ticketing, events, options);
-            var cmd = new NewCommand(phase, "", null);
+            var cmd = new NewCommand(phase, "", "", null);
 
             var ctx = MakeCtx(new Dictionary<string, string>
             {
@@ -134,7 +134,7 @@ Body.
                 WorkerTimeout: TimeSpan.Zero,
                 DebugCaptureDirectory: null);
             var phase = new NewPhase(ticketing, events, options);
-            var cmd = new NewCommand(phase, "", null);
+            var cmd = new NewCommand(phase, "", "", null);
 
             var ctx = MakeCtx(new Dictionary<string, string>
             {
@@ -181,7 +181,7 @@ Body.
                 WorkerTimeout: TimeSpan.Zero,
                 DebugCaptureDirectory: null);
             var phase = new NewPhase(ticketing, events, options);
-            var cmd = new NewCommand(phase, "", null);
+            var cmd = new NewCommand(phase, "", "", null);
 
             var ctx = MakeCtx(new Dictionary<string, string>
             {
@@ -216,7 +216,7 @@ Body.
             WorkerTimeout: TimeSpan.Zero,
             DebugCaptureDirectory: null);
         var phase = new NewPhase(ticketing, events, options);
-        var cmd = new NewCommand(phase, "", null);
+        var cmd = new NewCommand(phase, "", "", null);
 
         var ctx = MakeCtx(new Dictionary<string, string> { ["print_template"] = "true" });
 
@@ -257,7 +257,7 @@ Body.
             WorkerTimeout: TimeSpan.Zero,
             DebugCaptureDirectory: null);
         var phase = new NewPhase(ticketing, events, options);
-        var cmd = new NewCommand(phase, "", null);
+        var cmd = new NewCommand(phase, "", "", null);
 
         var ctx = MakeCtx(new Dictionary<string, string>());
         var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
@@ -278,7 +278,7 @@ Body.
             WorkerTimeout: TimeSpan.Zero,
             DebugCaptureDirectory: null);
         var phase = new NewPhase(ticketing, events, options);
-        var cmd = new NewCommand(phase, "", null);
+        var cmd = new NewCommand(phase, "", "", null);
 
         var ctx = MakeCtx(new Dictionary<string, string>
         {
@@ -310,7 +310,7 @@ Short body.");
                 WorkerTimeout: TimeSpan.Zero,
                 DebugCaptureDirectory: null);
             var phase = new NewPhase(ticketing, events, options);
-            var cmd = new NewCommand(phase, "", null);
+            var cmd = new NewCommand(phase, "", "", null);
 
             var ctx = MakeCtx(new Dictionary<string, string> { ["body_path"] = tempBodyPath });
             var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
@@ -353,7 +353,7 @@ Body.
                 WorkerTimeout: TimeSpan.Zero,
                 DebugCaptureDirectory: null);
             var phase = new NewPhase(ticketing, events, options);
-            var cmd = new NewCommand(phase, "", null);
+            var cmd = new NewCommand(phase, "", "", null);
 
             var ctx = MakeCtx(new Dictionary<string, string> { ["body_path"] = tempBodyPath });
             var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
@@ -398,7 +398,7 @@ Body.
                 WorkerTimeout: TimeSpan.Zero,
                 DebugCaptureDirectory: null);
             var phase = new NewPhase(ticketing, events, options);
-            var cmd = new NewCommand(phase, "", tempDir);
+            var cmd = new NewCommand(phase, "", "", tempDir);
 
             var ctx = MakeCtx(new Dictionary<string, string> { ["body_path"] = tempBodyPath });
             var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);

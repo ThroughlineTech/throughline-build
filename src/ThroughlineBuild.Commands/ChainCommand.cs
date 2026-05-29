@@ -14,13 +14,11 @@ public sealed class ChainCommand : ITicketCommand
 {
     private readonly IChainRunner _runner;
     private readonly ITicketing _ticketing;
-    private readonly string _planeProjectUrl;
 
-    public ChainCommand(IChainRunner runner, ITicketing ticketing, string planeProjectUrl)
+    public ChainCommand(IChainRunner runner, ITicketing ticketing)
     {
         _runner = runner;
         _ticketing = ticketing;
-        _planeProjectUrl = planeProjectUrl;
     }
 
     /// <summary>

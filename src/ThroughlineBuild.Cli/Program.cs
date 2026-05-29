@@ -407,7 +407,7 @@ static async Task<int> RunAsync(string[] args)
         {
             newCommandArgs["print_template"] = "true";
             var ctx2 = new TicketCommandContext("", newCommandArgs);
-            var cmd2 = new NewCommand(newPhase2, config2.Project.PlaneProjectUrl, buildOptions2.DebugCaptureDirectory);
+            var cmd2 = new NewCommand(newPhase2, config2.Ticketing.PlaneBaseUrl, config2.Ticketing.PlaneWorkspaceSlug, buildOptions2.DebugCaptureDirectory);
             try
             {
                 var verbResult = await cmd2.ExecuteAsync(ctx2, verbCts.Token);
@@ -432,7 +432,7 @@ static async Task<int> RunAsync(string[] args)
         {
             newCommandArgs["body_path"] = classification.FilePath!;
             var ctx2 = new TicketCommandContext("", newCommandArgs);
-            var cmd2 = new NewCommand(newPhase2, config2.Project.PlaneProjectUrl, buildOptions2.DebugCaptureDirectory);
+            var cmd2 = new NewCommand(newPhase2, config2.Ticketing.PlaneBaseUrl, config2.Ticketing.PlaneWorkspaceSlug, buildOptions2.DebugCaptureDirectory);
             try
             {
                 var verbResult = await cmd2.ExecuteAsync(ctx2, verbCts.Token);
@@ -552,7 +552,7 @@ static async Task<int> RunAsync(string[] args)
             newCommandArgs["body_path"] = tempBodyPath;
 
             var ctx3 = new TicketCommandContext("", newCommandArgs);
-            var cmd3 = new NewCommand(newPhase2, config2.Project.PlaneProjectUrl, buildOptions2.DebugCaptureDirectory);
+            var cmd3 = new NewCommand(newPhase2, config2.Ticketing.PlaneBaseUrl, config2.Ticketing.PlaneWorkspaceSlug, buildOptions2.DebugCaptureDirectory);
             try
             {
                 var verbResult = await cmd3.ExecuteAsync(ctx3, verbCts.Token);
@@ -799,7 +799,7 @@ static async Task<int> RunAsync(string[] args)
 
     // Shared git client (read-only ops only at this layer) for summary-block construction.
     var summaryGit = new ProcessGitClient(cwd);
-    string PlaneUrl() => BuildPlaneUrl(config2.Project.PlaneProjectUrl, ticketId);
+    string PlaneUrl() => BuildPlaneUrl(config2.Ticketing.PlaneBaseUrl, config2.Ticketing.PlaneWorkspaceSlug, ticketId);
     string? ArtifactsPath() => debugCaptureDir is not null
         ? $".build/sessions/{fileStem}/"
         : $".build/events/{fileStem}.jsonl";
@@ -1071,7 +1071,7 @@ static async Task<int> RunAsync(string[] args)
             workingDirectory: cwd);
 
         var chainRunner = new DefaultChainRunner(chainPhase);
-        var chainCommand = new ChainCommand(chainRunner, ticketing, config2.Project.PlaneProjectUrl);
+        var chainCommand = new ChainCommand(chainRunner, ticketing);
         var chainCtx = new TicketCommandContext(ticketId, new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["debug"] = debugMode ? "true" : "false"
@@ -1308,15 +1308,13 @@ static async Task<int> RunAsync(string[] args)
     }
 }
 
-// Builds the Plane work-item URL by joining the configured PlaneProjectUrl with the
-// ticket id. Returns an empty string when the config field is unset so the summary
-// renderer can omit the URL line entirely.
-static string BuildPlaneUrl(string planeProjectUrl, string ticketId)
+// Builds the Plane work-item deep-link URL using the ?next_path= redirect parameter.
+// Returns an empty string when any argument is unset so callers can omit the URL line.
+static string BuildPlaneUrl(string planeBaseUrl, string workspaceSlug, string ticketId)
 {
-    if (string.IsNullOrEmpty(planeProjectUrl) || string.IsNullOrEmpty(ticketId))
+    if (string.IsNullOrEmpty(planeBaseUrl) || string.IsNullOrEmpty(workspaceSlug) || string.IsNullOrEmpty(ticketId))
         return string.Empty;
-    var trimmed = planeProjectUrl.TrimEnd('/');
-    return $"{trimmed}/browse/{ticketId}/";
+    return $"{planeBaseUrl.TrimEnd('/')}/?next_path=/{workspaceSlug}/browse/{ticketId}";
 }
 
 // Returns the first line of ex.StackTrace, trimmed, or "(no stack trace)" when absent.

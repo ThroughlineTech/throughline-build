@@ -7,13 +7,15 @@ namespace ThroughlineBuild.Commands;
 public sealed class NewCommand : ITicketCommand
 {
     private readonly NewPhase _phase;
-    private readonly string _planeProjectUrl;
+    private readonly string _planeBaseUrl;
+    private readonly string _planeWorkspaceSlug;
     private readonly string? _debugCaptureDir;
 
-    public NewCommand(NewPhase phase, string planeProjectUrl, string? debugCaptureDir = null)
+    public NewCommand(NewPhase phase, string planeBaseUrl, string planeWorkspaceSlug, string? debugCaptureDir = null)
     {
         _phase = phase;
-        _planeProjectUrl = planeProjectUrl;
+        _planeBaseUrl = planeBaseUrl;
+        _planeWorkspaceSlug = planeWorkspaceSlug;
         _debugCaptureDir = debugCaptureDir;
     }
 
@@ -57,7 +59,7 @@ public sealed class NewCommand : ITicketCommand
             output.AppendLine($"Created {result.Id} (uuid: {result.Uuid})");
 
             // Add plane URL if configured.
-            var planeUrl = BuildPlaneUrl(_planeProjectUrl, result.Id);
+            var planeUrl = BuildPlaneUrl(_planeBaseUrl, _planeWorkspaceSlug, result.Id);
             if (!string.IsNullOrEmpty(planeUrl))
             {
                 output.AppendLine(planeUrl);
@@ -91,12 +93,11 @@ public sealed class NewCommand : ITicketCommand
         }
     }
 
-    private static string BuildPlaneUrl(string planeProjectUrl, string ticketId)
+    private static string BuildPlaneUrl(string planeBaseUrl, string workspaceSlug, string ticketId)
     {
-        if (string.IsNullOrEmpty(planeProjectUrl) || string.IsNullOrEmpty(ticketId))
+        if (string.IsNullOrEmpty(planeBaseUrl) || string.IsNullOrEmpty(workspaceSlug) || string.IsNullOrEmpty(ticketId))
             return string.Empty;
-        var trimmed = planeProjectUrl.TrimEnd('/');
-        return $"{trimmed}/browse/{ticketId}/";
+        return $"{planeBaseUrl.TrimEnd('/')}/?next_path=/{workspaceSlug}/browse/{ticketId}";
     }
 
     private async Task WriteDebugArtifactsAsync(string bodyPath, NewResult result, CancellationToken ct)
