@@ -21,7 +21,7 @@ public record LlmConfig(
     string AnthropicApiKeyEnv,
     string? AnthropicApiKey = null);
 
-public record AgentConfig(string Executable, int? MaxOutputTokens, IReadOnlyDictionary<WorkerSize, string> Sizes);
+public record AgentConfig(string Executable, int? MaxOutputTokens, IReadOnlyDictionary<WorkerSize, string> Sizes, bool BypassPermissions = true);
 
 public record WorkersConfig(
     string DefaultAgent,
@@ -249,6 +249,14 @@ public static class BuildConfigLoader
                 else if (motVal is int i) maxOutputTokens = i;
             }
 
+            // Per-agent bypass_permissions flag. Default true preserves the
+            // historic behavior (CLI gets its unattended-mode flag); setting
+            // false lets an operator opt back into the interactive permission
+            // gate for a given agent.
+            bool bypassPermissions = true;
+            if (subTable.TryGetValue("bypass_permissions", out var bpVal) && bpVal is bool bp)
+                bypassPermissions = bp;
+
             var sizes = new Dictionary<WorkerSize, string>();
             if (!subTable.TryGetValue("sizes", out var sizesVal) || sizesVal is not TomlTable sizesTable)
                 throw new ConfigException(
@@ -266,7 +274,7 @@ public static class BuildConfigLoader
             if (missing.Count > 0)
                 throw new ConfigException(
                     $"[workers.{kv.Key}.sizes] is missing required size keys: {string.Join(", ", missing)}");
-            agents[kv.Key] = new AgentConfig(executable, maxOutputTokens, sizes.AsReadOnly());
+            agents[kv.Key] = new AgentConfig(executable, maxOutputTokens, sizes.AsReadOnly(), bypassPermissions);
         }
 
         return new WorkersConfig(

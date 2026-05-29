@@ -20,17 +20,13 @@ public class CodexAgent : IWorkerAgent
 
     public async Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
     {
-        // Build args: codex exec --full-auto "<brief>"
+        // Build args: codex exec [--full-auto] "<brief>"
         // Brief is delivered as the positional prompt argument (not stdin).
-        var args = new List<string> { "exec", "--full-auto" };
-        foreach (var extra in _options.ExtraArgs)
-            args.Add(extra);
-        // Resolve size -> model, normalize, add --model flag if resolved
+        var args = BuildArgs(brief.Instruction, _options, options);
+        // modelArg is needed below for llm_usage metadata regardless of whether
+        // it was emitted on the CLI; resolve it here too.
         _options.Sizes.TryGetValue(options.Size, out var resolvedModelRaw);
         var modelArg = NormalizeModel(resolvedModelRaw);
-        if (modelArg is not null)
-            args.AddRange(new[] { "--model", modelArg });
-        args.Add(brief.Instruction);
 
         var stdoutBuilder = new StringBuilder();
         var stderrBuilder = new StringBuilder();
@@ -172,6 +168,28 @@ public class CodexAgent : IWorkerAgent
         if (options.EnvironmentVariables != null)
             foreach (var (k, v) in options.EnvironmentVariables)
                 psi.Environment[k] = v;
+    }
+
+    // Builds the argv passed to the codex CLI.
+    //
+    // --full-auto puts codex into its unattended-execution mode (no permission
+    // gate). Emitted only when options.BypassPermissions is true. ExtraArgs
+    // is appended before the resolved model so explicit user flags can
+    // override default ordering, and brief.Instruction is appended last as
+    // the positional prompt.
+    internal static List<string> BuildArgs(string briefInstruction, CodexOptions options, WorkerOptions workerOptions)
+    {
+        var args = new List<string> { "exec" };
+        if (options.BypassPermissions)
+            args.Add("--full-auto");
+        foreach (var extra in options.ExtraArgs)
+            args.Add(extra);
+        options.Sizes.TryGetValue(workerOptions.Size, out var resolvedModelRaw);
+        var modelArg = NormalizeModel(resolvedModelRaw);
+        if (modelArg is not null)
+            args.AddRange(new[] { "--model", modelArg });
+        args.Add(briefInstruction);
+        return args;
     }
 
     // Strips the "openai:" vendor prefix from a configured model id so the

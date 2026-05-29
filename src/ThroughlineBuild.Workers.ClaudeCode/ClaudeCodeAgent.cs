@@ -28,24 +28,8 @@ public class ClaudeCodeAgent : IWorkerAgent
         await File.WriteAllTextAsync(briefPath, brief.Instruction, ct);
 
         // Build args - brief is delivered via stdin.
-        // --output-format must immediately follow --print (claude --help: "only works with --print").
-        // --verbose is required by claude-code when combining --print with --output-format stream-json
-        // (the CLI rejects the combination otherwise). The terminal NDJSON event is type=result and is
-        // bit-for-bit identical to the legacy --output-format json single-blob envelope, so envelope
-        // parsing downstream is unchanged.
-        // --dangerously-skip-permissions: worker runs headless via --print; the interactive
-        // approval gate is always unreachable. settings.json defaultMode:bypassPermissions is
-        // ignored by subprocesses, so this flag must be explicit. AllowedTools still constrains
-        // which tools the worker may call (e.g. review phase restricts to Read/Grep/Glob).
-        var args = new List<string> { "--print", "--verbose", "--output-format", "stream-json", "--dangerously-skip-permissions" };
-        if (options.AllowedTools is { Count: > 0 })
-            args.AddRange(new[] { "--allowedTools", string.Join(",", options.AllowedTools) });
+        var args = BuildArgs(_options, options);
         _options.Sizes.TryGetValue(options.Size, out var resolvedModelRaw);
-        var modelArg = NormalizeModel(resolvedModelRaw);
-        if (modelArg is not null)
-            args.AddRange(new[] { "--model", modelArg });
-        foreach (var extra in _options.ExtraArgs)
-            args.Add(extra);
 
         var stdoutBuilder = new StringBuilder();
         var stderrBuilder = new StringBuilder();
@@ -368,6 +352,38 @@ public class ClaudeCodeAgent : IWorkerAgent
             metadata["cost_usd"] = (double)cost;
 
         return metadata;
+    }
+
+    // Builds the argv passed to the claude CLI.
+    //
+    // --output-format must immediately follow --print (claude --help:
+    // "only works with --print"). --verbose is required by claude-code when
+    // combining --print with --output-format stream-json (the CLI rejects the
+    // combination otherwise). The terminal NDJSON event is type=result and is
+    // bit-for-bit identical to the legacy --output-format json single-blob
+    // envelope, so envelope parsing downstream is unchanged.
+    //
+    // --dangerously-skip-permissions: worker runs headless via --print; the
+    // interactive approval gate is always unreachable. settings.json
+    // defaultMode:bypassPermissions is ignored by subprocesses, so this flag
+    // must be explicit. AllowedTools still constrains which tools the worker
+    // may call (e.g. review phase restricts to Read/Grep/Glob). The flag is
+    // emitted only when options.BypassPermissions is true; setting it false in
+    // config opts back into the gate.
+    internal static List<string> BuildArgs(ClaudeCodeOptions options, WorkerOptions workerOptions)
+    {
+        var args = new List<string> { "--print", "--verbose", "--output-format", "stream-json" };
+        if (options.BypassPermissions)
+            args.Add("--dangerously-skip-permissions");
+        if (workerOptions.AllowedTools is { Count: > 0 })
+            args.AddRange(new[] { "--allowedTools", string.Join(",", workerOptions.AllowedTools) });
+        options.Sizes.TryGetValue(workerOptions.Size, out var resolvedModelRaw);
+        var modelArg = NormalizeModel(resolvedModelRaw);
+        if (modelArg is not null)
+            args.AddRange(new[] { "--model", modelArg });
+        foreach (var extra in options.ExtraArgs)
+            args.Add(extra);
+        return args;
     }
 
     // Strips the "anthropic:" provider prefix from a configured model id so the

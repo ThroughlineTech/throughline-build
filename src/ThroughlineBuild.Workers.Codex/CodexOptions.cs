@@ -14,4 +14,8 @@ public class CodexOptions
             { WorkerSize.Medium, "o4-mini" },
             { WorkerSize.Large,  "o3" },
         };
+    // When true (default), pass --full-auto to the codex CLI so the headless
+    // run does not block on the interactive approval gate. Set false from
+    // config to opt back into the gate.
+    public bool BypassPermissions { get; init; } = true;
 }

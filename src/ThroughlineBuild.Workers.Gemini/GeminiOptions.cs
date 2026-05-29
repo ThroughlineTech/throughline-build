@@ -14,4 +14,8 @@ public class GeminiOptions
             { WorkerSize.Medium, "gemini-2.5-flash" },
             { WorkerSize.Large,  "gemini-2.5-pro"   },
         };
+    // When true (default), pass --yolo to the gemini CLI so the headless run
+    // does not block on the interactive approval gate. Set false from config
+    // to opt back into the gate.
+    public bool BypassPermissions { get; init; } = true;
 }
