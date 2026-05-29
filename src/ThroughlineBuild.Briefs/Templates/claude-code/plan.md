@@ -109,9 +109,37 @@ Count Relevant files and Steps. Apply:
 
 The "Agent size:" line in the Implementation Plan must match this inference.
 
-## Invalid or already-fixed discovery
+## Obsolete detection
 
-If investigation reveals the ticket is invalid, obsolete, or already fixed: return `WorkerResult` with `Status = Escalate` and `FailureReason` containing a one-line explanation. Do not append a plan.
+Before starting investigation proper, check whether the work is already done. If the acceptance criteria's artifacts already exist AND their content meets the acceptance criteria, the ticket is obsolete.
+
+**Detection bar:** "the file exists AND its content meets the acceptance criteria" qualifies. "a file with the same name exists" does not.
+
+Emit `Status=Escalate` with a populated `metadata.escalation` block. Do not append a plan.
+
+```json
+WORKER_RESULT
+{
+  "status": "Escalate",
+  "summary": "Ticket obsolete: decompose.md already delivered in commit 80ccafa",
+  "files_changed": [],
+  "failure_reason": null,
+  "metadata": {
+    "escalation": {
+      "reason": "obsolete",
+      "subsumed_by": {
+        "commit": "80ccafa",
+        "files": ["src/ThroughlineBuild.Briefs/Templates/claude-code/decompose.md"],
+        "rationale": "decompose.md delivered in commit 80ccafa; file meets this brief's acceptance criteria"
+      }
+    }
+  }
+}
+```
+
+## Invalid-ticket discovery
+
+If investigation reveals the ticket is invalid or already fixed (not obsolete): return `WorkerResult` with `Status = Escalate` and `FailureReason` containing a one-line explanation. Do not append a plan.
 
 ## WORKER_RESULT envelope
 
