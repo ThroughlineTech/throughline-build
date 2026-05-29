@@ -35,11 +35,13 @@ public class ShipPhaseTests
 
     private static ShipOptions MakeShipOptions(
         IReadOnlyList<CheckSpec>? checks = null,
-        bool deleteFeatureBranch = true) => new ShipOptions(
+        bool deleteFeatureBranch = true,
+        bool noAutoMerge = false) => new ShipOptions(
             RegressionChecks: checks ?? Array.Empty<CheckSpec>(),
             Remote: "origin",
             BaseBranch: "main",
-            DeleteFeatureBranch: deleteFeatureBranch);
+            DeleteFeatureBranch: deleteFeatureBranch,
+            NoAutoMerge: noAutoMerge);
 
     private static string MakeWorkingDir() => Directory.GetCurrentDirectory();
 
@@ -723,13 +725,12 @@ public class ShipPhaseTests
         Assert.Equal("origin/main", git.RebaseOntoRefs[0]);
         Assert.Equal("main", git.RebaseOntoRefs[1]);
 
-        // main_auto_rebased TicketWrite event emitted
-        var writeEvents = events.Events.Where(e => e.Kind == EventKind.TicketWrite).ToList();
-        var autoRebased = writeEvents.FirstOrDefault(w => w.Data.TryGetValue("action", out var a) && a.ToString() == "main_auto_rebased");
-        Assert.NotNull(autoRebased);
-        Assert.Equal("origin/main", autoRebased.Data["onto"].ToString());
+        // MainAutoRebased event emitted with outcome="clean"
+        var autoRebased = events.Events.Single(e => e.Kind == EventKind.MainAutoRebased);
+        Assert.Equal("clean", autoRebased.Data["outcome"].ToString());
 
         // base_ref_resolved with auto_rebased_main reason
+        var writeEvents = events.Events.Where(e => e.Kind == EventKind.TicketWrite).ToList();
         var baseRefResolved = writeEvents.FirstOrDefault(w => w.Data.TryGetValue("action", out var a) && a.ToString() == "base_ref_resolved");
         Assert.NotNull(baseRefResolved);
         Assert.Equal("auto_rebased_main", baseRefResolved.Data["reason"].ToString());
@@ -767,6 +768,48 @@ public class ShipPhaseTests
 
         // Abort called to restore main worktree
         Assert.Equal(1, git.RebaseAbortCallCount);
+
+        // MainAutoRebased event emitted with outcome="raced_to_conflict"
+        var autoRebased = events.Events.Single(e => e.Kind == EventKind.MainAutoRebased);
+        Assert.Equal("raced_to_conflict", autoRebased.Data["outcome"].ToString());
+
+        // GateFailure with kind=diverged_bases emitted
+        var gateFailures = events.Events.Where(e => e.Kind == EventKind.GateFailure).ToList();
+        Assert.Single(gateFailures);
+        Assert.Equal("diverged_bases", gateFailures[0].Data["kind"].ToString());
+
+        // No Done transition
+        var stateTransitions = events.Events.Where(e => e.Kind == EventKind.StateTransition).ToList();
+        Assert.DoesNotContain(stateTransitions, t => t.Data["to"].ToString() == "Done");
+    }
+
+    [Fact]
+    public async Task RunAsync_NoAutoMerge_DivergedNoConflict_SkipsRebaseAndReturnsGateFailure()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        // Configure: bases have diverged
+        git.AncestryResponses[("origin/main", "main")] = false;
+        git.AncestryResponses[("main", "origin/main")] = false;
+        // Probe predicts no conflict, but --no-auto-merge is set
+        git.DivergenceStateResult = DivergenceState.DivergedNoConflict;
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(noAutoMerge: true),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ShipFailureStage.Fetch, result.FailedAt);
+        Assert.Contains("diverged", result.FailureReason, StringComparison.OrdinalIgnoreCase);
+
+        // No rebase attempted
+        Assert.Equal(0, git.RebaseCallCount);
+
+        // No MainAutoRebased event (no attempt was made)
+        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.MainAutoRebased));
 
         // GateFailure with kind=diverged_bases emitted
         var gateFailures = events.Events.Where(e => e.Kind == EventKind.GateFailure).ToList();

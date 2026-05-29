@@ -78,4 +78,10 @@ public interface IGitClient
     // Never throws - any error returns DivergedWithConflict.
     Task<DivergenceState> ProbeDivergenceAsync(string mainWorktreePath, string baseBranch, string remote, CancellationToken ct) =>
         Task.FromResult(DivergenceState.DivergedWithConflict);
+
+    // Returns SHAs of commits in the given range (e.g. "origin/main..main"), newest first.
+    // limit 0 means no limit. Default returns empty so existing FakeGitClients remain unchanged (TLB-298).
+    // Never throws - returns empty on git failure.
+    Task<IReadOnlyList<string>> LogShasAsync(string range, int limit, string workingDirectory, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
 }

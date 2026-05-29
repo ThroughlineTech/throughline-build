@@ -10,7 +10,8 @@ public record ShipOptions(
     IReadOnlyList<CheckSpec> RegressionChecks,
     string Remote,
     string BaseBranch,
-    bool DeleteFeatureBranch = true);
+    bool DeleteFeatureBranch = true,
+    bool NoAutoMerge = false);
 
 public record ShipResult(
     bool Success,
@@ -224,8 +225,13 @@ public class ShipPhase : IWorkflowPhase
                 // Diverged - probe for conflict subspecies before deciding
                 var divergenceState = await _git.ProbeDivergenceAsync(workingDirectory, baseBranch, remote, ct).ConfigureAwait(false);
 
-                if (divergenceState == DivergenceState.DivergedNoConflict)
+                if (divergenceState == DivergenceState.DivergedNoConflict && !_shipOptions.NoAutoMerge)
                 {
+                    // B02 path: auto-rebase local main onto origin/main
+                    var fromSha = await _git.HeadShaAsync(workingDirectory, ct).ConfigureAwait(false);
+                    var ontoSha = await _git.RevParseAsync(remoteRef, workingDirectory, ct).ConfigureAwait(false);
+                    var replayedShas = await _git.LogShasAsync($"{remoteRef}..{localRef}", 0, workingDirectory, ct).ConfigureAwait(false);
+
                     RebaseResult? mainRebaseResult = null;
                     await MainWorktreeLock.WithLockAsync(workingDirectory, async ct =>
                     {
@@ -234,10 +240,12 @@ public class ShipPhase : IWorkflowPhase
 
                     if (mainRebaseResult!.Success)
                     {
-                        await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
+                        await EmitAsync(EventKind.MainAutoRebased, ticketId, new Dictionary<string, object>
                         {
-                            ["action"] = "main_auto_rebased",
-                            ["onto"] = remoteRef
+                            ["from_sha"] = fromSha,
+                            ["onto_sha"] = ontoSha,
+                            ["local_commits_replayed"] = replayedShas,
+                            ["outcome"] = "clean"
                         }, ct).ConfigureAwait(false);
                         ontoRef = localRef;
                         baseRefReason = "auto_rebased_main";
@@ -246,6 +254,13 @@ public class ShipPhase : IWorkflowPhase
                     {
                         if (mainRebaseResult.HadConflicts)
                             await _git.RebaseAbortAsync(workingDirectory, ct).ConfigureAwait(false);
+                        await EmitAsync(EventKind.MainAutoRebased, ticketId, new Dictionary<string, object>
+                        {
+                            ["from_sha"] = fromSha,
+                            ["onto_sha"] = ontoSha,
+                            ["local_commits_replayed"] = replayedShas,
+                            ["outcome"] = "raced_to_conflict"
+                        }, ct).ConfigureAwait(false);
                         await _ticketing.CreateCommentAsync(ticketId,
                             $"<p><strong>ship_blocked:</strong> local {baseBranch} and {remote}/{baseBranch} have diverged; manual resolution required</p>", ct).ConfigureAwait(false);
                         await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>

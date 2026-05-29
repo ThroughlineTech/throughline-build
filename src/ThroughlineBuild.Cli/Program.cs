@@ -36,6 +36,7 @@ static async Task<int> RunAsync(string[] args)
     bool summaryJson = false;
     bool errorLocation = false;
     bool noAutoResolve = false;
+    bool noAutoMerge = false;
     var filteredArgs = new List<string>(args.Length);
     foreach (var a in args)
     {
@@ -49,6 +50,8 @@ static async Task<int> RunAsync(string[] args)
             errorLocation = true;
         else if (a == "--no-auto-resolve")
             noAutoResolve = true;
+        else if (a == "--no-auto-merge")
+            noAutoMerge = true;
         else
             filteredArgs.Add(a);
     }
@@ -929,7 +932,8 @@ static async Task<int> RunAsync(string[] args)
             RegressionChecks: config2.Ship.RegressionChecks,
             Remote: config2.Ship.Remote,
             BaseBranch: config2.Ship.BaseBranch,
-            DeleteFeatureBranch: config2.Ship.DeleteFeatureBranch);
+            DeleteFeatureBranch: config2.Ship.DeleteFeatureBranch,
+            NoAutoMerge: noAutoMerge);
         var gitClient = new ProcessGitClient(cwd);
         var checksRunner = new AutomatedChecksRunner();
         var phase = new ShipPhase(ticketing, eventSink, buildOptions, shipOptions, gitClient: gitClient, checksRunner: checksRunner);
@@ -1046,7 +1050,8 @@ static async Task<int> RunAsync(string[] args)
                 RegressionChecks: config2.Ship.RegressionChecks,
                 Remote: config2.Ship.Remote,
                 BaseBranch: config2.Ship.BaseBranch,
-                DeleteFeatureBranch: config2.Ship.DeleteFeatureBranch);
+                DeleteFeatureBranch: config2.Ship.DeleteFeatureBranch,
+                NoAutoMerge: noAutoMerge);
             var gitClient = new ProcessGitClient(cwd);
             var checksRunner = new AutomatedChecksRunner();
             return new ShipPhase(ticketing, eventSink, buildOpts, shipOptions, gitClient: gitClient, checksRunner: checksRunner);
