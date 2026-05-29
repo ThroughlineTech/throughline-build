@@ -3,8 +3,6 @@ using System.Text.Json.Serialization;
 
 namespace ThroughlineBuild.Workers.Gemini;
 
-// Placeholder DTOs for the Gemini CLI result. The exact JSON shape will be
-// confirmed and filled in by B02 during GeminiAgent.ExecuteAsync implementation.
 public record GeminiResultEnvelope(
     [property: JsonPropertyName("response")] string? Response,
     [property: JsonPropertyName("stats")] GeminiUsage? Stats
