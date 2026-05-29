@@ -221,18 +221,58 @@ public class ShipPhase : IWorkflowPhase
             }
             else
             {
-                // Diverged - neither is ancestor of the other
-                await _ticketing.CreateCommentAsync(ticketId,
-                    $"<p><strong>ship_blocked:</strong> local {baseBranch} and {remote}/{baseBranch} have diverged; manual resolution required</p>", ct).ConfigureAwait(false);
-                await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+                // Diverged - probe for conflict subspecies before deciding
+                var divergenceState = await _git.ProbeDivergenceAsync(workingDirectory, baseBranch, remote, ct).ConfigureAwait(false);
+
+                if (divergenceState == DivergenceState.DivergedNoConflict)
                 {
-                    ["kind"] = "diverged_bases",
-                    ["local_ref"] = baseBranch,
-                    ["remote_ref"] = remoteRef
-                }, ct).ConfigureAwait(false);
-                return (new ShipResult(false, ticketId, null,
-                    $"local {baseBranch} and {remote}/{baseBranch} have diverged; manual resolution required",
-                    ShipFailureStage.Fetch), worktreeNames, null);
+                    RebaseResult? mainRebaseResult = null;
+                    await MainWorktreeLock.WithLockAsync(workingDirectory, async ct =>
+                    {
+                        mainRebaseResult = await _git.RebaseAsync(remoteRef, workingDirectory, ct).ConfigureAwait(false);
+                    }, ct).ConfigureAwait(false);
+
+                    if (mainRebaseResult!.Success)
+                    {
+                        await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
+                        {
+                            ["action"] = "main_auto_rebased",
+                            ["onto"] = remoteRef
+                        }, ct).ConfigureAwait(false);
+                        ontoRef = localRef;
+                        baseRefReason = "auto_rebased_main";
+                    }
+                    else
+                    {
+                        if (mainRebaseResult.HadConflicts)
+                            await _git.RebaseAbortAsync(workingDirectory, ct).ConfigureAwait(false);
+                        await _ticketing.CreateCommentAsync(ticketId,
+                            $"<p><strong>ship_blocked:</strong> local {baseBranch} and {remote}/{baseBranch} have diverged; manual resolution required</p>", ct).ConfigureAwait(false);
+                        await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+                        {
+                            ["kind"] = "diverged_bases",
+                            ["local_ref"] = baseBranch,
+                            ["remote_ref"] = remoteRef
+                        }, ct).ConfigureAwait(false);
+                        return (new ShipResult(false, ticketId, null,
+                            $"local {baseBranch} and {remote}/{baseBranch} have diverged; manual resolution required",
+                            ShipFailureStage.Fetch), worktreeNames, null);
+                    }
+                }
+                else
+                {
+                    await _ticketing.CreateCommentAsync(ticketId,
+                        $"<p><strong>ship_blocked:</strong> local {baseBranch} and {remote}/{baseBranch} have diverged; manual resolution required</p>", ct).ConfigureAwait(false);
+                    await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+                    {
+                        ["kind"] = "diverged_bases",
+                        ["local_ref"] = baseBranch,
+                        ["remote_ref"] = remoteRef
+                    }, ct).ConfigureAwait(false);
+                    return (new ShipResult(false, ticketId, null,
+                        $"local {baseBranch} and {remote}/{baseBranch} have diverged; manual resolution required",
+                        ShipFailureStage.Fetch), worktreeNames, null);
+                }
             }
         }
 

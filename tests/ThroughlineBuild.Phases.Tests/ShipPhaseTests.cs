@@ -697,6 +697,88 @@ public class ShipPhaseTests
     }
 
     [Fact]
+    public async Task RunAsync_DivergedNoConflict_AutoRebasesMainAndContinuesShip()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        // Configure: bases have diverged (neither is ancestor of the other)
+        git.AncestryResponses[("origin/main", "main")] = false;
+        git.AncestryResponses[("main", "origin/main")] = false;
+        // Probe predicts clean rebase
+        git.DivergenceStateResult = DivergenceState.DivergedNoConflict;
+        // Both rebases (main auto-rebase + feature rebase) succeed with default RebaseResult
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Null(result.FailedAt);
+
+        // Two rebases: first onto origin/main (main auto-rebase), second onto main (feature rebase)
+        Assert.Equal(2, git.RebaseCallCount);
+        Assert.Equal("origin/main", git.RebaseOntoRefs[0]);
+        Assert.Equal("main", git.RebaseOntoRefs[1]);
+
+        // main_auto_rebased TicketWrite event emitted
+        var writeEvents = events.Events.Where(e => e.Kind == EventKind.TicketWrite).ToList();
+        var autoRebased = writeEvents.FirstOrDefault(w => w.Data.TryGetValue("action", out var a) && a.ToString() == "main_auto_rebased");
+        Assert.NotNull(autoRebased);
+        Assert.Equal("origin/main", autoRebased.Data["onto"].ToString());
+
+        // base_ref_resolved with auto_rebased_main reason
+        var baseRefResolved = writeEvents.FirstOrDefault(w => w.Data.TryGetValue("action", out var a) && a.ToString() == "base_ref_resolved");
+        Assert.NotNull(baseRefResolved);
+        Assert.Equal("auto_rebased_main", baseRefResolved.Data["reason"].ToString());
+
+        // Ship completes: Done transition
+        var stateTransitions = events.Events.Where(e => e.Kind == EventKind.StateTransition).ToList();
+        Assert.Contains(stateTransitions, t => t.Data["to"].ToString() == "Done");
+    }
+
+    [Fact]
+    public async Task RunAsync_DivergedNoConflict_RaceCondition_AbortsRebaseAndEmitsGateFailure()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        // Configure: bases have diverged
+        git.AncestryResponses[("origin/main", "main")] = false;
+        git.AncestryResponses[("main", "origin/main")] = false;
+        // Probe predicted no conflict but rebase encounters a conflict (race condition)
+        git.DivergenceStateResult = DivergenceState.DivergedNoConflict;
+        git.RebaseResult = new RebaseResult(false, true, new[] { "src/Foo.cs" }, "conflict");
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ShipFailureStage.Fetch, result.FailedAt);
+        Assert.Contains("diverged", result.FailureReason, StringComparison.OrdinalIgnoreCase);
+
+        // Only one rebase attempted (the main auto-rebase); feature rebase never reached
+        Assert.Equal(1, git.RebaseCallCount);
+
+        // Abort called to restore main worktree
+        Assert.Equal(1, git.RebaseAbortCallCount);
+
+        // GateFailure with kind=diverged_bases emitted
+        var gateFailures = events.Events.Where(e => e.Kind == EventKind.GateFailure).ToList();
+        Assert.Single(gateFailures);
+        Assert.Equal("diverged_bases", gateFailures[0].Data["kind"].ToString());
+
+        // No Done transition
+        var stateTransitions = events.Events.Where(e => e.Kind == EventKind.StateTransition).ToList();
+        Assert.DoesNotContain(stateTransitions, t => t.Data["to"].ToString() == "Done");
+    }
+
+    [Fact]
     public async Task RunAsync_PushFails_HaltsBeforePostCommentAndDoneTransition()
     {
         var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
@@ -807,6 +889,7 @@ public class ShipPhaseTests
         public bool RemoteExistsResult { get; set; } = true;
         public Dictionary<string, IReadOnlyList<string>> TrackedChangesByPath { get; } = new(StringComparer.OrdinalIgnoreCase);
         public Dictionary<(string ancestor, string descendant), bool> AncestryResponses { get; } = new();
+        public DivergenceState DivergenceStateResult { get; set; } = DivergenceState.DivergedWithConflict;
 
         public GitOpResult PushResult { get; set; } = new GitOpResult(true, null);
         public int FetchCallCount { get; private set; }
@@ -916,6 +999,9 @@ public class ShipPhaseTests
             // Default: both are ancestors of each other (same commit)
             return Task.FromResult(true);
         }
+
+        public Task<DivergenceState> ProbeDivergenceAsync(string mainWorktreePath, string baseBranch, string remote, CancellationToken ct) =>
+            Task.FromResult(DivergenceStateResult);
     }
 
     private sealed class FakeChecksRunner : AutomatedChecksRunner
