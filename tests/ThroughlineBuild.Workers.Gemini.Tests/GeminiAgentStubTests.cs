@@ -1,5 +1,5 @@
-using ThroughlineBuild.Workers.Gemini;
 using Xunit;
+using ThroughlineBuild.Workers.Gemini;
 
 namespace ThroughlineBuild.Workers.Gemini.Tests;
 
@@ -13,9 +13,9 @@ public class GeminiAgentStubTests
     }
 
     [Fact]
-    public void GeminiAgent_Digester_IsNull()
+    public void GeminiAgent_Digester_IsNonNull()
     {
         var agent = new GeminiAgent();
-        Assert.Null(agent.Digester);
+        Assert.NotNull(agent.Digester);
     }
 }

@@ -8,12 +8,13 @@ namespace ThroughlineBuild.Workers.Gemini;
 public class GeminiAgent : IWorkerAgent
 {
     private readonly GeminiOptions _options;
+    private readonly GeminiProgressDigester _digester = new();
 
     public GeminiAgent(GeminiOptions options) => _options = options;
     public GeminiAgent() : this(new GeminiOptions()) { }
 
     public string Name => "gemini";
-    public IWorkerProgressDigester? Digester => null;
+    public IWorkerProgressDigester? Digester => _digester;
 
     public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
     {
