@@ -51,6 +51,8 @@ Acceptance:
 - [ ] Single-ticket invocation behaves exactly as before
 - [ ] Usage documents the list form
 
+Notes: Preserves operator-supplied order so B02 dependency-graph and B03 dispatch briefs can use input order as the tiebreaker when listed tickets have no derived dependency relationship. Decompose's presence in the supported-verb list is structural - whether multi-ticket decompose has its own result-shape quirks (independent parent decompositions, aggregated result shape) is for the dispatch brief to decide, not this brief.
+
 OOS:
 - Dependency graph (B02)
 - concurrency (B03)

@@ -68,6 +68,8 @@ Acceptance:
 - [ ] The written config passes the normal config loader
 - [ ] Usage documents the verb
 
+Notes: Refuses-to-clobber semantics matter for operator safety - the `--force` flag is the only path to overwrite an existing config. Prompts should accept the same values that the operator could provide as flags, so non-interactive use (CI, automation) works identically to interactive prompting. The template from B01 is the single source of truth for the scaffolded shape.
+
 OOS:
 - Repo detection / git init
 - installing the binary
