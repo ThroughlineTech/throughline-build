@@ -56,6 +56,17 @@ public class OpDocTypesTests
             WhatDoneLooksLike: whatDoneLooksLike ?? "All tests pass");
 
     [Fact]
+    public void OpDocParseError_Create_CapturesSourceLocation()
+    {
+        var err = OpDocParseError.Create(5, "Goal", "Missing");
+        Assert.NotNull(err.SourceFile);
+        Assert.NotEmpty(err.SourceFile);
+        Assert.NotNull(err.SourceMember);
+        Assert.NotEmpty(err.SourceMember);
+        Assert.True(err.SourceLineNumber > 0);
+    }
+
+    [Fact]
     public void OpDocParseError_EqualWhenSameValues()
     {
         var a = MakeError();

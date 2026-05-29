@@ -219,7 +219,7 @@ public static class OpDocParser
 
         if (operationSlug == null)
         {
-            errors.Add(new OpDocParseError(1, "document", "missing_h1: No '# Operation: <slug>' header found"));
+            errors.Add(OpDocParseError.Create(1, "document", "missing_h1: No '# Operation: <slug>' header found"));
             return new ParseResult(null, errors);
         }
 
@@ -227,13 +227,13 @@ public static class OpDocParser
             operationTitle = operationSlug;
 
         if (whyContent == null)
-            errors.Add(new OpDocParseError(h1Line, "document", "missing_section: '## Why this exists' section not found"));
+            errors.Add(OpDocParseError.Create(h1Line, "document", "missing_section: '## Why this exists' section not found"));
 
         if (dispatchLine < 0)
-            errors.Add(new OpDocParseError(h1Line, "document", "missing_section: '## Dispatch order' section not found"));
+            errors.Add(OpDocParseError.Create(h1Line, "document", "missing_section: '## Dispatch order' section not found"));
 
         if (whatDoneContent == null)
-            errors.Add(new OpDocParseError(h1Line, "document", "missing_section: '## What done looks like' section not found"));
+            errors.Add(OpDocParseError.Create(h1Line, "document", "missing_section: '## What done looks like' section not found"));
 
         // ---- Phase 3: parse dispatch table ----
 
@@ -257,7 +257,7 @@ public static class OpDocParser
         {
             if (!parsedPlanIds.Contains(entry.PlanId))
             {
-                errors.Add(new OpDocParseError(dispatchLine, $"Plans[{entry.PlanId}]",
+                errors.Add(OpDocParseError.Create(dispatchLine, $"Plans[{entry.PlanId}]",
                     $"plan_section_missing: Dispatch order references Plan {entry.PlanId} but no '## Plan {entry.PlanId}: ...' section found"));
             }
         }
@@ -267,7 +267,7 @@ public static class OpDocParser
         {
             if (!declaredPlanIds.Contains(planSec.PlanId))
             {
-                errors.Add(new OpDocParseError(planSec.LineNum, $"Plans[{planSec.PlanId}]",
+                errors.Add(OpDocParseError.Create(planSec.LineNum, $"Plans[{planSec.PlanId}]",
                     $"warning:plan_not_in_dispatch: Plan {planSec.PlanId} exists but is not referenced in dispatch order"));
             }
         }
@@ -313,7 +313,7 @@ public static class OpDocParser
 
         if (headerIdx < 0)
         {
-            errors.Add(new OpDocParseError(sectionLineOffset, "dispatch_order",
+            errors.Add(OpDocParseError.Create(sectionLineOffset, "dispatch_order",
                 "dispatch_columns_missing: No table found in Dispatch order section"));
             return (entries, errors);
         }
@@ -328,7 +328,7 @@ public static class OpDocParser
             if (!headerLower.Contains(required))
             {
                 int lineNum = sectionLineOffset + headerIdx + 1;
-                errors.Add(new OpDocParseError(lineNum, "dispatch_order",
+                errors.Add(OpDocParseError.Create(lineNum, "dispatch_order",
                     $"dispatch_columns_missing: Required column '{required}' not found in dispatch table header"));
             }
         }
@@ -362,7 +362,7 @@ public static class OpDocParser
 
             if (cells.Count != headerCells.Count)
             {
-                errors.Add(new OpDocParseError(lineNum, "dispatch_order",
+                errors.Add(OpDocParseError.Create(lineNum, "dispatch_order",
                     $"dispatch_row_malformed: Row has {cells.Count} cells but header has {headerCells.Count}"));
                 continue;
             }
@@ -469,7 +469,7 @@ public static class OpDocParser
             }
             else
             {
-                errors.Add(new OpDocParseError(briefsTableLineOffset, $"Plans[{planId}].Briefs[{stub.Number:D2}]",
+                errors.Add(OpDocParseError.Create(briefsTableLineOffset, $"Plans[{planId}].Briefs[{stub.Number:D2}]",
                     $"brief_detail_missing: Brief {stub.Number:D2} ({stub.Slug}) appears in briefs table but has no '#### Brief {stub.Number:D2}:' detail section"));
                 briefs.Add(stub);
             }
@@ -702,15 +702,15 @@ public static class OpDocParser
         // Validate required subsections
         string sectionPath = $"Plans[{planId}].Briefs[{num:D2}]";
         if (string.IsNullOrWhiteSpace(goal))
-            errors.Add(new OpDocParseError(startLine, sectionPath,
+            errors.Add(OpDocParseError.Create(startLine, sectionPath,
                 "brief_subsection_missing: Brief missing required 'Goal:' subsection"));
 
         if (acceptance.Count == 0)
-            errors.Add(new OpDocParseError(startLine, sectionPath,
+            errors.Add(OpDocParseError.Create(startLine, sectionPath,
                 "brief_subsection_missing: Brief missing required 'Acceptance:' subsection"));
 
         if (oos.Count == 0)
-            errors.Add(new OpDocParseError(startLine, sectionPath,
+            errors.Add(OpDocParseError.Create(startLine, sectionPath,
                 "brief_subsection_missing: Brief missing required 'OOS:' subsection"));
 
         var brief = new Brief(

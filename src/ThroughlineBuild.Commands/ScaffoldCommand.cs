@@ -41,11 +41,12 @@ public sealed class ScaffoldCommand : ITicketCommand
         bool validateOnly = ctx.Args.TryGetValue("validate_only", out var vOnly) && vOnly == "true";
         bool dryRun = ctx.Args.TryGetValue("dry_run", out var dRun) && dRun == "true";
         bool acceptWarnings = ctx.Args.TryGetValue("accept_warnings", out var aWarn) && aWarn == "true";
+        bool showLocation = ctx.Args.TryGetValue("show_location", out var sLoc) && sLoc == "true";
 
         // --validate-only: parse + validate, no creation, print errors/warnings and exit.
         if (validateOnly)
         {
-            return RunValidateOnly(opDocPath);
+            return RunValidateOnly(opDocPath, showLocation);
         }
 
         var options = new ScaffoldOptions(
@@ -64,26 +65,28 @@ public sealed class ScaffoldCommand : ITicketCommand
         }
         catch (Exception ex)
         {
-            return new CommandResult(false, $"scaffold failed: {ex.Message}");
+            return new CommandResult(false, showLocation
+                ? $"scaffold failed: {ex.Message}\n{ex.StackTrace?.Split('\n')[0].Trim() ?? string.Empty}"
+                : $"scaffold failed: {ex.Message}");
         }
 
         if (result.WasAbortedByParseErrors)
         {
             // Parse errors: surface via validate-only path for detailed output.
-            var parseOnlyResult = RunValidateOnly(opDocPath);
+            var parseOnlyResult = RunValidateOnly(opDocPath, showLocation);
             return new CommandResult(false, $"{ScaffoldExitCategory.ValidationError}\n{StripTag(parseOnlyResult.Message)}");
         }
 
         if (result.WasAbortedByValidationErrors)
         {
-            var valOnlyResult = RunValidateOnly(opDocPath);
+            var valOnlyResult = RunValidateOnly(opDocPath, showLocation);
             return new CommandResult(false, $"{ScaffoldExitCategory.ValidationError}\n{StripTag(valOnlyResult.Message)}");
         }
 
         if (result.WasBlockedByWarnings)
         {
             // Blocked by warnings: show warnings, tell operator to use --accept-warnings.
-            var warnResult = RunValidateOnly(opDocPath);
+            var warnResult = RunValidateOnly(opDocPath, showLocation);
             var sb = new System.Text.StringBuilder();
             sb.AppendLine(StripTag(warnResult.Message));
             sb.AppendLine("Re-run with --accept-warnings to proceed past warnings.");
@@ -99,7 +102,7 @@ public sealed class ScaffoldCommand : ITicketCommand
     }
 
     // --- validate-only path: no ScaffoldPhase invocation ---
-    private static CommandResult RunValidateOnly(string opDocPath)
+    private static CommandResult RunValidateOnly(string opDocPath, bool showLocation = false)
     {
         var sb = new System.Text.StringBuilder();
         sb.AppendLine($"Validating {opDocPath} ...");
@@ -116,6 +119,8 @@ public sealed class ScaffoldCommand : ITicketCommand
             foreach (var err in hardErrors)
             {
                 sb.AppendLine($"  [PARSE] line {err.LineNumber} ({err.Section}): {err.Message}");
+                if (showLocation && err.SourceFile != null)
+                    sb.AppendLine($"         at {err.SourceMember} ({Path.GetFileName(err.SourceFile)}:{err.SourceLineNumber})");
             }
             if (!hardErrors.Any() && parseResult.Parsed == null)
             {

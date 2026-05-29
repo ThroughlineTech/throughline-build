@@ -51,6 +51,10 @@ Flags:
   --review         (draft mode only) After drafting, open an interactive review loop before filing.
                    Choose [a]ccept to file with the current body, [e]dit to open $EDITOR, [r]egenerate
                    to re-run the drafter (optionally with extra context), or [q]uit to abort (exit 0).
+  --error-location When set, prints the C# source filename, method, and line where a parse error or
+                   fatal exception originated. Off by default. For parse errors the location is captured
+                   at compile time (works in AOT); for exceptions it reads ex.StackTrace (requires
+                   debug build or embedded PDB for line numbers).
 
 Progress digest (default behavior for plan/implement/review):
   Without --debug or --quiet, the orchestrator prints a one-line digest per worker stream event to stderr

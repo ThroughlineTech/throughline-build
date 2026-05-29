@@ -28,12 +28,13 @@ static async Task<int> RunAsync(string[] args)
         return 0;
     }
 
-    // Pre-pass: strip --debug, --quiet, and --summary-json from args before any positional parser sees them.
-    // All three are bare bool flags (no value); the existing key/value parser expects pairs
+    // Pre-pass: strip --debug, --quiet, --summary-json, and --error-location from args before any positional parser sees them.
+    // All four are bare bool flags (no value); the existing key/value parser expects pairs
     // and would mangle subsequent args if they were left in.
     bool debugMode = false;
     bool quietMode = false;
     bool summaryJson = false;
+    bool errorLocation = false;
     var filteredArgs = new List<string>(args.Length);
     foreach (var a in args)
     {
@@ -43,6 +44,8 @@ static async Task<int> RunAsync(string[] args)
             quietMode = true;
         else if (a == "--summary-json")
             summaryJson = true;
+        else if (a == "--error-location")
+            errorLocation = true;
         else
             filteredArgs.Add(a);
     }
@@ -132,6 +135,7 @@ static async Task<int> RunAsync(string[] args)
     catch (ConfigException ex)
     {
         Console.Error.WriteLine($"Config error: {ex.Message}");
+        if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
         return 2;
     }
 
@@ -143,6 +147,7 @@ static async Task<int> RunAsync(string[] args)
     catch (ConfigException ex)
     {
         Console.Error.WriteLine($"Config error: {ex.Message}");
+        if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
         return 2;
     }
 
@@ -154,6 +159,7 @@ static async Task<int> RunAsync(string[] args)
     catch (ConfigException ex)
     {
         Console.Error.WriteLine($"Secret error: {ex.Message}");
+        if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
         return 3;
     }
 
@@ -617,8 +623,9 @@ static async Task<int> RunAsync(string[] args)
             if (a == "--validate-only") scaffoldArgs["validate_only"] = "true";
             else if (a == "--dry-run") scaffoldArgs["dry_run"] = "true";
             else if (a == "--accept-warnings") scaffoldArgs["accept_warnings"] = "true";
-            // --debug already stripped by pre-pass; other unknown flags are silently ignored
+            // --debug and --error-location already stripped by pre-pass; other unknown flags are silently ignored
         }
+        if (errorLocation) scaffoldArgs["show_location"] = "true";
 
         var scaffoldCtx = new TicketCommandContext("", scaffoldArgs);
 
@@ -819,6 +826,7 @@ static async Task<int> RunAsync(string[] args)
         catch (KeyNotFoundException ex)
         {
             Console.Error.WriteLine($"Ticket not found: {ex.Message}");
+            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
             return 2;
         }
         catch (OperationCanceledException)
@@ -870,6 +878,7 @@ static async Task<int> RunAsync(string[] args)
         catch (KeyNotFoundException ex)
         {
             Console.Error.WriteLine($"Ticket not found: {ex.Message}");
+            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
             return 2;
         }
         catch (OperationCanceledException)
@@ -942,6 +951,7 @@ static async Task<int> RunAsync(string[] args)
         catch (KeyNotFoundException ex)
         {
             Console.Error.WriteLine($"Ticket not found: {ex.Message}");
+            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
             return 2;
         }
         catch (OperationCanceledException)
@@ -1195,6 +1205,7 @@ static async Task<int> RunAsync(string[] args)
         catch (KeyNotFoundException ex)
         {
             Console.Error.WriteLine($"Ticket not found: {ex.Message}");
+            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
             return 2;
         }
 
@@ -1261,6 +1272,7 @@ static async Task<int> RunAsync(string[] args)
         catch (KeyNotFoundException ex)
         {
             Console.Error.WriteLine($"Ticket not found: {ex.Message}");
+            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
             return 2;
         }
         catch (OperationCanceledException)
@@ -1305,6 +1317,15 @@ static string BuildPlaneUrl(string planeProjectUrl, string ticketId)
         return string.Empty;
     var trimmed = planeProjectUrl.TrimEnd('/');
     return $"{trimmed}/browse/{ticketId}/";
+}
+
+// Returns the first line of ex.StackTrace, trimmed, or "(no stack trace)" when absent.
+// Method names are always available in AOT; source line numbers require embedded PDB symbols.
+static string FirstExceptionFrame(Exception ex)
+{
+    var trace = ex.StackTrace;
+    if (string.IsNullOrEmpty(trace)) return "(no stack trace)";
+    return trace.TrimStart().Split('\n')[0].Trim();
 }
 
 static string? WireUpConditionalCommands(
