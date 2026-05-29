@@ -117,7 +117,6 @@ Before starting investigation proper, check whether the work is already done. If
 
 Emit `Status=Escalate` with a populated `metadata.escalation` block. Do not append a plan.
 
-```json
 WORKER_RESULT
 {
   "status": "Escalate",
@@ -135,7 +134,6 @@ WORKER_RESULT
     }
   }
 }
-```
 
 ## Invalid-ticket discovery
 
@@ -145,7 +143,6 @@ If investigation reveals the ticket is invalid or already fixed (not obsolete): 
 
 When investigation, discipline passes, and size inference are complete, emit the envelope as the LAST output. A bare `WORKER_RESULT` marker on its own line, followed by JSON:
 
-```
 WORKER_RESULT
 {
   "status": "Ok",
@@ -159,7 +156,6 @@ WORKER_RESULT
     "planned_at_sha": "abc1234567890def"
   }
 }
-```
 
 ## Rules
 
