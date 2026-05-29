@@ -1,0 +1,22 @@
+> copilot -p "Implement the changes described in the plan." -s --no-ask-user --model claude-3.5-sonnet
+
+Analyzing the codebase...
+Reading relevant files...
+
+I'll implement the changes as described in the plan.
+
+Reading src/ThroughlineBuild.Cli/Program.cs...
+Editing src/ThroughlineBuild.Cli/Program.cs...
+Reading .build/config.toml...
+Editing .build/config.toml...
+
+Changes applied successfully.
+
+WORKER_RESULT
+{
+  "status": "Ok",
+  "summary": "Added copilot factory branch to Program.cs and documented [workers.copilot] config block",
+  "files_changed": ["src/ThroughlineBuild.Cli/Program.cs", ".build/config.toml"],
+  "failure_reason": null,
+  "metadata": {}
+}

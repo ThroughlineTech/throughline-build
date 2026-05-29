@@ -15,6 +15,7 @@ using ThroughlineBuild.Scaffold;
 using ThroughlineBuild.Verification;
 using ThroughlineBuild.Workers.ClaudeCode;
 using ThroughlineBuild.Workers.Codex;
+using ThroughlineBuild.Workers.Copilot;
 using ThroughlineBuild.Workers.Gemini;
 
 return await RunAsync(args);
@@ -686,6 +687,13 @@ static async Task<int> RunAsync(string[] args)
                 });
             if (capturedName == "codex")
                 return new CodexAgent(new CodexOptions
+                {
+                    ExecutablePath = capturedCfg.Executable,
+                    MaxOutputTokens = capturedCfg.MaxOutputTokens,
+                    Sizes = capturedCfg.Sizes
+                });
+            if (capturedName == "copilot")
+                return new CopilotAgent(new CopilotOptions
                 {
                     ExecutablePath = capturedCfg.Executable,
                     MaxOutputTokens = capturedCfg.MaxOutputTokens,
