@@ -33,7 +33,11 @@ public class ClaudeCodeAgent : IWorkerAgent
         // (the CLI rejects the combination otherwise). The terminal NDJSON event is type=result and is
         // bit-for-bit identical to the legacy --output-format json single-blob envelope, so envelope
         // parsing downstream is unchanged.
-        var args = new List<string> { "--print", "--verbose", "--output-format", "stream-json" };
+        // --dangerously-skip-permissions: worker runs headless via --print; the interactive
+        // approval gate is always unreachable. settings.json defaultMode:bypassPermissions is
+        // ignored by subprocesses, so this flag must be explicit. AllowedTools still constrains
+        // which tools the worker may call (e.g. review phase restricts to Read/Grep/Glob).
+        var args = new List<string> { "--print", "--verbose", "--output-format", "stream-json", "--dangerously-skip-permissions" };
         if (options.AllowedTools is { Count: > 0 })
             args.AddRange(new[] { "--allowedTools", string.Join(",", options.AllowedTools) });
         _options.Sizes.TryGetValue(options.Size, out var resolvedModelRaw);
@@ -74,7 +78,7 @@ public class ClaudeCodeAgent : IWorkerAgent
                 if (options.LiveStdoutSink is not null)
                 {
                     // --debug path: raw firehose. Digest is suppressed (mutually exclusive).
-                    WriteWorkerLine(options.LiveStdoutSink, "worker> ", e.Data);
+                    WriteWorkerLine(options.LiveStdoutSink, "", e.Data);
                 }
                 else if (options.ProgressDigestSink is not null)
                 {
