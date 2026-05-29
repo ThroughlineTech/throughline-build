@@ -104,7 +104,7 @@ Goal: Define and implement plan/implement on a parent.
 Outputs: implement on a parent refuses with guidance to work children (per contract); plan on a parent does the contract-specified thing (e.g. plan the parent's framing, or refuse). Clear messaging either way.
 
 Acceptance:
-- [ ] Invoking implement on a parent ticket produces no code changes, no branch creation, and no ticket state change; the operator receives a message that identifies the parent and points at the children
+- [ ] Invoking implement on a parent ticket produces no changes to the repository or to ticket state; the operator receives a message that identifies the parent and points at the children
 - [ ] Invoking plan on a parent produces the contract-specified outcome (no child-state effects beyond what the contract permits)
 - [ ] Output messaging for both cases includes the parent ticket id and the count of children detected
 
