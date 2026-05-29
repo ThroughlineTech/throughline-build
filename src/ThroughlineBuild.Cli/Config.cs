@@ -227,12 +227,12 @@ public static class BuildConfigLoader
             if (kv.Key == "phases")
             {
                 // Parse phases: each value must be one of the known phase keys.
-                var knownPhases = new HashSet<string>(StringComparer.Ordinal) { "plan", "implement", "review" };
+                var knownPhases = new HashSet<string>(StringComparer.Ordinal) { "plan", "implement", "review", "decompose" };
                 foreach (var phaseKv in subTable)
                 {
                     if (!knownPhases.Contains(phaseKv.Key))
                         throw new ConfigException(
-                            $"unknown phase key '{phaseKv.Key}' in [workers.phases]; allowed keys are: plan, implement, review");
+                            $"unknown phase key '{phaseKv.Key}' in [workers.phases]; allowed keys are: plan, implement, review, decompose");
                     if (phaseKv.Value is not string agentName || string.IsNullOrEmpty(agentName))
                         throw new ConfigException(
                             $"value for '{phaseKv.Key}' in [workers.phases] must be a non-empty string");
