@@ -87,6 +87,22 @@ public interface ITicketing
     /// Implemented via a PATCH to the issue endpoint with the parent UUID field.
     /// </summary>
     Task SetParentAsync(string childUuid, string parentUuid, CancellationToken ct);
+
+    /// <summary>
+    /// Query tickets matching the given filter criteria.
+    /// </summary>
+    Task<IReadOnlyList<Ticket>> QueryAsync(TicketQuery query, CancellationToken ct);
+
+    /// <summary>
+    /// Apply a high-level lifecycle transition (Close, Defer, Reopen) to a ticket,
+    /// posting a marker comment and changing state.
+    /// </summary>
+    Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct);
+
+    /// <summary>
+    /// Replace a ticket's description with the given HTML.
+    /// </summary>
+    Task UpdateDescriptionAsync(string id, string html, CancellationToken ct);
 }
 
 /// <summary>
@@ -115,3 +131,13 @@ public record RollupResult(bool ParentTransitioned, string? NewParentState, stri
 /// <param name="Uuid">Plane work item UUID.</param>
 /// <param name="CreatedAt">Timestamp when the ticket was created (UTC).</param>
 public record NewTicketResult(string Id, string Uuid, DateTime CreatedAt);
+
+/// <summary>
+/// Filter criteria for QueryAsync.
+/// </summary>
+public record TicketQuery(TicketState? State = null, string? ParentId = null, string? Type = null);
+
+/// <summary>
+/// High-level lifecycle transitions that map to state changes and marker comments.
+/// </summary>
+public enum LifecycleTransition { Close, Defer, Reopen }

@@ -534,6 +534,116 @@ public sealed class PlaneTicketingClient : ITicketing
         }, ct).ConfigureAwait(false);
     }
 
+    public async Task<IReadOnlyList<Ticket>> QueryAsync(TicketQuery query, CancellationToken ct)
+    {
+        return await _pipeline.ExecuteAsync(async token =>
+        {
+            var sb = new System.Text.StringBuilder(IssuesBase);
+            sb.Append("?per_page=100");
+
+            if (query.State.HasValue)
+            {
+                var stateName = query.State.Value switch
+                {
+                    TicketState.Backlog     => "Backlog",
+                    TicketState.Planning    => "Planning",
+                    TicketState.Ready       => "Ready",
+                    TicketState.InProgress  => "In Progress",
+                    TicketState.InReview    => "In Review",
+                    TicketState.Done        => "Done",
+                    TicketState.Cancelled   => "Cancelled",
+                    _ => throw new ArgumentOutOfRangeException(nameof(query))
+                };
+                var statesByName = await GetStatesByNameAsync(token).ConfigureAwait(false);
+                if (statesByName.TryGetValue(stateName, out var stateUuid))
+                    sb.Append($"&state={stateUuid}");
+            }
+
+            if (!string.IsNullOrEmpty(query.ParentId))
+                sb.Append($"&parent={query.ParentId}");
+
+            if (!string.IsNullOrEmpty(query.Type))
+                sb.Append($"&type={Uri.EscapeDataString(query.Type)}");
+
+            var issueList = await GetJsonAsync<PlaneIssueList>(
+                sb.ToString(), PlaneJsonContext.Default, token).ConfigureAwait(false);
+
+            var tickets = new List<Ticket>(issueList.Results.Count);
+            foreach (var issue in issueList.Results)
+                tickets.Add(await ToTicketAsync(issue, token).ConfigureAwait(false));
+
+            return (IReadOnlyList<Ticket>)tickets;
+        }, ct).ConfigureAwait(false);
+    }
+
+    public async Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct)
+    {
+        await _pipeline.ExecuteAsync(async token =>
+        {
+            var (targetState, commentMarker) = transition switch
+            {
+                LifecycleTransition.Close  => (TicketState.Cancelled, "<strong>wontfix:</strong>"),
+                LifecycleTransition.Defer  => (TicketState.Cancelled, "<strong>deferred:</strong>"),
+                LifecycleTransition.Reopen => (TicketState.Backlog,   "<strong>reopened:</strong>"),
+                _ => throw new ArgumentOutOfRangeException(nameof(transition))
+            };
+
+            var commentHtml = string.IsNullOrEmpty(reason)
+                ? $"<p>{commentMarker}</p>"
+                : $"<p>{commentMarker} {reason}</p>";
+
+            var seq = ParseSequenceId(id);
+            var issue = await FindIssueAsync(seq, token).ConfigureAwait(false);
+
+            // Post comment
+            await PostJsonAsync(
+                $"{IssuesBase}{issue.Id}/comments/",
+                new CreateCommentRequest(commentHtml),
+                PlaneJsonContext.Default,
+                token).ConfigureAwait(false);
+
+            // Resolve state UUID and patch
+            var stateName = targetState switch
+            {
+                TicketState.Backlog     => "Backlog",
+                TicketState.Planning    => "Planning",
+                TicketState.Ready       => "Ready",
+                TicketState.InProgress  => "In Progress",
+                TicketState.InReview    => "In Review",
+                TicketState.Done        => "Done",
+                TicketState.Cancelled   => "Cancelled",
+                _ => throw new ArgumentOutOfRangeException(nameof(targetState))
+            };
+            var statesByName = await GetStatesByNameAsync(token).ConfigureAwait(false);
+            if (!statesByName.TryGetValue(stateName, out var stateId))
+            {
+                Console.Error.WriteLine(
+                    $"Warning: Plane project has no '{stateName}' state; leaving {id} in its current state.");
+                return;
+            }
+            await PatchJsonAsync(
+                $"{IssuesBase}{issue.Id}/",
+                new TransitionRequest(stateId),
+                PlaneJsonContext.Default,
+                token).ConfigureAwait(false);
+        }, ct).ConfigureAwait(false);
+    }
+
+    public async Task UpdateDescriptionAsync(string id, string html, CancellationToken ct)
+    {
+        await _pipeline.ExecuteAsync(async token =>
+        {
+            var seq = ParseSequenceId(id);
+            var issue = await FindIssueAsync(seq, token).ConfigureAwait(false);
+
+            await PatchJsonAsync(
+                $"{IssuesBase}{issue.Id}/",
+                new UpdateDescriptionRequest(html),
+                PlaneJsonContext.Default,
+                token).ConfigureAwait(false);
+        }, ct).ConfigureAwait(false);
+    }
+
     // ------------------------------------------------------------------ rollup helpers
 
     private static string ExtractStateName(JsonElement stateElement)

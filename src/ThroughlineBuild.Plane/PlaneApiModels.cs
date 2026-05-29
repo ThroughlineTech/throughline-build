@@ -123,6 +123,10 @@ public record SetParentRequest(
     [property: JsonPropertyName("parent")] string Parent
 );
 
+public record UpdateDescriptionRequest(
+    [property: JsonPropertyName("description_html")] string DescriptionHtml
+);
+
 [JsonSerializable(typeof(PlaneIssue))]
 [JsonSerializable(typeof(PlaneIssueList))]
 [JsonSerializable(typeof(PlaneState))]
@@ -147,6 +151,7 @@ public record SetParentRequest(
 [JsonSerializable(typeof(CreateIssueRequest))]
 [JsonSerializable(typeof(PlaneCreateIssueResponse))]
 [JsonSerializable(typeof(SetParentRequest))]
+[JsonSerializable(typeof(UpdateDescriptionRequest))]
 [JsonSerializable(typeof(List<PlaneState>))]
 [JsonSerializable(typeof(List<PlaneLabel>))]
 [JsonSerializable(typeof(List<PlaneRelationItem>))]
