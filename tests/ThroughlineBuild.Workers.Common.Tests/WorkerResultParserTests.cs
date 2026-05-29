@@ -187,3 +187,56 @@ public class WorkerResultParserTemplateRoundTripTests
             "Metadata must contain 'planned_at_sha' key");
     }
 }
+
+/// <summary>
+/// Tests for metadata.escalation schema validation in WorkerResultParser.
+/// Covers: valid obsolete escalation, missing subsumed_by on obsolete reason, unknown reason passthrough.
+/// </summary>
+public class WorkerResultParserEscalationMetadataTests
+{
+    [Fact]
+    public void TryParse_ValidObsoleteEscalation_ParsesCleanly()
+    {
+        var stdout =
+            "WORKER_RESULT\n" +
+            "{\"status\":\"Escalate\",\"summary\":\"ticket is obsolete\",\"files_changed\":[]," +
+            "\"failure_reason\":null,\"metadata\":{\"escalation\":{\"reason\":\"obsolete\"," +
+            "\"subsumed_by\":{\"commit\":\"abc123\",\"files\":[\"src/A.cs\"]," +
+            "\"rationale\":\"already done\"}}}}\n";
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.NotNull(outcome.Result);
+        Assert.Equal(Status.Escalate, outcome.Result.Status);
+        Assert.True(outcome.Result.Metadata.ContainsKey("escalation"));
+    }
+
+    [Fact]
+    public void TryParse_ObsoleteEscalation_MissingSubsumedBy_FailsWithClearMessage()
+    {
+        var stdout =
+            "WORKER_RESULT\n" +
+            "{\"status\":\"Escalate\",\"summary\":\"ticket is obsolete\",\"files_changed\":[]," +
+            "\"failure_reason\":null,\"metadata\":{\"escalation\":{\"reason\":\"obsolete\"}}}\n";
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.Null(outcome.Result);
+        Assert.NotNull(outcome.DeserializeErrorMessage);
+        Assert.Contains("subsumed_by", outcome.DeserializeErrorMessage);
+    }
+
+    [Fact]
+    public void TryParse_UnknownEscalationReason_ParsesAndPassesThrough()
+    {
+        var stdout =
+            "WORKER_RESULT\n" +
+            "{\"status\":\"Escalate\",\"summary\":\"blocked on dependency\",\"files_changed\":[]," +
+            "\"failure_reason\":null,\"metadata\":{\"escalation\":{\"reason\":\"blocked\"}}}\n";
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.NotNull(outcome.Result);
+        Assert.True(outcome.Result.Metadata.ContainsKey("escalation"));
+    }
+}

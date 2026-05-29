@@ -98,6 +98,43 @@ From `Phase` at [src/ThroughlineBuild.Contracts/Models/Phase.cs:3](../src/Throug
 
 New emit sites should follow this style: short, lowercase, snake_case keys; values are strings or primitives.
 
+### WORKER_RESULT metadata.escalation
+
+When a worker emits `status: Escalate`, it may include a structured `metadata.escalation` object to convey the escalation context to the orchestrator:
+
+```json
+"metadata": {
+  "escalation": {
+    "reason": "obsolete",
+    "subsumed_by": {
+      "commit": "abc123def456",
+      "files": ["src/Foo.cs", "src/Bar.cs"],
+      "rationale": "These changes were already applied in the referenced commit."
+    }
+  }
+}
+```
+
+**Fields:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `reason` | string | yes | Why the worker escalated. Recognized values listed below. |
+| `subsumed_by` | object | when `reason == "obsolete"` | The commit that makes this ticket obsolete. |
+| `subsumed_by.commit` | string (non-empty) | yes (if subsumed_by present) | SHA of the commit that subsumes this ticket's work. |
+| `subsumed_by.files` | string array (non-empty) | yes (if subsumed_by present) | Paths already handled by that commit. |
+| `subsumed_by.rationale` | string (non-empty) | yes (if subsumed_by present) | Human-readable explanation of why the ticket is now obsolete. |
+
+**Recognized reasons:**
+
+| Value | Meaning | subsumed_by required? |
+|-------|---------|-----------------------|
+| `"obsolete"` | The ticket's work is already done by another commit or ticket. | Yes - parser fails with `ValidationError` if absent or incomplete. |
+
+**Unknown reasons:** Any `reason` value not listed above is accepted by the parser without failure. The orchestrator treats an unknown reason as "unknown escalation reason - no auto-resolve" and handles it via its Plan B path.
+
+**Parser rule:** If `metadata.escalation.reason == "obsolete"` (case-insensitive), the `subsumed_by` object must be present and fully populated (`commit` non-empty string, `files` non-empty array, `rationale` non-empty string). A missing or incomplete `subsumed_by` causes the worker result parse to fail with `ValidationError` and message: `metadata.escalation.reason is 'obsolete' but subsumed_by is missing or incomplete (requires commit string, non-empty files array, and rationale string)`. This is consistent with how the parser handles other malformed required fields (`status`, `summary`).
+
 ---
 
 ## Happy-path Plan example
