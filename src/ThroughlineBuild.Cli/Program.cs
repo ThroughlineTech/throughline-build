@@ -72,17 +72,6 @@ static async Task<int> RunAsync(string[] args)
             return 2;
         }
 
-        // For chain: reject multiple positional ticket IDs (v1 out of scope).
-        if (verb == "chain" && args.Length > 2)
-        {
-            // Check if args[2] is a flag or another ticket ID.
-            if (!args[2].StartsWith("--"))
-            {
-                Console.Error.WriteLine("Error: build chain accepts exactly one ticket ID in v1; multi-ticket dispatch is planned for a future release.");
-                return 2;
-            }
-        }
-
         // For rework: reject multiple positional ticket IDs (single ticket only).
         if (verb == "rework" && args.Length > 2)
         {
