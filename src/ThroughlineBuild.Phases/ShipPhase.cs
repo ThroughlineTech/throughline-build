@@ -182,10 +182,14 @@ public class ShipPhase : IWorkflowPhase
         }
         else
         {
-            var fetchResult = await _git.FetchAsync(remote, workingDirectory, ct).ConfigureAwait(false);
-            if (!fetchResult.Success)
+            GitOpResult? fetchResult = null;
+            await MainWorktreeLock.WithLockAsync(workingDirectory, async ct =>
+            {
+                fetchResult = await _git.FetchAsync(remote, workingDirectory, ct).ConfigureAwait(false);
+            }, ct).ConfigureAwait(false);
+            if (fetchResult == null || !fetchResult.Success)
                 return (new ShipResult(false, ticketId, null,
-                    $"git fetch failed: {fetchResult.FailureReason}",
+                    $"git fetch failed: {fetchResult?.FailureReason}",
                     ShipFailureStage.Fetch), worktreeNames, null);
 
             // Step 4a: Determine rebase base by ancestry check
@@ -310,10 +314,14 @@ public class ShipPhase : IWorkflowPhase
         }
 
         // Step 8: Fast-forward merge into local baseBranch (main worktree)
-        var ffResult = await _git.FastForwardMergeAsync(worktreeNames.BranchName, workingDirectory, ct).ConfigureAwait(false);
-        if (!ffResult.Success)
+        GitOpResult? ffResult = null;
+        await MainWorktreeLock.WithLockAsync(workingDirectory, async ct =>
+        {
+            ffResult = await _git.FastForwardMergeAsync(worktreeNames.BranchName, workingDirectory, ct).ConfigureAwait(false);
+        }, ct).ConfigureAwait(false);
+        if (ffResult == null || !ffResult.Success)
             return (new ShipResult(false, ticketId, null,
-                $"fast-forward merge failed: {ffResult.FailureReason}",
+                $"fast-forward merge failed: {ffResult?.FailureReason}",
                 ShipFailureStage.FastForwardMerge), worktreeNames, null);
 
         // Step 8a: Push to remote (skipped when no remote is configured)
