@@ -11,7 +11,8 @@ public record ScaffoldResult(
     bool WasAbortedByParseErrors,
     bool WasAbortedByValidationErrors,
     bool WasBlockedByWarnings,
-    bool WasDryRun);
+    bool WasDryRun,
+    string? OpTicketId = null);
 
 /// <summary>
 /// Records a single per-step failure during scaffolding.

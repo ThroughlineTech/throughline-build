@@ -168,17 +168,18 @@ public sealed class ScaffoldCommand : ITicketCommand
 
         var opDoc = parseResult.Parsed;
         var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"Would create {result.PlansCreated} plan(s) + {result.BriefsCreated} brief(s):");
+        sb.AppendLine($"Would create 1 operation + {result.PlansCreated} plan(s) + {result.BriefsCreated} brief(s):");
+        sb.AppendLine($"  [Op] \"{opDoc.Title}\" (plan-ticket)");
 
         foreach (var entry in opDoc.DispatchOrder)
         {
             var plan = opDoc.Plans.FirstOrDefault(p => p.Id == entry.PlanId);
             if (plan == null) continue;
 
-            sb.AppendLine($"  [Plan {plan.Id}] \"Plan {plan.Id}: {plan.Name}\" (plan-ticket)");
+            sb.AppendLine($"    [Plan {plan.Id}] \"Plan {plan.Id}: {plan.Name}\" (plan-ticket)");
             foreach (var brief in plan.Briefs)
             {
-                sb.AppendLine($"    -> [Brief {plan.Id}.{brief.Number:D2}] \"{brief.Slug}\"");
+                sb.AppendLine($"      -> [Brief {plan.Id}.{brief.Number:D2}] \"{brief.Slug}\"");
             }
         }
 
@@ -197,6 +198,13 @@ public sealed class ScaffoldCommand : ITicketCommand
         {
             var opDoc = parseResult.Parsed;
             int idIndex = 0;
+
+            // Emit operation ticket
+            if (!string.IsNullOrEmpty(result.OpTicketId))
+            {
+                sb.AppendLine($"Created operation ticket: {result.OpTicketId} \"{opDoc.Title}\"");
+            }
+
             foreach (var entry in opDoc.DispatchOrder)
             {
                 var plan = opDoc.Plans.FirstOrDefault(p => p.Id == entry.PlanId);

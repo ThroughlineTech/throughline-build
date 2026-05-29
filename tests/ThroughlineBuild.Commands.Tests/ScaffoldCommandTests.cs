@@ -298,8 +298,8 @@ OOS:
         var ctxAccept = MakeCtx(path, acceptWarnings: true);
         var acceptResult = await cmd.ExecuteAsync(ctxAccept, CancellationToken.None);
         Assert.True(acceptResult.Success);
-        // 1 plan + 1 brief = 2 creates
-        Assert.Equal(2, ticketing.CreateCalls);
+        // 1 op + 1 plan + 1 brief = 3 creates
+        Assert.Equal(3, ticketing.CreateCalls);
     }
 
     // ---- Test 4: validation errors cause non-zero exit ----
@@ -341,10 +341,10 @@ OOS:
 
         // Should succeed
         Assert.True(result.Success);
-        // 1 plan + 2 briefs = 3 API calls
-        Assert.Equal(3, ticketing.CreateCalls);
-        // SetParent should be called for each brief (2 times)
-        Assert.Equal(2, ticketing.SetParentCalls);
+        // 1 op + 1 plan + 2 briefs = 4 API calls
+        Assert.Equal(4, ticketing.CreateCalls);
+        // SetParent should be called for each brief (2) and plan to op (1) = 3 times
+        Assert.Equal(3, ticketing.SetParentCalls);
         // Output should mention "Scaffolding" and "Scaffold complete"
         Assert.NotNull(result.Message);
         Assert.Contains("Scaffolding", result.Message);
