@@ -129,6 +129,19 @@ public class ChainPhase
                         var finalRationale = FormatSubsumedRationale(evidence);
                         await _ticketing.TransitionAsync(options.TicketId, TicketState.Done, ct).ConfigureAwait(false);
                         await _ticketing.CreateCommentAsync(options.TicketId, "<p>" + WebUtility.HtmlEncode(finalRationale) + "</p>", ct).ConfigureAwait(false);
+                        await _events.EmitAsync(new WorkflowEvent(
+                            SessionId: chainSessionId,
+                            Timestamp: DateTimeOffset.UtcNow,
+                            Kind: EventKind.TicketSubsumed,
+                            TicketId: options.TicketId,
+                            Phase: Phase.Chain,
+                            Data: new Dictionary<string, object>
+                            {
+                                ["ticket_id"] = options.TicketId,
+                                ["subsumed_by_commit"] = evidence?.Commit ?? "",
+                                ["files"] = evidence?.Files.ToArray() ?? Array.Empty<string>(),
+                                ["rationale"] = evidence?.Rationale ?? ""
+                            }), ct).ConfigureAwait(false);
                         totalSw.Stop();
                         var ratified = new ChainResult(options.TicketId, steps, ChainOutcome.RatifiedObsolete,
                             totalSw.Elapsed, finalRationale, evidence);
@@ -273,6 +286,19 @@ public class ChainPhase
                         var finalRationale = FormatSubsumedRationale(evidence);
                         await _ticketing.TransitionAsync(options.TicketId, TicketState.Done, ct).ConfigureAwait(false);
                         await _ticketing.CreateCommentAsync(options.TicketId, "<p>" + WebUtility.HtmlEncode(finalRationale) + "</p>", ct).ConfigureAwait(false);
+                        await _events.EmitAsync(new WorkflowEvent(
+                            SessionId: chainSessionId,
+                            Timestamp: DateTimeOffset.UtcNow,
+                            Kind: EventKind.TicketSubsumed,
+                            TicketId: options.TicketId,
+                            Phase: Phase.Chain,
+                            Data: new Dictionary<string, object>
+                            {
+                                ["ticket_id"] = options.TicketId,
+                                ["subsumed_by_commit"] = evidence?.Commit ?? "",
+                                ["files"] = evidence?.Files.ToArray() ?? Array.Empty<string>(),
+                                ["rationale"] = evidence?.Rationale ?? ""
+                            }), ct).ConfigureAwait(false);
                         totalSw.Stop();
                         return new ChainResult(options.TicketId, steps, ChainOutcome.RatifiedObsolete,
                             totalSw.Elapsed, finalRationale, evidence);

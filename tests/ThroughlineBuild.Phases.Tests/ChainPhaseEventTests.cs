@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Helpers;
@@ -68,10 +69,11 @@ public class ChainPhaseEventTests
 
     private (ChainPhase chain, CapturingEventSink sink) BuildChain(
         EventChainFakeTicketing ticketing,
-        EventFakeWorkerAgent planWorker,
+        IWorkerAgent planWorker,
         EventFakeWorkerAgent implWorker,
         Queue<IVerifier> verifierQueue,
-        EventFakeGitClient? git = null)
+        EventFakeGitClient? git = null,
+        Func<BuildOptions, IObsoleteRatifier>? ratifierFactory = null)
     {
         _sessionCounter = 0;
         var sink = new CapturingEventSink();
@@ -103,7 +105,8 @@ public class ChainPhaseEventTests
             ticketing, sink, baseOpts,
             planFactory, implFactory, reviewFactory, shipFactory,
             sessionIdGenerator: NextSessionId,
-            workingDirectory: WorkDir);
+            workingDirectory: WorkDir,
+            ratifierFactory: ratifierFactory);
 
         return (chain, sink);
     }
@@ -260,6 +263,87 @@ public class ChainPhaseEventTests
         Assert.Equal("RefusedInitialState", (string)chainEndEv.Data["outcome"]);
         Assert.Equal(0, (int)chainEndEv.Data["phases_run"]);
         Assert.Equal(0, (int)chainEndEv.Data["rework_rounds"]);
+    }
+
+    // Test 6: RatifiedObsolete via plan path emits TicketSubsumed before ChainEnd with evidence fields
+    [Fact]
+    public async Task RatifiedObsolete_EmitsTicketSubsumedEvent_BeforeChainEnd_WithEvidenceFields()
+    {
+        const string subsumedCommit = "abc123def456";
+        var ticketing = new EventChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var escalateResult = ObsoleteEscalateWorkerResult(subsumedCommit);
+        var planWorker = new EscalateWorkerAgent(escalateResult);
+        var ratifier = new FakeObsoleteRatifier(new Verdict(VerdictKind.Pass, "ratified", Array.Empty<string>()));
+
+        var (chain, sink) = BuildChain(
+            ticketing,
+            planWorker,
+            new EventFakeWorkerAgent(null),
+            new Queue<IVerifier>(),
+            ratifierFactory: _ => ratifier);
+
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.RatifiedObsolete, result.Outcome);
+        Assert.True(ratifier.WasCalled);
+
+        var events = sink.Events;
+        var subsumedEvs = events.Where(e => e.Kind == EventKind.TicketSubsumed).ToList();
+        Assert.Single(subsumedEvs);
+
+        var subsumedEv = subsumedEvs[0];
+        Assert.Equal(Phase.Chain, subsumedEv.Phase);
+        Assert.Equal(TicketId, (string)subsumedEv.Data["ticket_id"]);
+        Assert.Equal(subsumedCommit, (string)subsumedEv.Data["subsumed_by_commit"]);
+        Assert.Equal("already done in prior commit", (string)subsumedEv.Data["rationale"]);
+
+        // TicketSubsumed must appear before ChainEnd
+        var subsumedIdx = events.FindIndex(e => e.Kind == EventKind.TicketSubsumed);
+        var chainEndIdx = events.FindIndex(e => e.Kind == EventKind.ChainEnd);
+        Assert.True(subsumedIdx >= 0 && chainEndIdx >= 0);
+        Assert.True(subsumedIdx < chainEndIdx);
+    }
+
+    private static WorkerResult ObsoleteEscalateWorkerResult(string commit = "abc123obsolete") =>
+        new WorkerResult(
+            Status.Escalate,
+            "ticket is obsolete",
+            Array.Empty<string>(),
+            null,
+            new Dictionary<string, object>
+            {
+                ["escalation"] = JsonSerializer.Deserialize<JsonElement>($$"""
+                    {
+                      "reason": "obsolete",
+                      "subsumed_by": {
+                        "commit": "{{commit}}",
+                        "files": ["src/Foo.cs"],
+                        "rationale": "already done in prior commit"
+                      }
+                    }
+                    """)
+            });
+
+    private sealed class EscalateWorkerAgent : IWorkerAgent
+    {
+        private readonly WorkerResult _result;
+        public string Name => "claude-code";
+        public IWorkerProgressDigester? Digester => null;
+        public EscalateWorkerAgent(WorkerResult result) { _result = result; }
+        public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct) =>
+            Task.FromResult(_result);
+    }
+
+    private sealed class FakeObsoleteRatifier : IObsoleteRatifier
+    {
+        private readonly Verdict _verdict;
+        public bool WasCalled { get; private set; }
+        public FakeObsoleteRatifier(Verdict verdict) { _verdict = verdict; }
+        public Task<Verdict> RatifyAsync(Ticket ticket, WorkerResult escalateResult, CancellationToken ct)
+        {
+            WasCalled = true;
+            return Task.FromResult(_verdict);
+        }
     }
 
     // CapturingEventSink records all emitted events in order

@@ -85,6 +85,7 @@ static Bucket AnalyzeAndReport(
     string? firstTs = null, lastTs = null;
     JsonElement chainEndData = default;
     bool sawChainEnd = false;
+    var subsumedEvents = new List<(string ticketId, string commit)>();
 
     foreach (var raw in File.ReadLines(path))
     {
@@ -110,6 +111,13 @@ static Bucket AnalyzeAndReport(
             // Clone because the JsonDocument is disposed at end of scope.
             chainEndData = root.GetProperty("Data").Clone();
             sawChainEnd = true;
+        }
+        else if (kind == 9) // TicketSubsumed
+        {
+            var data = root.GetProperty("Data");
+            TryGetString(data, "ticket_id", out var subTicketId);
+            TryGetString(data, "subsumed_by_commit", out var subCommit);
+            subsumedEvents.Add((subTicketId ?? ticketId ?? "n/a", subCommit ?? ""));
         }
 
         if (!byPhase.TryGetValue(phase, out var bucket))
@@ -155,6 +163,12 @@ static Bucket AnalyzeAndReport(
         Console.WriteLine($"Phases run:     {phasesRun}");
         Console.WriteLine($"Rework rounds:  {rework}");
         Console.WriteLine($"Chain duration: {totalMs / 1000.0:F1}s ({totalMs / 60000.0:F2}m)");
+        if (subsumedEvents.Count > 0)
+        {
+            Console.WriteLine($"Subsumed:       {subsumedEvents.Count} ticket(s) auto-resolved");
+            foreach (var (tid, commit) in subsumedEvents)
+                Console.WriteLine($"  {tid}  subsumed_by {commit}");
+        }
     }
 
     Console.WriteLine();
