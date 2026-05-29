@@ -1,4 +1,5 @@
 using ThroughlineBuild.Workers.Gemini;
+using Xunit;
 
 namespace ThroughlineBuild.Workers.Gemini.Tests;
 
