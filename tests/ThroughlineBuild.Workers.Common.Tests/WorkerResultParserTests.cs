@@ -134,17 +134,19 @@ public class WorkerResultParserTemplateRoundTripTests
         // Build the brief (this renders the template).
         var brief = PlanBriefBuilder.Build("claude-code", ticket, repo);
 
-        // Locate the WORKER_RESULT block: it is inside a triple-backtick fence.
-        // Pattern: ```NEWLINE WORKER_RESULT NEWLINE {...JSON...} NEWLINE```
-        var workerResultMatch = Regex.Match(
+        // Locate the WORKER_RESULT envelope block. The template also contains an
+        // escalation example; we want the final block (the envelope at the bottom).
+        // WORKER_RESULT is a bare marker followed by a JSON object whose outer closing
+        // brace sits at column 0 (no indent), so \n\} reliably terminates each block.
+        var allWorkerResultMatches = Regex.Matches(
             brief.Instruction,
-            @"```\s*\nWORKER_RESULT\s*\n([\s\S]*?)\n```",
+            @"WORKER_RESULT\s*\n(\{[\s\S]*?\n\})",
             RegexOptions.Multiline
         );
-        Assert.True(workerResultMatch.Success, "Template must contain WORKER_RESULT block inside fenced code block");
+        Assert.True(allWorkerResultMatches.Count > 0, "Template must contain at least one WORKER_RESULT block");
 
-        // Extract the JSON (everything between WORKER_RESULT and the closing fence).
-        var jsonBlock = workerResultMatch.Groups[1].Value.Trim();
+        // Extract the JSON from the last (envelope) block.
+        var jsonBlock = allWorkerResultMatches[^1].Groups[1].Value.Trim();
 
         // Substitute placeholder values. We also substitute a non-empty
         // files_changed array so the round-trip can assert on a value that
