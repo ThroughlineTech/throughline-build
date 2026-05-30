@@ -202,7 +202,13 @@ public sealed class ScaffoldCommand : ITicketCommand
         if (parseResult.Parsed != null)
         {
             var opDoc = parseResult.Parsed;
-            int idIndex = 0;
+
+            // CreatedTicketIds is [op, plan, briefs..., plan, briefs...]. The op id lives
+            // at index 0 whenever the op was created (OpTicketId set), and it is printed
+            // separately below - so plan/brief consumption must start *after* it. Starting
+            // at 0 reprinted the op id as the first plan and shifted every id down one,
+            // dropping the last brief.
+            int idIndex = string.IsNullOrEmpty(result.OpTicketId) ? 0 : 1;
 
             // Emit operation ticket
             if (!string.IsNullOrEmpty(result.OpTicketId))

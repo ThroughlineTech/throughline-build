@@ -353,6 +353,33 @@ OOS:
         Assert.StartsWith(ScaffoldExitCategory.Clean, result.Message);
     }
 
+    // ---- Test 6: created-ticket ids correlate to the right plan/brief (no off-by-one) ----
+
+    [Fact]
+    public async Task SuccessPath_CorrelatesTicketIdsToPlansAndBriefs_NoOffByOne()
+    {
+        // Fake assigns ids sequentially: op=TLB-101, plan=TLB-102, briefs=TLB-103/104.
+        var path = WriteOpDoc(ValidOpDoc);
+        var ticketing = new ScaffoldFakeTicketing();
+        var events = new ScaffoldFakeEventSink();
+        var phase = new ScaffoldPhase(ticketing, events, "test-session");
+        var cmd = new ScaffoldCommand(phase);
+
+        var result = await cmd.ExecuteAsync(MakeCtx(path, acceptWarnings: true), CancellationToken.None);
+
+        Assert.True(result.Success);
+        var msg = result.Message!;
+
+        // Operation prints its own id; the plan must NOT reuse it.
+        Assert.Contains("Created operation ticket: TLB-101", msg);
+        Assert.Contains("Created plan A: TLB-102", msg);
+        Assert.DoesNotContain("Created plan A: TLB-101", msg);
+
+        // Briefs map to the next two ids - and the last id is not dropped.
+        Assert.Contains("Created brief: TLB-103 \"alpha-one\" (parent: TLB-102)", msg);
+        Assert.Contains("Created brief: TLB-104 \"alpha-two\" (parent: TLB-102)", msg);
+    }
+
     // ---- Helper ----
 
     private static TicketCommandContext MakeCtx(
