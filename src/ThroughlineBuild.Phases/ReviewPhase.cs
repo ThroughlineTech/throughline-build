@@ -62,6 +62,13 @@ public class ReviewPhase : IWorkflowPhase
         // Step 1: Fetch ticket
         var ticket = await _ticketing.GetAsync(ticketId, ct).ConfigureAwait(false);
 
+        // Parent-ticket aggregate review path
+        var reviewChildren = await _ticketing.QueryAsync(new TicketQuery(ParentId: ticket.Uuid), ct).ConfigureAwait(false);
+        if (reviewChildren.Count > 0)
+        {
+            return await RunParentReviewAsync(ticketId, ticket, reviewChildren, ct).ConfigureAwait(false);
+        }
+
         // Step 2: Validate state
         if (ticket.State != TicketState.InReview)
             return new ReviewResult(false, ticketId, null, null, Array.Empty<string>(),
@@ -242,6 +249,64 @@ public class ReviewPhase : IWorkflowPhase
             } as IReadOnlyDictionary<string, string>
             : new Dictionary<string, string>() as IReadOnlyDictionary<string, string>;
         return new PhaseResult(reviewResult.Success, reviewResult.TicketId, Phase.Review, reviewResult.FailureReason, outputs);
+    }
+
+    private async Task<ReviewResult> RunParentReviewAsync(
+        string ticketId,
+        Ticket ticket,
+        IReadOnlyList<Ticket> children,
+        CancellationToken ct)
+    {
+        // Classify children by state
+        var inFlight = children.Where(c => c.State == TicketState.InProgress || c.State == TicketState.InReview).ToList();
+        var notDone = children.Where(c => c.State != TicketState.Done).ToList();
+        var allDone = notDone.Count == 0;
+
+        VerdictKind kind;
+        string rationale;
+        string commentHtml;
+
+        if (inFlight.Count > 0)
+        {
+            // Any child InProgress or InReview -> Rework
+            kind = VerdictKind.Rework;
+            var blockerIds = string.Join(", ", inFlight.Select(c => c.Id));
+            rationale = $"children still in progress: {blockerIds}";
+            commentHtml = $"<p><strong>reviewed:</strong> rework - {rationale}</p>";
+        }
+        else if (allDone)
+        {
+            // All Done -> Pass
+            kind = VerdictKind.Pass;
+            rationale = $"all {children.Count} children are Done";
+            commentHtml = $"<p><strong>reviewed:</strong> pass - {rationale}</p>";
+        }
+        else
+        {
+            // Some children not Done and not in-flight -> Fail
+            kind = VerdictKind.Fail;
+            var blockerIds = string.Join(", ", notDone.Select(c => c.Id));
+            rationale = $"children not Done: {blockerIds}";
+            commentHtml = $"<p><strong>reviewed:</strong> fail - {rationale}</p>";
+        }
+
+        await _ticketing.CreateCommentAsync(ticketId, commentHtml, ct).ConfigureAwait(false);
+        await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
+        {
+            ["action"] = "create_comment"
+        }, ct).ConfigureAwait(false);
+
+        if (kind == VerdictKind.Rework)
+        {
+            await _ticketing.TransitionAsync(ticketId, TicketState.InProgress, ct).ConfigureAwait(false);
+            await EmitAsync(EventKind.StateTransition, ticketId, new Dictionary<string, object>
+            {
+                ["from"] = ticket.State.ToString(),
+                ["to"] = "InProgress"
+            }, ct).ConfigureAwait(false);
+        }
+
+        return new ReviewResult(true, ticketId, kind, rationale, Array.Empty<string>(), null);
     }
 
     private async Task EmitAsync(EventKind kind, string ticketId, IReadOnlyDictionary<string, object> data, CancellationToken ct)

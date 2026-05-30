@@ -853,13 +853,86 @@ public class ShipPhaseTests
 
     // ---------- Fakes ----------
 
+    [Fact]
+    public async Task RunAsync_ParentTicket_AllChildrenDone_TransitionsParentToDone()
+    {
+        var ticket = MakeTicket(TicketState.InReview);
+        var ticketing = new FakeTicketing(ticket);
+        ticketing.SeedChildren(new[]
+        {
+            new Ticket("TLB-2", "child-uuid-2", "Child A", "feature", TicketState.Done,
+                Size.S, Risk.Low, "", Array.Empty<Relation>(), Array.Empty<string>(), ticket.Uuid),
+            new Ticket("TLB-3", "child-uuid-3", "Child B", "feature", TicketState.Done,
+                Size.S, Risk.Low, "", Array.Empty<Relation>(), Array.Empty<string>(), ticket.Uuid)
+        });
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Null(result.FailureReason);
+        Assert.Null(result.MergedSha);
+
+        Assert.Single(ticketing.Transitions);
+        Assert.Equal(TicketState.Done, ticketing.Transitions[0].state);
+
+        Assert.Single(ticketing.Comments);
+        Assert.Contains("shipped", ticketing.Comments[0].html);
+
+        // No git operations should have been invoked
+        Assert.Equal(0, git.FetchCallCount);
+        Assert.Equal(0, git.RebaseCallCount);
+    }
+
+    [Fact]
+    public async Task RunAsync_ParentTicket_ChildNotDone_ReturnsFailureWithBlockerList()
+    {
+        var ticket = MakeTicket(TicketState.InReview);
+        var ticketing = new FakeTicketing(ticket);
+        ticketing.SeedChildren(new[]
+        {
+            new Ticket("TLB-2", "child-uuid-2", "Child A", "feature", TicketState.Done,
+                Size.S, Risk.Low, "", Array.Empty<Relation>(), Array.Empty<string>(), ticket.Uuid),
+            new Ticket("TLB-3", "child-uuid-3", "Child B", "feature", TicketState.InProgress,
+                Size.S, Risk.Low, "", Array.Empty<Relation>(), Array.Empty<string>(), ticket.Uuid)
+        });
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("TLB-3", result.FailureReason ?? "");
+        Assert.Empty(ticketing.Transitions);
+
+        Assert.Single(ticketing.Comments);
+        Assert.Contains("ship_blocked", ticketing.Comments[0].html);
+        Assert.Contains("TLB-3", ticketing.Comments[0].html);
+
+        // No git operations
+        Assert.Equal(0, git.FetchCallCount);
+        Assert.Equal(0, git.RebaseCallCount);
+    }
+
     private sealed class FakeTicketing : ITicketing
     {
         private readonly Ticket _ticket;
+        private List<Ticket> _queryChildren = new();
         public List<(string id, TicketState state)> Transitions { get; } = new();
         public List<(string id, string html)> Comments { get; } = new();
 
         public FakeTicketing(Ticket ticket) { _ticket = ticket; }
+
+        public void SeedChildren(IReadOnlyList<Ticket> children) => _queryChildren = children.ToList();
 
         public BackendCapabilities Capabilities => new BackendCapabilities(true, true, true, false);
         public Task<Ticket> GetAsync(string id, CancellationToken ct) => Task.FromResult(_ticket);
@@ -896,7 +969,7 @@ public class ShipPhaseTests
             Task.CompletedTask;
 
         public Task<IReadOnlyList<Ticket>> QueryAsync(TicketQuery query, CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<Ticket>>(Array.Empty<Ticket>());
+            Task.FromResult<IReadOnlyList<Ticket>>(_queryChildren);
 
         public Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct) =>
             Task.CompletedTask;
