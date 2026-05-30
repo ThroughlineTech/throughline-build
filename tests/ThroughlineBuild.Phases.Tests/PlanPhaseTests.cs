@@ -28,10 +28,15 @@ public class PlanPhaseTests
 
     private static IReadOnlyDictionary<string, object> ValidMetadata() => new Dictionary<string, object>
     {
-        ["plan_html"] = "<p>plan</p>",
+        ["plan_body_ref"] = "PLAN_BODY",
         ["risk_label"] = "low",
         ["size_label"] = "S",
         ["planned_at_sha"] = "abc123"
+    };
+
+    private static IReadOnlyDictionary<string, string> ValidBlocks() => new Dictionary<string, string>
+    {
+        ["PLAN_BODY"] = "# Plan\nThis is the plan."
     };
 
     [Fact]
@@ -39,7 +44,7 @@ public class PlanPhaseTests
     {
         var ticketing = new FakeTicketing(MakeTicket(TicketState.Backlog));
         var worker = new FakeWorkerAgent(new WorkerResult(
-            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata()));
+            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata(), ValidBlocks()));
         var events = new FakeEventSink();
         var git = new FakeGitClient("test-sha-123");
         var phase = new PlanPhase(ticketing, worker, events, MakeOptions(), git);
@@ -57,7 +62,9 @@ public class PlanPhaseTests
         Assert.Equal(TicketState.Ready, ticketing.Transitions[1].state);
 
         Assert.Single(ticketing.AppendDescriptions);
-        Assert.Equal("<p>plan</p>", ticketing.AppendDescriptions[0].html);
+        // Rendered from PLAN_BODY markdown block via MarkdownRenderer
+        Assert.Contains("<h1>", ticketing.AppendDescriptions[0].html);
+        Assert.Contains("Plan", ticketing.AppendDescriptions[0].html);
 
         Assert.Single(ticketing.ApplyLabels);
         Assert.Contains("risk:low", ticketing.ApplyLabels[0].labels);
@@ -77,7 +84,7 @@ public class PlanPhaseTests
         var child1 = MakeTicket(TicketState.Backlog);
         var child2 = MakeTicket(TicketState.Ready);
         ticketing.SeedChildren(new[] { child1, child2 });
-        var worker = new FakeWorkerAgent(new WorkerResult(Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata()));
+        var worker = new FakeWorkerAgent(new WorkerResult(Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata(), ValidBlocks()));
         var events = new FakeEventSink();
         var git = new FakeGitClient("test-sha-123");
         var phase = new PlanPhase(ticketing, worker, events, MakeOptions(), git);
@@ -98,7 +105,7 @@ public class PlanPhaseTests
     {
         var ticketing = new FakeTicketing(MakeTicket(TicketState.Ready));
         var worker = new FakeWorkerAgent(new WorkerResult(
-            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata()));
+            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata(), ValidBlocks()));
         var events = new FakeEventSink();
         var git = new FakeGitClient("test-sha-123");
         var phase = new PlanPhase(ticketing, worker, events, MakeOptions(), git);
@@ -154,7 +161,7 @@ public class PlanPhaseTests
     {
         var ticketing = new FakeTicketing(MakeTicket(TicketState.Backlog));
         var worker = new FakeWorkerAgent(new WorkerResult(
-            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata()));
+            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata(), ValidBlocks()));
         var events = new FakeEventSink();
         var git = new FakeGitClient("test-sha-123");
         var phase = new PlanPhase(ticketing, worker, events, MakeOptions(), git);
@@ -173,7 +180,7 @@ public class PlanPhaseTests
     {
         var ticketing = new FakeTicketing(MakeTicket(TicketState.Backlog, new[] { "plan-ticket", "team:core" }));
         var worker = new FakeWorkerAgent(new WorkerResult(
-            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata()));
+            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata(), ValidBlocks()));
         var events = new FakeEventSink();
         var git = new FakeGitClient("test-sha-123");
         var phase = new PlanPhase(ticketing, worker, events, MakeOptions(), git);
@@ -194,7 +201,7 @@ public class PlanPhaseTests
     {
         var ticketing = new FakeTicketing(MakeTicket(TicketState.Backlog, new[] { "risk:high" }));
         var worker = new FakeWorkerAgent(new WorkerResult(
-            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata()));
+            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata(), ValidBlocks()));
         var events = new FakeEventSink();
         var git = new FakeGitClient("test-sha-123");
         var phase = new PlanPhase(ticketing, worker, events, MakeOptions(), git);
@@ -214,7 +221,7 @@ public class PlanPhaseTests
     {
         var ticketing = new FakeTicketing(MakeTicket(TicketState.Backlog, new[] { "size:L" }));
         var worker = new FakeWorkerAgent(new WorkerResult(
-            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata()));
+            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata(), ValidBlocks()));
         var events = new FakeEventSink();
         var git = new FakeGitClient("test-sha-123");
         var phase = new PlanPhase(ticketing, worker, events, MakeOptions(), git);
@@ -234,7 +241,7 @@ public class PlanPhaseTests
     {
         var ticketing = new FakeTicketing(MakeTicket(TicketState.Backlog, new[] { "risk:high", "size:L", "team:core" }));
         var worker = new FakeWorkerAgent(new WorkerResult(
-            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata()));
+            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata(), ValidBlocks()));
         var events = new FakeEventSink();
         var git = new FakeGitClient("test-sha-123");
         var phase = new PlanPhase(ticketing, worker, events, MakeOptions(), git);
@@ -405,7 +412,12 @@ public class PlanPhaseDebugCaptureTests
 
     private static IReadOnlyDictionary<string, object> ValidMetadata() => new Dictionary<string, object>
     {
-        ["plan_html"] = "<p>plan</p>", ["risk_label"] = "low", ["size_label"] = "S", ["planned_at_sha"] = "abc123"
+        ["plan_body_ref"] = "PLAN_BODY", ["risk_label"] = "low", ["size_label"] = "S", ["planned_at_sha"] = "abc123"
+    };
+
+    private static IReadOnlyDictionary<string, string> ValidBlocks() => new Dictionary<string, string>
+    {
+        ["PLAN_BODY"] = "# Plan\nThis is the plan."
     };
 
     [Fact]
@@ -413,7 +425,7 @@ public class PlanPhaseDebugCaptureTests
     {
         const string captureDir = "/tmp/debug-capture-test";
         var ticketing = new FakeTicketing(MakeTicket());
-        var worker = new CapturingWorkerAgent(new WorkerResult(Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata()));
+        var worker = new CapturingWorkerAgent(new WorkerResult(Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata(), ValidBlocks()));
         var events = new FakeEventSink();
         var git = new FakeGitClient("sha-abc");
         var options = new BuildOptions("session-dbg", "claude-code", TimeSpan.FromMinutes(5),
@@ -430,7 +442,7 @@ public class PlanPhaseDebugCaptureTests
     public async Task RunAsync_DebugCaptureDirectoryNull_WorkerOptionsHasNullDirectory()
     {
         var ticketing = new FakeTicketing(MakeTicket());
-        var worker = new CapturingWorkerAgent(new WorkerResult(Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata()));
+        var worker = new CapturingWorkerAgent(new WorkerResult(Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata(), ValidBlocks()));
         var events = new FakeEventSink();
         var git = new FakeGitClient("sha-abc");
         var options = new BuildOptions("session-1", "claude-code", TimeSpan.FromMinutes(5));

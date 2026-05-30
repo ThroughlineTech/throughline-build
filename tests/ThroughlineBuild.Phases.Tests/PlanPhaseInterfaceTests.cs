@@ -28,10 +28,15 @@ public class PlanPhaseInterfaceTests
 
     private static IReadOnlyDictionary<string, object> ValidMetadata() => new Dictionary<string, object>
     {
-        ["plan_html"] = "<p>plan</p>",
+        ["plan_body_ref"] = "PLAN_BODY",
         ["risk_label"] = "low",
         ["size_label"] = "S",
         ["planned_at_sha"] = "abc123"
+    };
+
+    private static IReadOnlyDictionary<string, string> ValidBlocks() => new Dictionary<string, string>
+    {
+        ["PLAN_BODY"] = "# Plan\nThis is the plan."
     };
 
     [Fact]
@@ -39,7 +44,7 @@ public class PlanPhaseInterfaceTests
     {
         var ticketing = new FakeTicketing(MakeTicket(TicketState.Backlog));
         var worker = new FakeWorkerAgent(new WorkerResult(
-            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata()));
+            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata(), ValidBlocks()));
         var events = new FakeEventSink();
         var git = new FakeGitClient("test-sha-123");
         var phase = new PlanPhase(ticketing, worker, events, MakeOptions(), git);
@@ -53,7 +58,7 @@ public class PlanPhaseInterfaceTests
     {
         var ticketing = new FakeTicketing(MakeTicket(TicketState.Backlog));
         var worker = new FakeWorkerAgent(new WorkerResult(
-            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata()));
+            Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata(), ValidBlocks()));
         var events = new FakeEventSink();
         var git = new FakeGitClient("abc123");
         var phase = new PlanPhase(ticketing, worker, events, MakeOptions(), git);

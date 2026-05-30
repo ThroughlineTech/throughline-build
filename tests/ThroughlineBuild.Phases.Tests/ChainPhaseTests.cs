@@ -54,16 +54,20 @@ public class ChainPhaseTests
         BaseBranch: "main",
         DeleteFeatureBranch: false);
 
-    private static WorkerResult OkWorkerResult(string? planHtml = null) => new WorkerResult(
+    private static WorkerResult OkWorkerResult(string? planMarkdown = null) => new WorkerResult(
         Status.Ok, "ok", Array.Empty<string>(), null,
         new Dictionary<string, object>
         {
             ["commit_sha"] = CommitSha,
-            ["plan_html"] = planHtml ?? "<p>plan</p>",
+            ["plan_body_ref"] = "PLAN_BODY",
             ["risk_label"] = "low",
             ["size_label"] = "s",
             ["planned_at_sha"] = MainSha,
             ["files_changed"] = Array.Empty<string>()
+        },
+        Blocks: new Dictionary<string, string>
+        {
+            ["PLAN_BODY"] = planMarkdown ?? "# Plan\nThis is the plan."
         });
 
     private static WorkerResult FailWorkerResult(string reason = "worker error") => new WorkerResult(
@@ -120,8 +124,8 @@ public class ChainPhaseTests
     public async Task RunAsync_HappyPath_BacklogStart_FourSteps_Completed()
     {
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
-        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
-        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var verifiers = new Queue<IVerifier>();
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
 
@@ -144,7 +148,7 @@ public class ChainPhaseTests
     {
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
         var planWorker = new FakeWorkerAgent(null, fail: true);
-        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var verifiers = new Queue<IVerifier>();
 
         var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
@@ -160,7 +164,7 @@ public class ChainPhaseTests
     public async Task RunAsync_ImplementInitialFails_StoppedAtImplement_TwoSteps()
     {
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
-        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var implWorker = new FakeWorkerAgent(null, fail: true);
         var verifiers = new Queue<IVerifier>();
 
@@ -178,8 +182,8 @@ public class ChainPhaseTests
     public async Task RunAsync_ReviewReworkOnceThenPass_SixSteps_Completed()
     {
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
-        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
-        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var verifiers = new Queue<IVerifier>();
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Rework, "missing tests", new[] { "tests_pass" })));
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
@@ -206,8 +210,8 @@ public class ChainPhaseTests
     public async Task RunAsync_ReviewReworkTwiceThenPass_EightSteps_Completed()
     {
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
-        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
-        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var verifiers = new Queue<IVerifier>();
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Rework, "r1", Array.Empty<string>())));
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Rework, "r2", Array.Empty<string>())));
@@ -229,8 +233,8 @@ public class ChainPhaseTests
     public async Task RunAsync_ReviewReworkThreeTimes_SevenSteps_ReworkCapExceeded_FinalRationalePopulated()
     {
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
-        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
-        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var verifiers = new Queue<IVerifier>();
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Rework, "r1", Array.Empty<string>())));
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Rework, "r2", Array.Empty<string>())));
@@ -251,8 +255,8 @@ public class ChainPhaseTests
     public async Task RunAsync_ReviewFailFirstCycle_StoppedAtReview_FinalRationalePopulated()
     {
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
-        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
-        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var verifiers = new Queue<IVerifier>();
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Fail, "fundamental issue", Array.Empty<string>())));
 
@@ -269,8 +273,8 @@ public class ChainPhaseTests
     public async Task RunAsync_ReviewFailAfterReworkRound1_StoppedAtReview()
     {
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
-        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
-        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var verifiers = new Queue<IVerifier>();
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Rework, "need work", Array.Empty<string>())));
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Fail, "still wrong", Array.Empty<string>())));
@@ -287,8 +291,8 @@ public class ChainPhaseTests
     public async Task RunAsync_ShipFails_AllPriorPhasesOk_StoppedAtShip()
     {
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
-        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
-        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var verifiers = new Queue<IVerifier>();
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
 
@@ -342,7 +346,7 @@ public class ChainPhaseTests
     public async Task RunAsync_InitialStateReady_SkipsPlan_StartsAtImplement()
     {
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Ready));
-        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var verifiers = new Queue<IVerifier>();
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
 
@@ -364,7 +368,7 @@ public class ChainPhaseTests
         var verifiers = new Queue<IVerifier>();
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
 
-        var chain = BuildChain(ticketing, new FakeWorkerAgent(null), new FakeWorkerAgent(OkWorkerResult().Metadata), verifiers);
+        var chain = BuildChain(ticketing, new FakeWorkerAgent(null), new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks), verifiers);
         var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
 
         Assert.Equal(ChainOutcome.Completed, result.Outcome);
@@ -377,8 +381,8 @@ public class ChainPhaseTests
     public async Task RunAsync_PerPhaseSessionIdsAreDistinct()
     {
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
-        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
-        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var verifiers = new Queue<IVerifier>();
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
 
@@ -394,8 +398,8 @@ public class ChainPhaseTests
     public async Task RunAsync_ReworkRoundNumberPropagatesIntoImplementStep()
     {
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
-        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
-        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var verifiers = new Queue<IVerifier>();
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Rework, "r1", Array.Empty<string>())));
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Rework, "r2", Array.Empty<string>())));
@@ -415,7 +419,7 @@ public class ChainPhaseTests
     public async Task RunAsync_ReworkFeedbackPassedToImplement()
     {
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
-        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var captureImplWorker = new CapturingImplFactory();
         var verifiers = new Queue<IVerifier>();
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Rework, "needs-work", new[] { "check_a", "check_b" })));
@@ -431,7 +435,7 @@ public class ChainPhaseTests
         Func<BuildOptions, ImplementPhaseOptions, ImplementPhase> implFactory = (opts, phaseOpts) =>
         {
             captureImplWorker.Capture(phaseOpts);
-            return new ImplementPhase(ticketing, new FakeWorkerAgent(OkWorkerResult().Metadata), events, opts, git, phaseOptions: phaseOpts);
+            return new ImplementPhase(ticketing, new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks), events, opts, git, phaseOptions: phaseOpts);
         };
 
         Func<BuildOptions, ReviewPhase> reviewFactory = opts =>
@@ -593,11 +597,14 @@ public class ChainPhaseTests
     private sealed class FakeWorkerAgent : IWorkerAgent
     {
         private readonly IReadOnlyDictionary<string, object>? _metadata;
+        private readonly IReadOnlyDictionary<string, string>? _blocks;
         private readonly bool _fail;
 
-        public FakeWorkerAgent(IReadOnlyDictionary<string, object>? metadata, bool fail = false)
+        public FakeWorkerAgent(IReadOnlyDictionary<string, object>? metadata, bool fail = false,
+            IReadOnlyDictionary<string, string>? blocks = null)
         {
             _metadata = metadata;
+            _blocks = blocks;
             _fail = fail;
         }
 
@@ -612,7 +619,7 @@ public class ChainPhaseTests
                     new Dictionary<string, object>()));
             return Task.FromResult(new WorkerResult(
                 Status.Ok, "ok", Array.Empty<string>(), null,
-                _metadata ?? new Dictionary<string, object>()));
+                _metadata ?? new Dictionary<string, object>(), _blocks));
         }
     }
 
@@ -620,11 +627,14 @@ public class ChainPhaseTests
     private sealed class FailFirstWorkerAgent : IWorkerAgent
     {
         private readonly IReadOnlyDictionary<string, object> _metadata;
+        private readonly IReadOnlyDictionary<string, string>? _blocks;
         private int _callCount;
 
-        public FailFirstWorkerAgent(IReadOnlyDictionary<string, object> metadata)
+        public FailFirstWorkerAgent(IReadOnlyDictionary<string, object> metadata,
+            IReadOnlyDictionary<string, string>? blocks = null)
         {
             _metadata = metadata;
+            _blocks = blocks;
         }
 
         public string Name => "claude-code";
@@ -638,7 +648,7 @@ public class ChainPhaseTests
                     Status.Failed, "failed", Array.Empty<string>(), "worker error",
                     new Dictionary<string, object>()));
             return Task.FromResult(new WorkerResult(
-                Status.Ok, "ok", Array.Empty<string>(), null, _metadata));
+                Status.Ok, "ok", Array.Empty<string>(), null, _metadata, _blocks));
         }
     }
 
@@ -737,7 +747,7 @@ public class ChainPhaseTests
     {
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
         var planWorker = new EscalateWorkerAgent(ObsoleteEscalateWorkerResult("abc123def"));
-        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var verifiers = new Queue<IVerifier>();
 
         var ratifier = new FakeObsoleteRatifier(
@@ -767,7 +777,7 @@ public class ChainPhaseTests
     {
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
         var planWorker = new EscalateWorkerAgent(ObsoleteEscalateWorkerResult());
-        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var verifiers = new Queue<IVerifier>();
 
         var ratifier = new FakeObsoleteRatifier(
@@ -786,7 +796,7 @@ public class ChainPhaseTests
     public async Task RunAsync_ImplementObsoleteEscalation_RatifiedByRatifier_RatifiedObsoleteOutcome()
     {
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
-        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var implWorker = new EscalateWorkerAgent(ObsoleteEscalateWorkerResult("deadbeef"));
         var verifiers = new Queue<IVerifier>();
 
@@ -815,7 +825,7 @@ public class ChainPhaseTests
     public async Task RunAsync_ImplementObsoleteEscalation_RejectedByRatifier_StoppedAtImplement()
     {
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
-        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var implWorker = new EscalateWorkerAgent(ObsoleteEscalateWorkerResult());
         var verifiers = new Queue<IVerifier>();
 
@@ -836,7 +846,7 @@ public class ChainPhaseTests
     {
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
         var planWorker = new EscalateWorkerAgent(ObsoleteEscalateWorkerResult());
-        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var verifiers = new Queue<IVerifier>();
 
         var ratifier = new FakeObsoleteRatifier(
@@ -857,7 +867,7 @@ public class ChainPhaseTests
     {
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
         var planWorker = new EscalateWorkerAgent(NonObsoleteEscalateWorkerResult());
-        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var verifiers = new Queue<IVerifier>();
 
         var ratifier = new FakeObsoleteRatifier(
@@ -900,8 +910,8 @@ public class ChainPhaseTests
         var ticketing = new ChainFakeTicketing(parent);
         ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
 
-        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
-        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var verifiers = new Queue<IVerifier>();
         // 2 children * 1 review pass each
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
@@ -951,8 +961,8 @@ public class ChainPhaseTests
         var ticketing = new ChainFakeTicketing(parent);
         ticketing.SeedChildren("ticket-uuid-1", new[] { doneChild, activeChild });
 
-        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
-        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var verifiers = new Queue<IVerifier>();
         // Only 1 active child needs a review
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
@@ -1000,8 +1010,8 @@ public class ChainPhaseTests
         ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
 
         // Plan worker fails on first call (child1), succeeds on subsequent calls (child2).
-        var planWorker = new FailFirstWorkerAgent(OkWorkerResult().Metadata);
-        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var planWorker = new FailFirstWorkerAgent(OkWorkerResult().Metadata, OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var verifiers = new Queue<IVerifier>();
         // Only child2 reaches review
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));

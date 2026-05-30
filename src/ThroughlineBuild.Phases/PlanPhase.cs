@@ -1,9 +1,9 @@
-using System.Text.Json;
 using ThroughlineBuild.Briefs;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Git;
 using ThroughlineBuild.Helpers;
+using ThroughlineBuild.Workers.Common;
 
 namespace ThroughlineBuild.Phases;
 
@@ -116,10 +116,17 @@ public class PlanPhase : IWorkflowPhase
             }
         }
 
-        var (planHtml, riskLabel, sizeLabel, plannedAtSha) = TryExtractMetadata(workerResult.Metadata);
-        if (planHtml is null || riskLabel is null || sizeLabel is null || plannedAtSha is null)
+        var blocks = workerResult.Blocks ?? new Dictionary<string, string>();
+        if (!FencedBlockResolver.TryResolveRef(blocks, workerResult.Metadata, "plan_body_ref", out var planMarkdown, out var refError))
             return new PlanResult(false, ticketId, null, null, null,
-                "worker metadata missing required keys (plan_html, risk_label, size_label, planned_at_sha)");
+                $"worker metadata missing or unresolvable plan_body_ref: {refError}");
+
+        var planHtml = MarkdownRenderer.Render(planMarkdown!);
+
+        var (riskLabel, sizeLabel, plannedAtSha) = TryExtractMetadata(workerResult.Metadata);
+        if (riskLabel is null || sizeLabel is null || plannedAtSha is null)
+            return new PlanResult(false, ticketId, null, null, null,
+                "worker metadata missing required keys (risk_label, size_label, planned_at_sha)");
 
         await _ticketing.AppendDescriptionAsync(ticketId, planHtml, ct).ConfigureAwait(false);
         await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
@@ -188,20 +195,19 @@ public class PlanPhase : IWorkflowPhase
         return filtered;
     }
 
-    private static (string? planHtml, string? riskLabel, string? sizeLabel, string? plannedAtSha)
+    private static (string? riskLabel, string? sizeLabel, string? plannedAtSha)
         TryExtractMetadata(IReadOnlyDictionary<string, object> metadata)
     {
         static string? GetString(IReadOnlyDictionary<string, object> meta, string key)
         {
             if (!meta.TryGetValue(key, out var val)) return null;
             if (val is string s) return s;
-            if (val is JsonElement je && je.ValueKind == JsonValueKind.String)
+            if (val is System.Text.Json.JsonElement je && je.ValueKind == System.Text.Json.JsonValueKind.String)
                 return je.GetString();
             return val?.ToString();
         }
 
         return (
-            GetString(metadata, "plan_html"),
             GetString(metadata, "risk_label"),
             GetString(metadata, "size_label"),
             GetString(metadata, "planned_at_sha")

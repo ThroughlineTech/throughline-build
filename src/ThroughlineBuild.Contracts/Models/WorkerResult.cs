@@ -5,6 +5,7 @@ public record WorkerResult(
     string Summary,
     IReadOnlyList<string> FilesChanged,
     string? FailureReason,
-    IReadOnlyDictionary<string, object> Metadata);
+    IReadOnlyDictionary<string, object> Metadata,
+    IReadOnlyDictionary<string, string>? Blocks = null);
 
 public enum Status { Ok, NeedsRework, Failed, Escalate }
