@@ -62,4 +62,24 @@ public class EnumExhaustivenessTests
         var expected = new[] { VerdictKind.Pass, VerdictKind.Rework, VerdictKind.Fail };
         Assert.Equal(expected.OrderBy(x => (int)x), Enum.GetValues<VerdictKind>().OrderBy(x => (int)x));
     }
+
+    [Fact]
+    public void ChainOutcome_HasExactlyExpectedValues()
+    {
+        var expected = new[]
+        {
+            ChainOutcome.Completed,
+            ChainOutcome.StoppedAtPlan,
+            ChainOutcome.StoppedAtImplement,
+            ChainOutcome.StoppedAtReview,
+            ChainOutcome.StoppedAtShip,
+            ChainOutcome.ReworkCapExceeded,
+            ChainOutcome.RefusedInitialState,
+            ChainOutcome.RatifiedObsolete,
+            ChainOutcome.ParentCompleted,
+            ChainOutcome.ParentStoppedEarly,
+            ChainOutcome.Skipped
+        };
+        Assert.Equal(expected.OrderBy(x => (int)x), Enum.GetValues<ChainOutcome>().OrderBy(x => (int)x));
+    }
 }

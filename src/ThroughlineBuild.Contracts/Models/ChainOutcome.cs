@@ -11,5 +11,6 @@ public enum ChainOutcome
     RefusedInitialState,
     RatifiedObsolete,
     ParentCompleted,    // all eligible children completed
-    ParentStoppedEarly  // one or more children stopped before completing
+    ParentStoppedEarly, // one or more children stopped before completing
+    Skipped             // ticket skipped because an ancestor failed and continuePastFailure is false
 }
