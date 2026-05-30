@@ -299,7 +299,7 @@ public class ClaudeCodeAgent : IWorkerAgent
             // Merge llm_usage metadata on success path
             var mergedMetadata = new Dictionary<string, object>(outcome.Result.Metadata);
             mergedMetadata["llm_usage"] = BuildLlmUsageMetadata(envelope, wallClockMs, model, vendor: "anthropic");
-            return outcome.Result with { Metadata = mergedMetadata };
+            return outcome.Result with { Metadata = mergedMetadata, Blocks = outcome.Blocks };
         }
 
         if (outcome.DeserializeErrorType != null)

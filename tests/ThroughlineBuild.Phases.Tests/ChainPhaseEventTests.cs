@@ -57,11 +57,16 @@ public class ChainPhaseEventTests
     private static IReadOnlyDictionary<string, object> OkWorkerMeta() => new Dictionary<string, object>
     {
         ["commit_sha"] = CommitSha,
-        ["plan_html"] = "<p>plan</p>",
+        ["plan_body_ref"] = "PLAN_BODY",
         ["risk_label"] = "low",
         ["size_label"] = "s",
         ["planned_at_sha"] = MainSha,
         ["files_changed"] = Array.Empty<string>()
+    };
+
+    private static IReadOnlyDictionary<string, string> OkWorkerBlocks() => new Dictionary<string, string>
+    {
+        ["PLAN_BODY"] = "# Plan\nThis is the plan."
     };
 
     private int _sessionCounter;
@@ -116,8 +121,8 @@ public class ChainPhaseEventTests
     public async Task HappyPath_EmitsChainStartThenPerPhaseEventsThenChainEnd_NoReworkRound()
     {
         var ticketing = new EventChainFakeTicketing(MakeTicket(TicketState.Backlog));
-        var planWorker = new EventFakeWorkerAgent(OkWorkerMeta());
-        var implWorker = new EventFakeWorkerAgent(OkWorkerMeta());
+        var planWorker = new EventFakeWorkerAgent(OkWorkerMeta(), blocks: OkWorkerBlocks());
+        var implWorker = new EventFakeWorkerAgent(OkWorkerMeta(), blocks: OkWorkerBlocks());
         var verifiers = new Queue<IVerifier>();
         verifiers.Enqueue(new EventFakeVerifier(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
 
@@ -151,8 +156,8 @@ public class ChainPhaseEventTests
     public async Task OneRework_EmitsOneReworkRoundEvent_WithCorrectData()
     {
         var ticketing = new EventChainFakeTicketing(MakeTicket(TicketState.Backlog));
-        var planWorker = new EventFakeWorkerAgent(OkWorkerMeta());
-        var implWorker = new EventFakeWorkerAgent(OkWorkerMeta());
+        var planWorker = new EventFakeWorkerAgent(OkWorkerMeta(), blocks: OkWorkerBlocks());
+        var implWorker = new EventFakeWorkerAgent(OkWorkerMeta(), blocks: OkWorkerBlocks());
         var reworkRationale = "missing tests - this is the rework rationale that should be truncated to 200 chars maximum";
         var verifiers = new Queue<IVerifier>();
         verifiers.Enqueue(new EventFakeVerifier(new Verdict(VerdictKind.Rework, reworkRationale, Array.Empty<string>())));
@@ -190,8 +195,8 @@ public class ChainPhaseEventTests
     public async Task CapExceeded_EmitsTwoReworkRoundEvents_NotThree_ChainEndOutcomeIsReworkCapExceeded()
     {
         var ticketing = new EventChainFakeTicketing(MakeTicket(TicketState.Backlog));
-        var planWorker = new EventFakeWorkerAgent(OkWorkerMeta());
-        var implWorker = new EventFakeWorkerAgent(OkWorkerMeta());
+        var planWorker = new EventFakeWorkerAgent(OkWorkerMeta(), blocks: OkWorkerBlocks());
+        var implWorker = new EventFakeWorkerAgent(OkWorkerMeta(), blocks: OkWorkerBlocks());
         var verifiers = new Queue<IVerifier>();
         verifiers.Enqueue(new EventFakeVerifier(new Verdict(VerdictKind.Rework, "r1", Array.Empty<string>())));
         verifiers.Enqueue(new EventFakeVerifier(new Verdict(VerdictKind.Rework, "r2", Array.Empty<string>())));
@@ -220,8 +225,8 @@ public class ChainPhaseEventTests
     public async Task HappyPath_ChainEndData_HasCorrectOutcomeAndCounts()
     {
         var ticketing = new EventChainFakeTicketing(MakeTicket(TicketState.Backlog));
-        var planWorker = new EventFakeWorkerAgent(OkWorkerMeta());
-        var implWorker = new EventFakeWorkerAgent(OkWorkerMeta());
+        var planWorker = new EventFakeWorkerAgent(OkWorkerMeta(), blocks: OkWorkerBlocks());
+        var implWorker = new EventFakeWorkerAgent(OkWorkerMeta(), blocks: OkWorkerBlocks());
         var verifiers = new Queue<IVerifier>();
         verifiers.Enqueue(new EventFakeVerifier(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
 
@@ -438,11 +443,14 @@ public class ChainPhaseEventTests
     private sealed class EventFakeWorkerAgent : IWorkerAgent
     {
         private readonly IReadOnlyDictionary<string, object>? _metadata;
+        private readonly IReadOnlyDictionary<string, string>? _blocks;
         private readonly bool _fail;
 
-        public EventFakeWorkerAgent(IReadOnlyDictionary<string, object>? metadata, bool fail = false)
+        public EventFakeWorkerAgent(IReadOnlyDictionary<string, object>? metadata, bool fail = false,
+            IReadOnlyDictionary<string, string>? blocks = null)
         {
             _metadata = metadata;
+            _blocks = blocks;
             _fail = fail;
         }
 
@@ -457,7 +465,7 @@ public class ChainPhaseEventTests
                     new Dictionary<string, object>()));
             return Task.FromResult(new WorkerResult(
                 Status.Ok, "ok", Array.Empty<string>(), null,
-                _metadata ?? new Dictionary<string, object>()));
+                _metadata ?? new Dictionary<string, object>(), _blocks));
         }
     }
 
