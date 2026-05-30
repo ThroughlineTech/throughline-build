@@ -7,4 +7,5 @@ public record ChainResult(
     TimeSpan TotalDuration,
     string? FinalRationale,
     SubsumedByEvidence? SubsumedBy = null,
-    IReadOnlyList<ChainResult>? ChildResults = null);
+    IReadOnlyList<ChainResult>? ChildResults = null,
+    string? SkipReason = null);

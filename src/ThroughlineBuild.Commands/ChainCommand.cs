@@ -176,8 +176,59 @@ public sealed class ChainCommand : ITicketCommand
             ChainOutcome.ParentStoppedEarly =>
                 $"[{ticketId}] parent chain stopped early: one or more children did not complete ({durationStr})",
 
+            ChainOutcome.Skipped =>
+                $"[{ticketId}] skipped ({durationStr}){(result.SkipReason is not null ? " - " + result.SkipReason : "")}",
+
             _ => $"[{ticketId}] chain stopped: unknown outcome {result.Outcome}"
         };
+    }
+
+    /// <summary>
+    /// Prints an aggregate report for a multi-ticket dispatch run.
+    /// Format:
+    ///   --- aggregate report ---
+    ///   [TLB-A] Completed (2.1s)
+    ///   [TLB-B] Failed (0.5s) - reason here
+    ///   [TLB-C] Skipped (0.0s) - skipped (ancestor TLB-B failed)
+    ///   3 tickets: 1 completed, 1 failed, 1 skipped
+    /// </summary>
+    public static void PrintAggregateReport(IReadOnlyList<ChainResult> results)
+    {
+        Console.WriteLine("--- aggregate report ---");
+
+        int completed = 0;
+        int failed = 0;
+        int skipped = 0;
+
+        foreach (var r in results)
+        {
+            var durationStr = FormatDuration(r.TotalDuration);
+            bool isSuccess = r.Outcome == ChainOutcome.Completed
+                || r.Outcome == ChainOutcome.RatifiedObsolete
+                || r.Outcome == ChainOutcome.ParentCompleted;
+            bool isSkipped = r.Outcome == ChainOutcome.Skipped;
+
+            if (isSkipped)
+            {
+                skipped++;
+                var skipSuffix = r.SkipReason is not null ? $" - {r.SkipReason}" : "";
+                Console.WriteLine($"[{r.TicketId}] Skipped ({durationStr}){skipSuffix}");
+            }
+            else if (isSuccess)
+            {
+                completed++;
+                Console.WriteLine($"[{r.TicketId}] Completed ({durationStr})");
+            }
+            else
+            {
+                failed++;
+                var failSuffix = r.FinalRationale is not null ? $" - {r.FinalRationale}" : "";
+                Console.WriteLine($"[{r.TicketId}] Failed ({durationStr}){failSuffix}");
+            }
+        }
+
+        int total = results.Count;
+        Console.WriteLine($"{total} ticket{(total == 1 ? "" : "s")}: {completed} completed, {failed} failed, {skipped} skipped");
     }
 
     private static string FormatChildSummaryLine(ChainResult child)

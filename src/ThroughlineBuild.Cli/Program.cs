@@ -37,6 +37,7 @@ static async Task<int> RunAsync(string[] args)
     bool errorLocation = false;
     bool noAutoResolve = false;
     bool noAutoMerge = false;
+    bool continuePastFailure = false;
     var filteredArgs = new List<string>(args.Length);
     foreach (var a in args)
     {
@@ -52,6 +53,8 @@ static async Task<int> RunAsync(string[] args)
             noAutoResolve = true;
         else if (a == "--no-auto-merge")
             noAutoMerge = true;
+        else if (a == "--continue-past-failure")
+            continuePastFailure = true;
         else
             filteredArgs.Add(a);
     }
