@@ -124,6 +124,15 @@ static async Task<int> RunAsync(string[] args)
     // sane workingDirectory even when the CLI is invoked from inside a feature worktree.
     // Fall back to the raw cwd on any error so no new failure mode is introduced.
     var rawCwd = Directory.GetCurrentDirectory();
+
+    // 'build init' must run before config load - it bootstraps the config file.
+    if (verb == "init")
+    {
+        var force = filteredArgs.Contains("--force");
+        var printTemplate = filteredArgs.Contains("--print-template");
+        return InitCommand.Execute(rawCwd, force, printTemplate, SystemConsole.Instance);
+    }
+
     var resolverGit = new ProcessGitClient(rawCwd);
     var resolvedCwd = await MainWorktreeResolver.ResolveAsync(resolverGit, rawCwd, CancellationToken.None);
 
