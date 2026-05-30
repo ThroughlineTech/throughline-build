@@ -65,6 +65,21 @@ public static class CliArgParser
     }
 
     /// <summary>
+    /// Returns the value of a key/value flag (e.g. "--flag value") from the args list,
+    /// or null if the flag is absent or has no following value.
+    /// Does not modify the list.
+    /// </summary>
+    public static string? GetFlagValue(IReadOnlyList<string> args, string flag)
+    {
+        for (int i = 0; i < args.Count - 1; i++)
+        {
+            if (args[i] == flag)
+                return args[i + 1];
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Extracts ticket IDs from the argument list for multi-ticket dispatch.
     /// Scans from args[1] forward (args[0] is the verb). Any token that does NOT
     /// start with '--' is considered a ticket ID. Scanning stops at the first '--'-prefixed token.
