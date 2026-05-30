@@ -20,6 +20,7 @@ Usage:
   If it looks like a path (contains / or \, or ends in .md/.txt) but no file exists, a stderr notice
   is printed and a brief pause allows Ctrl-C before proceeding in draft mode. Multiple positional args
   are joined with spaces as draft text (e.g. build new fix the readme typo).
+  build init [--force] [--print-template]                                            Write .build/config.toml from the built-in template; --force overwrites an existing file; --print-template prints to stdout
   build rework <ticket-id> [--feedback "..."] [--debug]                               Re-implement a ticket that returned Rework verdict (single ticket only)
   build decompose <ticket-id> [--agent <name>] [--debug|--quiet] [--summary-json]     Decompose a ticket into independently-shippable sub-tickets
   build scaffold <op-doc-path> [--validate-only] [--dry-run] [--accept-warnings] [--debug]  Scaffold an op-doc into Plane (creates plan-tickets and brief-tickets with parent links)
