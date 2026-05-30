@@ -71,6 +71,29 @@ public class PlanPhaseTests
     }
 
     [Fact]
+    public async Task RunAsync_TicketIsParent_ReturnsFailureWithChildCount()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.Backlog));
+        var child1 = MakeTicket(TicketState.Backlog);
+        var child2 = MakeTicket(TicketState.Ready);
+        ticketing.SeedChildren(new[] { child1, child2 });
+        var worker = new FakeWorkerAgent(new WorkerResult(Status.Ok, "ok", Array.Empty<string>(), null, ValidMetadata()));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient("test-sha-123");
+        var phase = new PlanPhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.FailureReason);
+        Assert.Contains("TLB-1", result.FailureReason);
+        Assert.Contains("2", result.FailureReason);
+        Assert.Contains("children", result.FailureReason);
+        Assert.Empty(ticketing.Transitions);
+        Assert.False(worker.WasInvoked);
+    }
+
+    [Fact]
     public async Task RunAsync_TicketNotInBacklog_ReturnsFailureImmediately()
     {
         var ticketing = new FakeTicketing(MakeTicket(TicketState.Ready));
@@ -289,8 +312,10 @@ public class PlanPhaseTests
         public Task SetParentAsync(string childUuid, string parentUuid, CancellationToken ct) =>
             Task.CompletedTask;
 
+        private List<Ticket> _children = new();
+        public void SeedChildren(IReadOnlyList<Ticket> children) => _children = children.ToList();
         public Task<IReadOnlyList<Ticket>> QueryAsync(TicketQuery query, CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<Ticket>>(Array.Empty<Ticket>());
+            Task.FromResult<IReadOnlyList<Ticket>>(_children.AsReadOnly());
 
         public Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct) =>
             Task.CompletedTask;
@@ -307,11 +332,15 @@ public class PlanPhaseTests
     private sealed class FakeWorkerAgent : IWorkerAgent
     {
         private readonly WorkerResult _result;
+        public bool WasInvoked { get; private set; }
         public FakeWorkerAgent(WorkerResult result) { _result = result; }
         public string Name => "claude-code";
         public IWorkerProgressDigester? Digester => null;
-        public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct) =>
-            Task.FromResult(_result);
+        public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
+        {
+            WasInvoked = true;
+            return Task.FromResult(_result);
+        }
     }
 
     private sealed class FakeEventSink : IEventSink

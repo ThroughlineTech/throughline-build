@@ -57,6 +57,11 @@ public class PlanPhase : IWorkflowPhase
     {
         var ticket = await _ticketing.GetAsync(ticketId, ct).ConfigureAwait(false);
 
+        var potentialChildren = await _ticketing.QueryAsync(new TicketQuery(ParentId: ticket.Uuid), ct).ConfigureAwait(false);
+        if (potentialChildren.Count > 0)
+            return new PlanResult(false, ticketId, null, null, null,
+                $"{ticketId} is a parent ticket with {potentialChildren.Count} children: parent containers do not receive independent implementation plans; plan each child individually.");
+
         if (ticket.State != TicketState.Backlog)
             return new PlanResult(false, ticketId, null, null, null, "ticket not in Backlog state");
 
