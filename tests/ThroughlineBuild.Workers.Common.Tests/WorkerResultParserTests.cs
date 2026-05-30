@@ -134,6 +134,9 @@ public class WorkerResultParserTemplateRoundTripTests
         // Build the brief (this renders the template).
         var brief = PlanBriefBuilder.Build("claude-code", ticket, repo);
 
+        // The template must instruct the worker to emit a PLAN_BODY fenced block.
+        Assert.Contains("PLAN_BODY_START", brief.Instruction);
+
         // Locate the WORKER_RESULT envelope block. The template also contains an
         // escalation example; we want the final block (the envelope at the bottom).
         // WORKER_RESULT is a bare marker followed by a JSON object whose outer closing
@@ -155,13 +158,18 @@ public class WorkerResultParserTemplateRoundTripTests
         // "key absent / renamed and parser fell back to []").
         var substituted = jsonBlock
             .Replace("<one-line root cause or approach>", "fixture summary")
-            .Replace("<the complete HTML block from Output structure, JSON-escaped>", "<p>plan</p>")
             .Replace("<low|medium|high>", "low")
             .Replace("<S|M|L>", "S")
             .Replace("\"files_changed\": []", "\"files_changed\": [\"sample.cs\"]");
 
-        // Build synthetic worker stdout: WORKER_RESULT + substituted JSON.
-        var stdout = "WORKER_RESULT\n" + substituted;
+        // Build synthetic worker stdout: PLAN_BODY fenced block + WORKER_RESULT + substituted JSON.
+        // The parser requires fenced blocks to appear before the WORKER_RESULT marker.
+        var stdout =
+            "<<<PLAN_BODY_START\n" +
+            "# Investigation\n" +
+            "Fixture plan body.\n" +
+            "<<<PLAN_BODY_END\n\n" +
+            "WORKER_RESULT\n" + substituted;
 
         // Parse using WorkerResultParser.
         var outcome = WorkerResultParser.TryParse(stdout);
@@ -180,14 +188,66 @@ public class WorkerResultParserTemplateRoundTripTests
 
         // Metadata must contain the expected keys (extracted from the template example).
         Assert.NotNull(outcome.Result.Metadata);
-        Assert.True(outcome.Result.Metadata.ContainsKey("plan_html"),
-            "Metadata must contain 'plan_html' key");
+        Assert.True(outcome.Result.Metadata.ContainsKey("plan_body_ref"),
+            "Metadata must contain 'plan_body_ref' key");
+        Assert.False(outcome.Result.Metadata.ContainsKey("plan_html"),
+            "Metadata must NOT contain 'plan_html' key - it was replaced by plan_body_ref");
         Assert.True(outcome.Result.Metadata.ContainsKey("risk_label"),
             "Metadata must contain 'risk_label' key");
         Assert.True(outcome.Result.Metadata.ContainsKey("size_label"),
             "Metadata must contain 'size_label' key");
         Assert.True(outcome.Result.Metadata.ContainsKey("planned_at_sha"),
             "Metadata must contain 'planned_at_sha' key");
+
+        // The PLAN_BODY block must be present in the parsed outcome.
+        Assert.NotNull(outcome.Blocks);
+        Assert.True(outcome.Blocks.ContainsKey("PLAN_BODY"),
+            "Parsed outcome must have a PLAN_BODY block");
+    }
+}
+
+/// <summary>
+/// Canary test: PLAN_BODY block with unescaped quotes and special chars parses correctly.
+/// Verifies the fenced-block protocol does not require JSON-escaping of plan content.
+/// </summary>
+public class WorkerResultParserPlanBodyCanaryTests
+{
+    [Fact]
+    public void TryParse_PlanBodyBlock_WithUnescapedQuotesAndSpecialChars_ParsesSuccessfully()
+    {
+        // Synthetic stdout: PLAN_BODY block with content containing unescaped double-quotes
+        // and special characters that would break JSON-string encoding if mistakenly escaped.
+        var stdout =
+            "<<<PLAN_BODY_START\n" +
+            "# Plan with \"quoted\" text\n" +
+            "Use `dotnet test` to verify. Path: src\\Foo.cs.\n" +
+            "Risk: low - \"isolated change\".\n" +
+            "<<<PLAN_BODY_END\n\n" +
+            "WORKER_RESULT\n" +
+            "{\n" +
+            "  \"status\": \"Ok\",\n" +
+            "  \"summary\": \"canary plan body test\",\n" +
+            "  \"files_changed\": [],\n" +
+            "  \"failure_reason\": null,\n" +
+            "  \"metadata\": {\n" +
+            "    \"plan_body_ref\": \"PLAN_BODY\",\n" +
+            "    \"risk_label\": \"low\",\n" +
+            "    \"size_label\": \"S\",\n" +
+            "    \"planned_at_sha\": \"abc123\"\n" +
+            "  }\n" +
+            "}\n";
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.NotNull(outcome.Result);
+        Assert.Equal(Status.Ok, outcome.Result.Status);
+        Assert.Equal("canary plan body test", outcome.Result.Summary);
+        Assert.NotNull(outcome.Blocks);
+        Assert.True(outcome.Blocks.ContainsKey("PLAN_BODY"),
+            "Parsed outcome must have a PLAN_BODY block");
+        Assert.Contains("\"quoted\"", outcome.Blocks["PLAN_BODY"]);
+        Assert.True(outcome.Result.Metadata.ContainsKey("plan_body_ref"),
+            "Metadata must contain 'plan_body_ref'");
     }
 }
 
