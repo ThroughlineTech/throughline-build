@@ -9,5 +9,7 @@ public enum ChainOutcome
     StoppedAtShip,
     ReworkCapExceeded,
     RefusedInitialState,
-    RatifiedObsolete
+    RatifiedObsolete,
+    ParentCompleted,    // all eligible children completed
+    ParentStoppedEarly  // one or more children stopped before completing
 }

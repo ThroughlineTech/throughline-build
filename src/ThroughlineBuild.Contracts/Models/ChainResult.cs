@@ -6,4 +6,5 @@ public record ChainResult(
     ChainOutcome Outcome,
     TimeSpan TotalDuration,
     string? FinalRationale,
-    SubsumedByEvidence? SubsumedBy = null);
+    SubsumedByEvidence? SubsumedBy = null,
+    IReadOnlyList<ChainResult>? ChildResults = null);
