@@ -1,0 +1,16 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build-cli",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "${workspaceFolder}/src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj"
+      ],
+      "problemMatcher": "$msbuild",
+      "group": "build"
+    }
+  ]
+}
