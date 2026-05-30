@@ -1273,16 +1273,63 @@ static async Task<int> RunAsync(string[] args)
         // Single-ticket path (original behavior).
         var chainRunner = new DefaultChainRunner(chainPhase);
         var chainCommand = new ChainCommand(chainRunner, ticketing);
-        var chainCtx = new TicketCommandContext(ticketId, new Dictionary<string, string>(StringComparer.Ordinal)
+
+        // Collect all ticket IDs from args: args[1] is the primary, plus any additional
+        // positional args that don't start with '--'.
+        var ticketIds = new List<string> { ticketId };
+        for (int i = 2; i < args.Length; i++)
         {
-            ["debug"] = debugMode ? "true" : "false",
-            ["no-auto-resolve"] = noAutoResolve ? "true" : "false"
-        });
+            if (!args[i].StartsWith("--", StringComparison.Ordinal))
+                ticketIds.Add(args[i]);
+        }
 
         try
         {
             using var cts = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+
+            if (ticketIds.Count > 1)
+            {
+                // Sequential fallback for multi-ticket dispatch.
+                // TLB-312 will replace this with concurrent ParallelDispatcher when rebased.
+                var allResults = await SequentialChainDispatcher.RunAsync(
+                    ticketIds,
+                    async (tid, token) =>
+                    {
+                        var singleCtx = new TicketCommandContext(tid, new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["debug"] = debugMode ? "true" : "false",
+                            ["no-auto-resolve"] = noAutoResolve ? "true" : "false"
+                        });
+                        var singleCommand = new ChainCommand(chainRunner, ticketing);
+                        await singleCommand.ExecuteAsync(singleCtx, token).ConfigureAwait(false);
+                        return singleCommand.LastChainResult ?? new ChainResult(
+                            TicketId: tid,
+                            Steps: Array.Empty<ChainStep>(),
+                            Outcome: ChainOutcome.StoppedAtPlan,
+                            TotalDuration: TimeSpan.Zero,
+                            FinalRationale: "command returned no result");
+                    },
+                    continuePastFailure,
+                    cts.Token).ConfigureAwait(false);
+
+                ChainCommand.PrintAggregateReport(allResults);
+
+                // Exit 0 if all results are success or skipped; non-zero if any failed.
+                bool allGood = allResults.All(r =>
+                    r.Outcome == ChainOutcome.Completed
+                    || r.Outcome == ChainOutcome.RatifiedObsolete
+                    || r.Outcome == ChainOutcome.ParentCompleted
+                    || r.Outcome == ChainOutcome.Skipped);
+                return allGood ? 0 : 1;
+            }
+
+            // Single-ticket path.
+            var chainCtx = new TicketCommandContext(ticketId, new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["debug"] = debugMode ? "true" : "false",
+                ["no-auto-resolve"] = noAutoResolve ? "true" : "false"
+            });
             var cmdResult = await chainCommand.ExecuteAsync(chainCtx, cts.Token).ConfigureAwait(false);
 
             if (!cmdResult.Success)
@@ -1298,6 +1345,7 @@ static async Task<int> RunAsync(string[] args)
                         ChainOutcome.RefusedInitialState => 2,
                         ChainOutcome.StoppedAtPlan => 3,
                         ChainOutcome.ParentStoppedEarly => 3,
+                        ChainOutcome.Skipped => 3,
                         ChainOutcome.StoppedAtImplement => 4,
                         ChainOutcome.StoppedAtReview => 5,
                         ChainOutcome.ReworkCapExceeded => 6,
