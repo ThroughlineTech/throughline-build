@@ -85,6 +85,11 @@ internal static class WorkerResultParser
         // throws NotSupportedException. See docs/throughline-build-architecture.md,
         // section "AOT serialization traps".
         var lines = stdout.Split('\n');
+
+        // Pre-pass: extract named fenced blocks before WORKER_RESULT
+        if (!TryScanFencedBlocks(lines, out var blocks, out var scanErrorType, out var scanErrorMessage))
+            return WorkerResultParseOutcome.FenceScanFailed(scanErrorType!, scanErrorMessage!);
+
         var markerIndices = new List<int>();
         for (int i = 0; i < lines.Length; i++)
         {
@@ -159,7 +164,7 @@ internal static class WorkerResultParser
                     files,
                     dto.FailureReason,
                     meta);
-                return WorkerResultParseOutcome.Success(result);
+                return WorkerResultParseOutcome.Success(result, blocks);
             }
             catch (JsonException ex)
             {
@@ -241,16 +246,171 @@ internal static class WorkerResultParser
         }
         return true;
     }
+
+    private static bool TryScanFencedBlocks(
+        string[] lines,
+        out Dictionary<string, string> blocks,
+        out string? errorType,
+        out string? errorMessage)
+    {
+        blocks = new Dictionary<string, string>(StringComparer.Ordinal);
+        errorType = null;
+        errorMessage = null;
+
+        string? currentName = null;
+        var currentContent = new System.Text.StringBuilder();
+        int currentStartLine = -1;
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var trimmed = lines[i].Trim();
+
+            // Stop scanning when we hit the WORKER_RESULT marker
+            if (trimmed == "WORKER_RESULT")
+                break;
+
+            if (trimmed.StartsWith("<<<", StringComparison.Ordinal))
+            {
+                if (trimmed.EndsWith("_START", StringComparison.Ordinal))
+                {
+                    // Extract name: everything between <<< and _START
+                    var name = trimmed.Substring(3, trimmed.Length - 3 - 6);
+                    if (currentName != null)
+                    {
+                        errorType = "FenceScanError";
+                        errorMessage = $"unclosed fenced block '{currentName}' (opened at line {currentStartLine}); found '<<<{name}_START' at line {i}";
+                        return false;
+                    }
+                    if (!IsValidBlockName(name))
+                    {
+                        errorType = "FenceScanError";
+                        errorMessage = $"invalid block name '{name}' at line {i}; must match ^[A-Z][A-Z0-9_]*$";
+                        return false;
+                    }
+                    if (blocks.ContainsKey(name))
+                    {
+                        errorType = "FenceScanError";
+                        errorMessage = $"duplicate block name '{name}' at line {i}";
+                        return false;
+                    }
+                    currentName = name;
+                    currentStartLine = i;
+                    currentContent.Clear();
+                }
+                else if (trimmed.EndsWith("_END", StringComparison.Ordinal))
+                {
+                    var name = trimmed.Substring(3, trimmed.Length - 3 - 4);
+                    if (currentName == null)
+                    {
+                        errorType = "FenceScanError";
+                        errorMessage = $"unexpected close marker '<<<{name}_END' at line {i} with no open block";
+                        return false;
+                    }
+                    if (!string.Equals(name, currentName, StringComparison.Ordinal))
+                    {
+                        errorType = "FenceScanError";
+                        errorMessage = $"mismatched fence: expected '<<<{currentName}_END', found '<<<{name}_END' at line {i}";
+                        return false;
+                    }
+                    blocks[currentName] = currentContent.ToString();
+                    currentName = null;
+                    currentContent.Clear();
+                    currentStartLine = -1;
+                }
+            }
+            else if (currentName != null)
+            {
+                // Accumulate content lines
+                if (currentContent.Length > 0)
+                    currentContent.Append('\n');
+                currentContent.Append(lines[i]);
+            }
+        }
+
+        if (currentName != null)
+        {
+            errorType = "FenceScanError";
+            errorMessage = $"unclosed fenced block '{currentName}' (opened at line {currentStartLine}); reached end of output without '<<<{currentName}_END'";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsValidBlockName(string name)
+    {
+        if (name.Length == 0) return false;
+        if (!char.IsUpper(name[0])) return false;
+        foreach (char c in name)
+        {
+            if (!char.IsUpper(c) && !char.IsDigit(c) && c != '_')
+                return false;
+        }
+        return true;
+    }
 }
 
-internal readonly record struct WorkerResultParseOutcome(WorkerResult? Result, string? DeserializeErrorType, string? DeserializeErrorMessage)
+internal readonly record struct WorkerResultParseOutcome(
+    WorkerResult? Result,
+    string? DeserializeErrorType,
+    string? DeserializeErrorMessage,
+    IReadOnlyDictionary<string, string> Blocks)
 {
-    internal static WorkerResultParseOutcome Success(WorkerResult result) =>
-        new(Result: result, DeserializeErrorType: null, DeserializeErrorMessage: null);
+    private static readonly IReadOnlyDictionary<string, string> EmptyBlocks =
+        new Dictionary<string, string>();
+
+    internal static WorkerResultParseOutcome Success(WorkerResult result, IReadOnlyDictionary<string, string> blocks) =>
+        new(Result: result, DeserializeErrorType: null, DeserializeErrorMessage: null, Blocks: blocks);
 
     internal static WorkerResultParseOutcome MarkerMissing() =>
-        new(Result: null, DeserializeErrorType: null, DeserializeErrorMessage: null);
+        new(Result: null, DeserializeErrorType: null, DeserializeErrorMessage: null, Blocks: EmptyBlocks);
 
     internal static WorkerResultParseOutcome DeserializeFailed(string errorType, string errorMessage) =>
-        new(Result: null, DeserializeErrorType: errorType, DeserializeErrorMessage: errorMessage);
+        new(Result: null, DeserializeErrorType: errorType, DeserializeErrorMessage: errorMessage, Blocks: EmptyBlocks);
+
+    internal static WorkerResultParseOutcome FenceScanFailed(string errorType, string errorMessage) =>
+        new(Result: null, DeserializeErrorType: errorType, DeserializeErrorMessage: errorMessage, Blocks: EmptyBlocks);
+}
+
+internal static class FencedBlockResolver
+{
+    // Resolves a _ref field from the envelope metadata to block content.
+    // refFieldName: the metadata key (e.g. "plan_body_ref")
+    // Returns true and sets content if the ref resolves; returns false and sets error on failure.
+    internal static bool TryResolveRef(
+        IReadOnlyDictionary<string, string> blocks,
+        IReadOnlyDictionary<string, object> metadata,
+        string refFieldName,
+        out string? content,
+        out string? error)
+    {
+        content = null;
+        error = null;
+
+        if (!metadata.TryGetValue(refFieldName, out var refObj))
+        {
+            error = $"metadata field '{refFieldName}' not found";
+            return false;
+        }
+
+        string? blockName = null;
+        if (refObj is System.Text.Json.JsonElement je && je.ValueKind == System.Text.Json.JsonValueKind.String)
+            blockName = je.GetString();
+        else if (refObj is string s)
+            blockName = s;
+
+        if (string.IsNullOrWhiteSpace(blockName))
+        {
+            error = $"metadata field '{refFieldName}' is not a non-empty string";
+            return false;
+        }
+
+        if (!blocks.TryGetValue(blockName, out content))
+        {
+            error = $"referenced block not found: '{blockName}' (referenced by metadata field '{refFieldName}')";
+            return false;
+        }
+
+        return true;
+    }
 }
