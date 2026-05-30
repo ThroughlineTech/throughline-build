@@ -238,6 +238,106 @@ public class OpDocParserTests
         Assert.Single(brief.OutOfScope);
     }
 
+    // ---- Bold-markdown label tolerance (**Goal:** etc.) ----
+
+    [Fact]
+    public void BoldLabels_ParsedAsGoalAcceptanceOOS()
+    {
+        // Mirrors the natural LLM output that broke scaffolding: subsection labels
+        // wrapped in markdown bold (**Goal:**), with prose Goal, checkbox Acceptance,
+        // and bullet OOS. All three required subsections must parse cleanly.
+        string content =
+            "# Operation: bold-op\n\nBold op title.\n\n" +
+            "## Why this exists\n\nWhy content.\n\n" +
+            "## Dispatch order\n\n" +
+            "| Plan | Name | Depends on | Effort |\n" +
+            "| ---- | ---- | ---------- | ------ |\n" +
+            "| A    | Plan A | - | M |\n\n" +
+            "## Plan A: Plan with bold labels\n\n" +
+            "### Goal\n\nPlan goal.\n\n" +
+            "### Briefs\n\n" +
+            "| # | Slug | Intent | Deps | Files |\n" +
+            "|---|------|--------|------|-------|\n" +
+            "| 01 | bold-brief | Bold brief | - | - |\n\n" +
+            "### Briefs - detail\n\n" +
+            "#### Brief 01: bold-brief\n\n" +
+            "**Goal:** Bold brief goal as prose.\n\n" +
+            "**Inputs:** Some prose inputs.\n\n" +
+            "**Outputs:** Prose outputs.\n\n" +
+            "**Acceptance:**\n- [ ] bold acceptance criterion\n\n" +
+            "**Notes:** Some notes.\n\n" +
+            "**OOS:**\n- bold oos item\n\n" +
+            "## What done looks like\n\nAll done.\n";
+
+        var result = Parse(content);
+        Assert.Empty(result.Errors);
+        var brief = result.Parsed!.Plans[0].Briefs[0];
+        Assert.Equal("Bold brief goal as prose.", brief.Goal);
+        Assert.Single(brief.AcceptanceCriteria);
+        Assert.Single(brief.OutOfScope);
+    }
+
+    [Fact]
+    public void BoldLabels_ColonOutsideEmphasis_AlsoParsed()
+    {
+        // "**Goal**:" (colon outside the bold) is the other emphasis form a model emits.
+        string content =
+            "# Operation: bold-op2\n\nBold op2 title.\n\n" +
+            "## Why this exists\n\nWhy content.\n\n" +
+            "## Dispatch order\n\n" +
+            "| Plan | Name | Depends on | Effort |\n" +
+            "| ---- | ---- | ---------- | ------ |\n" +
+            "| A    | Plan A | - | M |\n\n" +
+            "## Plan A: Plan with bold-outside labels\n\n" +
+            "### Goal\n\nPlan goal.\n\n" +
+            "### Briefs\n\n" +
+            "| # | Slug | Intent | Deps | Files |\n" +
+            "|---|------|--------|------|-------|\n" +
+            "| 01 | bold-brief | Bold brief | - | - |\n\n" +
+            "### Briefs - detail\n\n" +
+            "#### Brief 01: bold-brief\n\n" +
+            "**Goal**: Goal with colon outside.\n\n" +
+            "**Acceptance**:\n- [ ] criterion\n\n" +
+            "**OOS**:\n- oos item\n\n" +
+            "## What done looks like\n\nAll done.\n";
+
+        var result = Parse(content);
+        Assert.Empty(result.Errors);
+        var brief = result.Parsed!.Plans[0].Briefs[0];
+        Assert.Equal("Goal with colon outside.", brief.Goal);
+    }
+
+    [Fact]
+    public void PlainLabel_WithBoldContent_PreservesContentEmphasis()
+    {
+        // Non-regression: a plain "Goal:" whose content starts with bold must keep
+        // the leading "**" as content, not mistake it for a closing label marker.
+        string content =
+            "# Operation: content-op\n\nContent op title.\n\n" +
+            "## Why this exists\n\nWhy content.\n\n" +
+            "## Dispatch order\n\n" +
+            "| Plan | Name | Depends on | Effort |\n" +
+            "| ---- | ---- | ---------- | ------ |\n" +
+            "| A    | Plan A | - | M |\n\n" +
+            "## Plan A: Plan with bold content\n\n" +
+            "### Goal\n\nPlan goal.\n\n" +
+            "### Briefs\n\n" +
+            "| # | Slug | Intent | Deps | Files |\n" +
+            "|---|------|--------|------|-------|\n" +
+            "| 01 | content-brief | Content brief | - | - |\n\n" +
+            "### Briefs - detail\n\n" +
+            "#### Brief 01: content-brief\n\n" +
+            "Goal: **critical** thing to do.\n\n" +
+            "Acceptance:\n- [ ] criterion\n\n" +
+            "OOS:\n- oos item\n\n" +
+            "## What done looks like\n\nAll done.\n";
+
+        var result = Parse(content);
+        Assert.Empty(result.Errors);
+        var brief = result.Parsed!.Plans[0].Briefs[0];
+        Assert.Equal("**critical** thing to do.", brief.Goal);
+    }
+
     // ---- Missing required H2 sections ----
 
     [Fact]

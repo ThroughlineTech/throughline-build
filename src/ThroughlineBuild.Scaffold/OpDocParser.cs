@@ -24,6 +24,14 @@ public static class OpDocParser
     private static readonly Regex BulletPattern = new(@"^[\-\*]\s+(?<text>.+)$", RegexOptions.Compiled);
     private static readonly Regex CheckboxPattern = new(@"^-\s+\[[ xX]\]\s*(?<text>.+)$", RegexOptions.Compiled);
 
+    // Brief subsection label, tolerant of markdown emphasis around the label token.
+    // "Goal:", "**Goal:**", "**Goal**:", "*Goal:*", and "__OOS__:" all resolve to the same label.
+    // The closing emphasis is only consumed when there was a matching opening emphasis (backreference \k<e>),
+    // so a plain "Goal: **bold** content" keeps the leading "**" as content rather than treating it as a marker.
+    private static readonly Regex BriefLabelPattern = new(
+        @"^\s*(?:(?<e>\*{1,2}|_{1,2})\s*(?<label>Goal|Inputs|Outputs|Acceptance|Notes|OOS)\s*(?::\s*\k<e>|\k<e>\s*:)|(?<label2>Goal|Inputs|Outputs|Acceptance|Notes|OOS)\s*:)\s*(?<rest>.*)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     // Required H2 section names (case-sensitive match per spec)
     private const string WhySection = "Why this exists";
     private const string DispatchSection = "Dispatch order";
@@ -732,21 +740,18 @@ public static class OpDocParser
 
     private static string? DetectLabel(string line)
     {
-        string trimmed = line.TrimStart();
-        if (trimmed.StartsWith("Goal:", StringComparison.OrdinalIgnoreCase)) return "goal";
-        if (trimmed.StartsWith("Inputs:", StringComparison.OrdinalIgnoreCase)) return "inputs";
-        if (trimmed.StartsWith("Outputs:", StringComparison.OrdinalIgnoreCase)) return "outputs";
-        if (trimmed.StartsWith("Acceptance:", StringComparison.OrdinalIgnoreCase)) return "acceptance";
-        if (trimmed.StartsWith("Notes:", StringComparison.OrdinalIgnoreCase)) return "notes";
-        if (trimmed.StartsWith("OOS:", StringComparison.OrdinalIgnoreCase)) return "oos";
-        return null;
+        var match = BriefLabelPattern.Match(line);
+        if (!match.Success) return null;
+        string label = match.Groups["label"].Success
+            ? match.Groups["label"].Value
+            : match.Groups["label2"].Value;
+        return label.ToLowerInvariant();
     }
 
     private static string GetAfterLabel(string line)
     {
-        int colon = line.IndexOf(':');
-        if (colon < 0) return string.Empty;
-        return line.Substring(colon + 1).Trim();
+        var match = BriefLabelPattern.Match(line);
+        return match.Success ? match.Groups["rest"].Value.Trim() : string.Empty;
     }
 
     private static List<string> ExtractBullets(List<string> lines)
