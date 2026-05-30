@@ -120,8 +120,45 @@ public class ImplementPhaseReworkTests
         var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
 
         Assert.False(result.Success);
-        Assert.Contains("did you mean to invoke rework", result.FailureReason ?? "");
+        Assert.Contains("build rework", result.FailureReason ?? "");
         Assert.Contains("InProgress", result.FailureReason ?? "");
+        Assert.Empty(ticketing.Transitions);
+    }
+
+    [Fact]
+    public async Task RunAsync_InitialRound_AgainstInReview_PointsToReviewNotRework()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var worker = new FakeWorkerAgent(OkWorkerResult());
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha);
+        var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("InReview", result.FailureReason ?? "");
+        Assert.Contains("build review", result.FailureReason ?? "");
+        // The blanket "did you mean to invoke rework?" hint is wrong from InReview
+        // (rework requires InProgress), so it must not be surfaced here.
+        Assert.DoesNotContain("did you mean to invoke rework", result.FailureReason ?? "");
+        Assert.Empty(ticketing.Transitions);
+    }
+
+    [Fact]
+    public async Task RunAsync_InitialRound_AgainstDone_FailsClearly()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.Done));
+        var worker = new FakeWorkerAgent(OkWorkerResult());
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha);
+        var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("Done", result.FailureReason ?? "");
+        Assert.Contains("nothing to implement", result.FailureReason ?? "");
         Assert.Empty(ticketing.Transitions);
     }
 
