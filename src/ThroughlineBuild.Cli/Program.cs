@@ -64,25 +64,30 @@ static async Task<int> RunAsync(string[] args)
 
     var verb = args[0];
 
+    // Extract ticket IDs for verbs that need them.
+    IReadOnlyList<string> ticketIds = Array.Empty<string>();
+    if (verb == "plan" || verb == "implement" || verb == "review" || verb == "ship" || verb == "chain" || verb == "rework" || verb == "decompose")
+    {
+        var (extracted, _) = CliArgParser.ExtractTicketIds(args);
+        ticketIds = extracted;
+    }
+
     // Arg validation for phase verbs happens BEFORE config load so a missing id
     // surfaces a usage error (exit 2) rather than a config-not-found error.
     if (verb == "plan" || verb == "implement" || verb == "review" || verb == "ship" || verb == "chain" || verb == "rework" || verb == "decompose")
     {
-        if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]))
+        if (ticketIds.Count == 0 || string.IsNullOrWhiteSpace(ticketIds[0]))
         {
             Console.Error.WriteLine("Error: ticket-id is required");
-            Console.Error.WriteLine($"Usage: build {verb} <ticket-id>");
+            Console.Error.WriteLine($"Usage: build {verb} <ticket-id> [ticket-id ...]");
             return 2;
         }
 
-        // For rework: reject multiple positional ticket IDs (single ticket only).
-        if (verb == "rework" && args.Length > 2)
+        // For rework and decompose: reject multiple positional ticket IDs (single ticket only).
+        if ((verb == "rework" || verb == "decompose") && ticketIds.Count > 1)
         {
-            if (!args[2].StartsWith("--"))
-            {
-                Console.Error.WriteLine("Error: build rework accepts exactly one ticket ID; multi-ticket dispatch is not supported.");
-                return 2;
-            }
+            Console.Error.WriteLine($"Error: build {verb} accepts exactly one ticket ID; multi-ticket dispatch is not supported.");
+            return 2;
         }
     }
 
@@ -681,28 +686,7 @@ static async Task<int> RunAsync(string[] args)
         return 2;
     }
 
-    var ticketId = args[1];
     var cwd = resolvedCwd;
-
-    var sessionId = Guid.NewGuid().ToString("N");
-    var fileStem = SessionFileNameBuilder.Build(
-        projectName: config2.Ticketing.PlaneProjectName,
-        projectIdentifier: config2.Ticketing.PlaneProjectIdentifier,
-        verb: verb,
-        ticketId: ticketId,
-        extraSlug: null,
-        timestamp: DateTimeOffset.Now);
-
-    // --debug: capture worker stdin/stdout/stderr/envelope into .build/sessions/<file-stem>/
-    // The stem is shared with the JSONL event sink so the two artifacts sort together.
-    // Inside the JSONL, the SessionId field still carries the GUID as the correlation key.
-    // Create the dir eagerly so the "Debug capture:" line at exit always points somewhere
-    // real, even when the phase fails before the worker spawns (e.g. early git errors).
-    string? debugCaptureDir = debugMode
-        ? Path.GetFullPath(Path.Combine(cwd, ".build", "sessions", fileStem))
-        : null;
-    if (debugCaptureDir is not null)
-        Directory.CreateDirectory(debugCaptureDir);
 
     var http = new HttpClient();
     var ticketing = new PlaneTicketingClient(http, new PlaneClientOptions
@@ -783,36 +767,8 @@ static async Task<int> RunAsync(string[] args)
         phase == "review"    ? (agentReviewFlag ?? agentAll ?? AgentFor("review")) :
         AgentFor(phase);
 
-    await using var jsonlEventSink = new JsonlEventSink(new EventLogOptions
-    {
-        BaseDirectory = ResolveLogDir(config2.Events.LogDirectory),
-        SessionId = sessionId,
-        FileNameStem = fileStem
-    }, sessionContext);
-    // Digest is default-on when stderr is a TTY and the user has not opted out
-    // via --quiet or replaced it with the --debug raw firehose. When stderr is
-    // redirected (e.g. 2>err.log or piped to tee), the digest is suppressed to
-    // keep scripted/CI logs clean unless BUILD_PROGRESS=1 forces it on.
-    bool enableDigest = !debugMode
-        && !quietMode
-        && (!Console.IsErrorRedirected || Environment.GetEnvironmentVariable("BUILD_PROGRESS") == "1");
-
-    var eventSink = new RecordingEventSink(jsonlEventSink);
-    var buildOptions = new BuildOptions(
-        SessionId: sessionId,
-        WorkerName: config2.Workers.DefaultAgent,
-        WorkerTimeout: TimeSpan.FromMinutes(config2.Workers.TimeoutMinutes),
-        DebugCaptureDirectory: debugCaptureDir,
-        LiveStdoutSink: debugMode ? Console.Out : null,
-        LiveStderrSink: debugMode ? Console.Error : null,
-        ProgressDigestSink: enableDigest ? Console.Error : null);
-
     // Shared git client (read-only ops only at this layer) for summary-block construction.
     var summaryGit = new ProcessGitClient(cwd);
-    string PlaneUrl() => BuildPlaneUrl(config2.Ticketing.PlaneBaseUrl, config2.Ticketing.PlaneWorkspaceSlug, ticketId);
-    string? ArtifactsPath() => debugCaptureDir is not null
-        ? $".build/sessions/{fileStem}/"
-        : $".build/events/{fileStem}.jsonl";
 
     void WriteSummary(PhaseSummary summary)
     {
@@ -823,7 +779,61 @@ static async Task<int> RunAsync(string[] args)
         if (!text.EndsWith('\n')) Console.Out.WriteLine();
     }
 
-    if (verb == "plan")
+    // Loop over each ticket ID for multi-ticket dispatch.
+    // Sequential: stop on first failure (return non-zero exit code).
+    int dispatchExitCode = 0;
+    foreach (var ticketId in ticketIds)
+    {
+        var sessionId = Guid.NewGuid().ToString("N");
+        var fileStem = SessionFileNameBuilder.Build(
+            projectName: config2.Ticketing.PlaneProjectName,
+            projectIdentifier: config2.Ticketing.PlaneProjectIdentifier,
+            verb: verb,
+            ticketId: ticketId,
+            extraSlug: null,
+            timestamp: DateTimeOffset.Now);
+
+        // --debug: capture worker stdin/stdout/stderr/envelope into .build/sessions/<file-stem>/
+        // The stem is shared with the JSONL event sink so the two artifacts sort together.
+        // Inside the JSONL, the SessionId field still carries the GUID as the correlation key.
+        // Create the dir eagerly so the "Debug capture:" line at exit always points somewhere
+        // real, even when the phase fails before the worker spawns (e.g. early git errors).
+        string? debugCaptureDir = debugMode
+            ? Path.GetFullPath(Path.Combine(cwd, ".build", "sessions", fileStem))
+            : null;
+        if (debugCaptureDir is not null)
+            Directory.CreateDirectory(debugCaptureDir);
+
+        await using var jsonlEventSink = new JsonlEventSink(new EventLogOptions
+        {
+            BaseDirectory = ResolveLogDir(config2.Events.LogDirectory),
+            SessionId = sessionId,
+            FileNameStem = fileStem
+        }, sessionContext);
+        // Digest is default-on when stderr is a TTY and the user has not opted out
+        // via --quiet or replaced it with the --debug raw firehose. When stderr is
+        // redirected (e.g. 2>err.log or piped to tee), the digest is suppressed to
+        // keep scripted/CI logs clean unless BUILD_PROGRESS=1 forces it on.
+        bool enableDigest = !debugMode
+            && !quietMode
+            && (!Console.IsErrorRedirected || Environment.GetEnvironmentVariable("BUILD_PROGRESS") == "1");
+
+        var eventSink = new RecordingEventSink(jsonlEventSink);
+        var buildOptions = new BuildOptions(
+            SessionId: sessionId,
+            WorkerName: config2.Workers.DefaultAgent,
+            WorkerTimeout: TimeSpan.FromMinutes(config2.Workers.TimeoutMinutes),
+            DebugCaptureDirectory: debugCaptureDir,
+            LiveStdoutSink: debugMode ? Console.Out : null,
+            LiveStderrSink: debugMode ? Console.Error : null,
+            ProgressDigestSink: enableDigest ? Console.Error : null);
+
+        string PlaneUrl() => BuildPlaneUrl(config2.Ticketing.PlaneBaseUrl, config2.Ticketing.PlaneWorkspaceSlug, ticketId);
+        string? ArtifactsPath() => debugCaptureDir is not null
+            ? $".build/sessions/{fileStem}/"
+            : $".build/events/{fileStem}.jsonl";
+
+        if (verb == "plan")
     {
         var phase = new PlanPhase(ticketing, workerFactory.Create(EffectiveAgentFor("plan")), eventSink, buildOptions, project: config2.Project);
         PlanResult result;
@@ -837,12 +847,14 @@ static async Task<int> RunAsync(string[] args)
         {
             Console.Error.WriteLine($"Ticket not found: {ex.Message}");
             if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
-            return 2;
+            dispatchExitCode = 2;
+            break;
         }
         catch (OperationCanceledException)
         {
             Console.Error.WriteLine("Cancelled.");
-            return 1;
+            dispatchExitCode = 1;
+            break;
         }
 
         Ticket? planTicket = null;
@@ -868,12 +880,14 @@ static async Task<int> RunAsync(string[] args)
             Console.Error.WriteLine($"Plan phase failed: {result.FailureReason}");
             if (debugCaptureDir is not null)
                 Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
-            return 1;
+            dispatchExitCode = 1;
+            break;
         }
 
         if (debugCaptureDir is not null)
             Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
-        return 0;
+        dispatchExitCode = 0;
+        break;
     }
     else if (verb == "implement")
     {
@@ -889,12 +903,14 @@ static async Task<int> RunAsync(string[] args)
         {
             Console.Error.WriteLine($"Ticket not found: {ex.Message}");
             if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
-            return 2;
+            dispatchExitCode = 2;
+            break;
         }
         catch (OperationCanceledException)
         {
             Console.Error.WriteLine("Cancelled.");
-            return 1;
+            dispatchExitCode = 1;
+            break;
         }
 
         // Best-effort git facts for the implement summary - failures are silently
@@ -934,12 +950,72 @@ static async Task<int> RunAsync(string[] args)
             Console.Error.WriteLine($"Implement phase failed: {result.FailureReason}");
             if (debugCaptureDir is not null)
                 Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
-            return 1;
+            dispatchExitCode = 1;
+            break;
         }
 
         if (debugCaptureDir is not null)
             Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
-        return 0;
+        dispatchExitCode = 0;
+        break;
+    }
+    else if (verb == "review")
+    {
+        var verifierWorkerOptions = new WorkerOptions(
+            TimeSpan.FromMinutes(config2.Review.VerifierTimeoutMinutes),
+            config2.Review.VerifierAllowedTools,
+            DebugCaptureDirectory: debugCaptureDir,
+            LiveStdoutSink: debugMode ? Console.Out : null,
+            LiveStderrSink: debugMode ? Console.Error : null,
+            ProgressDigestSink: enableDigest ? Console.Error : null);
+        var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
+        var phase = new ReviewPhase(ticketing, workerFactory.Create(EffectiveAgentFor("review")), eventSink, buildOptions, reviewOptions, project: config2.Project);
+        ReviewResult result;
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+            result = await phase.RunAsync(ticketId, cwd, cts.Token);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            Console.Error.WriteLine($"Ticket not found: {ex.Message}");
+            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+            dispatchExitCode = 2;
+            break;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            dispatchExitCode = 1;
+            break;
+        }
+
+        var reviewSummary = PhaseSummaryBuilder.BuildReview(
+            ticketId: result.TicketId,
+            success: result.Success,
+            verdict: result.Verdict?.ToString(),
+            rationale: result.VerdictRationale,
+            checksFailed: result.ChecksFailed,
+            failureReason: result.FailureReason,
+            events: eventSink.Snapshot(),
+            planeUrl: PlaneUrl(),
+            sessionArtifactsPath: ArtifactsPath());
+        WriteSummary(reviewSummary);
+
+        if (!result.Success)
+        {
+            Console.Error.WriteLine($"Review phase failed: {result.FailureReason}");
+            if (debugCaptureDir is not null)
+                Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
+            dispatchExitCode = 1;
+            break;
+        }
+
+        if (debugCaptureDir is not null)
+            Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
+        dispatchExitCode = 0;
+        break;
     }
     else if (verb == "ship")
     {
@@ -963,12 +1039,14 @@ static async Task<int> RunAsync(string[] args)
         {
             Console.Error.WriteLine($"Ticket not found: {ex.Message}");
             if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
-            return 2;
+            dispatchExitCode = 2;
+            break;
         }
         catch (OperationCanceledException)
         {
             Console.Error.WriteLine("Cancelled.");
-            return 1;
+            dispatchExitCode = 1;
+            break;
         }
 
         // Derive branch name from the deterministic worktree layout (best effort).
@@ -1017,7 +1095,8 @@ static async Task<int> RunAsync(string[] args)
 
         if (result.Success)
         {
-            return 0;
+            dispatchExitCode = 0;
+            break;
         }
 
         // Map FailedAt to exit code: gate failures -> 1, infrastructure failures -> 4.
@@ -1025,7 +1104,7 @@ static async Task<int> RunAsync(string[] args)
         var stageName = failedAt?.ToString().ToLowerInvariant() ?? "unknown";
         Console.Error.WriteLine($"Ship blocked at {stageName}: {result.FailureReason}");
 
-        return failedAt switch
+        dispatchExitCode = failedAt switch
         {
             ShipFailureStage.Rebase => 1,
             ShipFailureStage.ConflictMarkerScan => 1,
@@ -1036,6 +1115,7 @@ static async Task<int> RunAsync(string[] args)
             ShipFailureStage.Decruft => 0,  // decruft failure is post-success non-fatal
             _ => 1
         };
+        break;
     }
     else if (verb == "chain")
     {
@@ -1118,7 +1198,7 @@ static async Task<int> RunAsync(string[] args)
                 // Map ChainResult.Outcome to exit code.
                 if (chainCommand.LastChainResult is not null)
                 {
-                    return chainCommand.LastChainResult.Outcome switch
+                    dispatchExitCode = chainCommand.LastChainResult.Outcome switch
                     {
                         ChainOutcome.Completed => 0,
                         ChainOutcome.RatifiedObsolete => 0,
@@ -1132,53 +1212,107 @@ static async Task<int> RunAsync(string[] args)
                         ChainOutcome.StoppedAtShip => 7,
                         _ => 1
                     };
+                    break;
                 }
                 // Unhandled exception path: LastChainResult not set because ChainCommand
                 // caught an exception before completing the chain. Print the message so
                 // the operator can see what went wrong instead of a silent exit code 1.
                 if (!string.IsNullOrEmpty(cmdResult.Message))
                     Console.Error.WriteLine($"Error: {cmdResult.Message}");
-                return 1;
+                dispatchExitCode = 1;
+                break;
             }
 
-            return 0;
+            dispatchExitCode = 0;
+            break;
         }
         catch (OperationCanceledException)
         {
             Console.Error.WriteLine("Cancelled.");
-            return 1;
+            dispatchExitCode = 1;
+            break;
         }
     }
-    else if (verb == "rework")
+    }
+
+    // Multi-ticket verbs dispatch complete; rework and decompose are single-ticket only.
+    if (dispatchExitCode != 0)
+        return dispatchExitCode;
+
+    // Single-ticket verbs: rework, decompose (require per-ticket setup)
+    if (verb == "rework" || verb == "decompose")
     {
-        // Parse --feedback "text" from remaining args.
-        string? feedbackText = null;
-        for (int i = 2; i < args.Length; i++)
+        var singleTicketId = ticketIds[0];
+        var sessionId = Guid.NewGuid().ToString("N");
+        var fileStem = SessionFileNameBuilder.Build(
+            projectName: config2.Ticketing.PlaneProjectName,
+            projectIdentifier: config2.Ticketing.PlaneProjectIdentifier,
+            verb: verb,
+            ticketId: singleTicketId,
+            extraSlug: null,
+            timestamp: DateTimeOffset.Now);
+
+        string? debugCaptureDir = debugMode
+            ? Path.GetFullPath(Path.Combine(cwd, ".build", "sessions", fileStem))
+            : null;
+        if (debugCaptureDir is not null)
+            Directory.CreateDirectory(debugCaptureDir);
+
+        await using var jsonlEventSink = new JsonlEventSink(new EventLogOptions
         {
-            if (args[i] == "--feedback" && i + 1 < args.Length)
+            BaseDirectory = ResolveLogDir(config2.Events.LogDirectory),
+            SessionId = sessionId,
+            FileNameStem = fileStem
+        }, sessionContext);
+        bool enableDigest = !debugMode
+            && !quietMode
+            && (!Console.IsErrorRedirected || Environment.GetEnvironmentVariable("BUILD_PROGRESS") == "1");
+
+        var eventSink = new RecordingEventSink(jsonlEventSink);
+        var buildOptions = new BuildOptions(
+            SessionId: sessionId,
+            WorkerName: config2.Workers.DefaultAgent,
+            WorkerTimeout: TimeSpan.FromMinutes(config2.Workers.TimeoutMinutes),
+            DebugCaptureDirectory: debugCaptureDir,
+            LiveStdoutSink: debugMode ? Console.Out : null,
+            LiveStderrSink: debugMode ? Console.Error : null,
+            ProgressDigestSink: enableDigest ? Console.Error : null);
+
+        string PlaneUrl() => BuildPlaneUrl(config2.Ticketing.PlaneBaseUrl, config2.Ticketing.PlaneWorkspaceSlug, singleTicketId);
+        string? ArtifactsPath() => debugCaptureDir is not null
+            ? $".build/sessions/{fileStem}/"
+            : $".build/events/{fileStem}.jsonl";
+
+        if (verb == "rework")
+        {
+            // Parse --feedback "text" from remaining args.
+            string? feedbackText = null;
+            for (int i = 2; i < args.Length; i++)
             {
-                feedbackText = args[i + 1];
-                i++; // skip value
+                if (args[i] == "--feedback" && i + 1 < args.Length)
+                {
+                    feedbackText = args[i + 1];
+                    i++; // skip value
+                }
             }
-        }
 
-        var reworkPhaseOptions = new ReworkPhaseOptions(
-            TicketId: ticketId,
-            ManualFeedback: feedbackText,
-            ReworkRoundNumber: 1,
-            Debug: debugMode);
+            var reworkPhaseOptions = new ReworkPhaseOptions(
+                TicketId: singleTicketId,
+                ManualFeedback: feedbackText,
+                ReworkRoundNumber: 1,
+                Debug: debugMode);
 
-        var retriever = new ReviewFeedbackRetriever(ResolveLogDir(config2.Events.LogDirectory));
+            var retriever = new ReviewFeedbackRetriever(ResolveLogDir(config2.Events.LogDirectory));
 
-        var reworkPhase = new ReworkPhase(
-            ticketing,
-            workerFactory.Create(EffectiveAgentFor("implement")),
-            eventSink,
-            buildOptions,
-            retriever,
-            reworkPhaseOptions,
-            gitClient: new ThroughlineBuild.Git.ProcessGitClient(cwd),
-            project: config2.Project);
+            var reworkPhase = new ReworkPhase(
+                ticketing,
+                workerFactory.Create(EffectiveAgentFor("implement")),
+                eventSink,
+                buildOptions,
+                retriever,
+                reworkPhaseOptions,
+                gitClient: new ThroughlineBuild.Git.ProcessGitClient(cwd),
+                project: config2.Project);
 
         var reworkRunner = new DefaultReworkRunner(reworkPhase, cwd);
         var reworkCommand = new ReworkCommand(reworkRunner, cwd);
@@ -1190,7 +1324,7 @@ static async Task<int> RunAsync(string[] args)
         if (feedbackText is not null)
             reworkArgs["feedback"] = feedbackText;
 
-        var reworkCtx = new TicketCommandContext(ticketId, reworkArgs);
+        var reworkCtx = new TicketCommandContext(singleTicketId, reworkArgs);
 
         try
         {
@@ -1217,23 +1351,13 @@ static async Task<int> RunAsync(string[] args)
             Console.Error.WriteLine("Cancelled.");
             return 1;
         }
-    }
-    else if (verb == "decompose")
-    {
-        // For decompose: reject multiple positional ticket IDs (single ticket only).
-        if (args.Length > 2)
-        {
-            if (!args[2].StartsWith("--"))
-            {
-                Console.Error.WriteLine("Error: build decompose accepts exactly one ticket ID; multi-ticket dispatch is not supported.");
-                return 2;
-            }
         }
-
+        else if (verb == "decompose")
+        {
         Ticket ticket;
         try
         {
-            ticket = await ticketing.GetAsync(ticketId, CancellationToken.None);
+            ticket = await ticketing.GetAsync(singleTicketId, CancellationToken.None);
         }
         catch (KeyNotFoundException ex)
         {
@@ -1248,7 +1372,7 @@ static async Task<int> RunAsync(string[] args)
         {
             using var cts = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
-            result = await phase.RunAsync(ticketId, cwd, cts.Token);
+            result = await phase.RunAsync(singleTicketId, cwd, cts.Token);
         }
         catch (OperationCanceledException)
         {
@@ -1283,62 +1407,11 @@ static async Task<int> RunAsync(string[] args)
         if (debugCaptureDir is not null)
             Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
         return 0;
+        }
     }
-    else // review
-    {
-        var verifierWorkerOptions = new WorkerOptions(
-            TimeSpan.FromMinutes(config2.Review.VerifierTimeoutMinutes),
-            config2.Review.VerifierAllowedTools,
-            DebugCaptureDirectory: debugCaptureDir,
-            LiveStdoutSink: debugMode ? Console.Out : null,
-            LiveStderrSink: debugMode ? Console.Error : null,
-            ProgressDigestSink: enableDigest ? Console.Error : null);
-        var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
-        var phase = new ReviewPhase(ticketing, workerFactory.Create(EffectiveAgentFor("review")), eventSink, buildOptions, reviewOptions, project: config2.Project);
-        ReviewResult result;
-        try
-        {
-            using var cts = new CancellationTokenSource();
-            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
-            result = await phase.RunAsync(ticketId, cwd, cts.Token);
-        }
-        catch (KeyNotFoundException ex)
-        {
-            Console.Error.WriteLine($"Ticket not found: {ex.Message}");
-            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
-            return 2;
-        }
-        catch (OperationCanceledException)
-        {
-            Console.Error.WriteLine("Cancelled.");
-            return 1;
-        }
 
-        var reviewSummary = PhaseSummaryBuilder.BuildReview(
-            ticketId: result.TicketId,
-            success: result.Success,
-            verdict: result.Verdict?.ToString(),
-            rationale: result.VerdictRationale,
-            checksFailed: result.ChecksFailed,
-            failureReason: result.FailureReason,
-            events: eventSink.Snapshot(),
-            planeUrl: PlaneUrl(),
-            sessionArtifactsPath: ArtifactsPath());
-        WriteSummary(reviewSummary);
-
-        if (!result.Success)
-        {
-            Console.Error.WriteLine($"Review phase failed: {result.FailureReason}");
-            if (debugCaptureDir is not null)
-                Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
-            return 4;
-        }
-
-        if (debugCaptureDir is not null)
-            Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
-
-        return result.Verdict == ThroughlineBuild.Contracts.Models.VerdictKind.Pass ? 0 : 1;
-    }
+    // Fallback: should not reach here if all verbs are handled
+    return 0;
 }
 
 // Builds the Plane work-item deep-link URL using the ?next_path= redirect parameter.
