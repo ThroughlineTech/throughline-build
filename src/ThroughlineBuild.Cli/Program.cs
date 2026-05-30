@@ -130,7 +130,17 @@ static async Task<int> RunAsync(string[] args)
     {
         var force = filteredArgs.Contains("--force");
         var printTemplate = filteredArgs.Contains("--print-template");
-        return InitCommand.Execute(rawCwd, force, printTemplate, SystemConsole.Instance);
+        var initPlaneUrl  = CliArgParser.GetFlagValue(filteredArgs, "--plane-url");
+        var initWorkspace = CliArgParser.GetFlagValue(filteredArgs, "--workspace");
+        var initProjectId = CliArgParser.GetFlagValue(filteredArgs, "--project-id");
+        var initToken     = CliArgParser.GetFlagValue(filteredArgs, "--token");
+        var initTokenEnv  = CliArgParser.GetFlagValue(filteredArgs, "--token-env");
+        return InitCommand.Execute(rawCwd, force, printTemplate, SystemConsole.Instance,
+            planeUrl: initPlaneUrl,
+            workspace: initWorkspace,
+            projectId: initProjectId,
+            token: initToken,
+            tokenEnv: initTokenEnv);
     }
 
     var resolverGit = new ProcessGitClient(rawCwd);
