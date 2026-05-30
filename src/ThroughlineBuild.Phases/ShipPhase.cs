@@ -84,6 +84,13 @@ public class ShipPhase : IWorkflowPhase
         // Step 1: Fetch ticket
         var ticket = await _ticketing.GetAsync(ticketId, ct).ConfigureAwait(false);
 
+        // Parent-ticket ship path: validate all children Done
+        var shipChildren = await _ticketing.QueryAsync(new TicketQuery(ParentId: ticket.Uuid), ct).ConfigureAwait(false);
+        if (shipChildren.Count > 0)
+        {
+            return (await RunParentShipAsync(ticketId, ticket, shipChildren, ct).ConfigureAwait(false), null, null);
+        }
+
         // Step 2: Validate state
         if (ticket.State != TicketState.InReview)
             return (new ShipResult(false, ticketId, null, "ticket not in InReview state", ShipFailureStage.StateCheck), null, null);
@@ -466,6 +473,47 @@ public class ShipPhase : IWorkflowPhase
             outputs = new Dictionary<string, string>();
         }
         return new PhaseResult(shipResult.Success, shipResult.TicketId, Phase.Ship, shipResult.FailureReason, outputs);
+    }
+
+    private async Task<ShipResult> RunParentShipAsync(
+        string ticketId,
+        Ticket ticket,
+        IReadOnlyList<Ticket> children,
+        CancellationToken ct)
+    {
+        // Find children not in Done state
+        var notDone = children.Where(c => c.State != TicketState.Done).ToList();
+
+        if (notDone.Count > 0)
+        {
+            var blockerIds = string.Join(", ", notDone.Select(c => c.Id));
+            var message = $"children not Done: {blockerIds}";
+            await _ticketing.CreateCommentAsync(ticketId,
+                $"<p><strong>ship_blocked:</strong> {message}</p>", ct).ConfigureAwait(false);
+            await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+            {
+                ["kind"] = "parent_children_not_done",
+                ["blockers"] = (IReadOnlyList<string>)notDone.Select(c => c.Id).ToList()
+            }, ct).ConfigureAwait(false);
+            return new ShipResult(false, ticketId, null, message, ShipFailureStage.StateCheck);
+        }
+
+        // All children Done - transition parent to Done
+        await _ticketing.TransitionAsync(ticketId, TicketState.Done, ct).ConfigureAwait(false);
+        await EmitAsync(EventKind.StateTransition, ticketId, new Dictionary<string, object>
+        {
+            ["from"] = ticket.State.ToString(),
+            ["to"] = "Done"
+        }, ct).ConfigureAwait(false);
+
+        await _ticketing.CreateCommentAsync(ticketId,
+            $"<p><strong>shipped:</strong> all {children.Count} children are Done; parent transitioned to Done</p>", ct).ConfigureAwait(false);
+        await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
+        {
+            ["action"] = "create_comment"
+        }, ct).ConfigureAwait(false);
+
+        return new ShipResult(true, ticketId, null, null, null);
     }
 
     private async Task EmitAsync(EventKind kind, string ticketId, IReadOnlyDictionary<string, object> data, CancellationToken ct)

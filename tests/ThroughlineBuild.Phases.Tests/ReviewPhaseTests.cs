@@ -420,10 +420,100 @@ public class ReviewPhaseTests
         Assert.Empty(llmCallEvents);
     }
 
+    [Fact]
+    public async Task RunAsync_ParentTicket_AllChildrenDone_ReturnsPass()
+    {
+        var ticket = MakeTicket(TicketState.InReview);
+        var ticketing = new FakeTicketing(ticket);
+        ticketing.SeedChildren(new[]
+        {
+            new Ticket("TLB-2", "child-uuid-2", "Child A", "feature", TicketState.Done,
+                Size.S, Risk.Low, "", Array.Empty<Relation>(), Array.Empty<string>(), ticket.Uuid),
+            new Ticket("TLB-3", "child-uuid-3", "Child B", "feature", TicketState.Done,
+                Size.S, Risk.Low, "", Array.Empty<Relation>(), Array.Empty<string>(), ticket.Uuid)
+        });
+        var worker = new FakeWorkerAgent();
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, includeWorktreeMatching: true);
+        var verifier = new FakeVerifier(new Verdict(VerdictKind.Pass, "ok", Array.Empty<string>()));
+        var phase = new ReviewPhase(ticketing, worker, events, MakeBuildOptions(), MakeReviewOptions(),
+            git, verifierOverride: verifier);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(VerdictKind.Pass, result.Verdict);
+        Assert.Contains("Done", result.VerdictRationale ?? "");
+        Assert.Null(result.FailureReason);
+        Assert.Single(ticketing.Comments);
+        Assert.Contains("pass", ticketing.Comments[0].html);
+        Assert.Empty(ticketing.Transitions);
+    }
+
+    [Fact]
+    public async Task RunAsync_ParentTicket_AnyChildInProgress_ReturnsRework()
+    {
+        var ticket = MakeTicket(TicketState.InReview);
+        var ticketing = new FakeTicketing(ticket);
+        ticketing.SeedChildren(new[]
+        {
+            new Ticket("TLB-2", "child-uuid-2", "Child A", "feature", TicketState.Done,
+                Size.S, Risk.Low, "", Array.Empty<Relation>(), Array.Empty<string>(), ticket.Uuid),
+            new Ticket("TLB-3", "child-uuid-3", "Child B", "feature", TicketState.InProgress,
+                Size.S, Risk.Low, "", Array.Empty<Relation>(), Array.Empty<string>(), ticket.Uuid)
+        });
+        var worker = new FakeWorkerAgent();
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, includeWorktreeMatching: true);
+        var verifier = new FakeVerifier(new Verdict(VerdictKind.Pass, "ok", Array.Empty<string>()));
+        var phase = new ReviewPhase(ticketing, worker, events, MakeBuildOptions(), MakeReviewOptions(),
+            git, verifierOverride: verifier);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(VerdictKind.Rework, result.Verdict);
+        Assert.Contains("TLB-3", result.VerdictRationale ?? "");
+        Assert.Single(ticketing.Comments);
+        Assert.Contains("rework", ticketing.Comments[0].html);
+        Assert.Single(ticketing.Transitions);
+        Assert.Equal(TicketState.InProgress, ticketing.Transitions[0].state);
+    }
+
+    [Fact]
+    public async Task RunAsync_ParentTicket_AnyChildCancelled_ReturnsFail()
+    {
+        var ticket = MakeTicket(TicketState.InReview);
+        var ticketing = new FakeTicketing(ticket);
+        ticketing.SeedChildren(new[]
+        {
+            new Ticket("TLB-2", "child-uuid-2", "Child A", "feature", TicketState.Done,
+                Size.S, Risk.Low, "", Array.Empty<Relation>(), Array.Empty<string>(), ticket.Uuid),
+            new Ticket("TLB-3", "child-uuid-3", "Child B", "feature", TicketState.Cancelled,
+                Size.S, Risk.Low, "", Array.Empty<Relation>(), Array.Empty<string>(), ticket.Uuid)
+        });
+        var worker = new FakeWorkerAgent();
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, includeWorktreeMatching: true);
+        var verifier = new FakeVerifier(new Verdict(VerdictKind.Pass, "ok", Array.Empty<string>()));
+        var phase = new ReviewPhase(ticketing, worker, events, MakeBuildOptions(), MakeReviewOptions(),
+            git, verifierOverride: verifier);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(VerdictKind.Fail, result.Verdict);
+        Assert.Contains("TLB-3", result.VerdictRationale ?? "");
+        Assert.Single(ticketing.Comments);
+        Assert.Contains("fail", ticketing.Comments[0].html);
+        Assert.Empty(ticketing.Transitions);
+    }
+
     private sealed class FakeTicketing : ITicketing
     {
         private readonly Ticket _ticket;
         private readonly List<TicketComment> _seededComments = new();
+        private List<Ticket> _queryChildren = new();
         public List<(string id, TicketState state)> Transitions { get; } = new();
         public List<(string id, string html)> Comments { get; } = new();
 
@@ -431,6 +521,8 @@ public class ReviewPhaseTests
 
         public void SeedComment(string html) =>
             _seededComments.Add(new TicketComment(Guid.NewGuid().ToString(), html, DateTimeOffset.UtcNow));
+
+        public void SeedChildren(IReadOnlyList<Ticket> children) => _queryChildren = children.ToList();
 
         public BackendCapabilities Capabilities => new BackendCapabilities(true, true, true, false);
         public Task<Ticket> GetAsync(string id, CancellationToken ct) => Task.FromResult(_ticket);
@@ -467,7 +559,7 @@ public class ReviewPhaseTests
             Task.CompletedTask;
 
         public Task<IReadOnlyList<Ticket>> QueryAsync(TicketQuery query, CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<Ticket>>(Array.Empty<Ticket>());
+            Task.FromResult<IReadOnlyList<Ticket>>(_queryChildren);
 
         public Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct) =>
             Task.CompletedTask;
