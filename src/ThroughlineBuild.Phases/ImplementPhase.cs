@@ -54,6 +54,15 @@ public class ImplementPhase : IWorkflowPhase
         // Step 1: Fetch ticket
         var ticket = await _ticketing.GetAsync(ticketId, ct).ConfigureAwait(false);
 
+        // Step 1b: Parent guard - refuse to implement a parent ticket directly
+        var potentialChildren = await _ticketing.QueryAsync(new TicketQuery(ParentId: ticket.Uuid), ct).ConfigureAwait(false);
+        if (potentialChildren.Count > 0)
+        {
+            var parentReason = $"{ticketId} is a parent ticket with {potentialChildren.Count} children: work child-by-child; implementing a parent directly is almost always a mistake.";
+            EarlyExitManifest.Write(_options.DebugCaptureDirectory, Phase.Implement.ToString(), ticketId, parentReason);
+            return new ImplementResult(false, ticketId, null, null, null, parentReason);
+        }
+
         // Step 2: Validate state
         bool isRework = _phaseOptions.ReviewFeedback is not null;
         if (!isRework && ticket.State != TicketState.Ready)
