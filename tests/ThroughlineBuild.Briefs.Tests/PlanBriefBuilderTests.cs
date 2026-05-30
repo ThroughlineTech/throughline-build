@@ -55,7 +55,8 @@ public class PlanBriefBuilderTests
 
         var brief = PlanBriefBuilder.Build("claude-code", ticket, repo);
 
-        Assert.Contains("plan_html", brief.Instruction);
+        Assert.Contains("plan_body_ref", brief.Instruction);
+        Assert.DoesNotContain("plan_html", brief.Instruction);
         Assert.Contains("risk_label", brief.Instruction);
         Assert.Contains("size_label", brief.Instruction);
         Assert.Contains("planned_at_sha", brief.Instruction);

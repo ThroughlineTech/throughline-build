@@ -40,40 +40,106 @@ Produce a plan an implementing agent can execute without guessing. The plan must
 
 ## Output structure
 
-Produce the plan as HTML. All sections, in this order:
+Produce the plan as markdown inside a PLAN_BODY fenced block. Emit the fenced block BEFORE the WORKER_RESULT envelope. All sections, in this order:
 
-```html
-<h3>Investigation</h3>
-<p>What you found, with specific file paths and line numbers. No vague descriptions.</p>
-<p>Root cause (for bugs) or architectural fit (for features) - specific.</p>
-<p>Regression risk: low | medium | high - with rationale.</p>
-<p>Subtract pass: {what was cut, deferred, or "nothing to cut"}.</p>
-<p>Rubber-duck pass: {clean, or defects caught and fixed}.</p>
+```
+# Investigation
 
-<h3>Proposed Solution</h3>
-<p>Approach, tradeoffs, why this approach over alternatives.</p>
-<p>If multiple paths exist, name them and explain the recommendation with reasoning.</p>
+What you found, with specific file paths and line numbers. No vague descriptions.
+Root cause (for bugs) or architectural fit (for features) - specific.
+Regression risk: low | medium | high - with rationale.
+Subtract pass: {what was cut, deferred, or "nothing to cut"}.
+Rubber-duck pass: {clean, or defects caught and fixed}.
 
-<h3>Implementation Plan</h3>
-<p>One paragraph: what, why, approach.</p>
-<p><strong>Relevant files</strong></p>
-<ul><li><code>path/to/file.ts</code> - what changes</li></ul>
-<p><strong>Steps</strong></p>
-<ol><li>Concrete actions an implementer takes; numbered.</li></ol>
-<p><strong>Verification</strong></p>
-<ul><li>Specific checks. Include at least one manual verification step for UI work. Name a human ship gate.</li></ul>
-<p><strong>Design decisions</strong></p>
-<ul><li>Decisions made during this investigation the implementer should treat as settled. Include rationale for non-obvious choices.</li></ul>
-<p><strong>Escalation rules</strong> (raise a ticket, do not work around)</p>
-<ul><li>Name the adjacent fixes, refactors, or temptations the implementing agent must not take. Being explicit here preempts scope creep.</li></ul>
-<p><strong>Out of scope</strong></p>
-<ul><li>Explicit deferrals - work for a different ticket or future phase.</li></ul>
-<p><strong>Agent size:</strong> {S|M|L} - {inference rationale, e.g. "M - 5 files, 8 steps, one new file"}</p>
+# Proposed Solution
+
+Approach, tradeoffs, why this approach over alternatives.
+If multiple paths exist, name them and explain the recommendation with reasoning.
+
+# Implementation Plan
+
+One paragraph: what, why, approach.
+
+**Relevant files**
+- `path/to/file.ts` - what changes
+
+**Steps**
+1. Concrete actions an implementer takes; numbered.
+
+**Verification**
+- Specific checks. Include at least one manual verification step for UI work. Name a human ship gate.
+
+**Design decisions**
+- Decisions made during this investigation the implementer should treat as settled. Include rationale for non-obvious choices.
+
+**Escalation rules** (raise a ticket, do not work around)
+- Name the adjacent fixes, refactors, or temptations the implementing agent must not take. Being explicit here preempts scope creep.
+
+**Out of scope**
+- Explicit deferrals - work for a different ticket or future phase.
+
+**Agent size:** {S|M|L} - {inference rationale, e.g. "M - 5 files, 8 steps, one new file"}
 ```
 
-**Plane render rule:** all `<ul>` and `<ol>` content on a single line. No newlines between list items. Plane renders inner newlines as empty bullets.
+**Length target:** under ~90 lines, but completeness wins. Relevant files is load-bearing - do not omit.
 
-**Length target:** under ~90 lines of rendered text, but completeness wins. Relevant files is load-bearing - do not omit.
+### Complete output example
+
+```
+<<<PLAN_BODY_START
+# Investigation
+
+Traced the bug to `src/Foo.cs` line 42: null-check absent before dereferencing `bar`.
+Regression risk: low - isolated to one call site.
+Subtract pass: nothing to cut.
+Rubber-duck pass: clean.
+
+# Proposed Solution
+
+Add null guard before dereference. No alternative needed.
+
+# Implementation Plan
+
+Add null check at the identified call site.
+
+**Relevant files**
+- `src/Foo.cs` - add null guard
+
+**Steps**
+1. Open `src/Foo.cs`.
+2. At line 42, add: `if (bar is null) return;`
+3. Run `dotnet test` to confirm green.
+
+**Verification**
+- `dotnet test` passes.
+
+**Design decisions**
+- Chosen early return over exception to match surrounding pattern.
+
+**Escalation rules**
+- Do not refactor unrelated null checks in the same file.
+
+**Out of scope**
+- Full null-safety audit of Foo - separate ticket.
+
+**Agent size:** S - 1 file, 3 steps, no new files
+<<<PLAN_BODY_END
+
+WORKER_RESULT
+```json
+{
+  "status": "Ok",
+  "summary": "Null dereference in Foo.cs line 42 - add null guard",
+  "files_changed": [],
+  "failure_reason": null,
+  "metadata": {
+    "plan_body_ref": "PLAN_BODY",
+    "risk_label": "low",
+    "size_label": "S",
+    "planned_at_sha": "abc1234567890def"
+  }
+}
+```
 
 ## Discipline passes (mandatory, both)
 
@@ -141,7 +207,7 @@ If investigation reveals the ticket is invalid or already fixed (not obsolete): 
 
 ## WORKER_RESULT envelope
 
-When investigation, discipline passes, and size inference are complete, emit the envelope as the LAST output. A bare `WORKER_RESULT` marker on its own line, followed by JSON:
+When investigation, discipline passes, and size inference are complete, emit the PLAN_BODY fenced block followed by the WORKER_RESULT envelope as the LAST output. A bare `WORKER_RESULT` marker on its own line, followed by JSON:
 
 WORKER_RESULT
 {
@@ -150,7 +216,7 @@ WORKER_RESULT
   "files_changed": [],
   "failure_reason": null,
   "metadata": {
-    "plan_html": "<the complete HTML block from Output structure, JSON-escaped>",
+    "plan_body_ref": "PLAN_BODY",
     "risk_label": "<low|medium|high>",
     "size_label": "<S|M|L>",
     "planned_at_sha": "abc1234567890def"
@@ -161,8 +227,9 @@ WORKER_RESULT
 
 - Investigation only. No code changes. No branches.
 - Specific file paths and line numbers. No vague descriptions.
-- Every section listed in Output structure must be present in `plan_html`. Empty sections are not acceptable - either the section has content or its absence is justified.
+- Every section listed in Output structure must be present in the PLAN_BODY fenced block. Empty sections are not acceptable - either the section has content or its absence is justified.
 - Both discipline passes documented before returning.
 - Never reference specific model names (haiku, sonnet, opus, claude-*) in the size line or rationale - only S, M, L.
 - Do not propose work outside the ticket's scope; surface as "Out of scope" items.
-- Do not embed `[planned_at: SHA]` marker comments in `plan_html` - the orchestrator posts those separately.
+- Do not embed `[planned_at: SHA]` marker comments in the PLAN_BODY block - the orchestrator posts those separately.
+- Do not JSON-escape the plan body. Write it as plain markdown inside the PLAN_BODY fenced block. The fenced block requires no escaping.
