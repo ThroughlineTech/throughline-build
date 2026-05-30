@@ -1119,6 +1119,14 @@ static async Task<int> RunAsync(string[] args)
     }
     else if (verb == "chain")
     {
+        // Collect additional positional ticket IDs beyond args[1] (args[0] is the verb).
+        var extraTicketIds = new List<string>();
+        for (int i = 2; i < args.Length; i++)
+        {
+            if (!args[i].StartsWith("--"))
+                extraTicketIds.Add(args[i]);
+        }
+
         // Construct per-phase factories for ChainPhase.
         var planPhaseFactory = (BuildOptions buildOpts) =>
             new PlanPhase(ticketing, workerFactory.Create(EffectiveAgentFor("plan")), eventSink, buildOpts, project: config2.Project);
@@ -1179,6 +1187,87 @@ static async Task<int> RunAsync(string[] args)
             workingDirectory: cwd,
             ratifierFactory: ratifierFactory);
 
+        // Multi-ticket path: if additional positional IDs were supplied, use ParallelDispatcher.
+        if (extraTicketIds.Count > 0)
+        {
+            var allTicketIds = new List<string> { ticketId };
+            allTicketIds.AddRange(extraTicketIds);
+
+            // Fetch tickets and build dependency graph from blocked_by relations.
+            IReadOnlyList<ThroughlineBuild.Contracts.Models.Ticket> batchTickets;
+            try
+            {
+                using var batchCts = new CancellationTokenSource();
+                Console.CancelKeyPress += (_, e) => { e.Cancel = true; batchCts.Cancel(); };
+                batchTickets = await ticketing.GetBatchAsync(allTicketIds, batchCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
+
+            var ticketIdSet = new HashSet<string>(allTicketIds, StringComparer.OrdinalIgnoreCase);
+            var graph = new ThroughlineBuild.Phases.TicketGraph();
+            foreach (var id in allTicketIds)
+                graph.AddNode(id);
+
+            // Add edges for blocked_by relations that are within the dispatched set.
+            try
+            {
+                using var relCts = new CancellationTokenSource();
+                Console.CancelKeyPress += (_, e) => { e.Cancel = true; relCts.Cancel(); };
+                foreach (var id in allTicketIds)
+                {
+                    var relations = await ticketing.GetRelationsAsync(id, relCts.Token).ConfigureAwait(false);
+                    foreach (var rel in relations)
+                    {
+                        if (rel.Kind == "blocked_by" && ticketIdSet.Contains(rel.TargetId))
+                            graph.AddEdge(rel.TargetId, id); // TargetId blocks id
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
+
+            var dispatcher = new ThroughlineBuild.Phases.ParallelDispatcher(
+                chainPhase,
+                eventSink,
+                config2.Workers.MaxConcurrency);
+
+            var baseChainOptions = new ThroughlineBuild.Phases.ChainPhaseOptions(
+                TicketId: ticketId,
+                Debug: debugMode,
+                NoAutoResolve: noAutoResolve);
+
+            ThroughlineBuild.Contracts.Models.ParallelDispatchResult dispatchResult;
+            try
+            {
+                using var dispatchCts = new CancellationTokenSource();
+                Console.CancelKeyPress += (_, e) => { e.Cancel = true; dispatchCts.Cancel(); };
+                dispatchResult = await dispatcher.RunAsync(allTicketIds, graph, baseChainOptions, dispatchCts.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
+
+            // Print per-ticket summary
+            foreach (var r in dispatchResult.Results)
+            {
+                var durationMs = (long)r.TotalDuration.TotalMilliseconds;
+                Console.WriteLine($"[{r.TicketId}] {r.Outcome} ({durationMs}ms)");
+            }
+
+            return dispatchResult.Success ? 0 : 1;
+        }
+
+        // Single-ticket path (original behavior).
         var chainRunner = new DefaultChainRunner(chainPhase);
         var chainCommand = new ChainCommand(chainRunner, ticketing);
         var chainCtx = new TicketCommandContext(ticketId, new Dictionary<string, string>(StringComparer.Ordinal)
