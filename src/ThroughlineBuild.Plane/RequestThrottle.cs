@@ -5,8 +5,11 @@ namespace ThroughlineBuild.Plane;
 /// <c>window</c>. When the budget is spent, <see cref="AcquireAsync"/> blocks
 /// (awaits) until the oldest in-window call ages out, then admits the caller.
 ///
-/// Every Plane HTTP request routes through one shared instance so the process
-/// never exceeds Plane's published rate limit (60/min) and never trips a 429.
+/// Every Plane HTTP request routes through one shared instance so a single
+/// process stays under its configured budget. Note this gate is per-process: it
+/// cannot coordinate across concurrent build instances sharing one API token, so
+/// the budget is set below Plane's global 60/min limit and the client's retry
+/// pipeline still has to handle a 429 originating from another process.
 /// The clock and the wait are injectable so the admission logic is testable
 /// without real time passing.
 /// </summary>

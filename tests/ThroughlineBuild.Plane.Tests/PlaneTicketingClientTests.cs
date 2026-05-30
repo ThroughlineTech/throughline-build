@@ -152,6 +152,29 @@ internal static class TestData
         ProjectId = "my-project",
         ProjectIdentifier = "TLB"
     };
+
+    // Zero-delay retry config so retry-path tests don't sleep on real wall-clock backoff.
+    public static PlaneClientOptions FastRetryOptions(int maxRetryAttempts = 3) => new()
+    {
+        BaseUrl = "https://plane.example.com",
+        ApiToken = "test-token",
+        WorkspaceSlug = "my-workspace",
+        ProjectId = "my-project",
+        ProjectIdentifier = "TLB",
+        MaxRetryAttempts = maxRetryAttempts,
+        RetryBaseDelay = TimeSpan.Zero
+    };
+
+    // 429 response carrying a Retry-After: 0 hint (instant retry, exercises the parse path).
+    public static HttpResponseMessage RateLimited(string body = "{\"error_code\":5900,\"error_message\":\"RATE_LIMIT_EXCEEDED\"}")
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+        {
+            Content = new StringContent(body)
+        };
+        response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.Zero);
+        return response;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +339,8 @@ public class TransitionAsyncTests
         var handler = new FakeMessageHandler();
         handler.Enqueue(FakeMessageHandler.ErrorJson(500, "server error"));
 
-        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        // FastRetryOptions defaults to 3 retries (4 attempts total) with zero backoff delay.
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.FastRetryOptions());
         // Polly will retry 3x on 5xx - we need enough responses
         // (On retry exhaustion it rethrows the last PlaneApiException)
         // Enqueue remaining retries
@@ -328,6 +352,47 @@ public class TransitionAsyncTests
             () => client.TransitionAsync("TLB-24", TicketState.Done, CancellationToken.None));
 
         Assert.Equal(500, ex.Status);
+    }
+}
+
+public class RateLimitRetryTests
+{
+    [Fact]
+    public async Task Transition_RetriesAfter429_ThenSucceeds()
+    {
+        var handler = new FakeMessageHandler();
+        // First GET issue list is rate-limited; the pipeline retries the whole delegate.
+        handler.Enqueue(TestData.RateLimited());
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson())); // retry: issue lookup
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson())); // state cache
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.PatchOkJson()));   // PATCH
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.FastRetryOptions());
+
+        // Must not throw - the 429 is absorbed and the retry completes the transition.
+        await client.TransitionAsync("TLB-24", TicketState.Backlog, CancellationToken.None);
+
+        var patchReqs = handler.Requests.Where(r => r.Method == HttpMethod.Patch).ToList();
+        Assert.Single(patchReqs);
+    }
+
+    [Fact]
+    public async Task Transition_429RetriesExhausted_ThrowsWithRetryAfterParsed()
+    {
+        var handler = new FakeMessageHandler();
+        // maxRetryAttempts: 2 -> 3 total attempts, all rate-limited.
+        handler.Enqueue(TestData.RateLimited());
+        handler.Enqueue(TestData.RateLimited());
+        handler.Enqueue(TestData.RateLimited());
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.FastRetryOptions(maxRetryAttempts: 2));
+
+        var ex = await Assert.ThrowsAsync<PlaneApiException>(
+            () => client.TransitionAsync("TLB-24", TicketState.Done, CancellationToken.None));
+
+        Assert.Equal(429, ex.Status);
+        // Retry-After: 0 header is parsed onto the exception (zero, not null).
+        Assert.Equal(TimeSpan.Zero, ex.RetryAfter);
     }
 }
 
@@ -554,6 +619,15 @@ public class PlaneApiExceptionTests
         Assert.Equal(422, ex.Status);
         Assert.Equal("unprocessable", ex.Body);
         Assert.Contains("422", ex.Message);
+        Assert.Null(ex.RetryAfter);
+    }
+
+    [Fact]
+    public void PlaneApiException_CarriesRetryAfter()
+    {
+        var ex = new PlaneApiException(429, "rate limited", TimeSpan.FromSeconds(30));
+        Assert.Equal(429, ex.Status);
+        Assert.Equal(TimeSpan.FromSeconds(30), ex.RetryAfter);
     }
 }
 

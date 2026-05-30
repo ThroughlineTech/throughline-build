@@ -50,14 +50,32 @@ public sealed class PlaneTicketingClient : ITicketing
 
         _throttle = new RequestThrottle(options.RequestsPerMinute, TimeSpan.FromMinutes(1));
 
+        var maxRetryDelay = options.MaxRetryDelay;
         _pipeline = new ResiliencePipelineBuilder()
             .AddRetry(new RetryStrategyOptions
             {
                 ShouldHandle = new PredicateBuilder()
                     .Handle<PlaneApiException>(ex => ex.Status == 429 || ex.Status >= 500),
-                MaxRetryAttempts = 3,
+                MaxRetryAttempts = options.MaxRetryAttempts,
                 BackoffType = DelayBackoffType.Exponential,
-                Delay = TimeSpan.FromSeconds(1)
+                // Jitter desynchronizes two concurrent build instances that would
+                // otherwise retry in lockstep and keep colliding on the same window.
+                UseJitter = true,
+                Delay = options.RetryBaseDelay,
+                // When Plane sends Retry-After (429s from its limiter do), wait exactly
+                // that long instead of our exponential guess - the window is shared with
+                // other processes, so our blind backoff is usually too short. Returning
+                // null falls back to the exponential-with-jitter delay above.
+                DelayGenerator = args =>
+                {
+                    if (args.Outcome.Exception is PlaneApiException { RetryAfter: { } retryAfter })
+                    {
+                        var capped = retryAfter > maxRetryDelay ? maxRetryDelay : retryAfter;
+                        if (capped < TimeSpan.Zero) capped = TimeSpan.Zero;
+                        return new ValueTask<TimeSpan?>(capped);
+                    }
+                    return new ValueTask<TimeSpan?>((TimeSpan?)null);
+                }
             })
             .Build();
     }
@@ -92,13 +110,32 @@ public sealed class PlaneTicketingClient : ITicketing
         return seq;
     }
 
+    /// <summary>
+    /// Extracts the <c>Retry-After</c> back-off hint from a response, supporting both
+    /// the seconds-delta and HTTP-date forms. Returns null when the header is absent.
+    /// </summary>
+    private static TimeSpan? ParseRetryAfter(HttpResponseMessage response)
+    {
+        var retryAfter = response.Headers.RetryAfter;
+        if (retryAfter is null)
+            return null;
+        if (retryAfter.Delta is { } delta)
+            return delta;
+        if (retryAfter.Date is { } date)
+        {
+            var diff = date - DateTimeOffset.UtcNow;
+            return diff > TimeSpan.Zero ? diff : TimeSpan.Zero;
+        }
+        return null;
+    }
+
     private async Task<T> GetJsonAsync<T>(string url, JsonSerializerContext ctx, CancellationToken ct)
     {
         await _throttle.AcquireAsync(ct).ConfigureAwait(false);
         var response = await _http.GetAsync(url, ct).ConfigureAwait(false);
         var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
-            throw new PlaneApiException((int)response.StatusCode, body);
+            throw new PlaneApiException((int)response.StatusCode, body, ParseRetryAfter(response));
 
         var result = (T?)JsonSerializer.Deserialize(body, typeof(T), ctx);
         return result ?? throw new InvalidOperationException($"Deserialized null for {typeof(T).Name}");
@@ -116,7 +153,7 @@ public sealed class PlaneTicketingClient : ITicketing
         var response = await _http.PatchAsync(url, content, ct).ConfigureAwait(false);
         var responseBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
-            throw new PlaneApiException((int)response.StatusCode, responseBody);
+            throw new PlaneApiException((int)response.StatusCode, responseBody, ParseRetryAfter(response));
         return responseBody;
     }
 
@@ -132,7 +169,7 @@ public sealed class PlaneTicketingClient : ITicketing
         var response = await _http.PostAsync(url, content, ct).ConfigureAwait(false);
         var responseBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
-            throw new PlaneApiException((int)response.StatusCode, responseBody);
+            throw new PlaneApiException((int)response.StatusCode, responseBody, ParseRetryAfter(response));
         return responseBody;
     }
 

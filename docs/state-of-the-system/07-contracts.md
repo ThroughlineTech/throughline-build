@@ -14,54 +14,76 @@ For phase orchestration that uses these types, see [10-lifecycle-orchestration.m
 
 ```
 Contracts (leaf, no project refs)
-    +-- Briefs --------+
-    +-- Helpers       |
-    +-- Git           |
-    +-- EventLog      |
-    +-- Plane         |
-    +-- Anthropic     |
-    +-- JudgmentSlots-+
-    +-- Workers.ClaudeCode-+
-    +-- Verification ------+
-    +-- Scaffold ----------+
-                           |
-                           v
-                       Phases
-                           |
-                           v
-                       Commands
-                           |
-                           v
-                          Cli
+    +-- Briefs
+    +-- Helpers
+    +-- Git
+    +-- EventLog
+    +-- Plane
+    +-- ModelClient (leaf, no project refs)
+    +-- Anthropic ........... refs Contracts + ModelClient
+    +-- JudgmentSlots ....... refs Contracts
+    +-- Workers.Common ...... refs Contracts (holds WorkerResultParser)
+    +-- Workers.ClaudeCode .. refs Contracts + Workers.Common
+    +-- Workers.Codex ....... refs Contracts + Workers.Common
+    +-- Workers.Gemini ...... refs Contracts + Workers.Common
+    +-- Workers.Copilot ..... refs Contracts + Workers.Common
+    +-- Verification ........ refs Contracts + Briefs
+    +-- Scaffold
+    +-- Phases .............. refs Contracts + Briefs + Git + Helpers + Verification
+                                    |
+                                    v
+                                Commands
+                                    |
+                                    v
+                                   Cli (refs all four Workers.* + ModelClient + ...)
 ```
 
-Verify by reading `<ProjectReference Include="..." />` lines in each `.csproj`.
+Verify by reading `<ProjectReference Include="..." />` lines in each `.csproj`. Two new leaf projects since the architecture doc: `ThroughlineBuild.ModelClient` (the `IModelClient` abstraction) and `ThroughlineBuild.Workers.Common` (the shared `WorkerResultParser`). `Helpers` now hosts the tree-walk utilities (`TicketTreeWalker`, `ParentDetector`).
 
 ### Core types live in `ThroughlineBuild.Contracts`
 
 | File | Type(s) | Notes |
 |---|---|---|
-| [src/ThroughlineBuild.Contracts/Models/Ticket.cs](../../src/ThroughlineBuild.Contracts/Models/Ticket.cs) | `Ticket`, `TicketState`, `Size`, `Risk` | `TicketState` has 7 values, `Size` and `Risk` have 3 each. `Size.S/L` and `Risk.Low/High` never constructed in production. |
+| [src/ThroughlineBuild.Contracts/Models/Ticket.cs](../../src/ThroughlineBuild.Contracts/Models/Ticket.cs) | `Ticket(Id, Uuid, Title, Type, State, Size, Risk, DescriptionHtml, Relations, Labels, ParentId)`, `TicketState`, `Size`, `Risk` | `Uuid` added (TLB-263) - the Plane work-item UUID, distinct from the human `Id` like `TLB-42`. `ParentId` carries the parent UUID. `TicketState` has 7 values, `Size` and `Risk` have 3 each. `Risk.Low/High` never constructed in production; `Size` is now read from a `size:` label (so `Size.S/L` can appear). |
 | [src/ThroughlineBuild.Contracts/Models/Brief.cs](../../src/ThroughlineBuild.Contracts/Models/Brief.cs) | `Brief(TicketId, Phase, Instruction, RelevantFiles, AllowedWrites, Context)` | The unit handed to a worker. |
-| [src/ThroughlineBuild.Contracts/Models/WorkerResult.cs](../../src/ThroughlineBuild.Contracts/Models/WorkerResult.cs) | `WorkerResult(Status, Summary, FilesChanged, FailureReason?, Metadata)`, `Status` enum | Parsed from the `WORKER_RESULT` envelope. |
-| [src/ThroughlineBuild.Contracts/Models/Verdict.cs](../../src/ThroughlineBuild.Contracts/Models/Verdict.cs) | `Verdict(Kind, Rationale, ChecksFailed)`, `VerdictKind` (Pass/Rework/Fail) | Returned by `IVerifier.VerifyAsync`. |
-| [src/ThroughlineBuild.Contracts/Models/WorkflowEvent.cs](../../src/ThroughlineBuild.Contracts/Models/WorkflowEvent.cs) | `WorkflowEvent(SessionId, Timestamp, Kind, TicketId, Phase, Data)`, `EventKind` (9 values) | Audit / telemetry record. |
-| [src/ThroughlineBuild.Contracts/Models/Phase.cs](../../src/ThroughlineBuild.Contracts/Models/Phase.cs) | `Phase` enum (9 values: Plan/Implement/Review/Ship/Chain/New/Command/Draft/Scaffold) | |
+| [src/ThroughlineBuild.Contracts/Models/WorkerResult.cs](../../src/ThroughlineBuild.Contracts/Models/WorkerResult.cs) | `WorkerResult(Status, Summary, FilesChanged, FailureReason?, Metadata)`, `Status` enum (Ok/NeedsRework/Failed/Escalate) | Parsed from the `WORKER_RESULT` envelope by `Workers.Common.WorkerResultParser`. |
+| [src/ThroughlineBuild.Contracts/Models/Verdict.cs](../../src/ThroughlineBuild.Contracts/Models/Verdict.cs) | `Verdict(Kind, Rationale, ChecksFailed)`, `VerdictKind` (Pass/Rework/Fail) | Returned by `IVerifier.VerifyAsync` and `IObsoleteRatifier.RatifyAsync`. |
+| [src/ThroughlineBuild.Contracts/Models/WorkflowEvent.cs](../../src/ThroughlineBuild.Contracts/Models/WorkflowEvent.cs) | `WorkflowEvent(SessionId, Timestamp, Kind, TicketId, Phase, Data)`, `EventKind` (13 values) | `EventKind` grew from 9 to 13: added `TicketSubsumed` (TLB-285), `MainAutoRebased` (TLB-298), `DispatchStart`, `DispatchEnd` (TLB-312). Integer values are pinned in a comment ([WorkflowEvent.cs:11-14](../../src/ThroughlineBuild.Contracts/Models/WorkflowEvent.cs#L11-L14)). |
+| [src/ThroughlineBuild.Contracts/Models/Phase.cs](../../src/ThroughlineBuild.Contracts/Models/Phase.cs) | `Phase` enum (10 values: Plan/Implement/Review/Ship/Chain/New/Command/Draft/Scaffold/Decompose) | `Decompose` added (TLB-259/264). |
 | [src/ThroughlineBuild.Contracts/Models/ChainResult.cs](../../src/ThroughlineBuild.Contracts/Models/ChainResult.cs), [ChainStep.cs](../../src/ThroughlineBuild.Contracts/Models/ChainStep.cs), [ChainOutcome.cs](../../src/ThroughlineBuild.Contracts/Models/ChainOutcome.cs) | `ChainResult`, `ChainStep`, `ChainOutcome` enum | |
+| [src/ThroughlineBuild.Contracts/Models/TicketNode.cs](../../src/ThroughlineBuild.Contracts/Models/TicketNode.cs) | `TicketNode(Root, Children)` | Recursive ticket-tree node (TLB-301). Built by `Helpers.TicketTreeWalker`. |
+| [src/ThroughlineBuild.Contracts/Models/TicketGraph.cs](../../src/ThroughlineBuild.Contracts/Models/TicketGraph.cs) | `TicketGraph(Levels, CycleDetected, CycleMembers)` | Level-ordered dependency graph for parallel dispatch (TLB-311/312). |
+| [src/ThroughlineBuild.Contracts/Models/ParallelDispatchResult.cs](../../src/ThroughlineBuild.Contracts/Models/ParallelDispatchResult.cs) | `ParallelDispatchResult` | Aggregate result of multi-ticket dispatch (TLB-312/313). |
+| [src/ThroughlineBuild.Contracts/Models/SubsumedByEvidence.cs](../../src/ThroughlineBuild.Contracts/Models/SubsumedByEvidence.cs) | `SubsumedByEvidence(Commit, Files, Rationale)` | Structured form of the `metadata.escalation.subsumed_by` block (TLB-278). |
 | [src/ThroughlineBuild.Contracts/Models/Relation.cs](../../src/ThroughlineBuild.Contracts/Models/Relation.cs) | `Relation(Kind, TargetId)` | |
 | [src/ThroughlineBuild.Contracts/Models/ReviewFeedback.cs](../../src/ThroughlineBuild.Contracts/Models/ReviewFeedback.cs) | `ReviewFeedback(Rationale, ChecksFailed, ReworkRoundNumber)` | Passed back into `ImplementBriefBuilder` for rework. |
 | [src/ThroughlineBuild.Contracts/Models/DraftResult.cs](../../src/ThroughlineBuild.Contracts/Models/DraftResult.cs) | `DraftResult`, `DraftOutcome` enum | |
 | [src/ThroughlineBuild.Contracts/Models/NewResult.cs](../../src/ThroughlineBuild.Contracts/Models/NewResult.cs) | `NewResult(Id, Uuid, ValidationWarnings)` | |
+| [src/ThroughlineBuild.Contracts/Models/WorkerSize.cs](../../src/ThroughlineBuild.Contracts/Models/WorkerSize.cs) | `WorkerSize` enum (Small/Medium/Large) | Worker-domain size signal, mapped by each agent to its own model tier (TLB-196). Deliberately separate from the ticket-domain `Size` enum. |
 | [src/ThroughlineBuild.Contracts/IWorkflowPhase.cs](../../src/ThroughlineBuild.Contracts/IWorkflowPhase.cs) | `IWorkflowPhase`, `PhaseResult(Success, TicketId, Phase, FailureReason?, Outputs)` | `Outputs` is an untyped `IReadOnlyDictionary<string,string>`. |
 | [src/ThroughlineBuild.Contracts/Verifier/IVerifier.cs](../../src/ThroughlineBuild.Contracts/Verifier/IVerifier.cs) | `IVerifier`, `GitDiff`, `DiffEntry`, `DiffKind` (4 values: Added/Modified/Deleted/Renamed) | |
+| [src/ThroughlineBuild.Contracts/Verifier/IObsoleteRatifier.cs](../../src/ThroughlineBuild.Contracts/Verifier/IObsoleteRatifier.cs) | `IObsoleteRatifier` | One method `RatifyAsync(ticket, escalateResult, ct) -> Verdict`. Implemented by `Verification.ObsoleteRatifier` (TLB-282); consumed by the chain auto-resolve path. |
 | [src/ThroughlineBuild.Contracts/Verifier/CheckResult.cs](../../src/ThroughlineBuild.Contracts/Verifier/CheckResult.cs) | `CheckSpec(Name, Executable, Arguments, Timeout)`, `CheckResult(Name, Passed, ExitCode, StdoutTail, StderrTail, Elapsed)` | StdoutTail/StderrTail capped at ~4 KiB. |
-| [src/ThroughlineBuild.Contracts/ITicketing.cs](../../src/ThroughlineBuild.Contracts/ITicketing.cs) | `ITicketing` + `TicketComment`, `BackendCapabilities`, `RollupResult`, `NewTicketResult` | `BackendCapabilities` advertised but unused by any caller. |
-| [src/ThroughlineBuild.Contracts/IWorkerAgent.cs](../../src/ThroughlineBuild.Contracts/IWorkerAgent.cs) | `IWorkerAgent`, `WorkerOptions(Timeout, AllowedTools?, EnvironmentVariables?, DebugCaptureDirectory?, LiveStdoutSink?, LiveStderrSink?, ProgressDigestSink?)` | |
-| [src/ThroughlineBuild.Contracts/ILlmClient.cs](../../src/ThroughlineBuild.Contracts/ILlmClient.cs) | `ILlmClient`, `LlmMessage`, `InvocationOptions`, `LlmResponse`, `LlmUsage`, `LlmStreamEvent` hierarchy | `InvokeStreamAsync` is a stub in the only implementation. |
-| [src/ThroughlineBuild.Contracts/IGitClient.cs](../../src/ThroughlineBuild.Contracts/IGitClient.cs) | `IGitClient` + 5 result records (`WorktreeInfo`, `WorktreeCreateResult`, `WorktreeRemoveResult`, `GitOpResult`, `RebaseResult`) | ~15 async methods. Some defaults (RemoteExists/GetTrackedChanges/IsAncestor) keep older test fakes working. |
+| [src/ThroughlineBuild.Contracts/ITicketing.cs](../../src/ThroughlineBuild.Contracts/ITicketing.cs) | `ITicketing` + `TicketComment`, `BackendCapabilities`, `RollupResult`, `NewTicketResult`, `TicketQuery`, `LifecycleTransition`, `ChildTicketSpec`, `CreatedChild`, `CreateChildTicketsResult` | Grew by 5 methods: `QueryAsync`, `TransitionLifecycleAsync`, `UpdateDescriptionAsync` (TLB-251), `CreateChildTicketsAsync` (TLB-262), plus `SetParentAsync`. `BackendCapabilities` still advertised but unused. |
+| [src/ThroughlineBuild.Contracts/IWorkerAgent.cs](../../src/ThroughlineBuild.Contracts/IWorkerAgent.cs) | `IWorkerAgent` (adds `Digester` property), `WorkerOptions(Timeout, AllowedTools?, EnvironmentVariables?, DebugCaptureDirectory?, LiveStdoutSink?, LiveStderrSink?, ProgressDigestSink?, Size)` | `Size` (WorkerSize, default Medium) added (TLB-196). `IWorkerAgent.Digester` returns the agent's `IWorkerProgressDigester?`. |
+| [src/ThroughlineBuild.Contracts/IWorkerAgentFactory.cs](../../src/ThroughlineBuild.Contracts/IWorkerAgentFactory.cs) | `IWorkerAgentFactory` | One method `Create(agentName)`. Maps a configured agent name (claude-code/codex/gemini/copilot) to a concrete `IWorkerAgent`. |
+| [src/ThroughlineBuild.Contracts/IWorkerProgressDigester.cs](../../src/ThroughlineBuild.Contracts/IWorkerProgressDigester.cs) | `IWorkerProgressDigester` | One method `FormatLine(rawLine) -> string?`, best-effort, never throws. Implemented per-agent (Copilot returns null). |
+| [src/ThroughlineBuild.Contracts/ILlmClient.cs](../../src/ThroughlineBuild.Contracts/ILlmClient.cs) | `ILlmClient`, `LlmMessage`, `InvocationOptions`, `LlmResponse`, `LlmUsage`, `LlmStreamEvent` hierarchy | `InvokeStreamAsync` is a stub in both implementations (`AnthropicClient`, `ModelClientLlmAdapter`). |
+| [src/ThroughlineBuild.Contracts/IGitClient.cs](../../src/ThroughlineBuild.Contracts/IGitClient.cs) | `IGitClient` + result records (`WorktreeInfo`, `WorktreeCreateResult`, `WorktreeRemoveResult`, `GitOpResult`, `RebaseResult`) + `DivergenceState` enum | `DivergenceState` (Clean/LocalAhead/RemoteAhead/DivergedNoConflict/DivergedWithConflict) added with `ProbeDivergenceAsync` (TLB-296). ~19 async methods; several have interface defaults (RemoteExists/GetTrackedChanges/IsAncestor/Push/ProbeDivergence/LogShas) so older test fakes keep compiling. |
 | [src/ThroughlineBuild.Contracts/IEventSink.cs](../../src/ThroughlineBuild.Contracts/IEventSink.cs) | `IEventSink` | |
 | [src/ThroughlineBuild.Contracts/IReviewFeedbackRetriever.cs](../../src/ThroughlineBuild.Contracts/IReviewFeedbackRetriever.cs) | `IReviewFeedbackRetriever` | One method: `GetLatestRework(ticketId)`. |
 | [src/ThroughlineBuild.Contracts/ITicketCommand.cs](../../src/ThroughlineBuild.Contracts/ITicketCommand.cs) | `ITicketCommand`, `CommandResult(Success, Message?)`, `TicketCommandContext(TicketId, Args)` | Args is `Dictionary<string,string>` - untyped keys, parser-by-convention per command. |
+
+### Tree-walk utilities live in `ThroughlineBuild.Helpers` (TLB-301/302)
+
+Not in Contracts - these consume `ITicketing` rather than define a contract:
+
+- `TicketTreeWalker` ([src/ThroughlineBuild.Helpers/TicketTreeWalker.cs](../../src/ThroughlineBuild.Helpers/TicketTreeWalker.cs)) - BFS walk of a ticket and its descendants to a depth (default 2), producing a `TicketNode`. Each level issues a `QueryAsync(ParentId: node.Uuid)`.
+- `ParentDetector` ([src/ThroughlineBuild.Helpers/ParentDetector.cs](../../src/ThroughlineBuild.Helpers/ParentDetector.cs)) - `HasChildrenAsync(ticketing, uuid)` returns whether a ticket has any children. Used by `plan`/`implement` to refuse parent tickets (TLB-304) and by `chain` to recurse parents (TLB-306).
+
+### Second model abstraction: `IModelClient` (separate project)
+
+`IModelClient` is NOT in `Contracts` - it lives in its own leaf project [src/ThroughlineBuild.ModelClient/IModelClient.cs](../../src/ThroughlineBuild.ModelClient/IModelClient.cs) alongside `ModelRequest`, `ModelResponse`, `Usage`, `ContentBlock`/`TextContent`, the `ModelStreamEvent` hierarchy, and `ProviderConfig`. It is a richer, provider-agnostic alternative to `ILlmClient` (multi-block content, real `StreamAsync`, `ProviderConfig` auth shape for anthropic/openai/ollama). The Anthropic project implements it (`AnthropicModelClient`) and provides `ModelClientLlmAdapter` to bridge `IModelClient` back to `ILlmClient`. As of HEAD nothing in `Program.cs` constructs an `IModelClient` - the live LLM path is `AnthropicClient : ILlmClient` only (see 03-external-dependencies.md). Two overlapping abstractions for the same job is itself a loose end.
 
 ### Construction conventions
 
@@ -85,38 +107,45 @@ These untyped dictionaries are intentional - they let phases evolve their per-ph
 This repo is the successor to `claude-config` (the older slash-command workflow). It also produces / consumes artifacts visible to:
 
 - **Plane** (the ticketing backend) - this is the operational sibling.
-- **The Claude Code CLI** (a vendor binary) - this is the worker sibling.
+- **The worker CLIs** (`claude`, `codex`, `gemini`, `copilot` - vendor binaries) - the worker siblings.
 - **The `/ticket-*` slash commands** in `.claude/commands/` (running under the Claude Code harness, defined elsewhere) - these still operate on the same Plane data.
 
-### Plane (`PlaneTicketingClient` ↔ Plane REST API)
+### Plane (`PlaneTicketingClient` <-> Plane REST API)
 
 What `build` reads that Plane wrote:
 
-- Ticket records (states, labels, comments, relations, parent links). Field names referenced verbatim in [src/ThroughlineBuild.Plane/PlaneApiModels.cs](../../src/ThroughlineBuild.Plane/PlaneApiModels.cs) - `name`, `description_html`, `state`, `labels`, `parent`, `created_at`, `comment_html`.
-- State names hardcoded in the orchestrator ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:163-173](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L163-L173)): `Backlog`, `Planning`, `Ready`, `In Progress`, `In Review`, `Done`, `Cancelled`. A workspace with different state names would break transitions.
+- Ticket records (states, labels, comments, relations, parent links). Field names referenced verbatim in [src/ThroughlineBuild.Plane/PlaneApiModels.cs](../../src/ThroughlineBuild.Plane/PlaneApiModels.cs) - `name`, `description_html`, `state`, `label_ids`, `parent`, `type`, `created_at`, `comment_html`, `sequence_id`, `next_cursor`.
+- State names hardcoded in the orchestrator ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:196-206](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L196-L206)): `Backlog`, `Planning`, `Ready`, `In Progress`, `In Review`, `Done`, `Cancelled`. A workspace with different state names reads everything as `Backlog` and skips transitions.
+- The `size:s|m|l` label, mapped into `Ticket.Size` ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:232-239](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L232-L239)).
+- The `parent` field (a UUID) -> `Ticket.ParentId`; sub-issue children are discovered via `QueryAsync(ParentId:)` plus client-side filtering, since Plane ignores the server-side `parent=` query param.
 
 What `build` writes that other systems read:
 
 - HTML descriptions and comments. Plane web UI renders them.
-- Markers embedded in comment HTML (`[planned_at: <sha>]`, etc.) - parsed back by `build` itself.
-- The `<strong>rollup:</strong>` and `<strong>wontfix:</strong>` / `<strong>deferred:</strong>` / `<strong>reopened:</strong>` prefixes - used by both `build` (`ReopenCommand` scans for them) and operators reading the Plane UI.
+- Markers embedded in comment HTML (`[planned_at: <sha>]`, `[decomposed_at: <sha>]`, etc.) - parsed back by `build` itself. The `decomposed_at` marker is posted by `DecomposePhase` ([src/ThroughlineBuild.Phases/DecomposePhase.cs:145](../../src/ThroughlineBuild.Phases/DecomposePhase.cs#L145)) (TLB-263).
+- The `<strong>rollup:</strong>`-style prefixes. `TransitionLifecycleAsync` posts `<strong>wontfix:</strong>` / `<strong>deferred:</strong>` / `<strong>reopened:</strong>` ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:652-657](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L652-L657)); rollup uses a `[rollup] ...` comment ([:471](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L471)). Used by both `build` and operators reading the Plane UI.
+- **Sub-issue parent/child linkage:** `CreateChildTicketsAsync` / `SetParentAsync` set the `parent` UUID field directly, so the children appear as native Plane sub-issues (TLB-262).
 
-The `/ticket-*` slash commands (a separate consumer) also POST comments and PATCH states against the same Plane tickets. They use the same state-name vocabulary but their comment conventions differ (`Investigation`, `Implementation Plan` headings instead of markers in many places). The two flows coexist by being explicit about which phase wrote what - the most recent marker wins for `MarkerParser`-driven lookups.
+What rides inside the worker `WORKER_RESULT` envelope (not a Plane field but a shared schema):
 
-### Claude Code (`ClaudeCodeAgent` ↔ `claude` CLI)
+- **`metadata.escalation` (TLB-278):** when a worker sets `Status=Escalate` it may attach an `escalation` object with `reason` and, when `reason == "obsolete"`, a required `subsumed_by { commit, files[], rationale }`. Validated in [src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs:54-67, 123-150](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs#L54-L67) and modeled by `SubsumedByEvidence`. The chain auto-resolve path (`IObsoleteRatifier`) consumes it; on ratification the ticket transitions to Done and a `TicketSubsumed` event is emitted (TLB-282/283/285).
 
-This is the most evolving contract.
+The `/ticket-*` slash commands (a separate consumer) also POST comments and PATCH states against the same Plane tickets. They use the same state-name vocabulary but their comment conventions differ (`Investigation`, `Implementation Plan` headings instead of markers in many places). The two flows coexist by being explicit about which phase wrote what - the most recent marker wins for marker-driven lookups.
 
-- `build` invokes the CLI with `--print --verbose --output-format stream-json` and optional `--allowedTools` and `--model` flags. Vendor CLI changes to these flags are a known risk (architecture Section 10).
-- `build` parses the NDJSON stream and the terminal `type=result` envelope. The envelope shape (`subtype`, `is_error`, `result`, `usage`) is the contract.
-- `build` parses the `WORKER_RESULT` marker block produced by the agent. **The agent itself must follow that contract** - the per-phase brief template includes a stub envelope that the worker is instructed to emit ([src/ThroughlineBuild.Briefs/Templates/implement.md](../../src/ThroughlineBuild.Briefs/Templates/implement.md), [review.md](../../src/ThroughlineBuild.Briefs/Templates/review.md), [plan.md](../../src/ThroughlineBuild.Briefs/Templates/plan.md), [draft.md](../../src/ThroughlineBuild.Briefs/Templates/draft.md)).
+### Worker CLIs (`ClaudeCodeAgent` / `CodexAgent` / `GeminiAgent` / `CopilotAgent` <-> vendor CLIs)
+
+This is the most evolving contract. Spawn flags and output shapes per agent are tabulated in 03-external-dependencies.md; this section covers the shared envelope contract.
+
+- The `WORKER_RESULT` envelope is the cross-agent contract, parsed by the shared `WorkerResultParser` in `ThroughlineBuild.Workers.Common` ([src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs)) - moved out of the per-agent project so all four agents share one parser. Required fields `status` + non-empty `summary`; optional `files_changed`, `failure_reason`, `metadata` (incl. the `escalation` block above). Walked in reverse so the last valid envelope wins (tolerates a template echo).
+- Claude Code additionally wraps its output in an NDJSON / `type=result` envelope (`subtype`, `is_error`, `result`, `usage`); Gemini wraps it in a `{response, stats}` JSON object; Codex and Copilot emit plain text. Each agent's parser unwraps to the inner text, then runs the shared `WorkerResultParser`.
+- **The agent itself must follow the envelope contract** - the per-phase, per-agent brief template includes a stub envelope the worker is instructed to emit. Templates now live under per-agent subdirectories `src/ThroughlineBuild.Briefs/Templates/{claude-code,codex,gemini,copilot}/{plan,implement,review,draft,decompose}.md`, loaded by [src/ThroughlineBuild.Briefs/TemplateLoader.cs](../../src/ThroughlineBuild.Briefs/TemplateLoader.cs) (`Load(agentName, templateName)`, embedded resources; hyphen in `claude-code` becomes underscore in the resource name). A `decompose.md` variant was added per agent (TLB-261). The plan / implement templates carry an "obsolete detection" section instructing the worker to escalate with the `metadata.escalation` block (TLB-279/280), e.g. [src/ThroughlineBuild.Briefs/Templates/claude-code/implement.md:34-59](../../src/ThroughlineBuild.Briefs/Templates/claude-code/implement.md#L34-L59).
 
 The brief templates ARE part of the contract. Changing the required `metadata` keys in a template without updating the consuming phase's validation will silently break. Today, validation lives at:
 
-- Plan: [src/ThroughlineBuild.Phases/PlanPhase.cs:111-114](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L111-L114) requires `plan_html`, `risk_label`, `size_label`, `planned_at_sha`.
-- Implement: [src/ThroughlineBuild.Phases/ImplementPhase.cs:186-188](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L186-L188) requires `commit_sha`.
-- Review: [src/ThroughlineBuild.Verification/ClaudeCodeReviewer.cs:73-100](../../src/ThroughlineBuild.Verification/ClaudeCodeReviewer.cs#L73-L100) requires `verdict`, `rationale`, `checks_failed`.
-- Draft: [src/ThroughlineBuild.Phases/DraftPhase.cs:70-79](../../src/ThroughlineBuild.Phases/DraftPhase.cs#L70-L79) requires `body_markdown`.
+- Plan: [src/ThroughlineBuild.Phases/PlanPhase.cs:119-122](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L119-L122) requires `plan_html`, `risk_label`, `size_label`, `planned_at_sha`.
+- Implement: [src/ThroughlineBuild.Phases/ImplementPhase.cs:208-212](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L208-L212) requires `commit_sha`.
+- Review: [src/ThroughlineBuild.Verification/WorkerAgentReviewer.cs:73-100](../../src/ThroughlineBuild.Verification/WorkerAgentReviewer.cs#L73-L100) reads `verdict`, `rationale`, `checks_failed` (the reviewer was renamed from `ClaudeCodeReviewer` to the agent-agnostic `WorkerAgentReviewer`).
+- Draft: [src/ThroughlineBuild.Phases/DraftPhase.cs:69-73](../../src/ThroughlineBuild.Phases/DraftPhase.cs#L69-L73) requires `body_markdown`.
 
 ### Older claude-config workflow (still active in the same repo)
 
@@ -140,12 +169,17 @@ Architecture Section 8 describes the cutover plan: when `chain` ships clean and 
 | `~/.claude/projects/<encoded>/...jsonl` | `claude` CLI | `token-audit` (this repo) |
 | `.build/events/*.jsonl` | `build` only | `analyze-event-log` (this repo) |
 | `.worktrees/ticket-<slug>/` | both | both |
+| Plane deep-link URL `?next_path=/{slug}/browse/{id}` | `build` (printed to operator) + Plane UI | operator (TLB-292) |
+| `WORKER_RESULT` envelope + `metadata.escalation` schema | worker CLI (per brief template) | all four `IWorkerAgent`s via shared `WorkerResultParser` |
 
 ---
 
 ## Conflicts and overlaps
 
-- **State-name vocabulary** is duplicated in three places: `.claude/plane-config.md`, [.build/config.toml.example](../../.build/config.toml.example) comments, and the hardcoded map in [src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:163-173](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L163-L173). They agree today but are not enforced to.
+- **State-name vocabulary** is duplicated in three places: `.claude/plane-config.md`, [.build/config.toml.example](../../.build/config.toml.example) comments, and the hardcoded reverse map in [src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:196-206](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L196-L206) plus the forward `switch` in each transition method. They agree today but are not enforced to.
+- **Two `Size` enums:** the ticket-domain `Size` (`Contracts/Models/Ticket.cs`) and the worker-domain `WorkerSize` (`Contracts/Models/WorkerSize.cs`). A phase maps from one to the other; they are deliberately separate but both express small/medium/large.
+- **Two LLM abstractions:** `ILlmClient` (Contracts) and `IModelClient` (ModelClient project) overlap entirely in intent. Only `ILlmClient`/`AnthropicClient` is wired at runtime; `IModelClient`/`AnthropicModelClient` is built and tested but dead at runtime.
+- **Two reason-translation/escalation consumers of `Verdict`:** `IVerifier` (review) and `IObsoleteRatifier` (chain auto-resolve) both return `Verdict`.
 - **Workspace / project IDs** appear in `.claude/plane-config.md` AND `.build/config.toml`. Both must be kept in sync by the operator (no auto-sync).
 - **Ticket comment formats** differ between flows: claude-config posts headed sections, `build` posts markers. Old comments visible to both flows but only `build` parses markers.
 - **`/ticket-ship` vs `build ship`** - both can transition a ticket to `Done`. Only one should be run per ticket; `build ship` is the current direction.
@@ -157,6 +191,9 @@ Architecture Section 8 describes the cutover plan: when `chain` ships clean and 
 - **`BackendCapabilities`** is never read - capability-driven dispatch is a typed promise without a runtime consumer. Adding a `GitHubTicketingClient` that returns `TypedRelations: false` would not actually disable any code path today.
 - **`Phase.Command`** value is in the enum but no phase implementation uses it - it appears to flow through `ITicketCommand` implementations for `WorkflowEvent.Phase` when no specific phase applies.
 - **`IReviewFeedbackRetriever`** has one implementation, one production caller, and a thin contract; could be inlined if the rework flow stays single-source.
-- **`InvokeStreamAsync` on `ILlmClient`** is part of the contract but stubbed. Any consumer that takes the interface and expects streaming gets `NotImplementedException` at runtime.
+- **`ILlmClient` vs `IModelClient`** - two abstractions for the same job, in two projects, with different content models. `InvokeStreamAsync` on `ILlmClient` is stubbed in both implementations, while `AnthropicModelClient.StreamAsync` actually works but has no caller. Reconciliation is unfinished.
+- **`metadata.escalation` schema** is validated by `WorkerResultParser` and modeled by `SubsumedByEvidence`, but the brief templates (the producing side) and the parser (the consuming side) hold the schema in two places (a markdown stub plus C# validation) with no shared source of truth - same fragility as the other `metadata` keys.
+- **Brief templates fan out 4 agents x 5 phases** under `Templates/<agent>/`. The required `metadata` keys must stay in sync across all per-agent variants and the consuming phase validators by hand; nothing enforces that the codex/gemini/copilot variants demand the same keys as claude-code.
+- **`IWorkerAgentFactory` agent selection** maps a config name to one of four agents, but the configured default is still `claude-code`; the non-claude agents are tested but not the live path.
 - **Cross-`Phase` metadata key conventions** for `PhaseResult.Outputs` and `WorkerResult.Metadata` live only in code comments at the producing site - no shared constants, no type-safe accessor.
 - **Old claude-config workflow** is still operative; the deletion contemplated in architecture Section 8 has not happened. Both flows touch the same Plane records.

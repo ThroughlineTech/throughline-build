@@ -10,12 +10,12 @@ For runtime state details see [05-state-and-persistence.md](05-state-and-persist
 
 The repository is a `.NET 8` solution with native AOT publication.
 
-- **`.NET 8 SDK`** - required for `dotnet build`, `dotnet test`, `dotnet publish`. Verified in CI via `actions/setup-dotnet@v4` with `dotnet-version: '8.x'` ([.github/workflows/build.yml:24-26](../../.github/workflows/build.yml#L24-L26)).
+- **`.NET 8 SDK`** - required for `dotnet build`, `dotnet test`, `dotnet publish`. Verified in CI via `actions/setup-dotnet@v4` with `dotnet-version: '8.x'` ([.github/workflows/build.yml:27-29](../../.github/workflows/build.yml#L27-L29)).
 - **A native toolchain** for AOT publication on the target RID: MSVC on Windows, Xcode CLT on macOS, gcc/clang + system libc on Linux. This is implicit in `dotnet publish -r <rid>` and is not enforced by the scripts.
-- **`git`** - assumed available on `PATH`. `ProcessGitClient` shells out to `git` without checking it exists; missing-git produces process-start failures that become `InvalidOperationException` ([src/ThroughlineBuild.Git/ProcessGitClient.cs:26](../../src/ThroughlineBuild.Git/ProcessGitClient.cs#L26)).
-- **`claude` CLI** - the Claude Code worker. Required for any phase that dispatches a worker (`plan`, `implement`, `review`, `chain`, `new` in draft mode). Path is configurable as `workers.claude-code.executable` in the agent sub-table; default is the bare command `claude`. Authenticated via the user's existing Claude Code OAuth (not via `ANTHROPIC_API_KEY`, which `ClaudeCodeAgent` actively strips from the child environment, [src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs:374](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L374)).
+- **`git`** - assumed available on `PATH`. `ProcessGitClient` shells out to `git` without checking it exists; a failed process start becomes `InvalidOperationException` ([src/ThroughlineBuild.Git/ProcessGitClient.cs:25-26](../../src/ThroughlineBuild.Git/ProcessGitClient.cs#L25-L26)).
+- **One or more worker CLIs** - the orchestrator dispatches phase work to whichever agent is configured. The bundled agents are `claude` (Claude Code), `codex`, `gemini`, and `copilot`. The README lists install commands for all four ([README.md:28-41](../../README.md#L28-L41)). Which CLI must be present depends entirely on `[workers]` config; see "Worker CLIs" below.
 
-The solution file is [throughline-build.sln](../../throughline-build.sln) covering all 14 library projects and 14 test projects.
+The solution file is [throughline-build.sln](../../throughline-build.sln). The `src/` tree now carries the four worker projects (`ThroughlineBuild.Workers.ClaudeCode`, `.Codex`, `.Gemini`, `.Copilot`) plus `ThroughlineBuild.Workers.Common`, alongside `ThroughlineBuild.ModelClient`, `.Scaffold`, `.JudgmentSlots`, and `.Verification`.
 
 ---
 
@@ -35,7 +35,7 @@ Per [README.md:11](../../README.md#L11). Produces managed assemblies under each 
 dotnet test
 ```
 
-Per [README.md:1-2](../../README.md#L1-L2) and `.claude/ticket-config.md:8`. Discovers and runs all 14 xUnit projects (~819 test methods). Tests target `net8.0` without `PublishAot=true`, so they do not exercise AOT-sensitive code paths under their default runner (see [architecture Section 11](../throughline-build-architecture.md), `WorkerResultParserAotRegressionTests` is the reference example for tests that opt in to the AOT switch).
+Per [README.md:1-2](../../README.md#L1-L2). Discovers and runs the xUnit test projects under `tests/`. Tests target `net8.0` without `PublishAot=true`, so they do not exercise AOT-sensitive code paths under their default runner (see [architecture Section 11](../throughline-build-architecture.md); `WorkerResultParserAotRegressionTests` is the reference example for tests that opt in to the AOT switch).
 
 ### Native AOT publish of `build`
 
@@ -43,22 +43,34 @@ Per [README.md:1-2](../../README.md#L1-L2) and `.claude/ticket-config.md:8`. Dis
 dotnet publish src/ThroughlineBuild.Cli -r win-x64 -c Release
 ```
 
-Per [README.md:4-9](../../README.md#L4-L9). Produces `src/ThroughlineBuild.Cli/bin/Release/net8.0/<rid>/publish/build.exe` (the `.exe` extension is dropped on non-Windows RIDs because of `<AssemblyName>build</AssemblyName>` in [src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj:8](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L8) combined with `<PublishAot>true</PublishAot>` and `<InvariantGlobalization>true</InvariantGlobalization>`).
+Per [README.md:4-9](../../README.md#L4-L9). Produces `src/ThroughlineBuild.Cli/bin/Release/net8.0/<rid>/publish/build.exe` (the `.exe` extension is dropped on non-Windows RIDs because of `<AssemblyName>build</AssemblyName>` in [src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj:8](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L8) combined with `<PublishAot>true</PublishAot>`).
 
 Cross-platform RIDs are noted in the README: `osx-arm64`, `linux-x64`.
 
-### Three-binary bundle via `build.sh`
+### Three-binary bundle via `build.sh` - Functional
 
 ```
-./build.sh                 # defaults to RID=win-x64
+./build.sh                 # RID auto-detected from uname; falls back to win-x64
 RID=osx-arm64 ./build.sh   # cross-target
 ```
 
-[build.sh](../../build.sh) publishes three AOT binaries (`build`, `token-audit`, `analyze-event-log`) and copies them into `bin/` next to the script. The tools (`src/tools/token-audit.cs`, `src/tools/analyze-event-log.cs`) are single-file project-less C# sources that `dotnet publish` compiles individually.
+[build.sh](../../build.sh) selects the RID from `uname -s`/`uname -m` (`linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64`, otherwise `win-x64`), creating `bin/` and publishing three AOT binaries into it ([build.sh:5-22](../../build.sh#L5-L22)):
+
+- `build` from `src/ThroughlineBuild.Cli`, copied to `bin/build$EXT` ([build.sh:24-26](../../build.sh#L24-L26)).
+- `token-audit` from the single-file source `src/tools/token-audit.cs`, copied from `src/tools/artifacts/token-audit/` to `bin/token-audit$EXT` ([build.sh:28-30](../../build.sh#L28-L30)).
+- `analyze-event-log` from `src/tools/analyze-event-log.cs`, copied from `src/tools/artifacts/analyze-event-log/` to `bin/analyze-event-log$EXT` ([build.sh:32-34](../../build.sh#L32-L34)).
+
+`EXT` is `.exe` only when `RID` starts with `win-` ([build.sh:15-16](../../build.sh#L15-L16)). The two tools are project-less C# sources that `dotnet publish` compiles individually; their artifacts land under `src/tools/artifacts/` (gitignored, [.gitignore:16](../../.gitignore#L16)).
 
 ### CI build matrix
 
-[.github/workflows/build.yml](../../.github/workflows/build.yml) builds `ThroughlineBuild.Cli` only across `{macos-latest, windows-latest, ubuntu-latest}` on push/PR to `main`, runs `dotnet test --no-restore`, publishes per-RID artifacts via `actions/upload-artifact@v4`. No release tagging, no deploy step.
+[.github/workflows/build.yml](../../.github/workflows/build.yml) builds `ThroughlineBuild.Cli` only across `{macos-latest (osx-arm64), windows-latest (win-x64), ubuntu-latest (linux-x64)}` on push/PR to `main` ([.github/workflows/build.yml:11-23](../../.github/workflows/build.yml#L11-L23)). Each leg runs `dotnet restore`, `dotnet test --no-restore`, then `dotnet publish ... --no-restore`, and uploads the per-RID `build`/`build.exe` artifact via `actions/upload-artifact@v4` ([.github/workflows/build.yml:30-36](../../.github/workflows/build.yml#L30-L36)). No release tagging, no deploy step. CI does not build the `token-audit`/`analyze-event-log` tools.
+
+### Loose ends
+
+- **`build.sh` does not chain to test** - operators publishing locally must run `dotnet test` separately. Only CI runs both.
+- **No release pipeline** in `.github/`. The published artifacts uploaded by CI are not promoted, signed, or tagged.
+- **AOT trim warnings** are not gated by CI; reflection-using DTOs that slip past source-gen would produce a runtime `NotSupportedException` only on the published binary (architecture Section 11). The reference regression test exists, but it is the only AOT-aware test.
 
 ---
 
@@ -66,45 +78,83 @@ RID=osx-arm64 ./build.sh   # cross-target
 
 ### The binary
 
-After AOT publish, the binary is single-file (`<PublishAot>true</PublishAot>`, [src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj:9](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L9)) - no `dotnet` runtime is required on the target machine. Drop it on `PATH`, run `build --help`. Architecture note: a future operator may want the alias `tl-build` to avoid colliding with project-local `build` commands (architecture Appendix item 7); no support for that alias today.
+After AOT publish, the binary is single-file (`<PublishAot>true</PublishAot>`, [src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj:9](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L9)) - no `dotnet` runtime is required on the target machine. Put it on `PATH` (operationally, copy from `bin/` or symlink there) and run `build --help`. Architecture note: a future operator may want the alias `tl-build` to avoid colliding with project-local `build` commands (architecture Appendix item 7); no support for that alias today.
 
 ### Invocation contract
 
 ```
-build <verb> [args] [--debug | --quiet] [--summary-json]
+build <verb> [args] [--debug | --quiet] [--summary-json] [--error-location]
 ```
 
-Verb dispatch lives in [src/ThroughlineBuild.Cli/Program.cs](../../src/ThroughlineBuild.Cli/Program.cs). On startup, `RunAsync` (line 20):
+Verb dispatch lives in [src/ThroughlineBuild.Cli/Program.cs](../../src/ThroughlineBuild.Cli/Program.cs). On startup, `RunAsync` ([src/ThroughlineBuild.Cli/Program.cs:23](../../src/ThroughlineBuild.Cli/Program.cs#L23)):
 
-1. Strips `--debug`, `--quiet`, `--summary-json` from `args` (these are bare bool flags, lines 28-46).
-2. Validates positional args for the chosen verb.
-3. Resolves the main worktree root via [src/ThroughlineBuild.Helpers/MainWorktreeResolver.cs](../../src/ThroughlineBuild.Helpers/MainWorktreeResolver.cs) so that being invoked from inside a feature worktree still locates `.build/config.toml` and the project root.
-4. Walks up from cwd to find `.build/config.toml` ([src/ThroughlineBuild.Cli/Config.cs:60-71](../../src/ThroughlineBuild.Cli/Config.cs#L60-L71)).
-5. Loads the TOML via `Tomlyn`. Resolves secrets from config or environment.
-6. Constructs per-verb dependencies (HttpClient, PlaneTicketingClient, ClaudeCodeAgent, JsonlEventSink wrapping a RecordingEventSink) and dispatches.
+1. Strips bare bool flags `--debug`, `--quiet`, `--summary-json`, `--error-location`, `--no-auto-resolve`, `--no-auto-merge`, `--continue-past-failure` from `args` ([src/ThroughlineBuild.Cli/Program.cs:31-61](../../src/ThroughlineBuild.Cli/Program.cs#L31-L61)).
+2. Extracts the agent-selection flags `--agent` / `--agent-plan` / `--agent-implement` / `--agent-review` ([src/ThroughlineBuild.Cli/Program.cs:63-66](../../src/ThroughlineBuild.Cli/Program.cs#L63-L66)).
+3. For `init`, bootstraps the config file and exits before any config load ([src/ThroughlineBuild.Cli/Program.cs:128-144](../../src/ThroughlineBuild.Cli/Program.cs#L128-L144)) - see "The `build init` verb" below.
+4. Resolves the main worktree root via [src/ThroughlineBuild.Helpers/MainWorktreeResolver.cs](../../src/ThroughlineBuild.Helpers/MainWorktreeResolver.cs) so that being invoked from inside a feature worktree still locates `.build/config.toml` and the project root ([src/ThroughlineBuild.Cli/Program.cs:146-149](../../src/ThroughlineBuild.Cli/Program.cs#L146-L149)).
+5. Walks up from cwd to find `.build/config.toml` ([src/ThroughlineBuild.Cli/Config.cs:64-75](../../src/ThroughlineBuild.Cli/Config.cs#L64-L75)); missing file exits 2.
+6. Loads the TOML via `Tomlyn` and resolves secrets from config or environment ([src/ThroughlineBuild.Cli/Program.cs:164-186](../../src/ThroughlineBuild.Cli/Program.cs#L164-L186)).
+7. Constructs per-verb dependencies (HttpClient, PlaneTicketingClient, a `WorkerAgentFactory` over all referenced agents, JsonlEventSink wrapping a RecordingEventSink) and dispatches.
 
 ### Working-directory expectations
 
 - Must be inside (or under) a git working tree - `MainWorktreeResolver` calls `git worktree list --porcelain`.
-- Must contain a discoverable `.build/config.toml`, either in the cwd or any ancestor.
-- For phases that operate inside a worktree (`implement`, `review`, `ship`), the worktree must be locatable by branch name or path via `git worktree list` ([src/ThroughlineBuild.Phases/ReviewPhase.cs:71-92](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L71-L92)).
+- Must contain a discoverable `.build/config.toml`, either in the cwd or any ancestor (except `build init`, which creates it).
+- For phases that operate inside a worktree (`implement`, `review`, `ship`), the worktree must be locatable by branch name or path via `git worktree list`.
+
+### Worker CLIs
+
+The orchestrator constructs one agent per name referenced by `default_agent` or the `[workers.phases]` map, choosing the implementation by agent name ([src/ThroughlineBuild.Cli/Program.cs:737-778](../../src/ThroughlineBuild.Cli/Program.cs#L737-L778)):
+
+| Agent name | Implementation | External CLI | Auth posture | Status |
+|---|---|---|---|---|
+| `claude-code` (or any other name) | `ClaudeCodeAgent` (fallback) | `claude` | Strips `ANTHROPIC_API_KEY` from the child env to force Claude Code OAuth ([src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs:408](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L408)). | Functional |
+| `codex` | `CodexAgent` | `codex` | Strips `CODEX_API_KEY` and `OPENAI_API_KEY` to force subscription auth ([src/ThroughlineBuild.Workers.Codex/CodexAgent.cs:166-167](../../src/ThroughlineBuild.Workers.Codex/CodexAgent.cs#L166-L167)). | Functional |
+| `gemini` | `GeminiAgent` | `gemini` | Strips `GEMINI_API_KEY` and `GOOGLE_API_KEY`, falling back to ADC / gcloud login ([src/ThroughlineBuild.Workers.Gemini/GeminiAgent.cs:266-267](../../src/ThroughlineBuild.Workers.Gemini/GeminiAgent.cs#L266-L267)). | Functional |
+| `copilot` | `CopilotAgent` | `copilot` | Additive, not subtractive: inherits the `gh` keyring credential, or the caller supplies `GH_TOKEN` via env ([src/ThroughlineBuild.Workers.Copilot/CopilotAgent.cs:178-188](../../src/ThroughlineBuild.Workers.Copilot/CopilotAgent.cs#L178-L188)). | Functional |
+
+Any agent name that is not `gemini`/`codex`/`copilot` falls through to `ClaudeCodeAgent` ([src/ThroughlineBuild.Cli/Program.cs:769-775](../../src/ThroughlineBuild.Cli/Program.cs#L769-L775)). The executable path per agent is `[workers.<name>].executable` (default `"claude"` for `ClaudeCodeAgent` if not overridden, [src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeOptions.cs:7](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeOptions.cs#L7)). All non-Anthropic worker LLM cost flows to the operator's subscription/quota, not to the orchestrator's API key.
 
 ### Host machine requirements
 
 | Requirement | Why | Source |
 |---|---|---|
 | `git` on PATH | Every phase that touches the repo runs `git` subprocesses. | [src/ThroughlineBuild.Git/ProcessGitClient.cs](../../src/ThroughlineBuild.Git/ProcessGitClient.cs) |
-| `claude` CLI on PATH (or absolute path in config) | Plan / Implement / Review / Draft phases spawn it. | [src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs:33-40](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L33-L40) |
-| Plane API token | Every Plane operation needs it; missing token aborts at config-load with exit 3 ([src/ThroughlineBuild.Cli/Config.cs:120-121](../../src/ThroughlineBuild.Cli/Config.cs#L120-L121)). | Config (or env) |
-| Network reachability to `plane.example.com` (or whatever `plane_base_url`) | Every ticket fetch / write hits the Plane REST API. | [src/ThroughlineBuild.Plane/PlaneTicketingClient.cs](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs) |
-| Network reachability to `api.anthropic.com` | Only for `close`/`defer`/`reopen` (`ReasonTranslator`) - other phases reach Anthropic via the `claude` CLI's own OAuth. | [src/ThroughlineBuild.Anthropic/AnthropicOptions.cs:7](../../src/ThroughlineBuild.Anthropic/AnthropicOptions.cs#L7) |
-| Anthropic API key | Same: only `close`/`defer`/`reopen` need it. If missing, those verbs fail with `"anthropic api key required for close/defer/reopen (reason translation)"` ([src/ThroughlineBuild.Cli/Program.cs:1130-1133](../../src/ThroughlineBuild.Cli/Program.cs#L1130-L1133)). |
+| The configured worker CLI(s) on PATH (or absolute path in config) | Plan / Implement / Review / Decompose / Draft phases spawn the agent named for that phase. | [src/ThroughlineBuild.Cli/Program.cs:737-778](../../src/ThroughlineBuild.Cli/Program.cs#L737-L778) |
+| Plane API token | Every Plane operation needs it; a missing token aborts at secret resolution with exit 3 ([src/ThroughlineBuild.Cli/Config.cs:120-125](../../src/ThroughlineBuild.Cli/Config.cs#L120-L125)). | Config (or env) |
+| Network reachability to the configured `plane_base_url` | Every ticket fetch / write hits the Plane REST API. | [src/ThroughlineBuild.Plane/PlaneTicketingClient.cs](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs) |
+| Network reachability to `api.anthropic.com` | Only for `close`/`defer`/`reopen` (`ReasonTranslator`) - other phases reach their provider via the worker CLI's own auth. | [src/ThroughlineBuild.Anthropic/AnthropicOptions.cs](../../src/ThroughlineBuild.Anthropic/AnthropicOptions.cs) |
+| Anthropic API key | Only `close`/`defer`/`reopen` need it (reason translation via `LlmClientFactory`). If missing, those verbs exit 3 with `Secret error: anthropic_api_key not set and env var '<name>' is not set; ...` ([src/ThroughlineBuild.Cli/Program.cs:270-274](../../src/ThroughlineBuild.Cli/Program.cs#L270-L274), [src/ThroughlineBuild.Cli/LlmClientFactory.cs:16-19](../../src/ThroughlineBuild.Cli/LlmClientFactory.cs#L16-L19)). |
 | Native exe execution permissions | AOT binary; no JIT. |
-| LF-EOL handling for templates | `.gitattributes` pins template files to LF so brief substitution is byte-stable across OS. |
+| LF-EOL handling for templates | `.gitattributes` pins brief template files and snapshot test data to LF so substitution is byte-stable across OS ([.gitattributes:1-3](../../.gitattributes#L1-L3)). |
 
-### What an `install` would do (not implemented)
+### The `build init` verb - Functional
 
-The architecture doc names a `build install` verb for bootstrapping `.build/config.toml`, registering MCP tools, and validating Plane credentials (Section 9, Appendix item 6). No such verb exists in `Program.cs` today - configuration files must be authored by hand from [.build/config.toml.example](../../.build/config.toml.example).
+`build init` scaffolds `.build/config.toml` from an embedded template. It is the one verb that runs before config load, because it produces the config ([src/ThroughlineBuild.Cli/Program.cs:128-144](../../src/ThroughlineBuild.Cli/Program.cs#L128-L144)).
+
+```
+build init                              # write .build/config.toml under cwd
+build init --force                      # overwrite an existing file
+build init --print-template             # print the template to stdout, write nothing
+build init --plane-url URL --workspace SLUG --project-id UUID --token TOKEN
+build init --token-env PLANE_API_TOKEN  # write an env-var indirection line instead of an inline token
+```
+
+`InitCommand.Execute` loads the template, applies any flag substitutions, and writes the file ([src/ThroughlineBuild.Cli/InitCommand.cs:24-59](../../src/ThroughlineBuild.Cli/InitCommand.cs#L24-L59)):
+
+- The template is an embedded resource `ThroughlineBuild.Commands.Templates.config.toml.template` loaded by `ConfigTemplateLoader.Load()` - no disk-relative lookup, preserving the single-binary AOT contract ([src/ThroughlineBuild.Commands/ConfigTemplateLoader.cs:20-36](../../src/ThroughlineBuild.Commands/ConfigTemplateLoader.cs#L20-L36)). The source file is [src/ThroughlineBuild.Commands/Templates/config.toml.template](../../src/ThroughlineBuild.Commands/Templates/config.toml.template), embedded via the csproj `<EmbeddedResource>` entry ([src/ThroughlineBuild.Commands/ThroughlineBuild.Commands.csproj:11](../../src/ThroughlineBuild.Commands/ThroughlineBuild.Commands.csproj#L11)).
+- Flag substitution replaces the `REQUIRED_PLANE_BASE_URL`, `REQUIRED_PLANE_WORKSPACE_SLUG`, `REQUIRED_PLANE_PROJECT_ID`, and `REQUIRED_PLANE_API_TOKEN` placeholders. `--token-env` rewrites the whole `plane_api_token = "..."` line into `plane_api_token_env = "VALUE"` and takes precedence over `--token` ([src/ThroughlineBuild.Cli/InitCommand.cs:64-101](../../src/ThroughlineBuild.Cli/InitCommand.cs#L64-L101)).
+- With `--print-template`, content is written to stdout and no file is created ([src/ThroughlineBuild.Cli/InitCommand.cs:38-42](../../src/ThroughlineBuild.Cli/InitCommand.cs#L38-L42)).
+- Without `--force`, an existing `.build/config.toml` causes `Error: <path> already exists. Use --force to overwrite.` and exit 1 ([src/ThroughlineBuild.Cli/InitCommand.cs:46-50](../../src/ThroughlineBuild.Cli/InitCommand.cs#L46-L50)).
+- On success it creates `.build/` if needed, writes the file UTF-8, and prints `Created <path>` plus a reminder to fill in the REQUIRED fields ([src/ThroughlineBuild.Cli/InitCommand.cs:52-58](../../src/ThroughlineBuild.Cli/InitCommand.cs#L52-L58)).
+
+The placeholders left in the file are non-empty strings, so the file loads but every `REQUIRED_*` value is meaningless until edited; the operator must still fill them in. See [04-configuration.md](04-configuration.md) for the resulting sections key-by-key.
+
+### Loose ends
+
+- **`build init` does not validate** the substituted values against Plane - it only writes the file. There is no `build config check` verb.
+- **`init` writes only the config**; it does not provision worker CLIs, register MCP tools, or validate credentials. The architecture posited a richer `build install` (Section 9, Appendix item 6); `init` is the narrower, implemented form.
+- The README still documents `build new --print-template` for ticket bodies separately from `build init --print-template` ([README.md:13-26](../../README.md#L13-L26)); the two `--print-template` flags belong to different verbs and emit different content.
 
 ---
 
@@ -117,7 +167,7 @@ git pull
 ./build.sh
 ```
 
-The binary contains no embedded version baked from build metadata beyond the assembly version (`Assembly.GetExecutingAssembly().GetName().Version`) read into `BuildVersion` in the `SessionContext` ([src/ThroughlineBuild.Cli/Program.cs:154-159](../../src/ThroughlineBuild.Cli/Program.cs#L154-L159)). That value flows into `EventLineDto.build_version` for downstream telemetry but does not gate behavior.
+The binary contains no embedded version baked from build metadata beyond the assembly version (`Assembly.GetExecutingAssembly().GetName().Version`) read into `BuildVersion` on the `SessionContext` ([src/ThroughlineBuild.Cli/Program.cs:190-195](../../src/ThroughlineBuild.Cli/Program.cs#L190-L195)). That value flows into the event-log `build_version` field for downstream telemetry but does not gate behavior.
 
 ---
 
@@ -127,16 +177,23 @@ Removing the repo and its binaries:
 
 | Artifact | Location | Cleanup |
 |---|---|---|
-| AOT binaries | `bin/` (gitignored) | Delete the directory. |
+| AOT binaries | `bin/` (gitignored, [.gitignore:3](../../.gitignore#L3)) | Delete the directory. |
+| Tool artifacts | `src/tools/artifacts/` (gitignored, [.gitignore:16](../../.gitignore#L16)) | Delete; regenerated by `build.sh`. |
 | Build output | each project's `bin/` and `obj/` | `dotnet clean` or delete. |
-| Config | `.build/config.toml` (gitignored) | Delete. Removes the operator's secrets-in-clear from disk. |
-| Event logs | `.build/events/*.jsonl` (gitignored) | Delete; safe at any time. |
-| Debug sessions | `.build/sessions/<stem>/` (gitignored) | Delete; safe at any time. |
-| Worktrees | `.worktrees/ticket-<slug>/` (gitignored) | `git worktree remove` each, or rely on `WorktreeDecrufter` triggered by `ship` / `close` / `defer` ([src/ThroughlineBuild.Helpers/WorktreeDecrufter.cs:44-192](../../src/ThroughlineBuild.Helpers/WorktreeDecrufter.cs#L44-L192)). |
-| Scratch | `.scratch/` (gitignored) | Delete. |
-| `secrets/` | gitignored top-level | Delete. |
+| Config | `.build/config.toml` (gitignored, [.gitignore:14](../../.gitignore#L14)) | Delete. Removes the operator's secrets-in-clear from disk. |
+| Event logs | `.build/events/` (gitignored, [.gitignore:12](../../.gitignore#L12)) | Delete; safe at any time. |
+| Debug sessions | `.build/sessions/` (gitignored, [.gitignore:13](../../.gitignore#L13)) | Delete; safe at any time. |
+| Draft brief | `.build/brief.md` (gitignored, [.gitignore:11](../../.gitignore#L11)) | Delete; safe at any time. |
+| Worktrees | `.worktrees/` (gitignored, [.gitignore:1](../../.gitignore#L1)) | `git worktree remove` each, or rely on `WorktreeDecrufter` triggered by `ship` / `close` / `defer` ([src/ThroughlineBuild.Helpers/WorktreeDecrufter.cs:55](../../src/ThroughlineBuild.Helpers/WorktreeDecrufter.cs#L55)). |
+| Scratch | `.scratch/` (gitignored, [.gitignore:10](../../.gitignore#L10)) | Delete. |
+| `secrets/` | gitignored top-level ([.gitignore:2](../../.gitignore#L2)) | Delete. |
 
 The binary itself writes no state outside the repo. No global config, no per-user state. No service or daemon to stop - architecture Section 2 explicitly forbids a persistent server.
+
+### Loose ends
+
+- **`WorktreeDecrufter` is best-effort** on Windows - it pre-cleans `node_modules` reparse points and retries `git worktree remove` with `--force`, but locked files from a phase killed mid-creation may need manual cleanup ([src/ThroughlineBuild.Helpers/WorktreeDecrufter.cs:111-144](../../src/ThroughlineBuild.Helpers/WorktreeDecrufter.cs#L111-L144)).
+- **No version stamp** beyond assembly version on the binary - `bin/build.exe` does not advertise the git SHA it was built from.
 
 ---
 
@@ -146,17 +203,17 @@ Repeated as a single list for operators:
 
 1. `.NET 8 SDK` to build; nothing at runtime (single-file AOT).
 2. `git`.
-3. `claude` CLI (Claude Code) for any phase that dispatches a worker.
-4. Network to Plane (`plane.example.com` by default) and Anthropic (`api.anthropic.com`) where applicable.
-5. A `PLANE_API_TOKEN` (or the token in `.build/config.toml`) and an `ANTHROPIC_API_KEY` for `close`/`defer`/`reopen`.
+3. At least the worker CLI named by `[workers] default_agent` (and any agent named in `[workers.phases]`): one or more of `claude`, `codex`, `gemini`, `copilot`.
+4. Network to the configured Plane base URL and, only for `close`/`defer`/`reopen`, to `api.anthropic.com`.
+5. A Plane API token (env `PLANE_API_TOKEN` by default, or inline in config) and - only for `close`/`defer`/`reopen` - an Anthropic API key.
+6. Provider auth for the chosen worker CLI: Claude Code OAuth, Codex subscription, Gemini ADC/gcloud, or a `gh` credential / `GH_TOKEN` for Copilot. None of these are read by `build` directly; the worker CLI handles them.
 
 ---
 
 ## Loose ends
 
-- **No `build install`** verb exists; the architecture posits one. Operators must hand-author `.build/config.toml` and provision the `claude` CLI and Plane token themselves.
-- **No version stamp** beyond assembly version on the binary - `bin/build.exe` does not advertise the git SHA it was built from.
-- **`build.sh` does not chain to test** - operators publishing locally must run `dotnet test` separately. Only CI runs both.
-- **No release pipeline** in `.github/`. The published artifacts uploaded by CI are not promoted, signed, or tagged.
-- **`uninstall` mode** in `WorktreeDecrufter` is best-effort - some Windows reparse points and locked files may need manual cleanup if a phase was killed mid-worktree-creation ([src/ThroughlineBuild.Helpers/WorktreeDecrufter.cs:112](../../src/ThroughlineBuild.Helpers/WorktreeDecrufter.cs#L112)).
-- **AOT trim warnings** are not gated by CI; reflection-using DTOs that slip past source-gen would produce runtime `NotSupportedException` only on the published binary (architecture Section 11). The reference regression test exists, but it is the only AOT-aware test.
+- **`build init`** is the implemented bootstrap; it writes config only and does not provision tools or validate credentials. A fuller `build install` remains aspirational (architecture Section 9).
+- **`build.sh` RID fallback** silently defaults to `win-x64` for any unrecognized `uname` output ([build.sh:11](../../build.sh#L11)); a cross-target build on an exotic platform may publish the wrong RID without warning.
+- **No version stamp** beyond assembly version on the binary.
+- **No release pipeline** in `.github/`; CI artifacts are not promoted, signed, or tagged.
+- **AOT trim warnings** are not gated by CI; the single reference regression test is the only AOT-aware test.
