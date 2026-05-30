@@ -48,6 +48,10 @@ internal sealed class FakeTicketing : ITicketing
     public int AppendDescriptionCalls { get; private set; }
     public int ApplyLabelsCalls { get; private set; }
 
+    // Children returned by QueryAsync when filtering by ParentId.
+    private List<Ticket> _queryChildren = new();
+    public void SeedChildren(IReadOnlyList<Ticket> children) => _queryChildren = children.ToList();
+
     public FakeTicketing(Ticket ticket) { _ticket = ticket; }
 
     public BackendCapabilities Capabilities => new BackendCapabilities(true, true, true, false);
@@ -108,7 +112,8 @@ internal sealed class FakeTicketing : ITicketing
         Task.CompletedTask;
 
     public Task<IReadOnlyList<Ticket>> QueryAsync(TicketQuery query, CancellationToken ct) =>
-        Task.FromResult<IReadOnlyList<Ticket>>(Array.Empty<Ticket>());
+        Task.FromResult<IReadOnlyList<Ticket>>(
+            query.ParentId is not null ? _queryChildren.AsReadOnly() : Array.Empty<Ticket>());
 
     public Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct)
     {

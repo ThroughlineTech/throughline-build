@@ -210,6 +210,109 @@ public class CloseCommandTests
         Assert.NotEqual(LifecycleTransition.Defer, ticketing.LifecycleTransitions[0].transition);
     }
 
+    private static Ticket MakeChild(string id, string uuid, TicketState state) => new Ticket(
+        Id: id,
+        Uuid: uuid,
+        Title: $"Child {id}",
+        Type: "feature",
+        State: state,
+        Size: Size.S,
+        Risk: Risk.Low,
+        DescriptionHtml: "<p>child</p>",
+        Relations: Array.Empty<Relation>(),
+        Labels: Array.Empty<string>(),
+        ParentId: "test-uuid-1");
+
+    [Fact]
+    public async Task Parent_with_two_backlog_children_cascades_close_to_all()
+    {
+        using var tmp = new TempDir();
+        var parent = MakeTicket();
+        var ticketing = new FakeTicketing(parent);
+        ticketing.SeedChildren(new[]
+        {
+            MakeChild("TLB-2", "child-uuid-2", TicketState.Backlog),
+            MakeChild("TLB-3", "child-uuid-3", TicketState.Backlog)
+        });
+        var (cmd, _, _, _, _, _) = BuildCommand(parent, tmp.Path, ticketingClient: ticketing);
+
+        var ctx = MakeCtx(args: new Dictionary<string, string> { ["reason"] = "x" });
+        var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.True(result.Success);
+        // 2 children + 1 parent = 3 Close transitions
+        Assert.Equal(3, ticketing.LifecycleTransitions.Count);
+        Assert.All(ticketing.LifecycleTransitions, t => Assert.Equal(LifecycleTransition.Close, t.transition));
+        // Children come first, then parent
+        Assert.Equal("TLB-2", ticketing.LifecycleTransitions[0].id);
+        Assert.Equal("TLB-3", ticketing.LifecycleTransitions[1].id);
+        Assert.Equal("TLB-1", ticketing.LifecycleTransitions[2].id);
+    }
+
+    [Fact]
+    public async Task Parent_with_done_child_skips_terminal_child()
+    {
+        using var tmp = new TempDir();
+        var parent = MakeTicket();
+        var ticketing = new FakeTicketing(parent);
+        ticketing.SeedChildren(new[]
+        {
+            MakeChild("TLB-2", "child-uuid-2", TicketState.Done),
+            MakeChild("TLB-3", "child-uuid-3", TicketState.Backlog)
+        });
+        var (cmd, _, _, _, _, _) = BuildCommand(parent, tmp.Path, ticketingClient: ticketing);
+
+        var ctx = MakeCtx(args: new Dictionary<string, string> { ["reason"] = "x" });
+        var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.True(result.Success);
+        // Done child skipped, so 1 non-terminal child + 1 parent = 2 transitions
+        Assert.Equal(2, ticketing.LifecycleTransitions.Count);
+        Assert.Equal("TLB-3", ticketing.LifecycleTransitions[0].id);
+        Assert.Equal("TLB-1", ticketing.LifecycleTransitions[1].id);
+        Assert.All(ticketing.LifecycleTransitions, t => Assert.Equal(LifecycleTransition.Close, t.transition));
+    }
+
+    [Fact]
+    public async Task No_cascade_flag_skips_children()
+    {
+        using var tmp = new TempDir();
+        var parent = MakeTicket();
+        var ticketing = new FakeTicketing(parent);
+        ticketing.SeedChildren(new[]
+        {
+            MakeChild("TLB-2", "child-uuid-2", TicketState.Backlog),
+            MakeChild("TLB-3", "child-uuid-3", TicketState.Backlog)
+        });
+        var (cmd, _, _, _, _, _) = BuildCommand(parent, tmp.Path, ticketingClient: ticketing);
+
+        var ctx = MakeCtx(args: new Dictionary<string, string> { ["reason"] = "x", ["no-cascade"] = "true" });
+        var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.True(result.Success);
+        // Only parent transition - children skipped due to --no-cascade
+        Assert.Single(ticketing.LifecycleTransitions);
+        Assert.Equal("TLB-1", ticketing.LifecycleTransitions[0].id);
+        Assert.Equal(LifecycleTransition.Close, ticketing.LifecycleTransitions[0].transition);
+    }
+
+    [Fact]
+    public async Task Leaf_ticket_no_children_single_transition()
+    {
+        using var tmp = new TempDir();
+        var parent = MakeTicket();
+        // No SeedChildren call - QueryAsync returns empty list
+        var (cmd, ticketing, _, _, _, _) = BuildCommand(parent, tmp.Path);
+
+        var ctx = MakeCtx(args: new Dictionary<string, string> { ["reason"] = "x" });
+        var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Single(ticketing.LifecycleTransitions);
+        Assert.Equal("TLB-1", ticketing.LifecycleTransitions[0].id);
+        Assert.Equal(LifecycleTransition.Close, ticketing.LifecycleTransitions[0].transition);
+    }
+
     // ---------- Fakes ----------
 
     private sealed class TempDir : IDisposable
@@ -241,6 +344,10 @@ public class CloseCommandTests
         // Track-through count for IGitClient calls observed via the decrufter
         // (not used directly on this fake; left for symmetry).
         public int ListWorktreeCallsViaGit { get; set; }
+
+        // Children returned by QueryAsync when filtering by ParentId.
+        private List<Ticket> _queryChildren = new();
+        public void SeedChildren(IReadOnlyList<Ticket> children) => _queryChildren = children.ToList();
 
         public FakeTicketing(Ticket ticket) { _ticket = ticket; }
 
@@ -296,7 +403,8 @@ public class CloseCommandTests
             Task.CompletedTask;
 
         public Task<IReadOnlyList<Ticket>> QueryAsync(TicketQuery query, CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<Ticket>>(Array.Empty<Ticket>());
+            Task.FromResult<IReadOnlyList<Ticket>>(
+                query.ParentId is not null ? _queryChildren.AsReadOnly() : Array.Empty<Ticket>());
 
         public Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct)
         {

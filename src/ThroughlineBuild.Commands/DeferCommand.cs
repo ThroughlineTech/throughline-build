@@ -41,6 +41,28 @@ public sealed class DeferCommand : ITicketCommand
         if (ticket.State == TicketState.Done || ticket.State == TicketState.Cancelled)
             return new CommandResult(false, "already terminal");
 
+        // (b2) hoist translation so it is available for child cascades
+        var translated = await _translator.TranslateAsync(reason, ct).ConfigureAwait(false);
+
+        // (b3) cascade defer to non-terminal children (unless --no-cascade)
+        if (!ctx.Args.ContainsKey("no-cascade"))
+        {
+            var children = await _ticketing.QueryAsync(new TicketQuery(ParentId: ticket.Uuid), ct).ConfigureAwait(false);
+            foreach (var child in children)
+            {
+                if (child.State == TicketState.Done || child.State == TicketState.Cancelled)
+                    continue;
+                try
+                {
+                    await _ticketing.TransitionLifecycleAsync(child.Id, LifecycleTransition.Defer, translated, ct).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"WARNING: failed to defer child {child.Id}: {ex.Message}");
+                }
+            }
+        }
+
         // (c) warn on unmerged branches matching the ticket pattern (fail-soft)
         var pattern = $"ticket/{ctx.TicketId.ToLowerInvariant()}-*";
         var unmerged = await _git.GetBranchesNotMergedAsync(pattern, "origin/main", ct).ConfigureAwait(false);
@@ -49,9 +71,6 @@ public sealed class DeferCommand : ITicketCommand
             Console.Error.WriteLine(
                 $"WARNING: {unmerged.Count} unmerged branch(es) matching {pattern}: {string.Join(", ", unmerged)} - branch may be needed for reopen, leaving in place");
         }
-
-        // (d) translate reason to English
-        var translated = await _translator.TranslateAsync(reason, ct).ConfigureAwait(false);
 
         // (e) transition to Cancelled via lifecycle method - handles comment posting internally
         await _ticketing.TransitionLifecycleAsync(ctx.TicketId, LifecycleTransition.Defer, translated, ct).ConfigureAwait(false);
