@@ -12,5 +12,6 @@ public enum ChainOutcome
     RatifiedObsolete,
     ParentCompleted,    // all eligible children completed
     ParentStoppedEarly, // one or more children stopped before completing
+    ParentHasGrandchildren, // tree is deeper than one level; chain the intermediate ticket directly
     Skipped             // ticket skipped because an ancestor failed and continuePastFailure is false
 }

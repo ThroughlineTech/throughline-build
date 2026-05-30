@@ -1362,6 +1362,7 @@ static async Task<int> RunAsync(string[] args)
                         ChainOutcome.RatifiedObsolete => 0,
                         ChainOutcome.ParentCompleted => 0,
                         ChainOutcome.RefusedInitialState => 2,
+                        ChainOutcome.ParentHasGrandchildren => 2,
                         ChainOutcome.StoppedAtPlan => 3,
                         ChainOutcome.ParentStoppedEarly => 3,
                         ChainOutcome.Skipped => 3,

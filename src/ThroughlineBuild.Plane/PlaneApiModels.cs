@@ -69,7 +69,8 @@ public record PlaneRelationList(
 );
 
 public record PlaneIssueList(
-    [property: JsonPropertyName("results")] List<PlaneIssue> Results
+    [property: JsonPropertyName("results")] List<PlaneIssue> Results,
+    [property: JsonPropertyName("next_cursor")] string? NextCursor = null
 );
 
 // Expanded DTOs - used for ?expand=state requests (state is an object, not a UUID string)
@@ -86,7 +87,8 @@ internal record PlaneIssueExpanded(
 );
 
 internal record PlaneIssueExpandedList(
-    [property: JsonPropertyName("results")] List<PlaneIssueExpanded> Results
+    [property: JsonPropertyName("results")] List<PlaneIssueExpanded> Results,
+    [property: JsonPropertyName("next_cursor")] string? NextCursor = null
 );
 
 // Request body types

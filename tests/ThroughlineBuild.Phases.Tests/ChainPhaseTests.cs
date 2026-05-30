@@ -917,6 +917,30 @@ public class ChainPhaseTests
     }
 
     [Fact]
+    public async Task RunAsync_ParentWhoseChildHasItsOwnChildren_StopsWithParentHasGrandchildren_RunsNothing()
+    {
+        // Operation -> plan -> brief: a 3-level tree. Chaining the operation must NOT
+        // recurse into the grandchildren (that was the infinite-recursion bug). It
+        // stops and tells the operator to chain the intermediate plan directly.
+        var parent = MakeTicket(TicketState.Backlog);                              // uuid ticket-uuid-1
+        var plan = MakeChildTicket("TLB-2", "plan-uuid", TicketState.Backlog);     // child of parent
+        var brief = MakeChildTicket("TLB-3", "brief-uuid", TicketState.Backlog);   // child of plan
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { plan });   // parent -> plan
+        ticketing.SeedChildren("plan-uuid", new[] { brief });      // plan -> brief (grandchild)
+
+        var chain = BuildChain(ticketing, new FakeWorkerAgent(null), new FakeWorkerAgent(null), new Queue<IVerifier>());
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentHasGrandchildren, result.Outcome);
+        Assert.Contains("TLB-2", result.FinalRationale);
+        Assert.Null(result.ChildResults);
+        // Nothing ran: no phase transitions, no comments posted.
+        Assert.Empty(ticketing.Transitions);
+    }
+
+    [Fact]
     public async Task RunAsync_ParentWithOneDoneChildAndOneBacklogChild_SkipsDone_OneChildResult_ParentCompleted()
     {
         // Parent has 1 Done child (skipped) and 1 Backlog child (processed).

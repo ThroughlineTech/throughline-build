@@ -534,46 +534,93 @@ public class ChainPhase
         CancellationToken ct)
     {
         var totalSw = Stopwatch.StartNew();
-        var childResults = new List<ChainResult>();
-        bool anyStoppedEarly = false;
 
-        // Filter to non-terminal children (skip Done and Cancelled)
+        // Filter to non-terminal children (skip Done and Cancelled), and never the parent
+        // itself - a self-referential parent edge would otherwise recurse forever.
         var eligible = children
             .Where(c => c.State != TicketState.Done && c.State != TicketState.Cancelled)
+            .Where(c => !string.Equals(c.Uuid, parentTicket.Uuid, StringComparison.Ordinal))
             .ToList();
 
+        // A parent chain operates exactly one level deep: it runs its direct children.
+        // If any eligible child has live children of its own, the tree is deeper than this
+        // command handles. Stop and tell the operator to chain the intermediate ticket
+        // directly, rather than recursing (which previously ran away into Plane's rate limiter).
+        var deeperTickets = new List<string>();
         foreach (var child in eligible)
         {
-            var startStep = new ChainStep(
+            var grandchildren = await _ticketing
+                .QueryAsync(new TicketQuery(ParentId: child.Uuid), ct).ConfigureAwait(false);
+            var liveGrandchildren = grandchildren
+                .Where(g => g.State != TicketState.Done && g.State != TicketState.Cancelled)
+                .Where(g => !string.Equals(g.Uuid, child.Uuid, StringComparison.Ordinal))
+                .ToList();
+            if (liveGrandchildren.Count > 0)
+                deeperTickets.Add(child.Id);
+        }
+
+        if (deeperTickets.Count > 0)
+        {
+            var notice = new ChainStep(
                 PhaseName: "chain",
                 ReworkRoundNumber: -1,
-                Status: Status.Ok,
-                FailureReason: null,
+                Status: Status.Failed,
+                FailureReason: $"grandchildren present under {string.Join(", ", deeperTickets)}",
                 Verdict: null,
                 Duration: TimeSpan.Zero,
                 PhaseSessionId: _sessionIdGenerator());
-            options.OnStep?.Invoke(startStep);
+            options.OnStep?.Invoke(notice);
 
-            var childOptions = options with { TicketId = child.Id };
-            var childResult = await RunAsync(childOptions, ct).ConfigureAwait(false);
-            childResults.Add(childResult);
-            if (childResult.Outcome != ChainOutcome.Completed &&
-                childResult.Outcome != ChainOutcome.RatifiedObsolete &&
-                childResult.Outcome != ChainOutcome.ParentCompleted)
-            {
-                anyStoppedEarly = true;
-            }
-
-            var doneStep = new ChainStep(
-                PhaseName: "chain",
-                ReworkRoundNumber: -1,
-                Status: anyStoppedEarly ? Status.Failed : Status.Ok,
-                FailureReason: anyStoppedEarly ? $"child {child.Id} stopped: {childResult.Outcome}" : null,
-                Verdict: null,
-                Duration: childResult.TotalDuration,
-                PhaseSessionId: _sessionIdGenerator());
-            options.OnStep?.Invoke(doneStep);
+            totalSw.Stop();
+            return new ChainResult(
+                TicketId: options.TicketId,
+                Steps: Array.Empty<ChainStep>(),
+                Outcome: ChainOutcome.ParentHasGrandchildren,
+                TotalDuration: totalSw.Elapsed,
+                FinalRationale: $"Tree is deeper than one level. Chain the intermediate ticket(s) directly: {string.Join(", ", deeperTickets)}.");
         }
+
+        // All eligible children are leaves: run their chains concurrently (bounded). The
+        // Plane rate gate (RequestThrottle) keeps the parallel API traffic under budget.
+        var semaphore = new SemaphoreSlim(MaxParentChainConcurrency, MaxParentChainConcurrency);
+        var tasks = eligible.Select(async child =>
+        {
+            await semaphore.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                var startStep = new ChainStep(
+                    PhaseName: "chain",
+                    ReworkRoundNumber: -1,
+                    Status: Status.Ok,
+                    FailureReason: null,
+                    Verdict: null,
+                    Duration: TimeSpan.Zero,
+                    PhaseSessionId: _sessionIdGenerator());
+                options.OnStep?.Invoke(startStep);
+
+                var childResult = await RunAsync(options with { TicketId = child.Id }, ct).ConfigureAwait(false);
+
+                var ok = IsChainSuccess(childResult.Outcome);
+                var doneStep = new ChainStep(
+                    PhaseName: "chain",
+                    ReworkRoundNumber: -1,
+                    Status: ok ? Status.Ok : Status.Failed,
+                    FailureReason: ok ? null : $"child {child.Id} stopped: {childResult.Outcome}",
+                    Verdict: null,
+                    Duration: childResult.TotalDuration,
+                    PhaseSessionId: _sessionIdGenerator());
+                options.OnStep?.Invoke(doneStep);
+
+                return childResult;
+            }
+            finally
+            {
+                semaphore.Release();
+            }
+        }).ToList();
+
+        var childResults = (await Task.WhenAll(tasks).ConfigureAwait(false)).ToList();
+        var anyStoppedEarly = childResults.Any(r => !IsChainSuccess(r.Outcome));
 
         // Attempt parent rollup (fail-soft)
         try { await _ticketing.RollupParentAsync(options.TicketId, ct).ConfigureAwait(false); }
@@ -582,7 +629,7 @@ public class ChainPhase
         totalSw.Stop();
         var outcome = anyStoppedEarly ? ChainOutcome.ParentStoppedEarly : ChainOutcome.ParentCompleted;
         var finalRationale = anyStoppedEarly
-            ? $"One or more children did not complete: {string.Join(", ", childResults.Where(r => r.Outcome != ChainOutcome.Completed && r.Outcome != ChainOutcome.RatifiedObsolete && r.Outcome != ChainOutcome.ParentCompleted).Select(r => r.TicketId))}"
+            ? $"One or more children did not complete: {string.Join(", ", childResults.Where(r => !IsChainSuccess(r.Outcome)).Select(r => r.TicketId))}"
             : $"All {eligible.Count} eligible children completed.";
 
         return new ChainResult(
@@ -593,6 +640,15 @@ public class ChainPhase
             FinalRationale: finalRationale,
             ChildResults: childResults.AsReadOnly());
     }
+
+    private static bool IsChainSuccess(ChainOutcome outcome) =>
+        outcome is ChainOutcome.Completed
+            or ChainOutcome.RatifiedObsolete
+            or ChainOutcome.ParentCompleted;
+
+    // Upper bound on leaf children chained in parallel under a single parent. The Plane
+    // rate gate handles API pacing; this caps local worktree/git concurrency.
+    private const int MaxParentChainConcurrency = 4;
 
     private enum StartPhase { Plan, Implement, Review, Refused }
 }

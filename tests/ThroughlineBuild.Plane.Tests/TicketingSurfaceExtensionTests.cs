@@ -98,6 +98,56 @@ public class QueryAsyncTests
         Assert.Contains($"&parent={parentUuid}", req.RequestUri!.ToString());
     }
 
+    // Plane silently ignores the server-side `parent=` filter and returns the whole
+    // project. These two tests pin the client-side filtering that prevents `build chain`
+    // from treating every ticket as a parent (the infinite-recursion / 429 bug).
+    private static string MixedParentsListJson(string targetParent) =>
+        $$"""
+        {
+          "results": [
+            { "id": "child-1", "sequence_id": 320, "name": "real child",   "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "label_ids": [], "parent": "{{targetParent}}", "type": null },
+            { "id": "other-1", "sequence_id": 317, "name": "other parent",  "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "label_ids": [], "parent": "zzzzzzzz-0000-0000-0000-000000000001", "type": null },
+            { "id": "root-1",  "sequence_id": 318, "name": "no parent",     "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "label_ids": [], "parent": null, "type": null }
+          ]
+        }
+        """;
+
+    [Fact]
+    public async Task QueryAsync_ParentFilter_ReturnsOnlyActualChildren_NotWholeProject()
+    {
+        const string parentUuid = "pppppppp-0000-0000-0000-000000000042";
+
+        var handler = new FakeMessageHandler();
+        // Plane returns 3 issues with assorted parents (filter ignored server-side).
+        handler.Enqueue(FakeMessageHandler.OkJson(MixedParentsListJson(parentUuid)));
+        // Only the one matching child survives -> one ToTicketAsync -> one state + label fetch.
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var tickets = await client.QueryAsync(new TicketQuery(ParentId: parentUuid), CancellationToken.None);
+
+        var only = Assert.Single(tickets);
+        Assert.Equal("child-1", only.Uuid);
+        Assert.Equal(parentUuid, only.ParentId);
+    }
+
+    [Fact]
+    public async Task QueryAsync_ParentWithNoChildren_ReturnsEmpty_EvenWhenProjectHasIssues()
+    {
+        // A leaf ticket: the project has issues, but none are parented to it. Pre-fix this
+        // returned the whole project and made the leaf look like a parent.
+        const string leafUuid = "leaf-0000-0000-0000-000000000001";
+
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(MixedParentsListJson("some-other-parent")));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var tickets = await client.QueryAsync(new TicketQuery(ParentId: leafUuid), CancellationToken.None);
+
+        Assert.Empty(tickets);
+    }
+
     [Fact]
     public async Task QueryAsync_EmptyResults_ReturnsEmptyList()
     {

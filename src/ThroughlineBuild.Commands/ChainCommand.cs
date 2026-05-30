@@ -176,6 +176,9 @@ public sealed class ChainCommand : ITicketCommand
             ChainOutcome.ParentStoppedEarly =>
                 $"[{ticketId}] parent chain stopped early: one or more children did not complete ({durationStr})",
 
+            ChainOutcome.ParentHasGrandchildren =>
+                $"[{ticketId}] chain stopped: tree is deeper than one level - chain the intermediate ticket(s) directly",
+
             ChainOutcome.Skipped =>
                 $"[{ticketId}] skipped ({durationStr}){(result.SkipReason is not null ? " - " + result.SkipReason : "")}",
 
@@ -276,6 +279,9 @@ public sealed class ChainCommand : ITicketCommand
             ChainOutcome.StoppedAtShip =>
                 GetStoppedAtShipTriage(ticketId, result),
 
+            ChainOutcome.ParentHasGrandchildren =>
+                GetParentHasGrandchildrenTriage(result),
+
             _ => null
         };
 
@@ -353,6 +359,14 @@ public sealed class ChainCommand : ITicketCommand
         output.AppendLine($"- Replan via 'build close {ticketId} <reason>' followed by a new ticket with refined acceptance criteria.");
 
         return output.ToString().TrimEnd();
+    }
+
+    private static string GetParentHasGrandchildrenTriage(ChainResult result)
+    {
+        return "Operator triage: This ticket is an operation/parent whose children are themselves parents. " +
+               "Chain handles exactly one parent level at a time. " +
+               "Chain the intermediate ticket(s) named above directly (e.g. 'build chain <plan-id>'), " +
+               "which will fan their leaf briefs out in parallel.";
     }
 
     private static string GetStoppedAtShipTriage(string ticketId, ChainResult result)

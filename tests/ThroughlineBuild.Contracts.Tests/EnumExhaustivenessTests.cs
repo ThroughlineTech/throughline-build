@@ -78,6 +78,7 @@ public class EnumExhaustivenessTests
             ChainOutcome.RatifiedObsolete,
             ChainOutcome.ParentCompleted,
             ChainOutcome.ParentStoppedEarly,
+            ChainOutcome.ParentHasGrandchildren,
             ChainOutcome.Skipped
         };
         Assert.Equal(expected.OrderBy(x => (int)x), Enum.GetValues<ChainOutcome>().OrderBy(x => (int)x));

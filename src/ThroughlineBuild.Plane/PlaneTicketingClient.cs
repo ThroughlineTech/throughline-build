@@ -19,6 +19,9 @@ public sealed class PlaneTicketingClient : ITicketing
     private readonly PlaneClientOptions _options;
     private readonly ResiliencePipeline _pipeline;
 
+    // Hard rate gate: every HTTP send waits here so we never exceed Plane's 60/min limit.
+    private readonly RequestThrottle _throttle;
+
     // State cache: name -> uuid, lazy-loaded on first use
     private Dictionary<string, string>? _statesByName;
     private readonly SemaphoreSlim _stateLock = new(1, 1);
@@ -44,6 +47,8 @@ public sealed class PlaneTicketingClient : ITicketing
 
         _http.BaseAddress = new Uri(options.BaseUrl.TrimEnd('/') + "/");
         _http.DefaultRequestHeaders.Add("X-API-Key", options.ApiToken);
+
+        _throttle = new RequestThrottle(options.RequestsPerMinute, TimeSpan.FromMinutes(1));
 
         _pipeline = new ResiliencePipelineBuilder()
             .AddRetry(new RetryStrategyOptions
@@ -89,6 +94,7 @@ public sealed class PlaneTicketingClient : ITicketing
 
     private async Task<T> GetJsonAsync<T>(string url, JsonSerializerContext ctx, CancellationToken ct)
     {
+        await _throttle.AcquireAsync(ct).ConfigureAwait(false);
         var response = await _http.GetAsync(url, ct).ConfigureAwait(false);
         var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
@@ -106,6 +112,7 @@ public sealed class PlaneTicketingClient : ITicketing
             Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
         });
         using var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+        await _throttle.AcquireAsync(ct).ConfigureAwait(false);
         var response = await _http.PatchAsync(url, content, ct).ConfigureAwait(false);
         var responseBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
@@ -121,6 +128,7 @@ public sealed class PlaneTicketingClient : ITicketing
             Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
         });
         using var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+        await _throttle.AcquireAsync(ct).ConfigureAwait(false);
         var response = await _http.PostAsync(url, content, ct).ConfigureAwait(false);
         var responseBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
@@ -428,12 +436,17 @@ public sealed class PlaneTicketingClient : ITicketing
                 $"{IssuesBase}{parentId}/?expand=state", PlaneJsonContext.Default, ct).ConfigureAwait(false);
             var currentParentStateName = ExtractStateName(parentExpanded.State);
 
-            // GET siblings with parent filter and expand=state
-            var siblingsResult = await GetJsonAsync<PlaneIssueExpandedList>(
-                $"{IssuesBase}?per_page=100&parent={parentId}&expand=state", PlaneJsonContext.Default, ct).ConfigureAwait(false);
+            // GET siblings (expand=state), filtering by parent ourselves: Plane ignores
+            // the server-side `parent=` param, so the unfiltered list would let unrelated
+            // tickets drive the parent's rollup state. See FetchAllIssuesAsync.
+            var allExpanded = await FetchAllExpandedAsync(
+                $"{IssuesBase}?per_page=100&parent={parentId}&expand=state", ct).ConfigureAwait(false);
+            var siblings = allExpanded
+                .Where(s => string.Equals(s.ParentId, parentId, StringComparison.Ordinal))
+                .ToList();
 
             // Apply ranked rules to determine desired state
-            var desired = ApplyRollupRules(siblingsResult.Results);
+            var desired = ApplyRollupRules(siblings);
             if (desired is null)
                 return new RollupResult(false, null, null);
 
@@ -566,15 +579,70 @@ public sealed class PlaneTicketingClient : ITicketing
             if (!string.IsNullOrEmpty(query.Type))
                 sb.Append($"&type={Uri.EscapeDataString(query.Type)}");
 
-            var issueList = await GetJsonAsync<PlaneIssueList>(
-                sb.ToString(), PlaneJsonContext.Default, token).ConfigureAwait(false);
+            // Plane's list endpoint silently ignores unknown query params, including
+            // `parent=`. So we cannot trust server-side parent filtering: we fetch every
+            // page and filter by parent ourselves. Without this, a parent query returns
+            // the whole project and every ticket looks like it has children - which made
+            // `build chain` recurse until it tripped Plane's rate limiter. (TLB)
+            var issues = await FetchAllIssuesAsync(sb.ToString(), token).ConfigureAwait(false);
 
-            var tickets = new List<Ticket>(issueList.Results.Count);
-            foreach (var issue in issueList.Results)
+            if (!string.IsNullOrEmpty(query.ParentId))
+                issues = issues.Where(i => string.Equals(i.ParentId, query.ParentId, StringComparison.Ordinal)).ToList();
+
+            var tickets = new List<Ticket>(issues.Count);
+            foreach (var issue in issues)
                 tickets.Add(await ToTicketAsync(issue, token).ConfigureAwait(false));
 
             return (IReadOnlyList<Ticket>)tickets;
         }, ct).ConfigureAwait(false);
+    }
+
+    // Maximum issue-list pages to walk before giving up (guards against a server that
+    // keeps handing back a non-empty cursor). 50 pages * 100 per page = 5000 issues.
+    private const int MaxListPages = 50;
+
+    /// <summary>
+    /// Walks every cursor page for an issues-list URL and returns the flattened results.
+    /// <paramref name="baseUrl"/> must already carry its leading query string (it is
+    /// extended with <c>&amp;cursor=</c>). Stops on an empty/repeated cursor or the page cap.
+    /// </summary>
+    private async Task<List<PlaneIssue>> FetchAllIssuesAsync(string baseUrl, CancellationToken ct)
+    {
+        var all = new List<PlaneIssue>();
+        string? cursor = null;
+        for (var page = 0; page < MaxListPages; page++)
+        {
+            var url = string.IsNullOrEmpty(cursor)
+                ? baseUrl
+                : $"{baseUrl}&cursor={Uri.EscapeDataString(cursor)}";
+            var list = await GetJsonAsync<PlaneIssueList>(url, PlaneJsonContext.Default, ct).ConfigureAwait(false);
+            all.AddRange(list.Results);
+
+            if (string.IsNullOrEmpty(list.NextCursor) || string.Equals(list.NextCursor, cursor, StringComparison.Ordinal))
+                break;
+            cursor = list.NextCursor;
+        }
+        return all;
+    }
+
+    /// <summary>Cursor-paginated variant of <see cref="FetchAllIssuesAsync"/> for the expand=state shape.</summary>
+    private async Task<List<PlaneIssueExpanded>> FetchAllExpandedAsync(string baseUrl, CancellationToken ct)
+    {
+        var all = new List<PlaneIssueExpanded>();
+        string? cursor = null;
+        for (var page = 0; page < MaxListPages; page++)
+        {
+            var url = string.IsNullOrEmpty(cursor)
+                ? baseUrl
+                : $"{baseUrl}&cursor={Uri.EscapeDataString(cursor)}";
+            var list = await GetJsonAsync<PlaneIssueExpandedList>(url, PlaneJsonContext.Default, ct).ConfigureAwait(false);
+            all.AddRange(list.Results);
+
+            if (string.IsNullOrEmpty(list.NextCursor) || string.Equals(list.NextCursor, cursor, StringComparison.Ordinal))
+                break;
+            cursor = list.NextCursor;
+        }
+        return all;
     }
 
     public async Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct)
