@@ -243,3 +243,197 @@ public class WorkerResultParserEscalationMetadataTests
         Assert.True(outcome.Result.Metadata.ContainsKey("escalation"));
     }
 }
+
+/// <summary>
+/// Tests for fenced-block extraction in WorkerResultParser (TLB-334).
+/// </summary>
+public class WorkerResultParserFencedBlockTests
+{
+    private const string MinimalWorkerResult =
+        "WORKER_RESULT\n" +
+        "{\"status\":\"Ok\",\"summary\":\"done\",\"files_changed\":[],\"failure_reason\":null,\"metadata\":{}}\n";
+
+    [Fact]
+    public void TryParse_SingleValidBlock_BlockMapContainsBlock_EnvelopeParsed()
+    {
+        var stdout =
+            "<<<PLAN_START\n" +
+            "line one\n" +
+            "line two\n" +
+            "<<<PLAN_END\n" +
+            MinimalWorkerResult;
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.NotNull(outcome.Result);
+        Assert.Equal(Status.Ok, outcome.Result.Status);
+        Assert.NotNull(outcome.Blocks);
+        Assert.True(outcome.Blocks.ContainsKey("PLAN"));
+        Assert.Equal("line one\nline two", outcome.Blocks["PLAN"]);
+    }
+
+    [Fact]
+    public void TryParse_NoBlocks_EmptyBlockMap_EnvelopeParsed()
+    {
+        var outcome = WorkerResultParser.TryParse(MinimalWorkerResult);
+
+        Assert.NotNull(outcome.Result);
+        Assert.Equal(Status.Ok, outcome.Result.Status);
+        Assert.NotNull(outcome.Blocks);
+        Assert.Empty(outcome.Blocks);
+    }
+
+    [Fact]
+    public void TryParse_TwoValidBlocks_BothInMap_EnvelopeParsed()
+    {
+        var stdout =
+            "<<<ALPHA_START\n" +
+            "alpha content\n" +
+            "<<<ALPHA_END\n" +
+            "<<<BETA_START\n" +
+            "beta content\n" +
+            "<<<BETA_END\n" +
+            MinimalWorkerResult;
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.NotNull(outcome.Result);
+        Assert.Equal(2, outcome.Blocks.Count);
+        Assert.Equal("alpha content", outcome.Blocks["ALPHA"]);
+        Assert.Equal("beta content", outcome.Blocks["BETA"]);
+    }
+
+    [Fact]
+    public void TryParse_UnclosedBlock_FenceScanFailed_ErrorContainsUnclosed()
+    {
+        var stdout =
+            "<<<PLAN_START\n" +
+            "some content\n" +
+            MinimalWorkerResult;
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.Null(outcome.Result);
+        Assert.Equal("FenceScanError", outcome.DeserializeErrorType);
+        Assert.NotNull(outcome.DeserializeErrorMessage);
+        Assert.Contains("unclosed", outcome.DeserializeErrorMessage);
+    }
+
+    [Fact]
+    public void TryParse_MismatchedBlockName_FenceScanFailed_ErrorContainsMismatched()
+    {
+        var stdout =
+            "<<<ALPHA_START\n" +
+            "content\n" +
+            "<<<BETA_END\n" +
+            MinimalWorkerResult;
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.Null(outcome.Result);
+        Assert.Equal("FenceScanError", outcome.DeserializeErrorType);
+        Assert.NotNull(outcome.DeserializeErrorMessage);
+        Assert.Contains("mismatched", outcome.DeserializeErrorMessage);
+    }
+
+    [Fact]
+    public void TryParse_DuplicateBlockName_FenceScanFailed_ErrorContainsDuplicate()
+    {
+        var stdout =
+            "<<<PLAN_START\n" +
+            "first\n" +
+            "<<<PLAN_END\n" +
+            "<<<PLAN_START\n" +
+            "second\n" +
+            "<<<PLAN_END\n" +
+            MinimalWorkerResult;
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.Null(outcome.Result);
+        Assert.Equal("FenceScanError", outcome.DeserializeErrorType);
+        Assert.NotNull(outcome.DeserializeErrorMessage);
+        Assert.Contains("duplicate", outcome.DeserializeErrorMessage);
+    }
+
+    [Fact]
+    public void TryParse_InvalidBlockName_Lowercase_FenceScanFailed_ErrorContainsInvalidBlockName()
+    {
+        var stdout =
+            "<<<plan_START\n" +
+            "content\n" +
+            "<<<plan_END\n" +
+            MinimalWorkerResult;
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.Null(outcome.Result);
+        Assert.Equal("FenceScanError", outcome.DeserializeErrorType);
+        Assert.NotNull(outcome.DeserializeErrorMessage);
+        Assert.Contains("invalid block name", outcome.DeserializeErrorMessage);
+    }
+}
+
+/// <summary>
+/// Tests for FencedBlockResolver._ref helper (TLB-334).
+/// </summary>
+public class FencedBlockResolverTests
+{
+    private static IReadOnlyDictionary<string, string> MakeBlocks(params (string, string)[] pairs)
+    {
+        var d = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (k, v) in pairs)
+            d[k] = v;
+        return d;
+    }
+
+    private static IReadOnlyDictionary<string, object> MakeMeta(params (string, object)[] pairs)
+    {
+        var d = new Dictionary<string, object>(StringComparer.Ordinal);
+        foreach (var (k, v) in pairs)
+            d[k] = v;
+        return d;
+    }
+
+    [Fact]
+    public void TryResolveRef_ValidRef_ResolvesToBlockContent()
+    {
+        var blocks = MakeBlocks(("PLAN", "the plan body"));
+        var meta = MakeMeta(("plan_body_ref", (object)"PLAN"));
+
+        var resolved = FencedBlockResolver.TryResolveRef(blocks, meta, "plan_body_ref", out var content, out var error);
+
+        Assert.True(resolved);
+        Assert.Equal("the plan body", content);
+        Assert.Null(error);
+    }
+
+    [Fact]
+    public void TryResolveRef_RefFieldAbsentFromMetadata_ReturnsFalse_ErrorMentionsField()
+    {
+        var blocks = MakeBlocks(("PLAN", "body"));
+        var meta = MakeMeta();
+
+        var resolved = FencedBlockResolver.TryResolveRef(blocks, meta, "plan_body_ref", out var content, out var error);
+
+        Assert.False(resolved);
+        Assert.Null(content);
+        Assert.NotNull(error);
+        Assert.Contains("plan_body_ref", error);
+    }
+
+    [Fact]
+    public void TryResolveRef_RefFieldPresentButBlockMissing_ReturnsFalse_ErrorMentionsReferencedBlockNotFound()
+    {
+        var blocks = MakeBlocks(("OTHER", "something"));
+        var meta = MakeMeta(("plan_body_ref", (object)"PLAN"));
+
+        var resolved = FencedBlockResolver.TryResolveRef(blocks, meta, "plan_body_ref", out var content, out var error);
+
+        Assert.False(resolved);
+        Assert.Null(content);
+        Assert.NotNull(error);
+        Assert.Contains("referenced block not found", error);
+        Assert.Contains("PLAN", error);
+    }
+}
