@@ -8,7 +8,7 @@ build - Throughline Build
 Usage:
   build plan <ticket-id> [ticket-id ...] [--agent <name>] [--debug|--quiet] [--summary-json]       Run the plan phase for a ticket (multiple tickets dispatch sequentially, stops at first failure)
   build implement <ticket-id> [ticket-id ...] [--agent <name>] [--debug|--quiet] [--summary-json]  Run the implement phase for a ticket (multiple tickets dispatch sequentially, stops at first failure)
-  build review <ticket-id> [--agent <name>] [--debug|--quiet] [--summary-json]     Run the review phase for a ticket
+  build review <ticket-id> [ticket-id ...] [--agent <name>] [--debug|--quiet] [--summary-json]  Run the review phase for a ticket (multiple tickets dispatch sequentially, stops at first failure)
   build ship <ticket-id> [ticket-id ...] [--debug] [--summary-json] [--no-auto-merge]               Ship a reviewed ticket; local fast-forward merge, no push to remote; multiple tickets dispatch sequentially, stops at first failure; --debug accepted but is a no-op (ship has no worker subprocess)
   build chain <ticket-id> [ticket-id ...] [--agent <name>] [--agent-plan <name>] [--agent-implement <name>] [--agent-review <name>] [--debug] [--no-auto-resolve] [--no-auto-merge]  Run the full chain (plan -> implement -> review -> ship cycle) for a ticket (multiple tickets dispatch sequentially, stops at first failure); streams per-phase output to stdout
   build new <body-path> [--title "..."] [--type "..."] [--label "..."]* [--review] [--debug]  Create a new ticket from a body file (file mode: arg must be an existing file)

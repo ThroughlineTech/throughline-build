@@ -959,6 +959,64 @@ static async Task<int> RunAsync(string[] args)
         dispatchExitCode = 0;
         break;
     }
+    else if (verb == "review")
+    {
+        var verifierWorkerOptions = new WorkerOptions(
+            TimeSpan.FromMinutes(config2.Review.VerifierTimeoutMinutes),
+            config2.Review.VerifierAllowedTools,
+            DebugCaptureDirectory: debugCaptureDir,
+            LiveStdoutSink: debugMode ? Console.Out : null,
+            LiveStderrSink: debugMode ? Console.Error : null,
+            ProgressDigestSink: enableDigest ? Console.Error : null);
+        var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
+        var phase = new ReviewPhase(ticketing, workerFactory.Create(EffectiveAgentFor("review")), eventSink, buildOptions, reviewOptions, project: config2.Project);
+        ReviewResult result;
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+            result = await phase.RunAsync(ticketId, cwd, cts.Token);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            Console.Error.WriteLine($"Ticket not found: {ex.Message}");
+            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+            dispatchExitCode = 2;
+            break;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            dispatchExitCode = 1;
+            break;
+        }
+
+        var reviewSummary = PhaseSummaryBuilder.BuildReview(
+            ticketId: result.TicketId,
+            success: result.Success,
+            verdict: result.Verdict?.ToString(),
+            rationale: result.VerdictRationale,
+            checksFailed: result.ChecksFailed,
+            failureReason: result.FailureReason,
+            events: eventSink.Snapshot(),
+            planeUrl: PlaneUrl(),
+            sessionArtifactsPath: ArtifactsPath());
+        WriteSummary(reviewSummary);
+
+        if (!result.Success)
+        {
+            Console.Error.WriteLine($"Review phase failed: {result.FailureReason}");
+            if (debugCaptureDir is not null)
+                Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
+            dispatchExitCode = 1;
+            break;
+        }
+
+        if (debugCaptureDir is not null)
+            Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
+        dispatchExitCode = 0;
+        break;
+    }
     else if (verb == "ship")
     {
         var shipOptions = new ShipOptions(

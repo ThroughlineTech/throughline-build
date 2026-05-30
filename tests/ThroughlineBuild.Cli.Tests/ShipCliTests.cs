@@ -36,7 +36,7 @@ public class ShipCliTests
         // TLB-310 added multi-ticket support.
         Assert.Contains("build plan <ticket-id> [ticket-id ...] [--agent <name>] [--debug|--quiet]", CliUsage.UsageText);
         Assert.Contains("build implement <ticket-id> [ticket-id ...] [--agent <name>] [--debug|--quiet]", CliUsage.UsageText);
-        Assert.Contains("build review <ticket-id> [--agent <name>] [--debug|--quiet]", CliUsage.UsageText);
+        Assert.Contains("build review <ticket-id> [ticket-id ...] [--agent <name>] [--debug|--quiet]", CliUsage.UsageText);
     }
 
     [Fact]
