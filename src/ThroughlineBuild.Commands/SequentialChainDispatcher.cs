@@ -1,9 +1,10 @@
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Phases;
 
 namespace ThroughlineBuild.Commands;
 
 /// <summary>
-/// Dispatches a list of ticket IDs sequentially, applying a simple predecessor-failure
+/// Dispatches a list of ticket IDs sequentially, applying the AncestorSkipFilter
 /// skip rule when continuePastFailure is false. When continuePastFailure is false and a
 /// prior ticket in the sequence produced a non-success outcome, all remaining tickets
 /// receive a synthesized Skipped result and are not dispatched.
@@ -14,14 +15,6 @@ namespace ThroughlineBuild.Commands;
 /// </summary>
 public static class SequentialChainDispatcher
 {
-    private static readonly IReadOnlySet<ChainOutcome> SuccessOutcomes =
-        new HashSet<ChainOutcome>
-        {
-            ChainOutcome.Completed,
-            ChainOutcome.RatifiedObsolete,
-            ChainOutcome.ParentCompleted
-        };
-
     /// <summary>
     /// Runs each ticket in <paramref name="ticketIds"/> sequentially. Returns one
     /// <see cref="ChainResult"/> per ticket in input order.
@@ -41,30 +34,32 @@ public static class SequentialChainDispatcher
         bool continuePastFailure,
         CancellationToken ct)
     {
-        var results = new List<ChainResult>(ticketIds.Count);
-        bool anyFailedSoFar = false;
+        var orderedIds = ticketIds is List<string> l ? l : new List<string>(ticketIds);
 
-        foreach (var tid in ticketIds)
+        // Build implicit linear edges: each preceding ticket is an ancestor of all following ones.
+        var edges = new List<(string Blocker, string Blocked)>();
+        for (int i = 0; i < orderedIds.Count; i++)
+            for (int j = i + 1; j < orderedIds.Count; j++)
+                edges.Add((orderedIds[i], orderedIds[j]));
+
+        var results = new List<ChainResult>(ticketIds.Count);
+        var completedResults = new Dictionary<string, ChainResult>(StringComparer.Ordinal);
+
+        foreach (var tid in orderedIds)
         {
             ct.ThrowIfCancellationRequested();
 
-            if (!continuePastFailure && anyFailedSoFar)
+            var skipResult = AncestorSkipFilter.ShouldSkip(tid, completedResults, edges, continuePastFailure);
+            if (skipResult != null)
             {
-                results.Add(new ChainResult(
-                    TicketId: tid,
-                    Steps: Array.Empty<ChainStep>(),
-                    Outcome: ChainOutcome.Skipped,
-                    TotalDuration: TimeSpan.Zero,
-                    FinalRationale: null,
-                    SkipReason: "skipped (prior ticket in sequence failed)"));
+                results.Add(skipResult);
+                completedResults[tid] = skipResult;
                 continue;
             }
 
             var result = await runTicket(tid, ct).ConfigureAwait(false);
             results.Add(result);
-
-            if (!SuccessOutcomes.Contains(result.Outcome))
-                anyFailedSoFar = true;
+            completedResults[tid] = result;
         }
 
         return results;

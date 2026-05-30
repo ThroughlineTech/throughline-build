@@ -1276,11 +1276,11 @@ static async Task<int> RunAsync(string[] args)
 
         // Collect all ticket IDs from args: args[1] is the primary, plus any additional
         // positional args that don't start with '--'.
-        var ticketIds = new List<string> { ticketId };
+        var chainTicketIds = new List<string> { ticketId };
         for (int i = 2; i < args.Length; i++)
         {
             if (!args[i].StartsWith("--", StringComparison.Ordinal))
-                ticketIds.Add(args[i]);
+                chainTicketIds.Add(args[i]);
         }
 
         try
@@ -1288,12 +1288,12 @@ static async Task<int> RunAsync(string[] args)
             using var cts = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
-            if (ticketIds.Count > 1)
+            if (chainTicketIds.Count > 1)
             {
                 // Sequential fallback for multi-ticket dispatch.
                 // TLB-312 will replace this with concurrent ParallelDispatcher when rebased.
                 var allResults = await SequentialChainDispatcher.RunAsync(
-                    ticketIds,
+                    chainTicketIds,
                     async (tid, token) =>
                     {
                         var singleCtx = new TicketCommandContext(tid, new Dictionary<string, string>(StringComparer.Ordinal)
