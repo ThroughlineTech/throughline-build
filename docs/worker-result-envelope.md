@@ -145,8 +145,46 @@ The following block names are reserved for specific phases:
 #### Review Phase
 - `REVIEW_CRITIQUE`: Human reviewer feedback, acceptance criteria verification, or requested changes
 
+#### Decompose Phase
+- **No fenced blocks**: The decompose phase emits structured JSON (see below)
+
 #### Future Phases
 Additional block names may be added as the protocol evolves. Block names are namespaced by phase to avoid collisions.
+
+### Decompose Phase: child_specs JSON Format
+
+The decompose phase produces a `child_specs` array in the metadata, where each child ticket is represented as a structured JSON object:
+
+```json
+{
+  "child_specs": [
+    {
+      "title": "short ticket headline",
+      "description": "2-4 prose sentences describing the work",
+      "acceptance_criteria": "prose acceptance statements",
+      "size": "S",
+      "scope_boundary": "one sentence boundary"
+    }
+  ]
+}
+```
+
+**Field constraints (by design):**
+- `title`: 3-8 words, under 60 chars, no code snippets
+- `description`: 2-4 prose sentences, approximately 350 chars max, no shell commands or backticks
+- `acceptance_criteria`: prose statements, approximately 400 chars max, no embedded code blocks
+- `size`: single enum value ("S", "M", or "L")
+- `scope_boundary`: one sentence, approximately 120 chars max
+
+**Decision: No fenced-block migration (keep structured JSON)**
+
+The decompose phase keeps child_specs as a JSON array rather than migrating to fenced blocks. Rationale:
+
+1. **Low JSON-escape risk**: The fenced-block migration in plan/implement/review/draft was driven by large content with unescaped double-quotes from shell snippets or code blocks. Decompose's per-child fields are bounded by design and contain only prose - the risk of JSON-escape failure is minimal.
+
+2. **Structural argument**: DecomposePhase needs typed per-child field access (iterating child_specs to create individual Plane tickets in a loop). Migrating to fenced blocks would require either N separate blocks per child or a re-encoded format inside one block, adding implementation complexity with no reliability benefit.
+
+**Future phase guidance**: Apply this decision logic when adding new phases - migrate to fenced blocks only when a field carries multi-paragraph narratives, embedded diffs, shell command listings, or other content with unescaped quotes and backticks. Short prose fields (sentences, not paragraphs) and enums stay in JSON.
 
 ### Failure Modes
 
