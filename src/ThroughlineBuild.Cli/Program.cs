@@ -1107,8 +1107,10 @@ static async Task<int> RunAsync(string[] args)
                     {
                         ChainOutcome.Completed => 0,
                         ChainOutcome.RatifiedObsolete => 0,
+                        ChainOutcome.ParentCompleted => 0,
                         ChainOutcome.RefusedInitialState => 2,
                         ChainOutcome.StoppedAtPlan => 3,
+                        ChainOutcome.ParentStoppedEarly => 3,
                         ChainOutcome.StoppedAtImplement => 4,
                         ChainOutcome.StoppedAtReview => 5,
                         ChainOutcome.ReworkCapExceeded => 6,

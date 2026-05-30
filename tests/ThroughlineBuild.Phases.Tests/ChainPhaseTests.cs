@@ -479,6 +479,8 @@ public class ChainPhaseTests
     {
         private Ticket _ticket;
         private readonly List<TicketComment> _seededComments = new();
+        private readonly Dictionary<string, Ticket> _extraTickets = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, List<Ticket>> _childrenByParentUuid = new(StringComparer.Ordinal);
         public List<(string id, TicketState state)> Transitions { get; } = new();
         public List<(string id, string html)> PostedComments { get; } = new();
 
@@ -490,10 +492,25 @@ public class ChainPhaseTests
         public void SeedImplementedAt(string sha) =>
             SeedComment($"<p>[implemented_at: {sha}]</p>");
 
+        /// <summary>Seed an additional ticket lookup by its Id (e.g. "TLB-2").</summary>
+        public void SeedTicket(Ticket t) => _extraTickets[t.Id] = t;
+
+        /// <summary>Seed children returned for a given parent UUID.</summary>
+        public void SeedChildren(string parentUuid, IReadOnlyList<Ticket> children)
+        {
+            _childrenByParentUuid[parentUuid] = children.ToList();
+            foreach (var c in children)
+                _extraTickets[c.Id] = c;
+        }
+
         public BackendCapabilities Capabilities => new BackendCapabilities(true, true, true, false);
 
-        public Task<Ticket> GetAsync(string id, CancellationToken ct) =>
-            Task.FromResult(_ticket);
+        public Task<Ticket> GetAsync(string id, CancellationToken ct)
+        {
+            if (_extraTickets.TryGetValue(id, out var extra))
+                return Task.FromResult(extra);
+            return Task.FromResult(_ticket);
+        }
 
         public Task<IReadOnlyList<Ticket>> GetBatchAsync(IEnumerable<string> ids, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<Ticket>>(new[] { _ticket });
@@ -501,6 +518,19 @@ public class ChainPhaseTests
         public Task TransitionAsync(string id, TicketState newState, CancellationToken ct)
         {
             Transitions.Add((id, newState));
+            if (_extraTickets.TryGetValue(id, out var extra))
+            {
+                var updated = extra with { State = newState };
+                _extraTickets[id] = updated;
+                if (newState == TicketState.InReview)
+                {
+                    _seededComments.Add(new TicketComment(
+                        Guid.NewGuid().ToString(),
+                        $"<p>[implemented_at: {CommitSha}]</p>",
+                        DateTimeOffset.UtcNow));
+                }
+                return Task.CompletedTask;
+            }
             _ticket = _ticket with { State = newState };
             if (newState == TicketState.InReview)
             {
@@ -540,8 +570,13 @@ public class ChainPhaseTests
         public Task SetParentAsync(string childUuid, string parentUuid, CancellationToken ct) =>
             Task.CompletedTask;
 
-        public Task<IReadOnlyList<Ticket>> QueryAsync(TicketQuery query, CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<Ticket>>(Array.Empty<Ticket>());
+        public Task<IReadOnlyList<Ticket>> QueryAsync(TicketQuery query, CancellationToken ct)
+        {
+            if (query.ParentId is not null &&
+                _childrenByParentUuid.TryGetValue(query.ParentId, out var kids))
+                return Task.FromResult<IReadOnlyList<Ticket>>(kids.AsReadOnly());
+            return Task.FromResult<IReadOnlyList<Ticket>>(Array.Empty<Ticket>());
+        }
 
         public Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct) =>
             Task.CompletedTask;
@@ -578,6 +613,32 @@ public class ChainPhaseTests
             return Task.FromResult(new WorkerResult(
                 Status.Ok, "ok", Array.Empty<string>(), null,
                 _metadata ?? new Dictionary<string, object>()));
+        }
+    }
+
+    /// <summary>Worker that fails on the first call and succeeds on all subsequent calls.</summary>
+    private sealed class FailFirstWorkerAgent : IWorkerAgent
+    {
+        private readonly IReadOnlyDictionary<string, object> _metadata;
+        private int _callCount;
+
+        public FailFirstWorkerAgent(IReadOnlyDictionary<string, object> metadata)
+        {
+            _metadata = metadata;
+        }
+
+        public string Name => "claude-code";
+        public IWorkerProgressDigester? Digester => null;
+
+        public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
+        {
+            _callCount++;
+            if (_callCount == 1)
+                return Task.FromResult(new WorkerResult(
+                    Status.Failed, "failed", Array.Empty<string>(), "worker error",
+                    new Dictionary<string, object>()));
+            return Task.FromResult(new WorkerResult(
+                Status.Ok, "ok", Array.Empty<string>(), null, _metadata));
         }
     }
 
@@ -811,23 +872,142 @@ public class ChainPhaseTests
         Assert.Null(result.SubsumedBy);
     }
 
+    // -------------------------------------------------------------------------
+    // Parent-chain tests
+    // -------------------------------------------------------------------------
+
+    private static Ticket MakeChildTicket(string id, string uuid, TicketState state) => new Ticket(
+        Id: id,
+        Uuid: uuid,
+        Title: $"Child ticket {id}",
+        Type: "feature",
+        State: state,
+        Size: Size.S,
+        Risk: Risk.Low,
+        DescriptionHtml: "<p>child</p>",
+        Relations: Array.Empty<Relation>(),
+        Labels: Array.Empty<string>(),
+        ParentId: "ticket-uuid-1");
+
+    [Fact]
+    public async Task RunAsync_ParentWith2BacklogChildren_BothComplete_ParentCompleted_TwoChildResults()
+    {
+        // Parent ticket has 2 Backlog children; both should complete.
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var verifiers = new Queue<IVerifier>();
+        // 2 children * 1 review pass each
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        Assert.Equal(2, result.ChildResults!.Count);
+        Assert.All(result.ChildResults, r => Assert.Equal(ChainOutcome.Completed, r.Outcome));
+    }
+
+    [Fact]
+    public async Task RunAsync_ParentWithOneDoneChildAndOneBacklogChild_SkipsDone_OneChildResult_ParentCompleted()
+    {
+        // Parent has 1 Done child (skipped) and 1 Backlog child (processed).
+        var parent = MakeTicket(TicketState.Backlog);
+        var doneChild = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Done);
+        var activeChild = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { doneChild, activeChild });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var verifiers = new Queue<IVerifier>();
+        // Only 1 active child needs a review
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        // Only the Backlog child was processed
+        var onlyChild = Assert.Single(result.ChildResults!);
+        Assert.Equal("TLB-3", onlyChild.TicketId);
+        Assert.Equal(ChainOutcome.Completed, onlyChild.Outcome);
+    }
+
+    [Fact]
+    public async Task RunAsync_ParentWithAllDoneChildren_NoEligible_ParentCompleted_ZeroChildResults()
+    {
+        // Parent has only Done children; no eligible children to process.
+        var parent = MakeTicket(TicketState.Backlog);
+        var done1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Done);
+        var done2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Cancelled);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { done1, done2 });
+
+        var chain = BuildChain(ticketing, new FakeWorkerAgent(null), new FakeWorkerAgent(null), new Queue<IVerifier>());
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        Assert.Empty(result.ChildResults!);
+    }
+
+    [Fact]
+    public async Task RunAsync_ParentWith2BacklogChildren_OneChildFailsPlan_ParentStoppedEarly_TwoChildResults()
+    {
+        // Parent ticket has 2 Backlog children; first child fails at plan (StoppedAtPlan),
+        // second child succeeds. anyStoppedEarly should be true -> ParentStoppedEarly.
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        // Plan worker fails on first call (child1), succeeds on subsequent calls (child2).
+        var planWorker = new FailFirstWorkerAgent(OkWorkerResult().Metadata);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var verifiers = new Queue<IVerifier>();
+        // Only child2 reaches review
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentStoppedEarly, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        Assert.Equal(2, result.ChildResults!.Count);
+        Assert.Contains(result.ChildResults, r => r.Outcome != ChainOutcome.Completed);
+    }
+
     private sealed class FakeGitClientChain : IGitClient
     {
         private readonly bool _shipFails;
+        private readonly List<WorktreeInfo> _worktrees = new();
 
         public FakeGitClientChain(bool shipFails = false)
         {
             _shipFails = shipFails;
+            // Seed the default single-ticket worktree for backward compatibility.
+            _worktrees.Add(new WorktreeInfo("/fake/worktree", BranchName, CommitSha, false, false));
         }
 
         public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
             Task.FromResult(MainSha);
 
         public Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<WorktreeInfo>>(new[]
-            {
-                new WorktreeInfo("/fake/worktree", BranchName, CommitSha, false, false)
-            });
+            Task.FromResult<IReadOnlyList<WorktreeInfo>>(_worktrees.AsReadOnly());
 
         public Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct) =>
             Task.FromResult(new WorktreeRemoveResult(true, null));
@@ -838,6 +1018,8 @@ public class ChainPhaseTests
         public Task<WorktreeCreateResult> CreateWorktreeAsync(string worktreePath, string newBranch, string fromRef, string mainWorktreePath, CancellationToken ct)
         {
             Directory.CreateDirectory(worktreePath);
+            // Track the created worktree so ListWorktreesAsync can find it during ship.
+            _worktrees.Add(new WorktreeInfo(worktreePath, newBranch, CommitSha, false, false));
             return Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
         }
 

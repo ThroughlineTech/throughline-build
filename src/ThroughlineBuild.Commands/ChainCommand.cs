@@ -89,8 +89,19 @@ public sealed class ChainCommand : ITicketCommand
         var finalLine = FormatFinalLine(ticketId, result);
         Console.WriteLine(finalLine);
 
+        // For parent-chain results, print per-child summary lines.
+        if (result.ChildResults is { Count: > 0 })
+        {
+            foreach (var child in result.ChildResults)
+            {
+                Console.WriteLine(FormatChildSummaryLine(child));
+            }
+        }
+
         // Emit operator triage suggestions if the chain did not complete.
-        if (result.Outcome != ChainOutcome.Completed && result.Outcome != ChainOutcome.RatifiedObsolete)
+        if (result.Outcome != ChainOutcome.Completed &&
+            result.Outcome != ChainOutcome.RatifiedObsolete &&
+            result.Outcome != ChainOutcome.ParentCompleted)
         {
             var triage = GetOperatorTriageSuggestions(ticketId, result, initialTicket);
             if (!string.IsNullOrEmpty(triage))
@@ -100,10 +111,11 @@ public sealed class ChainCommand : ITicketCommand
             }
         }
 
-        // Return success for Completed and RatifiedObsolete.
-        return new CommandResult(
-            result.Outcome == ChainOutcome.Completed || result.Outcome == ChainOutcome.RatifiedObsolete,
-            string.Empty);
+        // Return success for Completed, RatifiedObsolete, and ParentCompleted.
+        bool success = result.Outcome == ChainOutcome.Completed
+            || result.Outcome == ChainOutcome.RatifiedObsolete
+            || result.Outcome == ChainOutcome.ParentCompleted;
+        return new CommandResult(success, string.Empty);
     }
 
     public static string FormatStepLine(string ticketId, ChainStep step)
@@ -158,8 +170,20 @@ public sealed class ChainCommand : ITicketCommand
             ChainOutcome.StoppedAtShip =>
                 $"[{ticketId}] chain stopped: ship gate failed",
 
+            ChainOutcome.ParentCompleted =>
+                $"[{ticketId}] parent chain complete: all eligible children completed ({durationStr})",
+
+            ChainOutcome.ParentStoppedEarly =>
+                $"[{ticketId}] parent chain stopped early: one or more children did not complete ({durationStr})",
+
             _ => $"[{ticketId}] chain stopped: unknown outcome {result.Outcome}"
         };
+    }
+
+    private static string FormatChildSummaryLine(ChainResult child)
+    {
+        var durationStr = FormatDuration(child.TotalDuration);
+        return $"  [{child.TicketId}] {child.Outcome} ({durationStr})";
     }
 
     private static string FormatDuration(TimeSpan duration)

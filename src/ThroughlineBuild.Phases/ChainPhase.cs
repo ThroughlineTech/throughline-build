@@ -3,6 +3,7 @@ using System.Net;
 using System.Text.Json;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Helpers;
 
 namespace ThroughlineBuild.Phases;
 
@@ -55,6 +56,13 @@ public class ChainPhase
         var chainSessionId = _sessionIdGenerator();
 
         var ticket = await _ticketing.GetAsync(options.TicketId, ct).ConfigureAwait(false);
+
+        // Parent-ticket chain path: recurse to non-terminal children
+        var chainChildren = await _ticketing.QueryAsync(new TicketQuery(ParentId: ticket.Uuid), ct).ConfigureAwait(false);
+        if (chainChildren.Count > 0)
+        {
+            return await RunParentChainAsync(options, ticket, chainChildren, ct).ConfigureAwait(false);
+        }
 
         var startPhase = ticket.State switch
         {
@@ -517,6 +525,73 @@ public class ChainPhase
         options.OnStep?.Invoke(ratifyStep);
 
         return verdict;
+    }
+
+    private async Task<ChainResult> RunParentChainAsync(
+        ChainPhaseOptions options,
+        Ticket parentTicket,
+        IReadOnlyList<Ticket> children,
+        CancellationToken ct)
+    {
+        var totalSw = Stopwatch.StartNew();
+        var childResults = new List<ChainResult>();
+        bool anyStoppedEarly = false;
+
+        // Filter to non-terminal children (skip Done and Cancelled)
+        var eligible = children
+            .Where(c => c.State != TicketState.Done && c.State != TicketState.Cancelled)
+            .ToList();
+
+        foreach (var child in eligible)
+        {
+            var startStep = new ChainStep(
+                PhaseName: "chain",
+                ReworkRoundNumber: -1,
+                Status: Status.Ok,
+                FailureReason: null,
+                Verdict: null,
+                Duration: TimeSpan.Zero,
+                PhaseSessionId: _sessionIdGenerator());
+            options.OnStep?.Invoke(startStep);
+
+            var childOptions = options with { TicketId = child.Id };
+            var childResult = await RunAsync(childOptions, ct).ConfigureAwait(false);
+            childResults.Add(childResult);
+            if (childResult.Outcome != ChainOutcome.Completed &&
+                childResult.Outcome != ChainOutcome.RatifiedObsolete &&
+                childResult.Outcome != ChainOutcome.ParentCompleted)
+            {
+                anyStoppedEarly = true;
+            }
+
+            var doneStep = new ChainStep(
+                PhaseName: "chain",
+                ReworkRoundNumber: -1,
+                Status: anyStoppedEarly ? Status.Failed : Status.Ok,
+                FailureReason: anyStoppedEarly ? $"child {child.Id} stopped: {childResult.Outcome}" : null,
+                Verdict: null,
+                Duration: childResult.TotalDuration,
+                PhaseSessionId: _sessionIdGenerator());
+            options.OnStep?.Invoke(doneStep);
+        }
+
+        // Attempt parent rollup (fail-soft)
+        try { await _ticketing.RollupParentAsync(options.TicketId, ct).ConfigureAwait(false); }
+        catch { /* non-fatal */ }
+
+        totalSw.Stop();
+        var outcome = anyStoppedEarly ? ChainOutcome.ParentStoppedEarly : ChainOutcome.ParentCompleted;
+        var finalRationale = anyStoppedEarly
+            ? $"One or more children did not complete: {string.Join(", ", childResults.Where(r => r.Outcome != ChainOutcome.Completed && r.Outcome != ChainOutcome.RatifiedObsolete && r.Outcome != ChainOutcome.ParentCompleted).Select(r => r.TicketId))}"
+            : $"All {eligible.Count} eligible children completed.";
+
+        return new ChainResult(
+            TicketId: options.TicketId,
+            Steps: Array.Empty<ChainStep>(),
+            Outcome: outcome,
+            TotalDuration: totalSw.Elapsed,
+            FinalRationale: finalRationale,
+            ChildResults: childResults.AsReadOnly());
     }
 
     private enum StartPhase { Plan, Implement, Review, Refused }

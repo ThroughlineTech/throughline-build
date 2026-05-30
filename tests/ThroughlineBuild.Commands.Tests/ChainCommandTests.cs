@@ -349,6 +349,64 @@ public class ChainCommandTests
         Assert.False(runner.LastDebug, "expected debug=false to be forwarded to runner");
     }
 
+    // --- outcome: ParentCompleted ---
+
+    [Fact]
+    public async Task ParentCompleted_returns_success_with_child_summaries()
+    {
+        var (cmd, runner, _) = BuildCommand();
+        var childResults = new[]
+        {
+            new ChainResult("TLB-2", Array.Empty<ChainStep>(), ChainOutcome.Completed,
+                TimeSpan.FromSeconds(10), null),
+            new ChainResult("TLB-3", Array.Empty<ChainStep>(), ChainOutcome.Completed,
+                TimeSpan.FromSeconds(8), null),
+        };
+        runner.Result = new ChainResult(
+            TicketId: "TLB-1",
+            Steps: Array.Empty<ChainStep>(),
+            Outcome: ChainOutcome.ParentCompleted,
+            TotalDuration: TimeSpan.FromSeconds(20),
+            FinalRationale: "All 2 eligible children completed.",
+            ChildResults: childResults);
+
+        var (result, output) = await RunCapturingStdout(cmd, MakeCtx());
+
+        Assert.True(result.Success);
+        Assert.Contains("parent chain complete", output);
+        Assert.Contains("TLB-2", output);
+        Assert.Contains("TLB-3", output);
+    }
+
+    // --- outcome: ParentStoppedEarly ---
+
+    [Fact]
+    public async Task ParentStoppedEarly_returns_failure_with_child_summaries()
+    {
+        var (cmd, runner, _) = BuildCommand();
+        var childResults = new[]
+        {
+            new ChainResult("TLB-2", Array.Empty<ChainStep>(), ChainOutcome.Completed,
+                TimeSpan.FromSeconds(10), null),
+            new ChainResult("TLB-3", Array.Empty<ChainStep>(), ChainOutcome.StoppedAtPlan,
+                TimeSpan.FromSeconds(3), null),
+        };
+        runner.Result = new ChainResult(
+            TicketId: "TLB-1",
+            Steps: Array.Empty<ChainStep>(),
+            Outcome: ChainOutcome.ParentStoppedEarly,
+            TotalDuration: TimeSpan.FromSeconds(15),
+            FinalRationale: "One or more children did not complete: TLB-3",
+            ChildResults: childResults);
+
+        var (result, output) = await RunCapturingStdout(cmd, MakeCtx());
+
+        Assert.False(result.Success);
+        Assert.Contains("parent chain stopped early", output);
+        Assert.Contains("TLB-2", output);
+        Assert.Contains("TLB-3", output);
+    }
+
     // --- outcome: RatifiedObsolete ---
 
     [Fact]
