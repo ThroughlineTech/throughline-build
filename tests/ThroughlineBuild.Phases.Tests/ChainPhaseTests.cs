@@ -616,6 +616,32 @@ public class ChainPhaseTests
         }
     }
 
+    /// <summary>Worker that fails on the first call and succeeds on all subsequent calls.</summary>
+    private sealed class FailFirstWorkerAgent : IWorkerAgent
+    {
+        private readonly IReadOnlyDictionary<string, object> _metadata;
+        private int _callCount;
+
+        public FailFirstWorkerAgent(IReadOnlyDictionary<string, object> metadata)
+        {
+            _metadata = metadata;
+        }
+
+        public string Name => "claude-code";
+        public IWorkerProgressDigester? Digester => null;
+
+        public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
+        {
+            _callCount++;
+            if (_callCount == 1)
+                return Task.FromResult(new WorkerResult(
+                    Status.Failed, "failed", Array.Empty<string>(), "worker error",
+                    new Dictionary<string, object>()));
+            return Task.FromResult(new WorkerResult(
+                Status.Ok, "ok", Array.Empty<string>(), null, _metadata));
+        }
+    }
+
     private sealed class FakeEventSinkChain : IEventSink
     {
         public Task EmitAsync(WorkflowEvent ev, CancellationToken ct) => Task.CompletedTask;
@@ -935,6 +961,34 @@ public class ChainPhaseTests
         Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
         Assert.NotNull(result.ChildResults);
         Assert.Empty(result.ChildResults!);
+    }
+
+    [Fact]
+    public async Task RunAsync_ParentWith2BacklogChildren_OneChildFailsPlan_ParentStoppedEarly_TwoChildResults()
+    {
+        // Parent ticket has 2 Backlog children; first child fails at plan (StoppedAtPlan),
+        // second child succeeds. anyStoppedEarly should be true -> ParentStoppedEarly.
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        // Plan worker fails on first call (child1), succeeds on subsequent calls (child2).
+        var planWorker = new FailFirstWorkerAgent(OkWorkerResult().Metadata);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata);
+        var verifiers = new Queue<IVerifier>();
+        // Only child2 reaches review
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentStoppedEarly, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        Assert.Equal(2, result.ChildResults!.Count);
+        Assert.Contains(result.ChildResults, r => r.Outcome != ChainOutcome.Completed);
     }
 
     private sealed class FakeGitClientChain : IGitClient
