@@ -61,11 +61,11 @@ Common across all four:
 
 - A `BypassPermissions` option (default true) decides whether to emit the agent's unattended-mode flag: `--dangerously-skip-permissions` (Claude Code), `--full-auto` (Codex), `--yolo` (Gemini); Copilot always passes `-s --no-ask-user`.
 - All four call the shared `WorkerResultParser.TryParse` in `Workers.Common` ([src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs:73-174](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs#L73-L174)) - the parser scans for the `WORKER_RESULT` marker line and deserializes the JSON after it, last-valid-envelope-wins. The vendor wrappers differ only in what they feed the parser (the Claude `.Result` string, the Gemini `.response` string, or raw stdout).
-- Each builds an `llm_usage` metadata dictionary and merges it onto the parsed result. The `vendor` string is the per-agent constant above; `model`, `wall_clock_ms`, token counts, and (Claude only) `cost_usd` are filled when available. Codex/Gemini/Copilot currently emit zero token counts and null cost (their CLIs do not surface usage in these modes).
+- Each builds an `llm_usage` metadata dictionary and merges it onto the parsed result. The `vendor` string is the per-agent constant above; `model`, `wall_clock_ms`, token counts, and (Claude only) `cost_usd` are filled when available. Claude Code reports full input/output/cache token splits and cost; Gemini reports a single combined token total in `input_tokens` (output left 0, cost null); Codex and Copilot emit zeroed token counts and null cost (their CLIs do not surface usage in these modes).
 
 ### Usage and cost capture
 
-`ClaudeCodeAgent.BuildLlmUsageMetadata` ([ClaudeCodeAgent.cs:326-355](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L326-L355)) is the richest: it reads token counts and cache fields from the envelope's `usage` block and `total_cost_usd`, and tags `vendor: "anthropic"`. The other three emit a thinner dictionary (model + vendor + wall-clock, zeroed tokens, null cost). The `vendor` string is what `analyze-event-log` keys its pricing table off, so per-agent vendor strings are required for mixed-vendor cost rollups - and now exist.
+`ClaudeCodeAgent.BuildLlmUsageMetadata` ([ClaudeCodeAgent.cs:326-355](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L326-L355)) is the richest: it reads token counts and cache fields from the envelope's `usage` block and `total_cost_usd`, and tags `vendor: "anthropic"`. Gemini fills `input_tokens` from its combined token total ([GeminiAgent.cs:278-289](../../src/ThroughlineBuild.Workers.Gemini/GeminiAgent.cs#L278-L289)); Codex and Copilot emit a thin dictionary (model + vendor + wall-clock, zeroed tokens, null cost). The `vendor` string is what `analyze-event-log` keys its pricing table off, so per-agent vendor strings are required for mixed-vendor cost rollups - and now exist.
 
 ### Brief templates per agent
 
@@ -90,6 +90,7 @@ Each phase is then constructed with `workerFactory.Create(EffectiveAgentFor(phas
 ### Loose ends (worker layer)
 
 - The factory body is a hardcoded `if`-chain over four known names rather than a data-driven registry; adding a fifth agent requires editing this block in `Program.cs` (see "adding a worker agent" below).
+- The `build new` draft-mode path resolves the implement-phase agent name but then constructs `ClaudeCodeAgent` unconditionally ([Program.cs:516-525](../../src/ThroughlineBuild.Cli/Program.cs#L516-L525)) - draft generation is effectively Claude-Code-only regardless of `default_agent`.
 - `WorkerOptions.AllowedTools` is Claude-Code-shaped. Copilot maps it to repeated `--allow-tool` flags; Codex/Gemini ignore it.
 - Token/cost capture is asymmetric: only Claude Code reports real token counts and cost. Cross-vendor cost rollups in `analyze-event-log` are only as accurate as each agent's `llm_usage` block.
 

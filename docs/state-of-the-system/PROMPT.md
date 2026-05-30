@@ -158,7 +158,7 @@ prose, `file:line` references throughout.
 | File | Description |
 |---|---|
 | `00-index.md` | Architectural map + one-line summary per doc + status legend. |
-| `01-inventory.md` | CLI verbs, 14 library projects, 2 tools, scripts and CI - what each is, what it reads/writes, status. |
+| `01-inventory.md` | The 15 CLI verbs, 19 src projects (1 entry + 18 libraries), 2 AOT tools, scripts and CI - what each is, what it reads/writes, status. |
 | `02-install-build-run.md` | Toolchain, `build.sh`, `dotnet publish` flow, host requirements, update / uninstall. |
 | `03-external-dependencies.md` | Plane REST API, Anthropic REST API, `claude` CLI, NuGet packages, handshake on missing dependency. |
 | `04-configuration.md` | `.build/config.toml` sections, env vars, secrets, precedence. |
@@ -168,12 +168,13 @@ prose, `file:line` references throughout.
 | `08-workspace-assumptions.md` | Branch conventions, required tooling, OS specifics, CI matrix, worktree-aware behavior. |
 | `09-failure-modes.md` | Per-phase failure modes, idempotency posture, cross-cutting failure modes. |
 | `10-lifecycle-orchestration.md` | The state machine, per-phase step sequences, chain rework loop (`MaxReworkRounds = 2`), event kinds emitted. |
-| `11-llm-architecture.md` | The two LLM-contact interfaces (`ILlmClient`, `IWorkerAgent`), vendor-specific code map, refactor sequence to add a new provider. Added 2026-05-28 by request to support multi-provider planning. |
+| `11-llm-architecture.md` | The two LLM layers - the wired four-vendor worker layer (`IWorkerAgent`) and the built-but-unwired model-client layer (`ILlmClient` / `IModelClient`) - vendor-specific code map, what it takes to add a new provider. Added 2026-05-28 by request to support multi-provider planning; rewritten 2026-05-30 once the multi-provider worker set actually landed. |
 | `PROMPT.md` | This file. |
 
 Set evolution:
 - 2026-05-28 - initial publication (12 documents: 00-index, 01-10, PROMPT.md).
 - 2026-05-28 - added `11-llm-architecture.md` after operator request for a multi-provider planning document. No existing docs were modified except this `PROMPT.md` and `00-index.md` to link the new entry.
+- 2026-05-30 - full code-true refresh against HEAD `68d6fa2` (the baseline `164e733` was ~150 commits behind). No documents added or removed; the same 13-file set was rewritten in place. The multi-provider planning anticipated by `11` shipped at the worker layer in the interim, so `11` flipped from "Codex/Gemini Aspirational" to "four agents Functional and wired", and the new Aspirational item became the unwired `IModelClient` layer.
 
 ---
 
@@ -209,6 +210,14 @@ Set evolution:
 - "Backend" in `.build/config.toml` is read but only `"plane"` is meaningfully supported. The doc set surfaces this as a loose end in [04-configuration.md](04-configuration.md).
 - The `Phase.Command` enum value is documented as "used by `ITicketCommand` implementations for `WorkflowEvent.Phase` when no specific workflow phase applies" - that is the observed usage, not a documented intent.
 
+**2026-05-30 refresh judgment calls.**
+
+- **No new documents.** The interim work was large (multi-provider workers, multi-ticket/tree chain, `decompose`/`init`/`list` verbs, divergence/auto-rebase, obsolete-claim ratification) but it all maps onto the existing ten-question structure. Multi-ticket and tree-aware orchestration was folded into `10-lifecycle-orchestration.md`; the worker fan-out into `11-llm-architecture.md`. Splitting out a new doc would have broken the clean question-to-doc mapping for no reader benefit.
+- **Two multiplicities, two maturities.** The single most important code-true correction this pass: the *worker* layer (agent CLIs) is genuinely multi-vendor and wired, but the *model-client* layer (`IModelClient`/`AnthropicModelClient`) is built and tested yet constructed on no production path. The docs now state this distinction explicitly rather than treating "multi-provider" as one undifferentiated effort.
+- **Slash-command flags vs CLI flags.** Several flags named in operator-facing slash-command docs (`--n`/`--no-promote` for decompose, `--all`/`--feature` for list, `--sequential`/`--ship`/`--in-given-order` for chain) are not parsed by the `build` binary; only the flags in `CliUsage.cs` are real. The inventory doc records this gap rather than documenting the slash-command surface as if it were the CLI's.
+- **Duplicate-type call-outs.** Two `TicketGraph` types (a `Contracts` record built by `TicketDependencyGraph`, test-only; and a `Phases` class consumed by the live dispatcher) and two `Size` enums are documented as overlaps in `07-contracts.md` rather than silently picking one.
+- **Architecture-doc drift.** `docs/throughline-build-architecture.md` is now further from the code than at first publication (it still posits an `install` verb, local-merge-only ship with no push, a 9-value `Phase` enum, and `ClaudeCodeReviewer`). Each disagreement is flagged as a loose end in the relevant doc; the code wins.
+
 ---
 
 ## Refresh history
@@ -217,3 +226,4 @@ Set evolution:
 |---|---|---|
 | 2026-05-28 | `164e733` on `main` | First publication. 12 documents created (00-index, 01-10, PROMPT.md). Doc set built from `Program.cs`, the 14 `ThroughlineBuild.*` projects, `tests/`, `docs/throughline-build-architecture.md`, `.build/config.toml.example`, `.claude/plane-config.md`, `.claude/ticket-config.md`, `.github/workflows/build.yml`, `build.sh`, `.gitignore`, `.gitattributes`. |
 | 2026-05-28 | `164e733` on `main` | Added [11-llm-architecture.md](11-llm-architecture.md) at operator request: a dedicated map of LLM interfaces (`ILlmClient`, `IWorkerAgent`), vendor-specific code locations, and the architectural choices required to add a second provider. Updated `00-index.md` and this `PROMPT.md` to reference the new doc. No other docs touched. |
+| 2026-05-30 | `68d6fa2` on `main` | Full code-true refresh; baseline `164e733` was ~150 commits behind. All 13 files rewritten in place against HEAD source (no docs added/removed). Major code deltas absorbed: project count 14 -> 19 (`ModelClient`, `Workers.Common`, `Workers.Codex`, `Workers.Gemini`, `Workers.Copilot`); four wired worker agents replacing the claude-only worker (`WorkerAgentFactory`, per-agent config/sizes/templates, `WorkerSize`); `ClaudeCodeReviewer` -> `WorkerAgentReviewer`; `WorkerResultParser` relocated to `Workers.Common`; new verbs `decompose`/`init`/`list`; multi-ticket and tree-aware chain (`ParallelDispatcher`, `TopologicalSorter`, `AncestorSkipFilter`, parent recursion, all-children-Done ship gate, cascade close/defer); obsolete-claim ratification (`ObsoleteRatifier`, `TicketSubsumed`); divergence probe + auto-rebase + push-after-FF (`DivergenceState`, `MainAutoRebased`, `MainWorktreeLock`); Plane surface extensions (`QueryAsync`/`TransitionLifecycleAsync`/`UpdateDescriptionAsync`/`CreateChildTicketsAsync`, issue-type name->UUID, `RequestThrottle` 60/min, `?next_path=` deep-link); `EventKind` 9 -> 13, `Phase` 9 -> 10; `ANTHROPIC_API_KEY` hard gate removed (lazy `LlmClientFactory`); `IModelClient`/`AnthropicModelClient` SSE streaming built and tested but unwired. The verbatim prompt above was unchanged from the prior run. |
