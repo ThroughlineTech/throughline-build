@@ -63,4 +63,42 @@ public static class CliArgParser
 
         return (agentAll, agentPlan, agentImpl, agentReview, remaining);
     }
+
+    /// <summary>
+    /// Extracts ticket IDs from the argument list for multi-ticket dispatch.
+    /// Scans from args[1] forward (args[0] is the verb). Any token that does NOT
+    /// start with '--' is considered a ticket ID. Scanning stops at the first '--'-prefixed token.
+    /// </summary>
+    /// <param name="args">The full argument list, with args[0] being the verb.</param>
+    /// <returns>
+    /// A tuple of:
+    ///   ticketIds   - list of extracted ticket IDs in order
+    ///   remaining   - all tokens from the first flag onward
+    /// If args has fewer than 2 elements, both lists are empty.
+    /// </returns>
+    public static (IReadOnlyList<string> TicketIds, IReadOnlyList<string> Remaining) ExtractTicketIds(IReadOnlyList<string> args)
+    {
+        if (args.Count < 2)
+            return (Array.Empty<string>(), Array.Empty<string>());
+
+        var ticketIds = new List<string>();
+        var remaining = new List<string>();
+
+        int i = 1;
+        // Scan for ticket IDs (non-flag tokens)
+        while (i < args.Count && !args[i].StartsWith("--"))
+        {
+            ticketIds.Add(args[i]);
+            i++;
+        }
+
+        // Collect remaining tokens (flags and their values)
+        while (i < args.Count)
+        {
+            remaining.Add(args[i]);
+            i++;
+        }
+
+        return (ticketIds, remaining);
+    }
 }
