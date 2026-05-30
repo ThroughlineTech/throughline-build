@@ -105,7 +105,7 @@ public class ImplementPhaseTests
         var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
 
         Assert.False(result.Success);
-        Assert.Contains("did you mean to invoke rework", result.FailureReason ?? "");
+        Assert.Contains("build plan", result.FailureReason ?? "");
         Assert.Contains("Backlog", result.FailureReason ?? "");
         Assert.Empty(ticketing.Transitions);
         Assert.Empty(events.Events);
@@ -276,7 +276,7 @@ public class ImplementPhaseTests
 
             var content = File.ReadAllText(manifestPath);
             Assert.Contains("Backlog", content);
-            Assert.Contains("did you mean to invoke rework", content);
+            Assert.Contains("build plan", content);
         }
         finally
         {

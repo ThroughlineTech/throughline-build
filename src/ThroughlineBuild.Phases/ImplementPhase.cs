@@ -67,7 +67,7 @@ public class ImplementPhase : IWorkflowPhase
         bool isRework = _phaseOptions.ReviewFeedback is not null;
         if (!isRework && ticket.State != TicketState.Ready)
         {
-            var reason = $"initial round invoked but ticket is in {ticket.State} - did you mean to invoke rework?";
+            var reason = InitialRoundStateGuidance(ticketId, ticket.State);
             EarlyExitManifest.Write(_options.DebugCaptureDirectory, Phase.Implement.ToString(), ticketId, reason);
             return new ImplementResult(false, ticketId, null, null, null, reason);
         }
@@ -265,6 +265,29 @@ public class ImplementPhase : IWorkflowPhase
             data), ct).ConfigureAwait(false);
     }
 
+
+    // The initial implement round requires a Ready ticket. When the ticket is in
+    // some other state, the right next move depends on where it already sits in the
+    // lifecycle, so surface state-specific guidance instead of one generic hint.
+    // (A blanket "did you mean to invoke rework?" is misleading from InReview, where
+    // rework would also fail - rework requires InProgress.)
+    private static string InitialRoundStateGuidance(string ticketId, TicketState state) => state switch
+    {
+        TicketState.InReview =>
+            $"initial round invoked but {ticketId} is in InReview - it has already been implemented and is awaiting review. Run `build review {ticketId}` (or `build ship {ticketId}` if review has already passed).",
+        TicketState.InProgress =>
+            $"initial round invoked but {ticketId} is in InProgress - run `build rework {ticketId}` to apply review feedback, or reset it to Ready to start the implementation over.",
+        TicketState.Backlog =>
+            $"initial round invoked but {ticketId} is in Backlog, not Ready - run `build plan {ticketId}` to plan and approve it first.",
+        TicketState.Planning =>
+            $"initial round invoked but {ticketId} is stuck in Planning, not Ready - its plan phase did not finish; reset it to Backlog and re-run `build plan {ticketId}` before implementing.",
+        TicketState.Done =>
+            $"initial round invoked but {ticketId} is Done - nothing to implement.",
+        TicketState.Cancelled =>
+            $"initial round invoked but {ticketId} is Cancelled - nothing to implement.",
+        _ =>
+            $"initial round invoked but {ticketId} is in {state}, not Ready.",
+    };
 
     private static string? TryGetString(IReadOnlyDictionary<string, object> metadata, string key)
     {
