@@ -35,6 +35,13 @@ public sealed class ReopenCommand : ITicketCommand
         if (ticket.State != TicketState.Done && ticket.State != TicketState.Cancelled)
             return new CommandResult(false, "already active");
 
+        // (a2) Parent check: note only - children are not reopened automatically
+        var reopenChildren = await _ticketing.QueryAsync(new TicketQuery(ParentId: ticket.Uuid), ct).ConfigureAwait(false);
+        if (reopenChildren.Count > 0)
+        {
+            Console.Error.WriteLine("Note: this is a parent ticket. Children are not reopened automatically.");
+        }
+
         // (b) Determine reason text. If supplied, translate (in case non-English);
         //     otherwise synthesize an English default - no translation needed.
         string reason;

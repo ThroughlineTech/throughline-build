@@ -6,6 +6,7 @@ using Xunit;
 
 namespace ThroughlineBuild.Commands.Tests;
 
+[Collection("CommandConsoleTests")]
 public class ReopenCommandTests
 {
     private static Ticket MakeTicket(
@@ -190,6 +191,48 @@ public class ReopenCommandTests
     }
 
     [Fact]
+    public async Task Parent_reopen_prints_note_to_stderr_and_does_not_cascade()
+    {
+        var child = new Ticket(
+            Id: "TLB-2",
+            Uuid: "child-uuid-2",
+            Title: "Child ticket",
+            Type: "feature",
+            State: TicketState.Cancelled,
+            Size: Size.S,
+            Risk: Risk.Low,
+            DescriptionHtml: "<p>child</p>",
+            Relations: Array.Empty<Relation>(),
+            Labels: Array.Empty<string>(),
+            ParentId: "test-uuid-1");
+
+        var ticket = MakeTicket(TicketState.Cancelled);
+        var (cmd, ticketing, _) = BuildCommand(ticket);
+        ticketing.SeedChildren(new[] { child });
+
+        var originalErr = Console.Error;
+        var swErr = new StringWriter();
+        Console.SetError(swErr);
+        CommandResult result;
+        try
+        {
+            result = await cmd.ExecuteAsync(MakeCtx(), CancellationToken.None);
+        }
+        finally
+        {
+            Console.SetError(originalErr);
+        }
+
+        Assert.True(result.Success);
+        // Only the parent gets reopened - children are NOT cascaded
+        Assert.Single(ticketing.LifecycleTransitions);
+        Assert.Equal("TLB-1", ticketing.LifecycleTransitions[0].id);
+        Assert.Equal(LifecycleTransition.Reopen, ticketing.LifecycleTransitions[0].transition);
+        // Stderr must contain the note
+        Assert.Contains("Children are not reopened automatically", swErr.ToString());
+    }
+
+    [Fact]
     public async Task Most_recent_marker_wins_in_scan()
     {
         // older deferred, newer wontfix -> destination should be Backlog (wontfix wins).
@@ -231,6 +274,10 @@ public class ReopenCommandTests
         public int AppendDescriptionCalls { get; private set; }
         public int ApplyLabelsCalls { get; private set; }
         public List<TicketComment> ExistingComments { get; set; } = new();
+
+        // Children returned by QueryAsync when filtering by ParentId.
+        private List<Ticket> _queryChildren = new();
+        public void SeedChildren(IReadOnlyList<Ticket> children) => _queryChildren = children.ToList();
 
         public FakeTicketing(Ticket ticket) { _ticket = ticket; }
 
@@ -287,7 +334,8 @@ public class ReopenCommandTests
             Task.CompletedTask;
 
         public Task<IReadOnlyList<Ticket>> QueryAsync(TicketQuery query, CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<Ticket>>(Array.Empty<Ticket>());
+            Task.FromResult<IReadOnlyList<Ticket>>(
+                query.ParentId is not null ? _queryChildren.AsReadOnly() : Array.Empty<Ticket>());
 
         public Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct)
         {

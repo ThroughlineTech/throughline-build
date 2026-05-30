@@ -261,12 +261,27 @@ static async Task<int> RunAsync(string[] args)
             extraArgs["reason"] = args[2];
             parseStart = 3;
         }
-        for (int i = parseStart; i + 1 < args.Length; i += 2)
+        // Single-pass: bare bool flags consume 1 slot; key=value pairs consume 2.
+        for (int i = parseStart; i < args.Length; )
         {
-            var key = args[i];
-            if (key.StartsWith("--"))
-                key = key.Substring(2);
-            extraArgs[key] = args[i + 1];
+            if (args[i] == "--no-cascade")
+            {
+                extraArgs["no-cascade"] = "true";
+                i += 1;
+            }
+            else if (i + 1 < args.Length)
+            {
+                var key = args[i];
+                if (key.StartsWith("--"))
+                    key = key.Substring(2);
+                extraArgs[key] = args[i + 1];
+                i += 2;
+            }
+            else
+            {
+                // Lone flag with no value - skip to avoid out-of-bounds.
+                i += 1;
+            }
         }
         var ctx = new TicketCommandContext(verbTicketId, extraArgs);
 
