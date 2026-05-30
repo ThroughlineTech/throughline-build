@@ -27,7 +27,8 @@ public record WorkersConfig(
     string DefaultAgent,
     int TimeoutMinutes,
     IReadOnlyDictionary<string, AgentConfig> Agents,
-    IReadOnlyDictionary<string, string> Phases);
+    IReadOnlyDictionary<string, string> Phases,
+    int MaxConcurrency = 4);
 
 public record EventsConfig(string LogDirectory);
 
@@ -277,11 +278,14 @@ public static class BuildConfigLoader
             agents[kv.Key] = new AgentConfig(executable, maxOutputTokens, sizes.AsReadOnly(), bypassPermissions);
         }
 
+        var maxConcurrency = OptionalInt(t, "max_concurrency", Math.Min(Environment.ProcessorCount, 4));
+
         return new WorkersConfig(
             DefaultAgent: defaultAgent,
             TimeoutMinutes: timeoutMinutes,
             Agents: agents,
-            Phases: phases);
+            Phases: phases,
+            MaxConcurrency: maxConcurrency);
     }
 
     private static EventsConfig ReadEventsSection(TomlTable root)
