@@ -47,6 +47,7 @@ public class ShipPhase : IWorkflowPhase
     private readonly ConflictMarkerScannerFn _markerScanner;
     private readonly WorktreeDecrufter _decrufter;
     private readonly Func<string?> _processPathProvider;
+    private readonly TextWriter? _progress;
 
     public ShipPhase(
         ITicketing ticketing,
@@ -57,7 +58,8 @@ public class ShipPhase : IWorkflowPhase
         AutomatedChecksRunner? checksRunner = null,
         ConflictMarkerScannerFn? markerScanner = null,
         WorktreeDecrufter? decrufter = null,
-        Func<string?>? processPathProvider = null)
+        Func<string?>? processPathProvider = null,
+        TextWriter? progressWriter = null)
     {
         _ticketing = ticketing;
         _events = events;
@@ -68,7 +70,10 @@ public class ShipPhase : IWorkflowPhase
         _markerScanner = markerScanner ?? ConflictMarkerScanner.ScanAsync;
         _decrufter = decrufter ?? new WorktreeDecrufter(_git);
         _processPathProvider = processPathProvider ?? (() => Environment.ProcessPath);
+        _progress = progressWriter;
     }
+
+    private void ReportProgress(string message) => _progress?.WriteLine(message);
 
     public Phase Phase => Phase.Ship;
 
@@ -82,6 +87,7 @@ public class ShipPhase : IWorkflowPhase
         string ticketId, string workingDirectory, CancellationToken ct)
     {
         // Step 1: Fetch ticket
+        ReportProgress($"[ship] fetching ticket {ticketId}...");
         var ticket = await _ticketing.GetAsync(ticketId, ct).ConfigureAwait(false);
 
         // Parent-ticket ship path: validate all children Done
@@ -125,6 +131,7 @@ public class ShipPhase : IWorkflowPhase
                 ShipFailureStage.StateCheck), worktreeNames, null);
 
         // Step 3a: Pre-flight exe-in-worktree check
+        ReportProgress("[ship] pre-flight checks...");
         var exePath = _processPathProvider();
         if (exePath is not null)
         {
@@ -190,6 +197,7 @@ public class ShipPhase : IWorkflowPhase
         }
         else
         {
+            ReportProgress($"[ship] fetching from {remote}...");
             GitOpResult? fetchResult = null;
             await MainWorktreeLock.WithLockAsync(workingDirectory, async ct =>
             {
@@ -307,6 +315,7 @@ public class ShipPhase : IWorkflowPhase
         }, ct).ConfigureAwait(false);
 
         // Step 5: Rebase feature branch onto ontoRef
+        ReportProgress($"[ship] rebasing {worktreeNames.BranchName} onto {ontoRef}...");
         var rebaseResult = await _git.RebaseAsync(ontoRef, canonicalWorktreePath, ct).ConfigureAwait(false);
         if (rebaseResult.HadConflicts)
         {
@@ -337,6 +346,7 @@ public class ShipPhase : IWorkflowPhase
         }
 
         // Step 6: Conflict-marker scan (post-rebase, pre-checks)
+        ReportProgress("[ship] scanning for conflict markers...");
         var diff = await _git.DiffAsync(ontoRef, worktreeNames.BranchName, workingDirectory,
             includePatchContent: false, ct).ConfigureAwait(false);
         var scanPaths = diff.Entries
@@ -359,6 +369,8 @@ public class ShipPhase : IWorkflowPhase
         }
 
         // Step 7: Regression checks
+        if (_shipOptions.RegressionChecks.Count > 0)
+            ReportProgress($"[ship] running {_shipOptions.RegressionChecks.Count} regression check(s)...");
         var checkResults = await _checksRunner.RunAsync(_shipOptions.RegressionChecks, canonicalWorktreePath, ct).ConfigureAwait(false);
         var checksFailed = checkResults.Where(r => !r.Passed).Select(r => r.Name).ToList();
         if (checksFailed.Count > 0)
@@ -376,6 +388,7 @@ public class ShipPhase : IWorkflowPhase
         }
 
         // Step 8: Fast-forward merge into local baseBranch (main worktree)
+        ReportProgress($"[ship] merging into {baseBranch}...");
         GitOpResult? ffResult = null;
         await MainWorktreeLock.WithLockAsync(workingDirectory, async ct =>
         {
@@ -389,6 +402,7 @@ public class ShipPhase : IWorkflowPhase
         // Step 8a: Push to remote (skipped when no remote is configured)
         if (remoteExists)
         {
+            ReportProgress($"[ship] pushing to {remote}/{baseBranch}...");
             var pushResult = await _git.PushAsync(remote, baseBranch, workingDirectory, ct).ConfigureAwait(false);
             if (!pushResult.Success)
                 return (new ShipResult(false, ticketId, null,
@@ -400,6 +414,7 @@ public class ShipPhase : IWorkflowPhase
         var mergedSha = await _git.HeadShaAsync(workingDirectory, ct).ConfigureAwait(false);
 
         // Step 10: Post shipped_at comment
+        ReportProgress($"[ship] updating ticket {ticketId}...");
         await _ticketing.CreateCommentAsync(ticketId,
             $"<p>[shipped_at: {mergedSha}]</p>", ct).ConfigureAwait(false);
         await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
@@ -416,6 +431,7 @@ public class ShipPhase : IWorkflowPhase
         }, ct).ConfigureAwait(false);
 
         // Step 12: Decruft worktree. Failure must not unwind Done.
+        ReportProgress("[ship] cleaning up worktree...");
         string decruftHaltedAt;
         string? decruftError = null;
         try
