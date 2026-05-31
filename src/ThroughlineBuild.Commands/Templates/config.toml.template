@@ -135,3 +135,12 @@ plane_project_url = "https://plane.example.com/workspace/browse/PROJ/"
 # Optional markdown file with extra project notes; path resolves relative to this config file.
 # Missing files emit a stderr warning but do not fail the run.
 # notes_file = ".build/project.md"
+
+# [work] is optional - omit entirely to use [ship] base_branch as the worktree base.
+# Set target_branch to override which branch new worktrees are cut from and
+# what diffs are computed against. Useful when working on a long-running feature
+# branch that is not yet main.
+# [work]
+# target_branch = "feature/my-feature"  # default: falls back to [ship] base_branch
+#
+# Unset this key (or remove it) to restore the [ship] base_branch fallback.

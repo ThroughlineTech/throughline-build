@@ -667,6 +667,59 @@ log_directory = ".build/events"
     }
 
     [Fact]
+    public void Load_WorkTargetBranchSet_ResolvesToTargetBranch()
+    {
+        var toml = ValidToml + "\n[work]\ntarget_branch = \"feature/x\"";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            Assert.Equal("feature/x", config.Work.TargetBranch);
+            Assert.Equal("feature/x", config.ResolveTargetBranch());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_WorkSectionAbsent_ResolvesToShipBaseBranch()
+    {
+        var path = WriteToml(ValidToml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            Assert.Null(config.Work.TargetBranch);
+            Assert.Equal("main", config.ResolveTargetBranch());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_WorkSectionPresentNoTargetBranch_FallsBackToBaseBranch()
+    {
+        var toml = ValidToml + "\n[work]";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            Assert.Null(config.Work.TargetBranch);
+            Assert.Equal("main", config.ResolveTargetBranch());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Load_GeminiAgentSubTable_WithGooglePrefixSizes_ParsesRawString()
     {
         var toml = """

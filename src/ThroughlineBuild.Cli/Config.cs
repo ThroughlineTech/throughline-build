@@ -43,6 +43,8 @@ public record ShipConfig(
     bool DeleteFeatureBranch,
     IReadOnlyList<CheckSpec> RegressionChecks);
 
+public record WorkConfig(string? TargetBranch);
+
 public record BuildConfig(
     TicketingConfig Ticketing,
     LlmConfig Llm,
@@ -50,7 +52,11 @@ public record BuildConfig(
     EventsConfig Events,
     ReviewConfig Review,
     ShipConfig Ship,
-    ProjectContext Project);
+    WorkConfig Work,
+    ProjectContext Project)
+{
+    public string ResolveTargetBranch() => Work.TargetBranch ?? Ship.BaseBranch;
+}
 
 public record BuildSecrets(string PlaneApiToken, string? AnthropicApiKey);
 
@@ -102,9 +108,10 @@ public static class BuildConfigLoader
         var events = ReadEventsSection(root);
         var review = ReadReviewSection(root);
         var ship = ReadShipSection(root);
+        var work = ReadWorkSection(root);
         var project = ReadProjectSection(root, path);
 
-        return new BuildConfig(ticketing, llm, workers, events, review, ship, project);
+        return new BuildConfig(ticketing, llm, workers, events, review, ship, work, project);
     }
 
     public static string ResolveLogDirectory(string configFilePath, string rawLogDir, string cwdFallback)
@@ -373,6 +380,16 @@ public static class BuildConfigLoader
             BaseBranch: baseBranch,
             DeleteFeatureBranch: deleteFeatureBranch,
             RegressionChecks: checks.AsReadOnly());
+    }
+
+    private static WorkConfig ReadWorkSection(TomlTable root)
+    {
+        if (!root.TryGetValue("work", out var val) || val is not TomlTable t)
+            return new WorkConfig(TargetBranch: null);
+        string? targetBranch = null;
+        if (t.TryGetValue("target_branch", out var tbVal) && tbVal is string tbStr && !string.IsNullOrEmpty(tbStr))
+            targetBranch = tbStr;
+        return new WorkConfig(TargetBranch: targetBranch);
     }
 
     private static ProjectContext ReadProjectSection(TomlTable root, string configPath)
