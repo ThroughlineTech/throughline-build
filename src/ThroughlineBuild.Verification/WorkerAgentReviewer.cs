@@ -2,6 +2,7 @@ using System.Text.Json;
 using ThroughlineBuild.Briefs;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Workers.Common;
 
 namespace ThroughlineBuild.Verification;
 
@@ -72,27 +73,40 @@ public sealed class WorkerAgentReviewer : IVerifier
 
         var raw = TryGetString(metadata, "verdict");
         VerdictKind kind;
-        string rationale;
 
         if (string.Equals(raw, "Pass", StringComparison.OrdinalIgnoreCase))
-        {
             kind = VerdictKind.Pass;
-            rationale = TryGetString(metadata, "rationale") ?? "";
-        }
         else if (string.Equals(raw, "Rework", StringComparison.OrdinalIgnoreCase))
-        {
             kind = VerdictKind.Rework;
-            rationale = TryGetString(metadata, "rationale") ?? "";
-        }
         else if (string.Equals(raw, "Fail", StringComparison.OrdinalIgnoreCase))
-        {
             kind = VerdictKind.Fail;
-            rationale = TryGetString(metadata, "rationale") ?? "";
+        else
+            kind = VerdictKind.Fail;
+
+        // Determine whether the verdict was a recognized value or malformed/missing.
+        bool verdictMalformed = !string.Equals(raw, "Pass", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(raw, "Rework", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(raw, "Fail", StringComparison.OrdinalIgnoreCase);
+
+        string rationale;
+        if (verdictMalformed)
+        {
+            rationale = $"malformed verdict from verifier: '{raw}'";
         }
         else
         {
-            kind = VerdictKind.Fail;
-            rationale = $"malformed verdict from verifier: '{raw}'";
+            // Resolve rationale from REVIEW_CRITIQUE block via rationale_ref.
+            // Falls back to direct "rationale" metadata key for backward compatibility.
+            var blocks = workerResult.Blocks ?? new Dictionary<string, string>();
+            if (FencedBlockResolver.TryResolveRef(blocks, metadata, "rationale_ref", out var resolvedRationale, out _)
+                && resolvedRationale is not null)
+            {
+                rationale = resolvedRationale;
+            }
+            else
+            {
+                rationale = TryGetString(metadata, "rationale") ?? "";
+            }
         }
 
         var checksFailed = ParseChecksFailed(metadata);

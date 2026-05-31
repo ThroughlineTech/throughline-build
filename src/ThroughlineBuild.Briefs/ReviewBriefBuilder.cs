@@ -27,7 +27,7 @@ public static class ReviewBriefBuilder
             "{\"status\":\"Ok\",\"summary\":\"Review for " + ticket.Id + "\"," +
             "\"files_changed\":[],\"failure_reason\":null," +
             "\"metadata\":{\"verdict\":\"Pass|Rework|Fail\"," +
-            "\"rationale\":\"<your rationale here>\"," +
+            "\"rationale_ref\":\"REVIEW_CRITIQUE\"," +
             "\"checks_failed\":[\"check_name_if_applicable\"]}}";
 
         var template = TemplateLoader.Load(agentName, "review.md");

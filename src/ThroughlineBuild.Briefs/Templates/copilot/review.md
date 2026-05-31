@@ -16,7 +16,18 @@ You are a reviewing agent. Your job is to assess the implementation against the 
 {{implementer_summary}}
 
 {{changed_files_section}}{{patch_content_section}}{{automated_checks_section}}## Required output
-Emit exactly one WORKER_RESULT block at the end of your response:
+
+Before emitting the WORKER_RESULT envelope, emit your review critique as a named fenced block:
+
+<<<REVIEW_CRITIQUE_START
+Write your detailed review rationale here. This can include:
+- Quoted lines from the diff
+- Code snippets showing issues
+- Multi-paragraph critique
+- Any characters including backticks, quotes, backslashes - no JSON escaping needed
+<<<REVIEW_CRITIQUE_END
+
+Then emit exactly one WORKER_RESULT block at the end of your response:
 
 WORKER_RESULT
 {{worker_result_json}}
