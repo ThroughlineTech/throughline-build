@@ -63,10 +63,22 @@ WORKER_RESULT
 }
 
 ## Required output
-Emit exactly one WORKER_RESULT block at the end of your response:
+
+Before emitting the WORKER_RESULT envelope, emit your implementation summary as a named fenced block:
+
+<<<IMPLEMENT_SUMMARY_START
+Write a concise summary of what you implemented. This can include:
+- Which files were changed and why
+- Key design decisions made
+- Any non-obvious implementation details
+This block can contain code snippets, shell commands, file paths, and any characters - no JSON escaping needed here.
+<<<IMPLEMENT_SUMMARY_END
+
+Then emit the WORKER_RESULT envelope:
 
 WORKER_RESULT
-{"status":"Ok","summary":"Implemented TLB-SNAP","files_changed":["path/relative/to/worktree"],"failure_reason":null,"metadata":{"commit_sha":"<HEAD SHA of feature branch after all commits>","files_changed":["path/relative/to/worktree"]}}
+{"status":"Ok","summary":"Implemented TLB-SNAP","files_changed":["path/to/changed/file"],"failure_reason":null,"metadata":{"commit_sha":"<HEAD SHA of feature branch after all commits>","files_changed":["path/to/changed/file"],"summary_ref":"IMPLEMENT_SUMMARY"}}
 
 - metadata.commit_sha must be the HEAD SHA of the feature branch after all commits land
 - metadata.files_changed must be the list of paths (relative to the worktree root) you wrote
+- metadata.summary_ref must point to the IMPLEMENT_SUMMARY block emitted above
