@@ -1050,7 +1050,7 @@ static async Task<int> RunAsync(string[] args)
         var gitClient = new ProcessGitClient(cwd);
         var checksRunner = new AutomatedChecksRunner();
         var shipProgress = quietMode || summaryJson ? null : Console.Error;
-        var phase = new ShipPhase(ticketing, eventSink, buildOptions, shipOptions, gitClient: gitClient, checksRunner: checksRunner, progressWriter: shipProgress);
+        var phase = new ShipPhase(ticketing, eventSink, buildOptions, shipOptions, gitClient: gitClient, checksRunner: checksRunner, progressWriter: shipProgress, verbose: debugMode);
         ShipResult result;
         try
         {

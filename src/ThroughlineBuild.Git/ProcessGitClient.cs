@@ -480,9 +480,10 @@ public sealed class ProcessGitClient : IGitClient
             ?? throw new InvalidOperationException("Failed to start git process");
         var stderr = await proc.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
         await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+        var stderrTrimmed = stderr.Trim();
         if (proc.ExitCode != 0)
-            return new GitOpResult(false, stderr.Trim());
-        return new GitOpResult(true, null);
+            return new GitOpResult(false, stderrTrimmed);
+        return new GitOpResult(true, null, stderrTrimmed.Length > 0 ? stderrTrimmed : null);
     }
 
     public async Task<GitOpResult> PushAsync(string remote, string branch, string workingDirectory, CancellationToken ct)
@@ -503,9 +504,10 @@ public sealed class ProcessGitClient : IGitClient
             ?? throw new InvalidOperationException("Failed to start git process");
         var stderr = await proc.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
         await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+        var stderrTrimmed = stderr.Trim();
         if (proc.ExitCode != 0)
-            return new GitOpResult(false, stderr.Trim());
-        return new GitOpResult(true, null);
+            return new GitOpResult(false, stderrTrimmed);
+        return new GitOpResult(true, null, stderrTrimmed.Length > 0 ? stderrTrimmed : null);
     }
 
     public async Task<RebaseResult> RebaseAsync(string ontoRef, string featureWorktreePath, CancellationToken ct)
@@ -619,11 +621,11 @@ public sealed class ProcessGitClient : IGitClient
             ?? throw new InvalidOperationException("Failed to start git process");
         var stderr = await proc.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
         await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+        var trimmed = stderr.Trim();
 
         if (proc.ExitCode == 0)
-            return new GitOpResult(true, null);
+            return new GitOpResult(true, null, trimmed.Length > 0 ? trimmed : null);
 
-        var trimmed = stderr.Trim();
         return new GitOpResult(false, trimmed.Length > 0 ? trimmed : $"git merge --ff-only exited with exit code {proc.ExitCode} and produced no stderr output");
     }
 

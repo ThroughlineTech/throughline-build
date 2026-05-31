@@ -48,6 +48,7 @@ public class ShipPhase : IWorkflowPhase
     private readonly WorktreeDecrufter _decrufter;
     private readonly Func<string?> _processPathProvider;
     private readonly TextWriter? _progress;
+    private readonly bool _verbose;
 
     public ShipPhase(
         ITicketing ticketing,
@@ -59,7 +60,8 @@ public class ShipPhase : IWorkflowPhase
         ConflictMarkerScannerFn? markerScanner = null,
         WorktreeDecrufter? decrufter = null,
         Func<string?>? processPathProvider = null,
-        TextWriter? progressWriter = null)
+        TextWriter? progressWriter = null,
+        bool verbose = false)
     {
         _ticketing = ticketing;
         _events = events;
@@ -71,9 +73,17 @@ public class ShipPhase : IWorkflowPhase
         _decrufter = decrufter ?? new WorktreeDecrufter(_git);
         _processPathProvider = processPathProvider ?? (() => Environment.ProcessPath);
         _progress = progressWriter;
+        _verbose = verbose;
     }
 
     private void ReportProgress(string message) => _progress?.WriteLine(message);
+
+    private void ReportGitOutput(string label, string? rawOutput)
+    {
+        if (!_verbose || _progress == null || string.IsNullOrWhiteSpace(rawOutput)) return;
+        _progress.WriteLine($"[ship] {label}:");
+        _progress.WriteLine(rawOutput.TrimEnd());
+    }
 
     public Phase Phase => Phase.Ship;
 
@@ -207,6 +217,7 @@ public class ShipPhase : IWorkflowPhase
                 return (new ShipResult(false, ticketId, null,
                     $"git fetch failed: {fetchResult?.FailureReason}",
                     ShipFailureStage.Fetch), worktreeNames, null);
+            ReportGitOutput("fetch output", fetchResult.RawOutput);
 
             // Step 4a: Determine rebase base by ancestry check
             var localRef = baseBranch;
@@ -372,22 +383,44 @@ public class ShipPhase : IWorkflowPhase
         if (_shipOptions.RegressionChecks.Count > 0)
             ReportProgress($"[ship] running {_shipOptions.RegressionChecks.Count} regression check(s)...");
         var checkResults = await _checksRunner.RunAsync(_shipOptions.RegressionChecks, canonicalWorktreePath, ct).ConfigureAwait(false);
+        if (_verbose)
+        {
+            foreach (var r in checkResults)
+            {
+                var status = r.Passed ? "passed" : "failed";
+                _progress?.WriteLine($"[ship] check {status}: {r.Name} ({r.Elapsed.TotalSeconds:0.0}s)");
+                if (!string.IsNullOrWhiteSpace(r.StdoutTail))
+                {
+                    _progress?.WriteLine("--- stdout ---");
+                    _progress?.WriteLine(r.StdoutTail.TrimEnd());
+                }
+                if (!string.IsNullOrWhiteSpace(r.StderrTail))
+                {
+                    _progress?.WriteLine("--- stderr ---");
+                    _progress?.WriteLine(r.StderrTail.TrimEnd());
+                }
+            }
+        }
+
         var checksFailed = checkResults.Where(r => !r.Passed).ToList();
         if (checksFailed.Count > 0)
         {
             var namesList = string.Join(", ", checksFailed.Select(r => r.Name));
-            foreach (var failed in checksFailed)
+            if (!_verbose)
             {
-                _progress?.WriteLine($"[ship] regression check failed: {failed.Name}");
-                if (!string.IsNullOrWhiteSpace(failed.StdoutTail))
+                foreach (var failed in checksFailed)
                 {
-                    _progress?.WriteLine("--- stdout ---");
-                    _progress?.WriteLine(failed.StdoutTail.TrimEnd());
-                }
-                if (!string.IsNullOrWhiteSpace(failed.StderrTail))
-                {
-                    _progress?.WriteLine("--- stderr ---");
-                    _progress?.WriteLine(failed.StderrTail.TrimEnd());
+                    _progress?.WriteLine($"[ship] regression check failed: {failed.Name}");
+                    if (!string.IsNullOrWhiteSpace(failed.StdoutTail))
+                    {
+                        _progress?.WriteLine("--- stdout ---");
+                        _progress?.WriteLine(failed.StdoutTail.TrimEnd());
+                    }
+                    if (!string.IsNullOrWhiteSpace(failed.StderrTail))
+                    {
+                        _progress?.WriteLine("--- stderr ---");
+                        _progress?.WriteLine(failed.StderrTail.TrimEnd());
+                    }
                 }
             }
             await _ticketing.CreateCommentAsync(ticketId,
@@ -412,6 +445,7 @@ public class ShipPhase : IWorkflowPhase
             return (new ShipResult(false, ticketId, null,
                 $"fast-forward merge failed: {ffResult?.FailureReason}",
                 ShipFailureStage.FastForwardMerge), worktreeNames, null);
+        ReportGitOutput("merge output", ffResult?.RawOutput);
 
         // Step 8a: Push to remote (skipped when no remote is configured)
         if (remoteExists)
@@ -422,6 +456,7 @@ public class ShipPhase : IWorkflowPhase
                 return (new ShipResult(false, ticketId, null,
                     $"git push failed: {pushResult.FailureReason}",
                     ShipFailureStage.Push), worktreeNames, null);
+            ReportGitOutput("push output", pushResult.RawOutput);
         }
 
         // Step 9: Read merged HEAD sha

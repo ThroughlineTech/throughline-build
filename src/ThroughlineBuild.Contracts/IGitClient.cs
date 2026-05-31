@@ -11,7 +11,7 @@ public record WorktreeRemoveResult(bool Success, string? FailureReason);
 
 public record WorktreeCreateResult(bool Success, string? FailureReason, string? AbsolutePath);
 
-public record GitOpResult(bool Success, string? FailureReason);
+public record GitOpResult(bool Success, string? FailureReason, string? RawOutput = null);
 
 public record RebaseResult(
     bool Success,
