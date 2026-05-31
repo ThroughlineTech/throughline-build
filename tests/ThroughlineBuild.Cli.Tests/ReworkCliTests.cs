@@ -90,7 +90,8 @@ public class ReworkCliTests
         }
         if (dir is null) return null;
 
-        var binDir = Path.Combine(dir.FullName, "src", "ThroughlineBuild.Cli", "bin", "Debug", "net8.0");
+        var config = here.Contains(Path.Combine("bin", "Release"), StringComparison.OrdinalIgnoreCase) ? "Release" : "Debug";
+        var binDir = Path.Combine(dir.FullName, "src", "ThroughlineBuild.Cli", "bin", config, "net8.0");
         var exeName = OperatingSystem.IsWindows() ? "build.exe" : "build";
         var fullPath = Path.Combine(binDir, exeName);
         return File.Exists(fullPath) ? fullPath : null;
