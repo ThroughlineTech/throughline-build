@@ -1223,6 +1223,11 @@ static async Task<int> RunAsync(string[] args)
                 Console.CancelKeyPress += (_, e) => { e.Cancel = true; batchCts.Cancel(); };
                 batchTickets = await ticketing.GetBatchAsync(allTicketIds, batchCts.Token).ConfigureAwait(false);
             }
+            catch (KeyNotFoundException ex)
+            {
+                Console.Error.WriteLine($"Ticket not found: {ex.Message}");
+                return 2;
+            }
             catch (OperationCanceledException)
             {
                 Console.Error.WriteLine("Cancelled.");

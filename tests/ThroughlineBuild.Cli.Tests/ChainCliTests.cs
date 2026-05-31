@@ -63,6 +63,18 @@ public class ChainCliTests
     }
 
     [Fact]
+    public async Task BuildBinary_ChainWithMultipleTicketIds_ExitsTwoWithMessage()
+    {
+        var exe = LocateBuildExecutable();
+        if (exe is null) return;
+
+        var (exitCode, _, stderr) = await RunProcess(exe, new[] { "chain", "TLB-1", "TLB-2" });
+
+        Assert.Equal(2, exitCode);
+        Assert.Contains("Ticket not found:", stderr);
+    }
+
+    [Fact]
     public async Task BuildBinary_HelpFlag_OutputContainsChainVerb()
     {
         var exe = LocateBuildExecutable();
