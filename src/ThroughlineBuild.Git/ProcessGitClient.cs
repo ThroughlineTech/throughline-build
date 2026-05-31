@@ -221,6 +221,37 @@ public sealed class ProcessGitClient : IGitClient
         }
     }
 
+    public async Task<string> CurrentBranchAsync(string workingDirectory, CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = workingDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("rev-parse");
+            psi.ArgumentList.Add("--abbrev-ref");
+            psi.ArgumentList.Add("HEAD");
+
+            using var proc = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start git process");
+            var stdout = await proc.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+            if (proc.ExitCode != 0)
+                return "main";
+            var branch = stdout.Trim();
+            return string.IsNullOrEmpty(branch) ? "main" : branch;
+        }
+        catch
+        {
+            return "main";
+        }
+    }
+
     // Returns the HEAD SHA of the given worktree, or empty string on failure.
     // Does not throw on git-level failure; callers check string.Length == 40 to detect failure.
     public async Task<string> HeadShaAsync(string worktreePath, CancellationToken ct)

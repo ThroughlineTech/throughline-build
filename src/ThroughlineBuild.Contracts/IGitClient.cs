@@ -84,4 +84,11 @@ public interface IGitClient
     // Never throws - returns empty on git failure.
     Task<IReadOnlyList<string>> LogShasAsync(string range, int limit, string workingDirectory, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+    // Returns the name of the currently checked-out branch in workingDirectory.
+    // Runs "git rev-parse --abbrev-ref HEAD".
+    // Default returns "main" so existing FakeGitClients remain unchanged (TLB-349).
+    // Never throws - returns "main" on git failure.
+    Task<string> CurrentBranchAsync(string workingDirectory, CancellationToken ct) =>
+        Task.FromResult("main");
 }

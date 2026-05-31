@@ -192,6 +192,29 @@ public class ShipPhase : IWorkflowPhase
         var remote = _shipOptions.Remote;
         var baseBranch = _shipOptions.BaseBranch;
         var targetBranch = _shipOptions.TargetBranch ?? baseBranch;
+
+        // Step 4 pre-check: when targeting a non-default branch, the main worktree must be on that branch.
+        // FastForwardMergeAsync advances whatever is currently checked out; if the worktree is on a
+        // different branch the merge lands on the wrong ref and the push sends stale bytes to origin.
+        if (targetBranch != baseBranch)
+        {
+            var currentBranch = await _git.CurrentBranchAsync(workingDirectory, ct).ConfigureAwait(false);
+            if (!string.Equals(currentBranch, targetBranch, StringComparison.Ordinal))
+            {
+                await _ticketing.CreateCommentAsync(ticketId,
+                    $"<p><strong>ship_blocked:</strong> main worktree is on '{currentBranch}'; must be on '{targetBranch}' before shipping to a non-default target branch</p>", ct).ConfigureAwait(false);
+                await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+                {
+                    ["kind"] = "wrong_worktree_branch",
+                    ["expected"] = targetBranch,
+                    ["actual"] = currentBranch
+                }, ct).ConfigureAwait(false);
+                return (new ShipResult(false, ticketId, null,
+                    $"main worktree is on '{currentBranch}'; must be on '{targetBranch}' before shipping to a non-default target branch",
+                    ShipFailureStage.PreFlight), worktreeNames, null);
+            }
+        }
+
         var remoteExists = await _git.RemoteExistsAsync(remote, workingDirectory, ct).ConfigureAwait(false);
         string ontoRef;
         string baseRefReason;
@@ -436,8 +459,8 @@ public class ShipPhase : IWorkflowPhase
                 $"regression checks failed: {namesList}", ShipFailureStage.RegressionChecks), worktreeNames, null);
         }
 
-        // Step 8: Fast-forward merge into local baseBranch (main worktree)
-        ReportProgress($"[ship] merging into {baseBranch}...");
+        // Step 8: Fast-forward merge into local targetBranch (main worktree)
+        ReportProgress($"[ship] merging into {targetBranch}...");
         GitOpResult? ffResult = null;
         await MainWorktreeLock.WithLockAsync(workingDirectory, async ct =>
         {

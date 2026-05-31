@@ -824,11 +824,48 @@ public class ShipPhaseTests
     }
 
     [Fact]
+    public async Task RunAsync_TargetBranchOverride_MainWorktreeOnWrongBranch_BlocksAtPreflight()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true)
+        {
+            CurrentBranch = "main"
+        };
+
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(),
+            MakeShipOptions(targetBranch: "feature/x"),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ShipFailureStage.PreFlight, result.FailedAt);
+        Assert.Equal(0, git.FetchCallCount);
+        Assert.Equal(0, git.PushCallCount);
+
+        Assert.Single(ticketing.Comments);
+        Assert.Contains("ship_blocked", ticketing.Comments[0].html);
+        Assert.Contains("feature/x", ticketing.Comments[0].html);
+
+        var gates = events.Events.Where(e => e.Kind == EventKind.GateFailure).ToList();
+        Assert.Single(gates);
+        Assert.Equal("wrong_worktree_branch", gates[0].Data["kind"].ToString());
+        Assert.Equal("feature/x", gates[0].Data["expected"].ToString());
+        Assert.Equal("main", gates[0].Data["actual"].ToString());
+    }
+
+    [Fact]
     public async Task RunAsync_TargetBranchOverride_ShipsToTargetNotBase()
     {
         var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
         var events = new FakeEventSink();
-        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var git = new FakeGitClient(includeWorktreeMatching: true)
+        {
+            CurrentBranch = "feature/x"
+        };
         // Default ancestry: IsAncestorAsync returns true for any pair not in AncestryResponses,
         // so feature/x and origin/feature/x are treated as the same commit -> ontoRef = origin/feature/x
         var phase = new ShipPhase(ticketing, events, MakeBuildOptions(),
@@ -860,7 +897,10 @@ public class ShipPhaseTests
     {
         var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
         var events = new FakeEventSink();
-        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var git = new FakeGitClient(includeWorktreeMatching: true)
+        {
+            CurrentBranch = "feature/x"
+        };
         // Configure: feature/x and origin/feature/x have diverged
         git.AncestryResponses[("feature/x", "origin/feature/x")] = false;
         git.AncestryResponses[("origin/feature/x", "feature/x")] = false;
@@ -1190,6 +1230,11 @@ public class ShipPhaseTests
 
         public Task<DivergenceState> ProbeDivergenceAsync(string mainWorktreePath, string baseBranch, string remote, CancellationToken ct) =>
             Task.FromResult(DivergenceStateResult);
+
+        public string CurrentBranch { get; set; } = "main";
+
+        public Task<string> CurrentBranchAsync(string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(CurrentBranch);
     }
 
     private sealed class FakeChecksRunner : AutomatedChecksRunner
