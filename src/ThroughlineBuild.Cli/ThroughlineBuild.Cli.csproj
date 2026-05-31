@@ -8,7 +8,8 @@
     <AssemblyName>build</AssemblyName>
     <PublishAot>true</PublishAot>
     <InvariantGlobalization>true</InvariantGlobalization>
-    <IlcOptimizationPreference>Speed</IlcOptimizationPreference>
+    <IlcOptimizationPreference>Size</IlcOptimizationPreference>
+    <IlcMaxParallelism>1</IlcMaxParallelism>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\ThroughlineBuild.Contracts\ThroughlineBuild.Contracts.csproj" />

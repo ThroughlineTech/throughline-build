@@ -806,600 +806,15 @@ static async Task<int> RunAsync(string[] args)
     int dispatchExitCode = 0;
     foreach (var ticketId in ticketIds)
     {
-        var sessionId = Guid.NewGuid().ToString("N");
-        var fileStem = SessionFileNameBuilder.Build(
-            projectName: config2.Ticketing.PlaneProjectName,
-            projectIdentifier: config2.Ticketing.PlaneProjectIdentifier,
-            verb: verb,
-            ticketId: ticketId,
-            extraSlug: null,
-            timestamp: DateTimeOffset.Now);
-
-        // --debug: capture worker stdin/stdout/stderr/envelope into .build/sessions/<file-stem>/
-        // The stem is shared with the JSONL event sink so the two artifacts sort together.
-        // Inside the JSONL, the SessionId field still carries the GUID as the correlation key.
-        // Create the dir eagerly so the "Debug capture:" line at exit always points somewhere
-        // real, even when the phase fails before the worker spawns (e.g. early git errors).
-        string? debugCaptureDir = debugMode
-            ? Path.GetFullPath(Path.Combine(cwd, ".build", "sessions", fileStem))
-            : null;
-        if (debugCaptureDir is not null)
-            Directory.CreateDirectory(debugCaptureDir);
-
-        await using var jsonlEventSink = new JsonlEventSink(new EventLogOptions
-        {
-            BaseDirectory = ResolveLogDir(config2.Events.LogDirectory),
-            SessionId = sessionId,
-            FileNameStem = fileStem
-        }, sessionContext);
-        // Digest is default-on when stderr is a TTY and the user has not opted out
-        // via --quiet or replaced it with the --debug raw firehose. When stderr is
-        // redirected (e.g. 2>err.log or piped to tee), the digest is suppressed to
-        // keep scripted/CI logs clean unless BUILD_PROGRESS=1 forces it on.
-        bool enableDigest = !debugMode
-            && !quietMode
-            && (!Console.IsErrorRedirected || Environment.GetEnvironmentVariable("BUILD_PROGRESS") == "1");
-
-        var eventSink = new RecordingEventSink(jsonlEventSink);
-        var buildOptions = new BuildOptions(
-            SessionId: sessionId,
-            WorkerName: config2.Workers.DefaultAgent,
-            WorkerTimeout: TimeSpan.FromMinutes(config2.Workers.TimeoutMinutes),
-            DebugCaptureDirectory: debugCaptureDir,
-            LiveStdoutSink: debugMode ? Console.Out : null,
-            LiveStderrSink: debugMode ? Console.Error : null,
-            ProgressDigestSink: enableDigest ? Console.Error : null,
-            TargetBranch: config2.ResolveTargetBranch());
-
-        string PlaneUrl() => BuildPlaneUrl(config2.Ticketing.PlaneBaseUrl, config2.Ticketing.PlaneWorkspaceSlug, ticketId);
-        string? ArtifactsPath() => debugCaptureDir is not null
-            ? $".build/sessions/{fileStem}/"
-            : $".build/events/{fileStem}.jsonl";
-
-        if (verb == "plan")
-    {
-        var phase = new PlanPhase(ticketing, workerFactory.Create(EffectiveAgentFor("plan")), eventSink, buildOptions, project: config2.Project);
-        PlanResult result;
-        try
-        {
-            using var cts = new CancellationTokenSource();
-            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
-            result = await phase.RunAsync(ticketId, cwd, cts.Token);
-        }
-        catch (KeyNotFoundException ex)
-        {
-            Console.Error.WriteLine($"Ticket not found: {ex.Message}");
-            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
-            dispatchExitCode = 2;
-            break;
-        }
-        catch (OperationCanceledException)
-        {
-            Console.Error.WriteLine("Cancelled.");
-            dispatchExitCode = 1;
-            break;
-        }
-
-        Ticket? planTicket = null;
-        try { planTicket = await ticketing.GetAsync(ticketId, CancellationToken.None); }
-        catch { /* best effort - summary tolerates a missing ticket */ }
-
-        var planSummary = PhaseSummaryBuilder.BuildPlan(
-            ticketId: result.TicketId,
-            success: result.Success,
-            riskLabel: result.RiskLabel,
-            sizeLabel: result.SizeLabel,
-            plannedAtSha: result.PlannedAtSha,
-            failureReason: result.FailureReason,
-            ticket: planTicket,
-            events: eventSink.Snapshot(),
-            sessionId: sessionId,
-            planeUrl: PlaneUrl(),
-            sessionArtifactsPath: ArtifactsPath());
-        WriteSummary(planSummary);
-
-        if (!result.Success)
-        {
-            Console.Error.WriteLine($"Plan phase failed: {result.FailureReason}");
-            if (debugCaptureDir is not null)
-                Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
-            dispatchExitCode = 1;
-            break;
-        }
-
-        if (debugCaptureDir is not null)
-            Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
-        dispatchExitCode = 0;
-        break;
-    }
-    else if (verb == "implement")
-    {
-        var phase = new ImplementPhase(ticketing, workerFactory.Create(EffectiveAgentFor("implement")), eventSink, buildOptions, project: config2.Project);
-        ImplementResult result;
-        try
-        {
-            using var cts = new CancellationTokenSource();
-            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
-            result = await phase.RunAsync(ticketId, cwd, cts.Token);
-        }
-        catch (KeyNotFoundException ex)
-        {
-            Console.Error.WriteLine($"Ticket not found: {ex.Message}");
-            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
-            dispatchExitCode = 2;
-            break;
-        }
-        catch (OperationCanceledException)
-        {
-            Console.Error.WriteLine("Cancelled.");
-            dispatchExitCode = 1;
-            break;
-        }
-
-        // Best-effort git facts for the implement summary - failures are silently
-        // absorbed and the summary just omits those fields.
-        IReadOnlyList<DiffEntry> implDiff = Array.Empty<DiffEntry>();
-        IReadOnlyList<string> implCommits = Array.Empty<string>();
-        int implCommitCount = 0;
-        if (result.Success && !string.IsNullOrEmpty(result.BranchName))
-        {
-            try
-            {
-                var (baseRef, _) = await ThroughlineBuild.Git.BaseRefResolver.ResolveAsync(summaryGit, cwd, buildOptions.TargetBranch, CancellationToken.None);
-                var d = await summaryGit.DiffAsync(baseRef, result.BranchName!, cwd, includePatchContent: false, CancellationToken.None);
-                implDiff = d.Entries;
-                implCommitCount = await summaryGit.RevListCountAsync($"{baseRef}..{result.BranchName}", cwd, CancellationToken.None);
-                implCommits = await summaryGit.LogOnelineAsync($"{baseRef}..{result.BranchName}", 10, cwd, CancellationToken.None);
-            }
-            catch { /* tolerated */ }
-        }
-
-        var implSummary = PhaseSummaryBuilder.BuildImplement(
-            ticketId: result.TicketId,
-            success: result.Success,
-            branchName: result.BranchName,
-            commitSha: result.CommitSha,
-            failureReason: result.FailureReason,
-            events: eventSink.Snapshot(),
-            diff: implDiff,
-            commitOnelines: implCommits,
-            commitCount: implCommitCount,
-            planeUrl: PlaneUrl(),
-            sessionArtifactsPath: ArtifactsPath());
-        WriteSummary(implSummary);
-
-        if (!result.Success)
-        {
-            Console.Error.WriteLine($"Implement phase failed: {result.FailureReason}");
-            if (debugCaptureDir is not null)
-                Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
-            dispatchExitCode = 1;
-            break;
-        }
-
-        if (debugCaptureDir is not null)
-            Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
-        dispatchExitCode = 0;
-        break;
-    }
-    else if (verb == "review")
-    {
-        var verifierWorkerOptions = new WorkerOptions(
-            TimeSpan.FromMinutes(config2.Review.VerifierTimeoutMinutes),
-            config2.Review.VerifierAllowedTools,
-            DebugCaptureDirectory: debugCaptureDir,
-            LiveStdoutSink: debugMode ? Console.Out : null,
-            LiveStderrSink: debugMode ? Console.Error : null,
-            ProgressDigestSink: enableDigest ? Console.Error : null);
-        var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
-        var phase = new ReviewPhase(ticketing, workerFactory.Create(EffectiveAgentFor("review")), eventSink, buildOptions, reviewOptions, project: config2.Project);
-        ReviewResult result;
-        try
-        {
-            using var cts = new CancellationTokenSource();
-            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
-            result = await phase.RunAsync(ticketId, cwd, cts.Token);
-        }
-        catch (KeyNotFoundException ex)
-        {
-            Console.Error.WriteLine($"Ticket not found: {ex.Message}");
-            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
-            dispatchExitCode = 2;
-            break;
-        }
-        catch (OperationCanceledException)
-        {
-            Console.Error.WriteLine("Cancelled.");
-            dispatchExitCode = 1;
-            break;
-        }
-
-        var reviewSummary = PhaseSummaryBuilder.BuildReview(
-            ticketId: result.TicketId,
-            success: result.Success,
-            verdict: result.Verdict?.ToString(),
-            rationale: result.VerdictRationale,
-            checksFailed: result.ChecksFailed,
-            failureReason: result.FailureReason,
-            events: eventSink.Snapshot(),
-            planeUrl: PlaneUrl(),
-            sessionArtifactsPath: ArtifactsPath());
-        WriteSummary(reviewSummary);
-
-        if (!result.Success)
-        {
-            Console.Error.WriteLine($"Review phase failed: {result.FailureReason}");
-            if (debugCaptureDir is not null)
-                Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
-            dispatchExitCode = 1;
-            break;
-        }
-
-        if (debugCaptureDir is not null)
-            Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
-        dispatchExitCode = 0;
-        break;
-    }
-    else if (verb == "ship")
-    {
-        var shipOptions = new ShipOptions(
-            RegressionChecks: config2.Ship.RegressionChecks,
-            Remote: config2.Ship.Remote,
-            BaseBranch: config2.Ship.BaseBranch,
-            DeleteFeatureBranch: config2.Ship.DeleteFeatureBranch,
-            NoAutoMerge: noAutoMerge);
-        var gitClient = new ProcessGitClient(cwd);
-        var checksRunner = new AutomatedChecksRunner();
-        var shipProgress = quietMode || summaryJson ? null : Console.Error;
-        var phase = new ShipPhase(ticketing, eventSink, buildOptions, shipOptions, gitClient: gitClient, checksRunner: checksRunner, progressWriter: shipProgress, verbose: debugMode);
-        ShipResult result;
-        try
-        {
-            using var cts = new CancellationTokenSource();
-            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
-            result = await phase.RunAsync(ticketId, cwd, cts.Token);
-        }
-        catch (KeyNotFoundException ex)
-        {
-            Console.Error.WriteLine($"Ticket not found: {ex.Message}");
-            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
-            dispatchExitCode = 2;
-            break;
-        }
-        catch (OperationCanceledException)
-        {
-            Console.Error.WriteLine("Cancelled.");
-            dispatchExitCode = 1;
-            break;
-        }
-
-        // Derive branch name from the deterministic worktree layout (best effort).
-        string shipBranchName = "(unknown)";
-        try
-        {
-            using var fetchCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            var ticket = await ticketing.GetAsync(ticketId, fetchCts.Token);
-            var layout = PhaseWorktreeLayout.Compute(ticketId, ticket.Title, cwd);
-            shipBranchName = layout.BranchName;
-        }
-        catch { /* tolerated */ }
-
-        IReadOnlyList<DiffEntry> shipDiff = Array.Empty<DiffEntry>();
-        if (result.Success && !string.IsNullOrEmpty(result.MergedSha))
-        {
-            try
-            {
-                // For a ship that just fast-forwarded, diff is most informative when
-                // measured against the merge-base. When no remote is configured, fall
-                // back to the local base branch (TLB-127).
-                string ontoRef;
-                var summaryRemoteExists = await summaryGit.RemoteExistsAsync(config2.Ship.Remote, cwd, CancellationToken.None);
-                if (summaryRemoteExists)
-                    ontoRef = $"{config2.Ship.Remote}/{config2.Ship.BaseBranch}";
-                else
-                    ontoRef = config2.Ship.BaseBranch;
-                var d = await summaryGit.DiffAsync(ontoRef, result.MergedSha!, cwd, includePatchContent: false, CancellationToken.None);
-                shipDiff = d.Entries;
-            }
-            catch { /* tolerated */ }
-        }
-
-        var shipSummary = PhaseSummaryBuilder.BuildShip(
-            ticketId: result.TicketId,
-            success: result.Success,
-            branchName: shipBranchName == "(unknown)" ? null : shipBranchName,
-            mergedSha: result.MergedSha,
-            failureReason: result.FailureReason,
-            failedAtStage: result.FailedAt?.ToString(),
-            events: eventSink.Snapshot(),
-            diff: shipDiff,
-            planeUrl: PlaneUrl(),
-            sessionArtifactsPath: ArtifactsPath());
-        WriteSummary(shipSummary);
-
-        if (result.Success)
-        {
-            dispatchExitCode = 0;
-            break;
-        }
-
-        // Map FailedAt to exit code: gate failures -> 1, infrastructure failures -> 4.
-        var failedAt = result.FailedAt;
-        var stageName = failedAt?.ToString().ToLowerInvariant() ?? "unknown";
-        Console.Error.WriteLine($"Ship blocked at {stageName}: {result.FailureReason}");
-
-        dispatchExitCode = failedAt switch
-        {
-            ShipFailureStage.Rebase => 1,
-            ShipFailureStage.ConflictMarkerScan => 1,
-            ShipFailureStage.RegressionChecks => 1,
-            ShipFailureStage.StateCheck => 4,
-            ShipFailureStage.Fetch => 4,
-            ShipFailureStage.FastForwardMerge => 4,
-            ShipFailureStage.Decruft => 0,  // decruft failure is post-success non-fatal
-            _ => 1
-        };
-        break;
-    }
-    else if (verb == "chain")
-    {
-        // Collect additional positional ticket IDs beyond args[1] (args[0] is the verb).
-        var extraTicketIds = new List<string>();
-        for (int i = 2; i < args.Length; i++)
-        {
-            if (!args[i].StartsWith("--"))
-                extraTicketIds.Add(args[i]);
-        }
-
-        // Construct per-phase factories for ChainPhase.
-        var planPhaseFactory = (BuildOptions buildOpts) =>
-            new PlanPhase(ticketing, workerFactory.Create(EffectiveAgentFor("plan")), eventSink, buildOpts, project: config2.Project);
-
-        var implementPhaseFactory = (BuildOptions buildOpts, ImplementPhaseOptions implOpts) =>
-            new ImplementPhase(ticketing, workerFactory.Create(EffectiveAgentFor("implement")), eventSink, buildOpts, project: config2.Project, phaseOptions: implOpts);
-
-        var reviewPhaseFactory = (BuildOptions buildOpts) =>
-        {
-            var verifierWorkerOptions = new WorkerOptions(
-                TimeSpan.FromMinutes(config2.Review.VerifierTimeoutMinutes),
-                config2.Review.VerifierAllowedTools,
-                DebugCaptureDirectory: debugCaptureDir,
-                LiveStdoutSink: debugMode ? Console.Out : null,
-                LiveStderrSink: debugMode ? Console.Error : null,
-                ProgressDigestSink: enableDigest ? Console.Error : null);
-            var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
-            return new ReviewPhase(ticketing, workerFactory.Create(EffectiveAgentFor("review")), eventSink, buildOpts, reviewOptions, project: config2.Project);
-        };
-
-        var shipPhaseFactory = (BuildOptions buildOpts) =>
-        {
-            var shipOptions = new ShipOptions(
-                RegressionChecks: config2.Ship.RegressionChecks,
-                Remote: config2.Ship.Remote,
-                BaseBranch: config2.Ship.BaseBranch,
-                DeleteFeatureBranch: config2.Ship.DeleteFeatureBranch,
-                NoAutoMerge: noAutoMerge);
-            var gitClient = new ProcessGitClient(cwd);
-            var checksRunner = new AutomatedChecksRunner();
-            return new ShipPhase(ticketing, eventSink, buildOpts, shipOptions, gitClient: gitClient, checksRunner: checksRunner);
-        };
-
-        var ratifierFactory = (BuildOptions _) =>
-        {
-            var ratifierWorkerOptions = new WorkerOptions(
-                TimeSpan.FromMinutes(config2.Review.VerifierTimeoutMinutes),
-                config2.Review.VerifierAllowedTools,
-                DebugCaptureDirectory: debugCaptureDir,
-                LiveStdoutSink: debugMode ? Console.Out : null,
-                LiveStderrSink: debugMode ? Console.Error : null,
-                ProgressDigestSink: enableDigest ? Console.Error : null);
-            return (IObsoleteRatifier)new ObsoleteRatifier(
-                workerFactory.Create(EffectiveAgentFor("review")),
-                ratifierWorkerOptions,
-                cwd,
-                git: new ProcessGitClient(cwd));
-        };
-
-        var chainPhase = new ChainPhase(
-            ticketing,
-            eventSink,
-            buildOptions,
-            planPhaseFactory,
-            implementPhaseFactory,
-            reviewPhaseFactory,
-            shipPhaseFactory,
-            workingDirectory: cwd,
-            ratifierFactory: ratifierFactory);
-
-        // Multi-ticket path: if additional positional IDs were supplied, use ParallelDispatcher.
-        if (extraTicketIds.Count > 0)
-        {
-            var allTicketIds = new List<string> { ticketId };
-            allTicketIds.AddRange(extraTicketIds);
-
-            // Fetch tickets and build dependency graph from blocked_by relations.
-            IReadOnlyList<ThroughlineBuild.Contracts.Models.Ticket> batchTickets;
-            try
-            {
-                using var batchCts = new CancellationTokenSource();
-                Console.CancelKeyPress += (_, e) => { e.Cancel = true; batchCts.Cancel(); };
-                batchTickets = await ticketing.GetBatchAsync(allTicketIds, batchCts.Token).ConfigureAwait(false);
-            }
-            catch (KeyNotFoundException ex)
-            {
-                Console.Error.WriteLine($"Ticket not found: {ex.Message}");
-                return 2;
-            }
-            catch (OperationCanceledException)
-            {
-                Console.Error.WriteLine("Cancelled.");
-                return 1;
-            }
-
-            var ticketIdSet = new HashSet<string>(allTicketIds, StringComparer.OrdinalIgnoreCase);
-            var graph = new ThroughlineBuild.Phases.TicketGraph();
-            foreach (var id in allTicketIds)
-                graph.AddNode(id);
-
-            // Add edges for blocked_by relations that are within the dispatched set.
-            try
-            {
-                using var relCts = new CancellationTokenSource();
-                Console.CancelKeyPress += (_, e) => { e.Cancel = true; relCts.Cancel(); };
-                foreach (var id in allTicketIds)
-                {
-                    var relations = await ticketing.GetRelationsAsync(id, relCts.Token).ConfigureAwait(false);
-                    foreach (var rel in relations)
-                    {
-                        if (rel.Kind == "blocked_by" && ticketIdSet.Contains(rel.TargetId))
-                            graph.AddEdge(rel.TargetId, id); // TargetId blocks id
-                    }
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                Console.Error.WriteLine("Cancelled.");
-                return 1;
-            }
-
-            var dispatcher = new ThroughlineBuild.Phases.ParallelDispatcher(
-                chainPhase,
-                eventSink,
-                config2.Workers.MaxConcurrency);
-
-            var baseChainOptions = new ThroughlineBuild.Phases.ChainPhaseOptions(
-                TicketId: ticketId,
-                Debug: debugMode,
-                NoAutoResolve: noAutoResolve);
-
-            ThroughlineBuild.Contracts.Models.ParallelDispatchResult dispatchResult;
-            try
-            {
-                using var dispatchCts = new CancellationTokenSource();
-                Console.CancelKeyPress += (_, e) => { e.Cancel = true; dispatchCts.Cancel(); };
-                dispatchResult = await dispatcher.RunAsync(allTicketIds, graph, baseChainOptions, dispatchCts.Token)
-                    .ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                Console.Error.WriteLine("Cancelled.");
-                return 1;
-            }
-
-            // Print per-ticket summary
-            foreach (var r in dispatchResult.Results)
-            {
-                var durationMs = (long)r.TotalDuration.TotalMilliseconds;
-                Console.WriteLine($"[{r.TicketId}] {r.Outcome} ({durationMs}ms)");
-            }
-
-            return dispatchResult.Success ? 0 : 1;
-        }
-
-        // Single-ticket path (original behavior).
-        var chainRunner = new DefaultChainRunner(chainPhase);
-        var chainCommand = new ChainCommand(chainRunner, ticketing);
-
-        // Collect all ticket IDs from args: args[1] is the primary, plus any additional
-        // positional args that don't start with '--'.
-        var chainTicketIds = new List<string> { ticketId };
-        for (int i = 2; i < args.Length; i++)
-        {
-            if (!args[i].StartsWith("--", StringComparison.Ordinal))
-                chainTicketIds.Add(args[i]);
-        }
-
-        try
-        {
-            using var cts = new CancellationTokenSource();
-            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
-
-            if (chainTicketIds.Count > 1)
-            {
-                // Sequential fallback for multi-ticket dispatch.
-                // TLB-312 will replace this with concurrent ParallelDispatcher when rebased.
-                var allResults = await SequentialChainDispatcher.RunAsync(
-                    chainTicketIds,
-                    async (tid, token) =>
-                    {
-                        var singleCtx = new TicketCommandContext(tid, new Dictionary<string, string>(StringComparer.Ordinal)
-                        {
-                            ["debug"] = debugMode ? "true" : "false",
-                            ["no-auto-resolve"] = noAutoResolve ? "true" : "false"
-                        });
-                        var singleCommand = new ChainCommand(chainRunner, ticketing);
-                        await singleCommand.ExecuteAsync(singleCtx, token).ConfigureAwait(false);
-                        return singleCommand.LastChainResult ?? new ChainResult(
-                            TicketId: tid,
-                            Steps: Array.Empty<ChainStep>(),
-                            Outcome: ChainOutcome.StoppedAtPlan,
-                            TotalDuration: TimeSpan.Zero,
-                            FinalRationale: "command returned no result");
-                    },
-                    continuePastFailure,
-                    cts.Token).ConfigureAwait(false);
-
-                ChainCommand.PrintAggregateReport(allResults);
-
-                // Exit 0 if all results are success or skipped; non-zero if any failed.
-                bool allGood = allResults.All(r =>
-                    r.Outcome == ChainOutcome.Completed
-                    || r.Outcome == ChainOutcome.RatifiedObsolete
-                    || r.Outcome == ChainOutcome.ParentCompleted
-                    || r.Outcome == ChainOutcome.Skipped);
-                return allGood ? 0 : 1;
-            }
-
-            // Single-ticket path.
-            var chainCtx = new TicketCommandContext(ticketId, new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["debug"] = debugMode ? "true" : "false",
-                ["no-auto-resolve"] = noAutoResolve ? "true" : "false"
-            });
-            var cmdResult = await chainCommand.ExecuteAsync(chainCtx, cts.Token).ConfigureAwait(false);
-
-            if (!cmdResult.Success)
-            {
-                // Map ChainResult.Outcome to exit code.
-                if (chainCommand.LastChainResult is not null)
-                {
-                    dispatchExitCode = chainCommand.LastChainResult.Outcome switch
-                    {
-                        ChainOutcome.Completed => 0,
-                        ChainOutcome.RatifiedObsolete => 0,
-                        ChainOutcome.ParentCompleted => 0,
-                        ChainOutcome.RefusedInitialState => 2,
-                        ChainOutcome.ParentHasGrandchildren => 2,
-                        ChainOutcome.StoppedAtPlan => 3,
-                        ChainOutcome.ParentStoppedEarly => 3,
-                        ChainOutcome.Skipped => 3,
-                        ChainOutcome.StoppedAtImplement => 4,
-                        ChainOutcome.StoppedAtReview => 5,
-                        ChainOutcome.ReworkCapExceeded => 6,
-                        ChainOutcome.StoppedAtShip => 7,
-                        _ => 1
-                    };
-                    break;
-                }
-                // Unhandled exception path: LastChainResult not set because ChainCommand
-                // caught an exception before completing the chain. Print the message so
-                // the operator can see what went wrong instead of a silent exit code 1.
-                if (!string.IsNullOrEmpty(cmdResult.Message))
-                    Console.Error.WriteLine($"Error: {cmdResult.Message}");
-                dispatchExitCode = 1;
-                break;
-            }
-
-            dispatchExitCode = 0;
-            break;
-        }
-        catch (OperationCanceledException)
-        {
-            Console.Error.WriteLine("Cancelled.");
-            dispatchExitCode = 1;
-            break;
-        }
-    }
+        // action: 0=continue loop, 1=break loop, 2=return directly from RunAsync
+        var (iterCode, iterAction) = await RunTicketVerbBodyAsync(
+            verb, ticketId, args, cwd, ticketing, workerFactory, config2,
+            ResolveLogDir(config2.Events.LogDirectory), sessionContext,
+            debugMode, quietMode, summaryJson, errorLocation, noAutoMerge,
+            noAutoResolve, continuePastFailure, EffectiveAgentFor);
+        dispatchExitCode = iterCode;
+        if (iterAction == 2) return iterCode;
+        if (iterAction == 1) break;
     }
 
     // Multi-ticket verbs dispatch complete; rework and decompose are single-ticket only.
@@ -1580,6 +995,620 @@ static async Task<int> RunAsync(string[] args)
 
     // Fallback: should not reach here if all verbs are handled
     return 0;
+}
+
+// Extracted from RunAsync to reduce the async state-machine size for Native AOT compilation.
+// action: 0=continue foreach loop, 1=break foreach loop, 2=return directly from RunAsync.
+static async Task<(int code, int action)> RunTicketVerbBodyAsync(
+    string verb,
+    string ticketId,
+    string[] args,
+    string cwd,
+    PlaneTicketingClient ticketing,
+    WorkerAgentFactory workerFactory,
+    BuildConfig config2,
+    string logDir,
+    SessionContext sessionContext,
+    bool debugMode,
+    bool quietMode,
+    bool summaryJson,
+    bool errorLocation,
+    bool noAutoMerge,
+    bool noAutoResolve,
+    bool continuePastFailure,
+    Func<string, string> effectiveAgentFor)
+{
+    var sessionId = Guid.NewGuid().ToString("N");
+    var fileStem = SessionFileNameBuilder.Build(
+        projectName: config2.Ticketing.PlaneProjectName,
+        projectIdentifier: config2.Ticketing.PlaneProjectIdentifier,
+        verb: verb,
+        ticketId: ticketId,
+        extraSlug: null,
+        timestamp: DateTimeOffset.Now);
+
+    string? debugCaptureDir = debugMode
+        ? Path.GetFullPath(Path.Combine(cwd, ".build", "sessions", fileStem))
+        : null;
+    if (debugCaptureDir is not null)
+        Directory.CreateDirectory(debugCaptureDir);
+
+    await using var jsonlEventSink = new JsonlEventSink(new EventLogOptions
+    {
+        BaseDirectory = logDir,
+        SessionId = sessionId,
+        FileNameStem = fileStem
+    }, sessionContext);
+    bool enableDigest = !debugMode
+        && !quietMode
+        && (!Console.IsErrorRedirected || Environment.GetEnvironmentVariable("BUILD_PROGRESS") == "1");
+
+    var eventSink = new RecordingEventSink(jsonlEventSink);
+    var buildOptions = new BuildOptions(
+        SessionId: sessionId,
+        WorkerName: config2.Workers.DefaultAgent,
+        WorkerTimeout: TimeSpan.FromMinutes(config2.Workers.TimeoutMinutes),
+        DebugCaptureDirectory: debugCaptureDir,
+        LiveStdoutSink: debugMode ? Console.Out : null,
+        LiveStderrSink: debugMode ? Console.Error : null,
+        ProgressDigestSink: enableDigest ? Console.Error : null,
+        TargetBranch: config2.ResolveTargetBranch());
+
+    string planeUrl = BuildPlaneUrl(config2.Ticketing.PlaneBaseUrl, config2.Ticketing.PlaneWorkspaceSlug, ticketId);
+    string? artifactsPath = debugCaptureDir is not null
+        ? $".build/sessions/{fileStem}/"
+        : $".build/events/{fileStem}.jsonl";
+
+    void WriteSummaryLocal(PhaseSummary summary)
+    {
+        var text = summaryJson
+            ? PhaseSummaryRenderer.RenderJson(summary)
+            : PhaseSummaryRenderer.RenderText(summary);
+        Console.Out.Write(text);
+        if (!text.EndsWith('\n')) Console.Out.WriteLine();
+    }
+
+    if (verb == "plan")
+    {
+        var phase = new PlanPhase(ticketing, workerFactory.Create(effectiveAgentFor("plan")), eventSink, buildOptions, project: config2.Project);
+        PlanResult result;
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+            result = await phase.RunAsync(ticketId, cwd, cts.Token);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            Console.Error.WriteLine($"Ticket not found: {ex.Message}");
+            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+            return (2, 1);
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return (1, 1);
+        }
+
+        Ticket? planTicket = null;
+        try { planTicket = await ticketing.GetAsync(ticketId, CancellationToken.None); }
+        catch { /* best effort */ }
+
+        var planSummary = PhaseSummaryBuilder.BuildPlan(
+            ticketId: result.TicketId,
+            success: result.Success,
+            riskLabel: result.RiskLabel,
+            sizeLabel: result.SizeLabel,
+            plannedAtSha: result.PlannedAtSha,
+            failureReason: result.FailureReason,
+            ticket: planTicket,
+            events: eventSink.Snapshot(),
+            sessionId: sessionId,
+            planeUrl: planeUrl,
+            sessionArtifactsPath: artifactsPath);
+        WriteSummaryLocal(planSummary);
+
+        if (!result.Success)
+        {
+            Console.Error.WriteLine($"Plan phase failed: {result.FailureReason}");
+            if (debugCaptureDir is not null) Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
+            return (1, 1);
+        }
+        if (debugCaptureDir is not null) Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
+        return (0, 1);
+    }
+
+    if (verb == "implement")
+    {
+        var phase = new ImplementPhase(ticketing, workerFactory.Create(effectiveAgentFor("implement")), eventSink, buildOptions, project: config2.Project);
+        ImplementResult result;
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+            result = await phase.RunAsync(ticketId, cwd, cts.Token);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            Console.Error.WriteLine($"Ticket not found: {ex.Message}");
+            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+            return (2, 1);
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return (1, 1);
+        }
+
+        IReadOnlyList<DiffEntry> implDiff = Array.Empty<DiffEntry>();
+        IReadOnlyList<string> implCommits = Array.Empty<string>();
+        int implCommitCount = 0;
+        if (result.Success && !string.IsNullOrEmpty(result.BranchName))
+        {
+            try
+            {
+                var implGit = new ProcessGitClient(cwd);
+                var (baseRef, _) = await ThroughlineBuild.Git.BaseRefResolver.ResolveAsync(implGit, cwd, buildOptions.TargetBranch, CancellationToken.None);
+                var d = await implGit.DiffAsync(baseRef, result.BranchName!, cwd, includePatchContent: false, CancellationToken.None);
+                implDiff = d.Entries;
+                implCommitCount = await implGit.RevListCountAsync($"{baseRef}..{result.BranchName}", cwd, CancellationToken.None);
+                implCommits = await implGit.LogOnelineAsync($"{baseRef}..{result.BranchName}", 10, cwd, CancellationToken.None);
+            }
+            catch { /* tolerated */ }
+        }
+
+        var implSummary = PhaseSummaryBuilder.BuildImplement(
+            ticketId: result.TicketId,
+            success: result.Success,
+            branchName: result.BranchName,
+            commitSha: result.CommitSha,
+            failureReason: result.FailureReason,
+            events: eventSink.Snapshot(),
+            diff: implDiff,
+            commitOnelines: implCommits,
+            commitCount: implCommitCount,
+            planeUrl: planeUrl,
+            sessionArtifactsPath: artifactsPath);
+        WriteSummaryLocal(implSummary);
+
+        if (!result.Success)
+        {
+            Console.Error.WriteLine($"Implement phase failed: {result.FailureReason}");
+            if (debugCaptureDir is not null) Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
+            return (1, 1);
+        }
+        if (debugCaptureDir is not null) Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
+        return (0, 1);
+    }
+
+    if (verb == "review")
+    {
+        var verifierWorkerOptions = new WorkerOptions(
+            TimeSpan.FromMinutes(config2.Review.VerifierTimeoutMinutes),
+            config2.Review.VerifierAllowedTools,
+            DebugCaptureDirectory: debugCaptureDir,
+            LiveStdoutSink: debugMode ? Console.Out : null,
+            LiveStderrSink: debugMode ? Console.Error : null,
+            ProgressDigestSink: enableDigest ? Console.Error : null);
+        var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
+        var phase = new ReviewPhase(ticketing, workerFactory.Create(effectiveAgentFor("review")), eventSink, buildOptions, reviewOptions, project: config2.Project);
+        ReviewResult result;
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+            result = await phase.RunAsync(ticketId, cwd, cts.Token);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            Console.Error.WriteLine($"Ticket not found: {ex.Message}");
+            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+            return (2, 1);
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return (1, 1);
+        }
+
+        var reviewSummary = PhaseSummaryBuilder.BuildReview(
+            ticketId: result.TicketId,
+            success: result.Success,
+            verdict: result.Verdict?.ToString(),
+            rationale: result.VerdictRationale,
+            checksFailed: result.ChecksFailed,
+            failureReason: result.FailureReason,
+            events: eventSink.Snapshot(),
+            planeUrl: planeUrl,
+            sessionArtifactsPath: artifactsPath);
+        WriteSummaryLocal(reviewSummary);
+
+        if (!result.Success)
+        {
+            Console.Error.WriteLine($"Review phase failed: {result.FailureReason}");
+            if (debugCaptureDir is not null) Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
+            return (1, 1);
+        }
+        if (debugCaptureDir is not null) Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
+        return (0, 1);
+    }
+
+    if (verb == "ship")
+    {
+        var shipOptions = new ShipOptions(
+            RegressionChecks: config2.Ship.RegressionChecks,
+            Remote: config2.Ship.Remote,
+            BaseBranch: config2.Ship.BaseBranch,
+            DeleteFeatureBranch: config2.Ship.DeleteFeatureBranch,
+            NoAutoMerge: noAutoMerge);
+        var gitClient = new ProcessGitClient(cwd);
+        var checksRunner = new AutomatedChecksRunner();
+        var shipProgress = quietMode || summaryJson ? null : Console.Error;
+        var phase = new ShipPhase(ticketing, eventSink, buildOptions, shipOptions, gitClient: gitClient, checksRunner: checksRunner, progressWriter: shipProgress, verbose: debugMode);
+        ShipResult result;
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+            result = await phase.RunAsync(ticketId, cwd, cts.Token);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            Console.Error.WriteLine($"Ticket not found: {ex.Message}");
+            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+            return (2, 1);
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return (1, 1);
+        }
+
+        string shipBranchName = "(unknown)";
+        try
+        {
+            using var fetchCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var ticket = await ticketing.GetAsync(ticketId, fetchCts.Token);
+            var layout = PhaseWorktreeLayout.Compute(ticketId, ticket.Title, cwd);
+            shipBranchName = layout.BranchName;
+        }
+        catch { /* tolerated */ }
+
+        IReadOnlyList<DiffEntry> shipDiff = Array.Empty<DiffEntry>();
+        if (result.Success && !string.IsNullOrEmpty(result.MergedSha))
+        {
+            try
+            {
+                var shipGit = new ProcessGitClient(cwd);
+                string ontoRef;
+                var summaryRemoteExists = await shipGit.RemoteExistsAsync(config2.Ship.Remote, cwd, CancellationToken.None);
+                if (summaryRemoteExists)
+                    ontoRef = $"{config2.Ship.Remote}/{config2.Ship.BaseBranch}";
+                else
+                    ontoRef = config2.Ship.BaseBranch;
+                var d = await shipGit.DiffAsync(ontoRef, result.MergedSha!, cwd, includePatchContent: false, CancellationToken.None);
+                shipDiff = d.Entries;
+            }
+            catch { /* tolerated */ }
+        }
+
+        var shipSummary = PhaseSummaryBuilder.BuildShip(
+            ticketId: result.TicketId,
+            success: result.Success,
+            branchName: shipBranchName == "(unknown)" ? null : shipBranchName,
+            mergedSha: result.MergedSha,
+            failureReason: result.FailureReason,
+            failedAtStage: result.FailedAt?.ToString(),
+            events: eventSink.Snapshot(),
+            diff: shipDiff,
+            planeUrl: planeUrl,
+            sessionArtifactsPath: artifactsPath);
+        WriteSummaryLocal(shipSummary);
+
+        if (result.Success)
+            return (0, 1);
+
+        var failedAt = result.FailedAt;
+        var stageName = failedAt?.ToString().ToLowerInvariant() ?? "unknown";
+        Console.Error.WriteLine($"Ship blocked at {stageName}: {result.FailureReason}");
+        int shipCode = failedAt switch
+        {
+            ShipFailureStage.Rebase => 1,
+            ShipFailureStage.ConflictMarkerScan => 1,
+            ShipFailureStage.RegressionChecks => 1,
+            ShipFailureStage.StateCheck => 4,
+            ShipFailureStage.Fetch => 4,
+            ShipFailureStage.FastForwardMerge => 4,
+            ShipFailureStage.Decruft => 0,
+            _ => 1
+        };
+        return (shipCode, 1);
+    }
+
+    if (verb == "chain")
+    {
+        var (chainCode, chainDirect) = await RunChainVerbAsync(
+            ticketId, args, cwd, ticketing, eventSink, buildOptions, config2,
+            workerFactory, debugMode, debugCaptureDir, enableDigest,
+            noAutoMerge, noAutoResolve, continuePastFailure, effectiveAgentFor);
+        // chainDirect=true means return from RunAsync; false means set dispatchExitCode + break
+        return (chainCode, chainDirect ? 2 : 1);
+    }
+
+    return (0, 0); // unrecognized verb - continue loop (no-op)
+}
+
+// Extracted from RunAsync to reduce the async state-machine size for Native AOT compilation.
+// Returns (code, true) to exit directly, or (code, false) to set dispatchExitCode and break.
+static async Task<(int code, bool direct)> RunChainVerbAsync(
+    string ticketId,
+    string[] args,
+    string cwd,
+    PlaneTicketingClient ticketing,
+    RecordingEventSink eventSink,
+    BuildOptions buildOptions,
+    BuildConfig config2,
+    WorkerAgentFactory workerFactory,
+    bool debugMode,
+    string? debugCaptureDir,
+    bool enableDigest,
+    bool noAutoMerge,
+    bool noAutoResolve,
+    bool continuePastFailure,
+    Func<string, string> effectiveAgentFor)
+{
+    // Collect additional positional ticket IDs beyond args[1] (args[0] is the verb).
+    var extraTicketIds = new List<string>();
+    for (int i = 2; i < args.Length; i++)
+    {
+        if (!args[i].StartsWith("--"))
+            extraTicketIds.Add(args[i]);
+    }
+
+    // Construct per-phase factories for ChainPhase.
+    var planPhaseFactory = (BuildOptions buildOpts) =>
+        new PlanPhase(ticketing, workerFactory.Create(effectiveAgentFor("plan")), eventSink, buildOpts, project: config2.Project);
+
+    var implementPhaseFactory = (BuildOptions buildOpts, ImplementPhaseOptions implOpts) =>
+        new ImplementPhase(ticketing, workerFactory.Create(effectiveAgentFor("implement")), eventSink, buildOpts, project: config2.Project, phaseOptions: implOpts);
+
+    var reviewPhaseFactory = (BuildOptions buildOpts) =>
+    {
+        var verifierWorkerOptions = new WorkerOptions(
+            TimeSpan.FromMinutes(config2.Review.VerifierTimeoutMinutes),
+            config2.Review.VerifierAllowedTools,
+            DebugCaptureDirectory: debugCaptureDir,
+            LiveStdoutSink: debugMode ? Console.Out : null,
+            LiveStderrSink: debugMode ? Console.Error : null,
+            ProgressDigestSink: enableDigest ? Console.Error : null);
+        var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
+        return new ReviewPhase(ticketing, workerFactory.Create(effectiveAgentFor("review")), eventSink, buildOpts, reviewOptions, project: config2.Project);
+    };
+
+    var shipPhaseFactory = (BuildOptions buildOpts) =>
+    {
+        var shipOptions = new ShipOptions(
+            RegressionChecks: config2.Ship.RegressionChecks,
+            Remote: config2.Ship.Remote,
+            BaseBranch: config2.Ship.BaseBranch,
+            DeleteFeatureBranch: config2.Ship.DeleteFeatureBranch,
+            NoAutoMerge: noAutoMerge);
+        var gitClient = new ProcessGitClient(cwd);
+        var checksRunner = new AutomatedChecksRunner();
+        return new ShipPhase(ticketing, eventSink, buildOpts, shipOptions, gitClient: gitClient, checksRunner: checksRunner);
+    };
+
+    var ratifierFactory = (BuildOptions _) =>
+    {
+        var ratifierWorkerOptions = new WorkerOptions(
+            TimeSpan.FromMinutes(config2.Review.VerifierTimeoutMinutes),
+            config2.Review.VerifierAllowedTools,
+            DebugCaptureDirectory: debugCaptureDir,
+            LiveStdoutSink: debugMode ? Console.Out : null,
+            LiveStderrSink: debugMode ? Console.Error : null,
+            ProgressDigestSink: enableDigest ? Console.Error : null);
+        return (IObsoleteRatifier)new ObsoleteRatifier(
+            workerFactory.Create(effectiveAgentFor("review")),
+            ratifierWorkerOptions,
+            cwd,
+            git: new ProcessGitClient(cwd));
+    };
+
+    var chainPhase = new ChainPhase(
+        ticketing,
+        eventSink,
+        buildOptions,
+        planPhaseFactory,
+        implementPhaseFactory,
+        reviewPhaseFactory,
+        shipPhaseFactory,
+        workingDirectory: cwd,
+        ratifierFactory: ratifierFactory);
+
+    // Multi-ticket path: if additional positional IDs were supplied, use ParallelDispatcher.
+    if (extraTicketIds.Count > 0)
+    {
+        var allTicketIds = new List<string> { ticketId };
+        allTicketIds.AddRange(extraTicketIds);
+
+        // Fetch tickets and build dependency graph from blocked_by relations.
+        IReadOnlyList<ThroughlineBuild.Contracts.Models.Ticket> batchTickets;
+        try
+        {
+            using var batchCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; batchCts.Cancel(); };
+            batchTickets = await ticketing.GetBatchAsync(allTicketIds, batchCts.Token).ConfigureAwait(false);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            Console.Error.WriteLine($"Ticket not found: {ex.Message}");
+            return (2, true);
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return (1, true);
+        }
+
+        var ticketIdSet = new HashSet<string>(allTicketIds, StringComparer.OrdinalIgnoreCase);
+        var graph = new ThroughlineBuild.Phases.TicketGraph();
+        foreach (var id in allTicketIds)
+            graph.AddNode(id);
+
+        // Add edges for blocked_by relations that are within the dispatched set.
+        try
+        {
+            using var relCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; relCts.Cancel(); };
+            foreach (var id in allTicketIds)
+            {
+                var relations = await ticketing.GetRelationsAsync(id, relCts.Token).ConfigureAwait(false);
+                foreach (var rel in relations)
+                {
+                    if (rel.Kind == "blocked_by" && ticketIdSet.Contains(rel.TargetId))
+                        graph.AddEdge(rel.TargetId, id); // TargetId blocks id
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return (1, true);
+        }
+
+        var dispatcher = new ThroughlineBuild.Phases.ParallelDispatcher(
+            chainPhase,
+            eventSink,
+            config2.Workers.MaxConcurrency);
+
+        var baseChainOptions = new ThroughlineBuild.Phases.ChainPhaseOptions(
+            TicketId: ticketId,
+            Debug: debugMode,
+            NoAutoResolve: noAutoResolve);
+
+        ThroughlineBuild.Contracts.Models.ParallelDispatchResult dispatchResult;
+        try
+        {
+            using var dispatchCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; dispatchCts.Cancel(); };
+            dispatchResult = await dispatcher.RunAsync(allTicketIds, graph, baseChainOptions, dispatchCts.Token)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return (1, true);
+        }
+
+        // Print per-ticket summary
+        foreach (var r in dispatchResult.Results)
+        {
+            var durationMs = (long)r.TotalDuration.TotalMilliseconds;
+            Console.WriteLine($"[{r.TicketId}] {r.Outcome} ({durationMs}ms)");
+        }
+
+        return (dispatchResult.Success ? 0 : 1, true);
+    }
+
+    // Single-ticket path (original behavior).
+    var chainRunner = new DefaultChainRunner(chainPhase);
+    var chainCommand = new ChainCommand(chainRunner, ticketing);
+
+    // Collect all ticket IDs from args: args[1] is the primary, plus any additional
+    // positional args that don't start with '--'.
+    var chainTicketIds = new List<string> { ticketId };
+    for (int i = 2; i < args.Length; i++)
+    {
+        if (!args[i].StartsWith("--", StringComparison.Ordinal))
+            chainTicketIds.Add(args[i]);
+    }
+
+    try
+    {
+        using var cts = new CancellationTokenSource();
+        Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+
+        if (chainTicketIds.Count > 1)
+        {
+            // Sequential fallback for multi-ticket dispatch.
+            // TLB-312 will replace this with concurrent ParallelDispatcher when rebased.
+            var allResults = await SequentialChainDispatcher.RunAsync(
+                chainTicketIds,
+                async (tid, token) =>
+                {
+                    var singleCtx = new TicketCommandContext(tid, new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["debug"] = debugMode ? "true" : "false",
+                        ["no-auto-resolve"] = noAutoResolve ? "true" : "false"
+                    });
+                    var singleCommand = new ChainCommand(chainRunner, ticketing);
+                    await singleCommand.ExecuteAsync(singleCtx, token).ConfigureAwait(false);
+                    return singleCommand.LastChainResult ?? new ChainResult(
+                        TicketId: tid,
+                        Steps: Array.Empty<ChainStep>(),
+                        Outcome: ChainOutcome.StoppedAtPlan,
+                        TotalDuration: TimeSpan.Zero,
+                        FinalRationale: "command returned no result");
+                },
+                continuePastFailure,
+                cts.Token).ConfigureAwait(false);
+
+            ChainCommand.PrintAggregateReport(allResults);
+
+            // Exit 0 if all results are success or skipped; non-zero if any failed.
+            bool allGood = allResults.All(r =>
+                r.Outcome == ChainOutcome.Completed
+                || r.Outcome == ChainOutcome.RatifiedObsolete
+                || r.Outcome == ChainOutcome.ParentCompleted
+                || r.Outcome == ChainOutcome.Skipped);
+            return (allGood ? 0 : 1, true);
+        }
+
+        // Single-ticket path.
+        var chainCtx = new TicketCommandContext(ticketId, new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["debug"] = debugMode ? "true" : "false",
+            ["no-auto-resolve"] = noAutoResolve ? "true" : "false"
+        });
+        var cmdResult = await chainCommand.ExecuteAsync(chainCtx, cts.Token).ConfigureAwait(false);
+
+        if (!cmdResult.Success)
+        {
+            // Map ChainResult.Outcome to exit code.
+            if (chainCommand.LastChainResult is not null)
+            {
+                return (chainCommand.LastChainResult.Outcome switch
+                {
+                    ChainOutcome.Completed => 0,
+                    ChainOutcome.RatifiedObsolete => 0,
+                    ChainOutcome.ParentCompleted => 0,
+                    ChainOutcome.RefusedInitialState => 2,
+                    ChainOutcome.ParentHasGrandchildren => 2,
+                    ChainOutcome.StoppedAtPlan => 3,
+                    ChainOutcome.ParentStoppedEarly => 3,
+                    ChainOutcome.Skipped => 3,
+                    ChainOutcome.StoppedAtImplement => 4,
+                    ChainOutcome.StoppedAtReview => 5,
+                    ChainOutcome.ReworkCapExceeded => 6,
+                    ChainOutcome.StoppedAtShip => 7,
+                    _ => 1
+                }, false);
+            }
+            // Unhandled exception path: LastChainResult not set because ChainCommand
+            // caught an exception before completing the chain. Print the message so
+            // the operator can see what went wrong instead of a silent exit code 1.
+            if (!string.IsNullOrEmpty(cmdResult.Message))
+                Console.Error.WriteLine($"Error: {cmdResult.Message}");
+            return (1, false);
+        }
+
+        return (0, false);
+    }
+    catch (OperationCanceledException)
+    {
+        Console.Error.WriteLine("Cancelled.");
+        return (1, false);
+    }
 }
 
 // Builds the Plane work-item deep-link URL using the ?next_path= redirect parameter.
