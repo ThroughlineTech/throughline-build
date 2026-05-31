@@ -4,6 +4,7 @@ using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Git;
 using ThroughlineBuild.Helpers;
+using ThroughlineBuild.Workers.Common;
 
 namespace ThroughlineBuild.Phases;
 
@@ -211,6 +212,13 @@ public class ImplementPhase : IWorkflowPhase
             return new ImplementResult(false, ticketId, null, worktreeNames.BranchName, worktreeNames.WorktreePath,
                 "worker metadata missing commit_sha");
 
+        // Step 15b: Resolve IMPLEMENT_SUMMARY block if present
+        string? implementSummaryMarkdown = null;
+        if (workerResult.Blocks != null)
+        {
+            FencedBlockResolver.TryResolveRef(workerResult.Blocks, workerResult.Metadata, "summary_ref", out implementSummaryMarkdown, out _);
+        }
+
         // Step 16: Verify against actual HEAD; prefer actual HEAD if it differs
         var actualHeadSha = await _git.HeadShaAsync(worktreeNames.WorktreePath, ct).ConfigureAwait(false);
         if (string.IsNullOrEmpty(actualHeadSha))
@@ -219,8 +227,11 @@ public class ImplementPhase : IWorkflowPhase
             ? $" (worker reported {metadataCommitSha}, HEAD is {actualHeadSha})"
             : "";
 
-        // Step 17: Post implemented_at comment
-        var commentHtml = $"<p>[implemented_at: {actualHeadSha}] (branch {worktreeNames.BranchName}){discrepancyNote}</p>";
+        // Step 17: Post implemented_at comment, including rendered summary if available
+        var summaryHtml = implementSummaryMarkdown is not null
+            ? MarkdownRenderer.Render(implementSummaryMarkdown)
+            : "";
+        var commentHtml = $"<p>[implemented_at: {actualHeadSha}] (branch {worktreeNames.BranchName}){discrepancyNote}</p>{summaryHtml}";
         await _ticketing.CreateCommentAsync(ticketId, commentHtml, ct).ConfigureAwait(false);
         await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
         {

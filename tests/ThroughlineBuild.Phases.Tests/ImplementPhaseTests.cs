@@ -200,6 +200,58 @@ public class ImplementPhaseTests
     }
 
     [Fact]
+    public async Task RunAsync_WithSummaryRef_CommentIncludesRenderedSummaryHtml()
+    {
+        const string summaryMarkdown = "# Summary\n\nRan `dotnet build` successfully.";
+        var metadata = new Dictionary<string, object>
+        {
+            ["commit_sha"] = CommitSha,
+            ["files_changed"] = new[] { "src/Foo.cs" },
+            ["summary_ref"] = "IMPLEMENT_SUMMARY"
+        };
+        var blocks = new Dictionary<string, string>
+        {
+            ["IMPLEMENT_SUMMARY"] = summaryMarkdown
+        };
+        var workerResult = new WorkerResult(Status.Ok, "implemented", new[] { "src/Foo.cs" }, null, metadata, blocks);
+
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.Ready));
+        var worker = new FakeWorkerAgent(workerResult);
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha);
+        var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Single(ticketing.Comments);
+        var html = ticketing.Comments[0].html;
+        Assert.Contains("implemented_at", html);
+        Assert.Contains("<h1>Summary</h1>", html);
+        Assert.Contains("<code>dotnet build</code>", html);
+    }
+
+    [Fact]
+    public async Task RunAsync_WithoutSummaryRef_CommentContainsOnlyImplementedAtMarker()
+    {
+        // Backward-compat: no summary_ref in metadata -> comment is only the implemented_at line
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.Ready));
+        var worker = new FakeWorkerAgent(OkWorkerResult());
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha);
+        var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Single(ticketing.Comments);
+        var html = ticketing.Comments[0].html;
+        Assert.Contains("implemented_at", html);
+        // No extra HTML beyond the single <p> tag
+        Assert.Equal($"<p>[implemented_at: {CommitSha}] (branch ticket/tlb-1-test-ticket)</p>", html);
+    }
+
+    [Fact]
     public async Task RunAsync_HeadShaDiffersFromMetadata_PrefersActualHeadAndNotesDiscrepancy()
     {
         const string ActualHead = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
