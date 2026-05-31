@@ -55,10 +55,30 @@ about scope, note it here: "Operator did not specify X; suggest clarifying or ac
 
 ## Output format
 
-Emit exactly one WORKER_RESULT block at the end of your response:
+Before emitting the WORKER_RESULT envelope, emit the drafted ticket body as a named fenced block:
+
+<<<DRAFT_BODY_START
+# Title here
+
+**Type:** task|feature|bug
+
+## Description
+
+Your drafted content here. Can include code blocks, backticks, quotes, shell commands - no JSON escaping needed.
+
+## Acceptance criteria
+
+- [ ] Observable outcome
+
+## Notes
+
+Optional notes.
+<<<DRAFT_BODY_END
+
+Then emit the WORKER_RESULT envelope:
 
 WORKER_RESULT
-{"status":"Ok","summary":"<one-line summary of the draft>","filesChanged":[],"failureReason":null,"metadata":{"body_markdown":"<the completed ticket body as a single JSON-escaped string>"}}
+{"status":"Ok","summary":"<one-line summary of the draft>","filesChanged":[],"failureReason":null,"metadata":{"body_markdown_ref":"DRAFT_BODY"}}
 
 ## Examples
 
@@ -71,8 +91,26 @@ Add a widget to the sidebar
 
 Output:
 
+<<<DRAFT_BODY_START
+# Add widget to sidebar
+
+**Type:** feature
+
+## Description
+
+Add a widget to the sidebar.
+
+## Acceptance criteria
+
+- [ ] Widget appears in the sidebar.
+
+## Notes
+
+Operator did not specify widget type or content; suggest clarifying before filing.
+<<<DRAFT_BODY_END
+
 WORKER_RESULT
-{"status":"Ok","summary":"Drafted ticket: Add widget to sidebar","filesChanged":[],"failureReason":null,"metadata":{"body_markdown":"# Add widget to sidebar\n\n**Type:** feature\n\n## Description\n\nAdd a widget to the sidebar.\n\n## Acceptance criteria\n\n- [ ] Widget appears in the sidebar.\n\n## Notes\n\nOperator did not specify widget type or content; suggest clarifying before filing."}}
+{"status":"Ok","summary":"Drafted ticket: Add widget to sidebar","filesChanged":[],"failureReason":null,"metadata":{"body_markdown_ref":"DRAFT_BODY"}}
 
 ### Example 2 - ambiguous input
 
@@ -83,5 +121,23 @@ The login sometimes fails when the network is slow - fix it
 
 Output:
 
+<<<DRAFT_BODY_START
+# Fix intermittent login failure on slow network
+
+**Type:** bug
+
+## Description
+
+Login fails intermittently when the network is slow. The root cause has not been identified; this ticket covers investigation and fix.
+
+## Acceptance criteria
+
+- [ ] Login succeeds reliably under degraded network conditions.
+
+## Notes
+
+Operator did not specify the failure mode (timeout, error response, or UI hang); suggest reproducing the issue before narrowing the fix scope.
+<<<DRAFT_BODY_END
+
 WORKER_RESULT
-{"status":"Ok","summary":"Drafted ticket: Fix intermittent login failure on slow network","filesChanged":[],"failureReason":null,"metadata":{"body_markdown":"# Fix intermittent login failure on slow network\n\n**Type:** bug\n\n## Description\n\nLogin fails intermittently when the network is slow. The root cause has not been identified; this ticket covers investigation and fix.\n\n## Acceptance criteria\n\n- [ ] Login succeeds reliably under degraded network conditions.\n\n## Notes\n\nOperator did not specify the failure mode (timeout, error response, or UI hang); suggest reproducing the issue before narrowing the fix scope."}}
+{"status":"Ok","summary":"Drafted ticket: Fix intermittent login failure on slow network","filesChanged":[],"failureReason":null,"metadata":{"body_markdown_ref":"DRAFT_BODY"}}

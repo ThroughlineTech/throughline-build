@@ -33,12 +33,13 @@ public class DraftBriefBuilderTests
     }
 
     [Fact]
-    public void Build_ContainsWorkerResultEnvelopeAndBodyMarkdownKey()
+    public void Build_ContainsWorkerResultEnvelopeAndBodyMarkdownRef()
     {
         var result = DraftBriefBuilder.Build("claude-code", FixtureOperatorText);
 
         Assert.Contains("WORKER_RESULT", result);
-        Assert.Contains("body_markdown", result);
+        Assert.Contains("DRAFT_BODY", result);
+        Assert.Contains("body_markdown_ref", result);
     }
 
     [Fact]

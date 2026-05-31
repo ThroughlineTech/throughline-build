@@ -16,8 +16,15 @@ public class DraftPhaseTests
     private static DraftPhaseOptions MakeOpts(string text = "Add a widget feature", bool debug = false)
         => new DraftPhaseOptions(text, debug);
 
+    // Legacy helper - body passed as direct metadata key (backward compat path)
     private static IReadOnlyDictionary<string, object> BodyMarkdownMetadata(string body) =>
         new Dictionary<string, object> { ["body_markdown"] = body };
+
+    // New fenced-block helper - body passed via DRAFT_BODY block + body_markdown_ref
+    private static WorkerResult BodyMarkdownResult(string body) => new WorkerResult(
+        Status.Ok, "drafted", Array.Empty<string>(), null,
+        new Dictionary<string, object> { ["body_markdown_ref"] = "DRAFT_BODY" },
+        new Dictionary<string, string> { ["DRAFT_BODY"] = body });
 
     private const string WellFormedBody =
         "# Add a widget feature\n\nDescription: This ticket adds a widget.\n\n## Acceptance criteria\n\n- [ ] Widget works";
@@ -29,6 +36,20 @@ public class DraftPhaseTests
     [Fact]
     public async Task RunAsync_HappyPath_ReturnsOkWithBodyMarkdown()
     {
+        var worker = new FakeWorkerAgent(BodyMarkdownResult(WellFormedBody));
+        var phase = new DraftPhase(worker, MakeOptions());
+
+        var result = await phase.RunAsync(MakeOpts(), Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.Equal(DraftOutcome.Ok, result.Outcome);
+        Assert.Equal(WellFormedBody, result.BodyMarkdown);
+        Assert.Null(result.FailureReason);
+    }
+
+    [Fact]
+    public async Task RunAsync_LegacyBodyMarkdown_BackwardCompatReturnsOk()
+    {
+        // Backward compat: worker returns body_markdown directly (no fenced block)
         var worker = new FakeWorkerAgent(new WorkerResult(
             Status.Ok, "done", Array.Empty<string>(), null, BodyMarkdownMetadata(WellFormedBody)));
         var phase = new DraftPhase(worker, MakeOptions());
@@ -38,6 +59,21 @@ public class DraftPhaseTests
         Assert.Equal(DraftOutcome.Ok, result.Outcome);
         Assert.Equal(WellFormedBody, result.BodyMarkdown);
         Assert.Null(result.FailureReason);
+    }
+
+    [Fact]
+    public async Task RunAsync_FencedBlockWithCodeAndQuotes_RoundTripsVerbatim()
+    {
+        // Verifies that backticks, double-quotes, and shell commands survive the fenced block round-trip
+        const string codeHeavyBody =
+            "# Fix widget escaping\n\n**Type:** bug\n\n## Description\n\nCall `dotnet build` and check \"output\".";
+        var worker = new FakeWorkerAgent(BodyMarkdownResult(codeHeavyBody));
+        var phase = new DraftPhase(worker, MakeOptions());
+
+        var result = await phase.RunAsync(MakeOpts(), Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.Equal(DraftOutcome.Ok, result.Outcome);
+        Assert.Equal(codeHeavyBody, result.BodyMarkdown);
     }
 
     // ------------------------------------------------------------------
@@ -103,8 +139,7 @@ public class DraftPhaseTests
     {
         // No ATX heading and no **Title:** marker
         const string noTitleBody = "Just some text without a heading.\n\nMore text here.";
-        var worker = new FakeWorkerAgent(new WorkerResult(
-            Status.Ok, "done", Array.Empty<string>(), null, BodyMarkdownMetadata(noTitleBody)));
+        var worker = new FakeWorkerAgent(BodyMarkdownResult(noTitleBody));
         var phase = new DraftPhase(worker, MakeOptions());
 
         var result = await phase.RunAsync(MakeOpts(), Directory.GetCurrentDirectory(), CancellationToken.None);
@@ -120,8 +155,7 @@ public class DraftPhaseTests
     {
         // Has a title line but nothing else after it
         const string titleOnlyBody = "# My ticket\n\n   \n\t\n";
-        var worker = new FakeWorkerAgent(new WorkerResult(
-            Status.Ok, "done", Array.Empty<string>(), null, BodyMarkdownMetadata(titleOnlyBody)));
+        var worker = new FakeWorkerAgent(BodyMarkdownResult(titleOnlyBody));
         var phase = new DraftPhase(worker, MakeOptions());
 
         var result = await phase.RunAsync(MakeOpts(), Directory.GetCurrentDirectory(), CancellationToken.None);
@@ -135,7 +169,7 @@ public class DraftPhaseTests
     {
         var worker = new FakeWorkerAgent(new WorkerResult(
             Status.Ok, "done", Array.Empty<string>(), null,
-            new Dictionary<string, object>())); // empty metadata - no body_markdown
+            new Dictionary<string, object>())); // empty metadata - no body_markdown_ref or body_markdown
         var phase = new DraftPhase(worker, MakeOptions());
 
         var result = await phase.RunAsync(MakeOpts(), Directory.GetCurrentDirectory(), CancellationToken.None);
@@ -152,8 +186,7 @@ public class DraftPhaseTests
     public async Task RunAsync_OperatorTextWithSpecialChars_PassesThroughVerbatim()
     {
         const string specialText = "newline\nand \"quotes\" and 'apostrophes' and <tags> & more";
-        var worker = new CapturingWorkerAgent(new WorkerResult(
-            Status.Ok, "done", Array.Empty<string>(), null, BodyMarkdownMetadata(WellFormedBody)));
+        var worker = new CapturingWorkerAgent(BodyMarkdownResult(WellFormedBody));
         var phase = new DraftPhase(worker, MakeOptions());
 
         var result = await phase.RunAsync(MakeOpts(specialText), Directory.GetCurrentDirectory(), CancellationToken.None);
