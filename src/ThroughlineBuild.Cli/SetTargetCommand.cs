@@ -76,7 +76,8 @@ public static class SetTargetCommand
         }
 
         if (root.TryGetValue("work", out var workRaw) && workRaw is TomlTable work &&
-            work.TryGetValue("target_branch", out var tbRaw) && tbRaw is string targetBranch)
+            work.TryGetValue("target_branch", out var tbRaw) && tbRaw is string targetBranch &&
+            !string.IsNullOrEmpty(targetBranch))
         {
             console.WriteLine($"target_branch = {targetBranch} (from [work])");
             return 0;

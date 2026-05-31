@@ -124,6 +124,24 @@ executable = "dotnet"
     }
 
     [Fact]
+    public void Display_WorkSectionWithEmptyKey_ShowsFallback()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            WriteConfig(dir, BaseConfig + "\n[work]\ntarget_branch = \"\"\n");
+            var console = new FakeConsole();
+
+            var rc = SetTargetCommand.Execute(dir, branch: null, unset: false, console);
+
+            Assert.Equal(0, rc);
+            Assert.Contains("target_branch = develop", console.Stdout);
+            Assert.Contains("default, no [work] override", console.Stdout);
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
     public void Display_NoShipSection_ShowsMainFallback()
     {
         var dir = MakeTempDir();
