@@ -75,10 +75,12 @@ public class ReviewPhase : IWorkflowPhase
                 "ticket not in InReview state");
 
         // Step 3: Compute and locate worktree
-        var worktreeNames = PhaseWorktreeLayout.Compute(ticketId, ticket.Title, workingDirectory);
+        var worktreeNames = PhaseWorktreeLayout.Compute(ticket.Id, ticket.Title, workingDirectory);
         var worktrees = await _git.ListWorktreesAsync(ct).ConfigureAwait(false);
         bool worktreeFound = false;
         string canonicalWorktreePath = worktreeNames.WorktreePath;
+        string canonicalBranchName = worktreeNames.BranchName;
+        var ticketBranchPrefix = $"ticket/{ticket.Id.ToLowerInvariant()}-";
         foreach (var w in worktrees)
         {
             if (w.Branch == worktreeNames.BranchName)
@@ -93,6 +95,14 @@ public class ReviewPhase : IWorkflowPhase
             if (string.Equals(wPathFull, worktreeNames.WorktreePath, StringComparison.OrdinalIgnoreCase))
             {
                 canonicalWorktreePath = w.Path;
+                canonicalBranchName = string.IsNullOrEmpty(w.Branch) ? worktreeNames.BranchName : w.Branch;
+                worktreeFound = true;
+                break;
+            }
+            if (w.Branch.StartsWith(ticketBranchPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                canonicalWorktreePath = w.Path;
+                canonicalBranchName = w.Branch;
                 worktreeFound = true;
                 break;
             }
@@ -117,7 +127,7 @@ public class ReviewPhase : IWorkflowPhase
         // Step 5: Build RepoState and implementer brief
         var topLevelEntries = Directory.EnumerateFileSystemEntries(workingDirectory).ToList().AsReadOnly();
         var repoState = new RepoState(mainSha, topLevelEntries);
-        var implementerBrief = ImplementBriefBuilder.Build(_verifierWorker.Name, ticket, repoState, worktreeNames.BranchName, worktreeNames.WorktreePath, _project);
+        var implementerBrief = ImplementBriefBuilder.Build(_verifierWorker.Name, ticket, repoState, canonicalBranchName, canonicalWorktreePath, _project);
 
         // Step 6a: Reconstruct implementer commit SHA from [implemented_at: <sha>] marker
         var comments = await _ticketing.GetCommentsAsync(ticketId, ct).ConfigureAwait(false);
@@ -138,7 +148,7 @@ public class ReviewPhase : IWorkflowPhase
                 "no implemented_at marker found - ticket reached InReview without an implement marker, ReviewPhase cannot reconstruct implementer state");
 
         // Step 6b: Compute diff and synthesize implementer WorkerResult
-        var diff = await _git.DiffAsync(baseRef, worktreeNames.BranchName, workingDirectory, includePatchContent: true, ct).ConfigureAwait(false);
+        var diff = await _git.DiffAsync(baseRef, canonicalBranchName, workingDirectory, includePatchContent: true, ct).ConfigureAwait(false);
         var implementerResult = new WorkerResult(
             Status.Ok,
             $"Reconstructed from implemented_at: {implementerCommitSha} ({diff.Entries.Count} files changed)",

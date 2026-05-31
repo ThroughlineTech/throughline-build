@@ -35,6 +35,12 @@ public interface IGitClient
     Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct);
     Task<IReadOnlyList<string>> GetBranchesNotMergedAsync(string pattern, string baseBranch, CancellationToken ct);
     Task<WorktreeCreateResult> CreateWorktreeAsync(string worktreePath, string newBranch, string fromRef, string mainWorktreePath, CancellationToken ct);
+
+    // Checks out an existing local branch into a new worktree (git worktree add <path> <branch>).
+    // Differs from CreateWorktreeAsync which always creates a new branch (-b flag).
+    // Default returns failure so existing test fakes remain unchanged.
+    Task<WorktreeCreateResult> CheckoutWorktreeAsync(string worktreePath, string existingBranch, string mainWorktreePath, CancellationToken ct) =>
+        Task.FromResult(new WorktreeCreateResult(false, "not implemented", null));
     Task<string> HeadShaAsync(string worktreePath, CancellationToken ct);
     Task<GitDiff> DiffAsync(string fromRef, string toRef, string mainWorktreePath, bool includePatchContent, CancellationToken ct);
     Task<GitOpResult> FetchAsync(string remote, string mainWorktreePath, CancellationToken ct);
@@ -47,6 +53,12 @@ public interface IGitClient
     // Both return best-effort values: 0 / empty list on git failure, never throw.
     Task<int> RevListCountAsync(string range, string workingDirectory, CancellationToken ct);
     Task<IReadOnlyList<string>> LogOnelineAsync(string range, int limit, string workingDirectory, CancellationToken ct);
+
+    // Lists local branches matching a glob pattern (git branch --list <pattern>).
+    // Default returns empty so existing FakeGitClients remain unchanged.
+    // Never throws - returns empty on git failure.
+    Task<IReadOnlyList<string>> ListLocalBranchesAsync(string pattern, string workingDirectory, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
 
     // Returns true if a remote with the given name is configured in the repo.
     // Default returns true so existing FakeGitClients remain unchanged (TLB-127).

@@ -113,11 +113,13 @@ public class ShipPhase : IWorkflowPhase
             return (new ShipResult(false, ticketId, null, "ticket not in InReview state", ShipFailureStage.StateCheck), null, null);
 
         // Step 3: Compute and locate worktree
-        var worktreeNames = PhaseWorktreeLayout.Compute(ticketId, ticket.Title, workingDirectory);
+        var worktreeNames = PhaseWorktreeLayout.Compute(ticket.Id, ticket.Title, workingDirectory);
         var worktrees = await _git.ListWorktreesAsync(ct).ConfigureAwait(false);
         bool worktreeFound = false;
-        // Default to the computed path; overwritten below with the canonical path from git.
+        // Default to the computed path/branch; overwritten below with the canonical values from git.
         string canonicalWorktreePath = worktreeNames.WorktreePath;
+        string canonicalBranchName = worktreeNames.BranchName;
+        var ticketBranchPrefix = $"ticket/{ticket.Id.ToLowerInvariant()}-";
         foreach (var w in worktrees)
         {
             if (w.Branch == worktreeNames.BranchName)
@@ -132,8 +134,36 @@ public class ShipPhase : IWorkflowPhase
             if (string.Equals(wPathFull, worktreeNames.WorktreePath, StringComparison.OrdinalIgnoreCase))
             {
                 canonicalWorktreePath = w.Path;
+                canonicalBranchName = string.IsNullOrEmpty(w.Branch) ? worktreeNames.BranchName : w.Branch;
                 worktreeFound = true;
                 break;
+            }
+            if (w.Branch.StartsWith(ticketBranchPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                canonicalWorktreePath = w.Path;
+                canonicalBranchName = w.Branch;
+                worktreeFound = true;
+                break;
+            }
+        }
+        // Fallback: find a local branch matching the prefix and create a worktree for it.
+        // Handles the case where the feature branch exists locally but is not checked out anywhere.
+        if (!worktreeFound && !Directory.Exists(worktreeNames.WorktreePath))
+        {
+            var localBranches = await _git.ListLocalBranchesAsync(
+                ticketBranchPrefix + "*", workingDirectory, ct).ConfigureAwait(false);
+            var matchingLocalBranch = localBranches.FirstOrDefault();
+            if (matchingLocalBranch is not null)
+            {
+                ReportProgress($"[ship] creating worktree for {matchingLocalBranch}...");
+                var addResult = await _git.CheckoutWorktreeAsync(
+                    worktreeNames.WorktreePath, matchingLocalBranch, workingDirectory, ct).ConfigureAwait(false);
+                if (addResult.Success)
+                {
+                    canonicalWorktreePath = worktreeNames.WorktreePath;
+                    canonicalBranchName = matchingLocalBranch;
+                    worktreeFound = true;
+                }
             }
         }
         if (!worktreeFound)
@@ -351,7 +381,7 @@ public class ShipPhase : IWorkflowPhase
         }, ct).ConfigureAwait(false);
 
         // Step 5: Rebase feature branch onto ontoRef
-        ReportProgress($"[ship] rebasing {worktreeNames.BranchName} onto {ontoRef}...");
+        ReportProgress($"[ship] rebasing {canonicalBranchName} onto {ontoRef}...");
         var rebaseResult = await _git.RebaseAsync(ontoRef, canonicalWorktreePath, ct).ConfigureAwait(false);
         if (rebaseResult.HadConflicts)
         {
@@ -383,7 +413,7 @@ public class ShipPhase : IWorkflowPhase
 
         // Step 6: Conflict-marker scan (post-rebase, pre-checks)
         ReportProgress("[ship] scanning for conflict markers...");
-        var diff = await _git.DiffAsync(ontoRef, worktreeNames.BranchName, workingDirectory,
+        var diff = await _git.DiffAsync(ontoRef, canonicalBranchName, workingDirectory,
             includePatchContent: false, ct).ConfigureAwait(false);
         var scanPaths = diff.Entries
             .Select(e => Path.Combine(canonicalWorktreePath, e.Path))
@@ -464,7 +494,7 @@ public class ShipPhase : IWorkflowPhase
         GitOpResult? ffResult = null;
         await MainWorktreeLock.WithLockAsync(workingDirectory, async ct =>
         {
-            ffResult = await _git.FastForwardMergeAsync(worktreeNames.BranchName, workingDirectory, ct).ConfigureAwait(false);
+            ffResult = await _git.FastForwardMergeAsync(canonicalBranchName, workingDirectory, ct).ConfigureAwait(false);
         }, ct).ConfigureAwait(false);
         if (ffResult == null || !ffResult.Success)
             return (new ShipResult(false, ticketId, null,
@@ -530,7 +560,7 @@ public class ShipPhase : IWorkflowPhase
         // Step 13: Optionally delete feature branch. Failure does not unwind Done.
         if (_shipOptions.DeleteFeatureBranch)
         {
-            var deleteResult = await _git.DeleteBranchAsync(worktreeNames.BranchName, force: false, workingDirectory, ct).ConfigureAwait(false);
+            var deleteResult = await _git.DeleteBranchAsync(canonicalBranchName, force: false, workingDirectory, ct).ConfigureAwait(false);
             var deleteData = new Dictionary<string, object>
             {
                 ["action"] = "delete_branch",

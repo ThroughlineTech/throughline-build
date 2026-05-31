@@ -94,7 +94,7 @@ public class ImplementPhase : IWorkflowPhase
         }
 
         // Step 4: Compute worktree names
-        var worktreeNames = PhaseWorktreeLayout.Compute(ticketId, ticket.Title, workingDirectory);
+        var worktreeNames = PhaseWorktreeLayout.Compute(ticket.Id, ticket.Title, workingDirectory);
 
         // Step 5: Drift check - scan comments for [planned_at: <sha>]
         var comments = await _ticketing.GetCommentsAsync(ticketId, ct).ConfigureAwait(false);
@@ -126,24 +126,57 @@ public class ImplementPhase : IWorkflowPhase
         var topLevelEntries = Directory.EnumerateFileSystemEntries(workingDirectory).ToList().AsReadOnly();
         var repoState = new RepoState(mainSha, topLevelEntries);
 
-        // Step 7: Build brief
-        var brief = ImplementBriefBuilder.Build(_worker.Name, ticket, repoState, worktreeNames.BranchName, worktreeNames.WorktreePath, _project, _phaseOptions.ReviewFeedback);
-
-        // Step 8: Create worktree (initial only; rework reuses the existing one)
+        // Step 7: Resolve canonical worktree (rework scans git list with prefix fallback; initial uses computed names)
+        string canonicalBranchName = worktreeNames.BranchName;
+        string canonicalWorktreePath = worktreeNames.WorktreePath;
         if (isRework)
         {
-            if (!Directory.Exists(worktreeNames.WorktreePath))
+            var existingWorktrees = await _git.ListWorktreesAsync(ct).ConfigureAwait(false);
+            var ticketBranchPrefix = $"ticket/{ticket.Id.ToLowerInvariant()}-";
+            bool reworkWorktreeFound = false;
+            foreach (var w in existingWorktrees)
+            {
+                if (w.Branch == worktreeNames.BranchName)
+                {
+                    canonicalWorktreePath = w.Path;
+                    reworkWorktreeFound = true;
+                    break;
+                }
+                string wPathFull;
+                try { wPathFull = Path.GetFullPath(w.Path); }
+                catch { wPathFull = w.Path; }
+                if (string.Equals(wPathFull, worktreeNames.WorktreePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    canonicalWorktreePath = w.Path;
+                    canonicalBranchName = string.IsNullOrEmpty(w.Branch) ? worktreeNames.BranchName : w.Branch;
+                    reworkWorktreeFound = true;
+                    break;
+                }
+                if (w.Branch.StartsWith(ticketBranchPrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    canonicalWorktreePath = w.Path;
+                    canonicalBranchName = w.Branch;
+                    reworkWorktreeFound = true;
+                    break;
+                }
+            }
+            if (!reworkWorktreeFound)
             {
                 var failureReason = $"rework expected existing worktree at {worktreeNames.WorktreePath} but it does not exist";
                 EarlyExitManifest.Write(_options.DebugCaptureDirectory, Phase.Implement.ToString(), ticketId, failureReason);
                 return new ImplementResult(false, ticketId, null, worktreeNames.BranchName, worktreeNames.WorktreePath, failureReason);
             }
         }
-        else
+
+        // Step 8: Build brief
+        var brief = ImplementBriefBuilder.Build(_worker.Name, ticket, repoState, canonicalBranchName, canonicalWorktreePath, _project, _phaseOptions.ReviewFeedback);
+
+        // Step 9: Create worktree (initial only; rework reuses the existing one found above)
+        if (!isRework)
         {
             var createResult = await _git.CreateWorktreeAsync(
-                worktreeNames.WorktreePath,
-                worktreeNames.BranchName,
+                canonicalWorktreePath,
+                canonicalBranchName,
                 baseRef,
                 workingDirectory,
                 ct).ConfigureAwait(false);
@@ -151,8 +184,7 @@ public class ImplementPhase : IWorkflowPhase
             {
                 var failureReason = $"worktree create failed: {createResult.FailureReason}";
                 EarlyExitManifest.Write(_options.DebugCaptureDirectory, Phase.Implement.ToString(), ticketId, failureReason);
-                return new ImplementResult(false, ticketId, null, worktreeNames.BranchName, worktreeNames.WorktreePath,
-                    failureReason);
+                return new ImplementResult(false, ticketId, null, canonicalBranchName, canonicalWorktreePath, failureReason);
             }
         }
 
@@ -182,7 +214,7 @@ public class ImplementPhase : IWorkflowPhase
             Size: WorkerSizeMapper.FromTicketSize(ticket.Size));
         if (_options.DebugCaptureDirectory is not null)
             Directory.CreateDirectory(_options.DebugCaptureDirectory);
-        var workerResult = await _worker.ExecuteAsync(brief, worktreeNames.WorktreePath, workerOptions, ct).ConfigureAwait(false);
+        var workerResult = await _worker.ExecuteAsync(brief, canonicalWorktreePath, workerOptions, ct).ConfigureAwait(false);
 
         // Step 12: Emit VerifierVerdict
         await EmitAsync(EventKind.VerifierVerdict, ticketId, new Dictionary<string, object>
@@ -202,14 +234,14 @@ public class ImplementPhase : IWorkflowPhase
 
         // Step 14: If worker failed, leave in InProgress
         if (workerResult.Status != Status.Ok)
-            return new ImplementResult(false, ticketId, null, worktreeNames.BranchName, worktreeNames.WorktreePath,
+            return new ImplementResult(false, ticketId, null, canonicalBranchName, canonicalWorktreePath,
                 workerResult.FailureReason ?? workerResult.Status.ToString(),
                 EscalationWorkerResult: workerResult.Status == Status.Escalate ? workerResult : null);
 
         // Step 15: Extract commit_sha from metadata
         var metadataCommitSha = TryGetString(workerResult.Metadata, "commit_sha");
         if (string.IsNullOrEmpty(metadataCommitSha))
-            return new ImplementResult(false, ticketId, null, worktreeNames.BranchName, worktreeNames.WorktreePath,
+            return new ImplementResult(false, ticketId, null, canonicalBranchName, canonicalWorktreePath,
                 "worker metadata missing commit_sha");
 
         // Step 15b: Resolve IMPLEMENT_SUMMARY block if present
@@ -220,7 +252,7 @@ public class ImplementPhase : IWorkflowPhase
         }
 
         // Step 16: Verify against actual HEAD; prefer actual HEAD if it differs
-        var actualHeadSha = await _git.HeadShaAsync(worktreeNames.WorktreePath, ct).ConfigureAwait(false);
+        var actualHeadSha = await _git.HeadShaAsync(canonicalWorktreePath, ct).ConfigureAwait(false);
         if (string.IsNullOrEmpty(actualHeadSha))
             actualHeadSha = metadataCommitSha;
         var discrepancyNote = (actualHeadSha != metadataCommitSha)
@@ -231,7 +263,7 @@ public class ImplementPhase : IWorkflowPhase
         var summaryHtml = implementSummaryMarkdown is not null
             ? MarkdownRenderer.Render(implementSummaryMarkdown)
             : "";
-        var commentHtml = $"<p>[implemented_at: {actualHeadSha}] (branch {worktreeNames.BranchName}){discrepancyNote}</p>{summaryHtml}";
+        var commentHtml = $"<p>[implemented_at: {actualHeadSha}] (branch {canonicalBranchName}){discrepancyNote}</p>{summaryHtml}";
         await _ticketing.CreateCommentAsync(ticketId, commentHtml, ct).ConfigureAwait(false);
         await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
         {
@@ -248,7 +280,7 @@ public class ImplementPhase : IWorkflowPhase
 
         // Step 19: Return success
         int reworkRound = _phaseOptions.ReviewFeedback?.ReworkRoundNumber ?? 0;
-        return new ImplementResult(true, ticketId, actualHeadSha, worktreeNames.BranchName, worktreeNames.WorktreePath, null, reworkRound);
+        return new ImplementResult(true, ticketId, actualHeadSha, canonicalBranchName, canonicalWorktreePath, null, reworkRound);
     }
 
     async Task<PhaseResult> IWorkflowPhase.RunAsync(string ticketId, string workingDirectory, CancellationToken ct)

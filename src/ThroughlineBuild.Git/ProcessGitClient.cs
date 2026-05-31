@@ -221,6 +221,69 @@ public sealed class ProcessGitClient : IGitClient
         }
     }
 
+    public async Task<WorktreeCreateResult> CheckoutWorktreeAsync(string worktreePath, string existingBranch, string mainWorktreePath, CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = mainWorktreePath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("worktree");
+            psi.ArgumentList.Add("add");
+            psi.ArgumentList.Add(worktreePath);
+            psi.ArgumentList.Add(existingBranch);
+            using var proc = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start git process");
+            var stderr = await proc.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
+            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+            if (proc.ExitCode != 0)
+                return new WorktreeCreateResult(false, stderr.Trim(), null);
+            return new WorktreeCreateResult(true, null, Path.GetFullPath(worktreePath));
+        }
+        catch (Exception ex)
+        {
+            return new WorktreeCreateResult(false, ex.Message, null);
+        }
+    }
+
+    public async Task<IReadOnlyList<string>> ListLocalBranchesAsync(string pattern, string workingDirectory, CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = workingDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("branch");
+            psi.ArgumentList.Add("--list");
+            psi.ArgumentList.Add(pattern);
+            using var proc = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start git process");
+            var stdout = await proc.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+            if (proc.ExitCode != 0)
+                return Array.Empty<string>();
+            return stdout.Split('\n')
+                .Select(l => l.Trim().TrimStart('*').Trim())
+                .Where(l => l.Length > 0)
+                .ToList()
+                .AsReadOnly();
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
+    }
+
     public async Task<string> CurrentBranchAsync(string workingDirectory, CancellationToken ct)
     {
         try
