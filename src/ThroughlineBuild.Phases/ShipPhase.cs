@@ -372,16 +372,30 @@ public class ShipPhase : IWorkflowPhase
         if (_shipOptions.RegressionChecks.Count > 0)
             ReportProgress($"[ship] running {_shipOptions.RegressionChecks.Count} regression check(s)...");
         var checkResults = await _checksRunner.RunAsync(_shipOptions.RegressionChecks, canonicalWorktreePath, ct).ConfigureAwait(false);
-        var checksFailed = checkResults.Where(r => !r.Passed).Select(r => r.Name).ToList();
+        var checksFailed = checkResults.Where(r => !r.Passed).ToList();
         if (checksFailed.Count > 0)
         {
-            var namesList = string.Join(", ", checksFailed);
+            var namesList = string.Join(", ", checksFailed.Select(r => r.Name));
+            foreach (var failed in checksFailed)
+            {
+                _progress?.WriteLine($"[ship] regression check failed: {failed.Name}");
+                if (!string.IsNullOrWhiteSpace(failed.StdoutTail))
+                {
+                    _progress?.WriteLine("--- stdout ---");
+                    _progress?.WriteLine(failed.StdoutTail.TrimEnd());
+                }
+                if (!string.IsNullOrWhiteSpace(failed.StderrTail))
+                {
+                    _progress?.WriteLine("--- stderr ---");
+                    _progress?.WriteLine(failed.StderrTail.TrimEnd());
+                }
+            }
             await _ticketing.CreateCommentAsync(ticketId,
                 $"<p><strong>ship_blocked:</strong> regression checks failed: {namesList}</p>", ct).ConfigureAwait(false);
             await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
             {
                 ["kind"] = "regression_checks",
-                ["checks_failed"] = checksFailed
+                ["checks_failed"] = checksFailed.Select(r => r.Name).ToList()
             }, ct).ConfigureAwait(false);
             return (new ShipResult(false, ticketId, null,
                 $"regression checks failed: {namesList}", ShipFailureStage.RegressionChecks), worktreeNames, null);
