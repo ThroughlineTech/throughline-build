@@ -106,7 +106,7 @@ public class ReviewPhase : IWorkflowPhase
         string mainSha;
         try
         {
-            (baseRef, mainSha) = await BaseRefResolver.ResolveAsync(_git, workingDirectory, ct).ConfigureAwait(false);
+            (baseRef, mainSha) = await BaseRefResolver.ResolveAsync(_git, workingDirectory, _options.TargetBranch, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

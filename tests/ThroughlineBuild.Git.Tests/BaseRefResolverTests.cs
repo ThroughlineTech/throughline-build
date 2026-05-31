@@ -51,7 +51,7 @@ public class BaseRefResolverTests : IDisposable
         var expectedSha = RunGit(repoDir, "rev-parse", "main");
         var client = new ProcessGitClient(repoDir);
 
-        var (refName, sha) = await BaseRefResolver.ResolveAsync(client, repoDir, CancellationToken.None);
+        var (refName, sha) = await BaseRefResolver.ResolveAsync(client, repoDir, "main", CancellationToken.None);
 
         Assert.Equal("main", refName);
         Assert.Equal(expectedSha, sha);
@@ -66,7 +66,7 @@ public class BaseRefResolverTests : IDisposable
         RunGit(repoDir, "update-ref", "refs/remotes/origin/main", localSha);
         var client = new ProcessGitClient(repoDir);
 
-        var (refName, sha) = await BaseRefResolver.ResolveAsync(client, repoDir, CancellationToken.None);
+        var (refName, sha) = await BaseRefResolver.ResolveAsync(client, repoDir, "main", CancellationToken.None);
 
         Assert.Equal("origin/main", refName);
         Assert.Equal(localSha, sha);
@@ -81,7 +81,49 @@ public class BaseRefResolverTests : IDisposable
         var client = new ProcessGitClient(repoDir);
 
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await BaseRefResolver.ResolveAsync(client, repoDir, CancellationToken.None));
+            await BaseRefResolver.ResolveAsync(client, repoDir, "main", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ResolveAsync_TargetBranchEqualsBaseBranch_ProducesOriginMainRef()
+    {
+        var repoDir = CreateTempGitRepoWithMain();
+        var localSha = RunGit(repoDir, "rev-parse", "main");
+        RunGit(repoDir, "update-ref", "refs/remotes/origin/main", localSha);
+        var client = new ProcessGitClient(repoDir);
+
+        var (refName, sha) = await BaseRefResolver.ResolveAsync(client, repoDir, "main", CancellationToken.None);
+
+        Assert.Equal("origin/main", refName);
+        Assert.Equal(localSha, sha);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_WithFeatureBranch_ProducesOriginFeatureRef()
+    {
+        var repoDir = CreateTempGitRepoWithMain();
+        var localSha = RunGit(repoDir, "rev-parse", "main");
+        RunGit(repoDir, "update-ref", "refs/remotes/origin/feature/payment", localSha);
+        var client = new ProcessGitClient(repoDir);
+
+        var (refName, sha) = await BaseRefResolver.ResolveAsync(client, repoDir, "feature/payment", CancellationToken.None);
+
+        Assert.Equal("origin/feature/payment", refName);
+        Assert.Equal(localSha, sha);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_WithSlashContainingBranch_HandlesSlashesCorrectly()
+    {
+        var repoDir = CreateTempGitRepoWithMain();
+        var localSha = RunGit(repoDir, "rev-parse", "main");
+        RunGit(repoDir, "update-ref", "refs/remotes/origin/feature/sub/thing", localSha);
+        var client = new ProcessGitClient(repoDir);
+
+        var (refName, sha) = await BaseRefResolver.ResolveAsync(client, repoDir, "feature/sub/thing", CancellationToken.None);
+
+        Assert.Equal("origin/feature/sub/thing", refName);
+        Assert.Equal(localSha, sha);
     }
 
     public void Dispose()

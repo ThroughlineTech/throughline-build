@@ -56,7 +56,7 @@ public class DecomposePhase : IWorkflowPhase
         string mainSha;
         try
         {
-            (_, mainSha) = await BaseRefResolver.ResolveAsync(_git, workingDirectory, ct).ConfigureAwait(false);
+            (_, mainSha) = await BaseRefResolver.ResolveAsync(_git, workingDirectory, _options.TargetBranch, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

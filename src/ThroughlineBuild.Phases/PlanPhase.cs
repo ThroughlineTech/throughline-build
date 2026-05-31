@@ -15,7 +15,8 @@ public record BuildOptions(
     string? DebugCaptureDirectory = null,
     System.IO.TextWriter? LiveStdoutSink = null,
     System.IO.TextWriter? LiveStderrSink = null,
-    System.IO.TextWriter? ProgressDigestSink = null);
+    System.IO.TextWriter? ProgressDigestSink = null,
+    string TargetBranch = "main");
 
 public record PlanResult(
     bool Success,
@@ -68,7 +69,7 @@ public class PlanPhase : IWorkflowPhase
         string mainSha;
         try
         {
-            (_, mainSha) = await BaseRefResolver.ResolveAsync(_git, workingDirectory, ct).ConfigureAwait(false);
+            (_, mainSha) = await BaseRefResolver.ResolveAsync(_git, workingDirectory, _options.TargetBranch, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

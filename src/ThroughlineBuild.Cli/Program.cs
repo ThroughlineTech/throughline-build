@@ -848,7 +848,8 @@ static async Task<int> RunAsync(string[] args)
             DebugCaptureDirectory: debugCaptureDir,
             LiveStdoutSink: debugMode ? Console.Out : null,
             LiveStderrSink: debugMode ? Console.Error : null,
-            ProgressDigestSink: enableDigest ? Console.Error : null);
+            ProgressDigestSink: enableDigest ? Console.Error : null,
+            TargetBranch: config2.ResolveTargetBranch());
 
         string PlaneUrl() => BuildPlaneUrl(config2.Ticketing.PlaneBaseUrl, config2.Ticketing.PlaneWorkspaceSlug, ticketId);
         string? ArtifactsPath() => debugCaptureDir is not null
@@ -944,7 +945,7 @@ static async Task<int> RunAsync(string[] args)
         {
             try
             {
-                var (baseRef, _) = await ThroughlineBuild.Git.BaseRefResolver.ResolveAsync(summaryGit, cwd, CancellationToken.None);
+                var (baseRef, _) = await ThroughlineBuild.Git.BaseRefResolver.ResolveAsync(summaryGit, cwd, buildOptions.TargetBranch, CancellationToken.None);
                 var d = await summaryGit.DiffAsync(baseRef, result.BranchName!, cwd, includePatchContent: false, CancellationToken.None);
                 implDiff = d.Entries;
                 implCommitCount = await summaryGit.RevListCountAsync($"{baseRef}..{result.BranchName}", cwd, CancellationToken.None);
@@ -1442,7 +1443,8 @@ static async Task<int> RunAsync(string[] args)
             DebugCaptureDirectory: debugCaptureDir,
             LiveStdoutSink: debugMode ? Console.Out : null,
             LiveStderrSink: debugMode ? Console.Error : null,
-            ProgressDigestSink: enableDigest ? Console.Error : null);
+            ProgressDigestSink: enableDigest ? Console.Error : null,
+            TargetBranch: config2.ResolveTargetBranch());
 
         string PlaneUrl() => BuildPlaneUrl(config2.Ticketing.PlaneBaseUrl, config2.Ticketing.PlaneWorkspaceSlug, singleTicketId);
         string? ArtifactsPath() => debugCaptureDir is not null
