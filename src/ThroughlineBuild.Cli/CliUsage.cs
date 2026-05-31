@@ -21,6 +21,9 @@ Usage:
   is printed and a brief pause allows Ctrl-C before proceeding in draft mode. Multiple positional args
   are joined with spaces as draft text (e.g. build new fix the readme typo).
   build init [--force] [--print-template] [--plane-url URL] [--workspace SLUG] [--project-id UUID] [--token TOKEN | --token-env VAR]   Write .build/config.toml from the built-in template; --force overwrites an existing file; --print-template prints to stdout; flag values replace the corresponding REQUIRED_ placeholders
+  build settarget <branch>     Validate <branch> exists as a local git ref and write target_branch = "<branch>" under [work] in .build/config.toml; exits 2 if branch not found locally (run git checkout -b <branch> first)
+  build settarget --unset      Remove target_branch from [work] in .build/config.toml; noop if key is already absent
+  build settarget              Print the current resolved target_branch value: shows [work] override if set, or base_branch default from [ship] if not
   build rework <ticket-id> [--feedback "..."] [--debug]                               Re-implement a ticket that returned Rework verdict (single ticket only)
   build decompose <ticket-id> [--agent <name>] [--debug|--quiet] [--summary-json]     Decompose a ticket into independently-shippable sub-tickets
   build scaffold <op-doc-path> [--validate-only] [--dry-run] [--accept-warnings] [--debug]  Scaffold an op-doc into Plane (creates plan-tickets and brief-tickets with parent links)

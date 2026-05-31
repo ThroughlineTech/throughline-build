@@ -143,6 +143,17 @@ static async Task<int> RunAsync(string[] args)
             tokenEnv: initTokenEnv);
     }
 
+    // 'build settarget' manages config without requiring Plane or worker setup;
+    // dispatch early like 'build init'.
+    if (verb == "settarget")
+    {
+        var unset = filteredArgs.Contains("--unset");
+        string? stBranch = (filteredArgs.Count > 1 && !filteredArgs[1].StartsWith("--"))
+            ? filteredArgs[1]
+            : null;
+        return SetTargetCommand.Execute(rawCwd, stBranch, unset, SystemConsole.Instance);
+    }
+
     var resolverGit = new ProcessGitClient(rawCwd);
     var resolvedCwd = await MainWorktreeResolver.ResolveAsync(resolverGit, rawCwd, CancellationToken.None);
 
