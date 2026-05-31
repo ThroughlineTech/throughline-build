@@ -1251,7 +1251,8 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
             Remote: config2.Ship.Remote,
             BaseBranch: config2.Ship.BaseBranch,
             DeleteFeatureBranch: config2.Ship.DeleteFeatureBranch,
-            NoAutoMerge: noAutoMerge);
+            NoAutoMerge: noAutoMerge,
+            TargetBranch: config2.ResolveTargetBranch());
         var gitClient = new ProcessGitClient(cwd);
         var checksRunner = new AutomatedChecksRunner();
         var shipProgress = quietMode || summaryJson ? null : Console.Error;
@@ -1403,7 +1404,8 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             Remote: config2.Ship.Remote,
             BaseBranch: config2.Ship.BaseBranch,
             DeleteFeatureBranch: config2.Ship.DeleteFeatureBranch,
-            NoAutoMerge: noAutoMerge);
+            NoAutoMerge: noAutoMerge,
+            TargetBranch: config2.ResolveTargetBranch());
         var gitClient = new ProcessGitClient(cwd);
         var checksRunner = new AutomatedChecksRunner();
         return new ShipPhase(ticketing, eventSink, buildOpts, shipOptions, gitClient: gitClient, checksRunner: checksRunner);

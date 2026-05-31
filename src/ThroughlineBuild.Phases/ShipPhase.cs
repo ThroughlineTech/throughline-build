@@ -11,7 +11,8 @@ public record ShipOptions(
     string Remote,
     string BaseBranch,
     bool DeleteFeatureBranch = true,
-    bool NoAutoMerge = false);
+    bool NoAutoMerge = false,
+    string? TargetBranch = null);
 
 public record ShipResult(
     bool Success,
@@ -190,6 +191,7 @@ public class ShipPhase : IWorkflowPhase
         // Step 4: Check for remote and conditionally fetch
         var remote = _shipOptions.Remote;
         var baseBranch = _shipOptions.BaseBranch;
+        var targetBranch = _shipOptions.TargetBranch ?? baseBranch;
         var remoteExists = await _git.RemoteExistsAsync(remote, workingDirectory, ct).ConfigureAwait(false);
         string ontoRef;
         string baseRefReason;
@@ -202,7 +204,7 @@ public class ShipPhase : IWorkflowPhase
                 ["reason"] = "no_remote",
                 ["remote"] = remote
             }, ct).ConfigureAwait(false);
-            ontoRef = baseBranch;
+            ontoRef = targetBranch;
             baseRefReason = "no_remote";
         }
         else
@@ -220,8 +222,8 @@ public class ShipPhase : IWorkflowPhase
             ReportGitOutput("fetch output", fetchResult.RawOutput);
 
             // Step 4a: Determine rebase base by ancestry check
-            var localRef = baseBranch;
-            var remoteRef = $"{remote}/{baseBranch}";
+            var localRef = targetBranch;
+            var remoteRef = $"{remote}/{targetBranch}";
 
             // Check if local is ancestor of remote (remote is ahead or equal)
             var localIsAncestorOfRemote = await _git.IsAncestorAsync(localRef, remoteRef, workingDirectory, ct).ConfigureAwait(false);
@@ -232,13 +234,13 @@ public class ShipPhase : IWorkflowPhase
             {
                 // Remote is ahead of local
                 ontoRef = remoteRef;
-                baseRefReason = "origin_main_ahead";
+                baseRefReason = "origin_target_ahead";
             }
             else if (remoteIsAncestorOfLocal && !localIsAncestorOfRemote)
             {
                 // Local is ahead of remote
                 ontoRef = localRef;
-                baseRefReason = "local_main_ahead";
+                baseRefReason = "local_target_ahead";
             }
             else if (localIsAncestorOfRemote && remoteIsAncestorOfLocal)
             {
@@ -249,11 +251,11 @@ public class ShipPhase : IWorkflowPhase
             else
             {
                 // Diverged - probe for conflict subspecies before deciding
-                var divergenceState = await _git.ProbeDivergenceAsync(workingDirectory, baseBranch, remote, ct).ConfigureAwait(false);
+                var divergenceState = await _git.ProbeDivergenceAsync(workingDirectory, targetBranch, remote, ct).ConfigureAwait(false);
 
                 if (divergenceState == DivergenceState.DivergedNoConflict && !_shipOptions.NoAutoMerge)
                 {
-                    // B02 path: auto-rebase local main onto origin/main
+                    // B02 path: auto-rebase local target branch onto origin/target branch
                     var fromSha = await _git.HeadShaAsync(workingDirectory, ct).ConfigureAwait(false);
                     var ontoSha = await _git.RevParseAsync(remoteRef, workingDirectory, ct).ConfigureAwait(false);
                     var replayedShas = await _git.LogShasAsync($"{remoteRef}..{localRef}", 0, workingDirectory, ct).ConfigureAwait(false);
@@ -266,7 +268,7 @@ public class ShipPhase : IWorkflowPhase
 
                     if (mainRebaseResult!.Success)
                     {
-                        await EmitAsync(EventKind.MainAutoRebased, ticketId, new Dictionary<string, object>
+                        await EmitAsync(EventKind.TargetAutoRebased, ticketId, new Dictionary<string, object>
                         {
                             ["from_sha"] = fromSha,
                             ["onto_sha"] = ontoSha,
@@ -274,13 +276,13 @@ public class ShipPhase : IWorkflowPhase
                             ["outcome"] = "clean"
                         }, ct).ConfigureAwait(false);
                         ontoRef = localRef;
-                        baseRefReason = "auto_rebased_main";
+                        baseRefReason = "auto_rebased_target";
                     }
                     else
                     {
                         if (mainRebaseResult.HadConflicts)
                             await _git.RebaseAbortAsync(workingDirectory, ct).ConfigureAwait(false);
-                        await EmitAsync(EventKind.MainAutoRebased, ticketId, new Dictionary<string, object>
+                        await EmitAsync(EventKind.TargetAutoRebased, ticketId, new Dictionary<string, object>
                         {
                             ["from_sha"] = fromSha,
                             ["onto_sha"] = ontoSha,
@@ -288,30 +290,30 @@ public class ShipPhase : IWorkflowPhase
                             ["outcome"] = "raced_to_conflict"
                         }, ct).ConfigureAwait(false);
                         await _ticketing.CreateCommentAsync(ticketId,
-                            $"<p><strong>ship_blocked:</strong> local {baseBranch} and {remote}/{baseBranch} have diverged; manual resolution required</p>", ct).ConfigureAwait(false);
+                            $"<p><strong>ship_blocked:</strong> local {localRef} and {remoteRef} have diverged; manual resolution required</p>", ct).ConfigureAwait(false);
                         await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
                         {
                             ["kind"] = "diverged_bases",
-                            ["local_ref"] = baseBranch,
+                            ["local_ref"] = localRef,
                             ["remote_ref"] = remoteRef
                         }, ct).ConfigureAwait(false);
                         return (new ShipResult(false, ticketId, null,
-                            $"local {baseBranch} and {remote}/{baseBranch} have diverged; manual resolution required",
+                            $"local {localRef} and {remoteRef} have diverged; manual resolution required",
                             ShipFailureStage.Fetch), worktreeNames, null);
                     }
                 }
                 else
                 {
                     await _ticketing.CreateCommentAsync(ticketId,
-                        $"<p><strong>ship_blocked:</strong> local {baseBranch} and {remote}/{baseBranch} have diverged; manual resolution required</p>", ct).ConfigureAwait(false);
+                        $"<p><strong>ship_blocked:</strong> local {localRef} and {remoteRef} have diverged; manual resolution required</p>", ct).ConfigureAwait(false);
                     await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
                     {
                         ["kind"] = "diverged_bases",
-                        ["local_ref"] = baseBranch,
+                        ["local_ref"] = localRef,
                         ["remote_ref"] = remoteRef
                     }, ct).ConfigureAwait(false);
                     return (new ShipResult(false, ticketId, null,
-                        $"local {baseBranch} and {remote}/{baseBranch} have diverged; manual resolution required",
+                        $"local {localRef} and {remoteRef} have diverged; manual resolution required",
                         ShipFailureStage.Fetch), worktreeNames, null);
                 }
             }
@@ -450,8 +452,8 @@ public class ShipPhase : IWorkflowPhase
         // Step 8a: Push to remote (skipped when no remote is configured)
         if (remoteExists)
         {
-            ReportProgress($"[ship] pushing to {remote}/{baseBranch}...");
-            var pushResult = await _git.PushAsync(remote, baseBranch, workingDirectory, ct).ConfigureAwait(false);
+            ReportProgress($"[ship] pushing to {remote}/{targetBranch}...");
+            var pushResult = await _git.PushAsync(remote, targetBranch, workingDirectory, ct).ConfigureAwait(false);
             if (!pushResult.Success)
                 return (new ShipResult(false, ticketId, null,
                     $"git push failed: {pushResult.FailureReason}",

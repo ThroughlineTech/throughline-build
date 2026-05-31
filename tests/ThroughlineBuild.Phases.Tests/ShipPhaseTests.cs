@@ -36,12 +36,14 @@ public class ShipPhaseTests
     private static ShipOptions MakeShipOptions(
         IReadOnlyList<CheckSpec>? checks = null,
         bool deleteFeatureBranch = true,
-        bool noAutoMerge = false) => new ShipOptions(
+        bool noAutoMerge = false,
+        string? targetBranch = null) => new ShipOptions(
             RegressionChecks: checks ?? Array.Empty<CheckSpec>(),
             Remote: "origin",
             BaseBranch: "main",
             DeleteFeatureBranch: deleteFeatureBranch,
-            NoAutoMerge: noAutoMerge);
+            NoAutoMerge: noAutoMerge,
+            TargetBranch: targetBranch);
 
     private static string MakeWorkingDir() => Directory.GetCurrentDirectory();
 
@@ -661,7 +663,7 @@ public class ShipPhaseTests
         var writeEvents = events.Events.Where(e => e.Kind == EventKind.TicketWrite).ToList();
         var baseRefResolved = writeEvents.FirstOrDefault(w => w.Data.TryGetValue("action", out var a) && a.ToString() == "base_ref_resolved");
         Assert.NotNull(baseRefResolved);
-        Assert.Equal("local_main_ahead", baseRefResolved.Data["reason"].ToString());
+        Assert.Equal("local_target_ahead", baseRefResolved.Data["reason"].ToString());
     }
 
     [Fact]
@@ -726,14 +728,14 @@ public class ShipPhaseTests
         Assert.Equal("main", git.RebaseOntoRefs[1]);
 
         // MainAutoRebased event emitted with outcome="clean"
-        var autoRebased = events.Events.Single(e => e.Kind == EventKind.MainAutoRebased);
+        var autoRebased = events.Events.Single(e => e.Kind == EventKind.TargetAutoRebased);
         Assert.Equal("clean", autoRebased.Data["outcome"].ToString());
 
         // base_ref_resolved with auto_rebased_main reason
         var writeEvents = events.Events.Where(e => e.Kind == EventKind.TicketWrite).ToList();
         var baseRefResolved = writeEvents.FirstOrDefault(w => w.Data.TryGetValue("action", out var a) && a.ToString() == "base_ref_resolved");
         Assert.NotNull(baseRefResolved);
-        Assert.Equal("auto_rebased_main", baseRefResolved.Data["reason"].ToString());
+        Assert.Equal("auto_rebased_target", baseRefResolved.Data["reason"].ToString());
 
         // Ship completes: Done transition
         var stateTransitions = events.Events.Where(e => e.Kind == EventKind.StateTransition).ToList();
@@ -770,7 +772,7 @@ public class ShipPhaseTests
         Assert.Equal(1, git.RebaseAbortCallCount);
 
         // MainAutoRebased event emitted with outcome="raced_to_conflict"
-        var autoRebased = events.Events.Single(e => e.Kind == EventKind.MainAutoRebased);
+        var autoRebased = events.Events.Single(e => e.Kind == EventKind.TargetAutoRebased);
         Assert.Equal("raced_to_conflict", autoRebased.Data["outcome"].ToString());
 
         // GateFailure with kind=diverged_bases emitted
@@ -809,7 +811,7 @@ public class ShipPhaseTests
         Assert.Equal(0, git.RebaseCallCount);
 
         // No MainAutoRebased event (no attempt was made)
-        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.MainAutoRebased));
+        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.TargetAutoRebased));
 
         // GateFailure with kind=diverged_bases emitted
         var gateFailures = events.Events.Where(e => e.Kind == EventKind.GateFailure).ToList();
@@ -819,6 +821,74 @@ public class ShipPhaseTests
         // No Done transition
         var stateTransitions = events.Events.Where(e => e.Kind == EventKind.StateTransition).ToList();
         Assert.DoesNotContain(stateTransitions, t => t.Data["to"].ToString() == "Done");
+    }
+
+    [Fact]
+    public async Task RunAsync_TargetBranchOverride_ShipsToTargetNotBase()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        // Default ancestry: IsAncestorAsync returns true for any pair not in AncestryResponses,
+        // so feature/x and origin/feature/x are treated as the same commit -> ontoRef = origin/feature/x
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(),
+            MakeShipOptions(targetBranch: "feature/x"),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Null(result.FailedAt);
+
+        // Feature rebase is onto origin/feature/x (same_commit -> remoteRef)
+        Assert.Equal(1, git.RebaseCallCount);
+        Assert.Equal("origin/feature/x", git.RebaseOntoRefs[0]);
+
+        // Push targeted feature/x, not the base branch (main)
+        Assert.Equal(1, git.PushCallCount);
+        Assert.Equal("feature/x", git.LastPushedBranch);
+
+        // Done transition still happens
+        var stateTransitions = events.Events.Where(e => e.Kind == EventKind.StateTransition).ToList();
+        Assert.Contains(stateTransitions, t => t.Data["to"].ToString() == "Done");
+    }
+
+    [Fact]
+    public async Task RunAsync_TargetBranchDiverged_AutoRebasesTargetBranch()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        // Configure: feature/x and origin/feature/x have diverged
+        git.AncestryResponses[("feature/x", "origin/feature/x")] = false;
+        git.AncestryResponses[("origin/feature/x", "feature/x")] = false;
+        // Probe predicts no conflict
+        git.DivergenceStateResult = DivergenceState.DivergedNoConflict;
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(),
+            MakeShipOptions(targetBranch: "feature/x"),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+
+        // TargetAutoRebased event emitted with outcome="clean"
+        var autoRebased = events.Events.Single(e => e.Kind == EventKind.TargetAutoRebased);
+        Assert.Equal("clean", autoRebased.Data["outcome"].ToString());
+
+        // base_ref_resolved with auto_rebased_target reason
+        var writeEvents = events.Events.Where(e => e.Kind == EventKind.TicketWrite).ToList();
+        var baseRefResolved = writeEvents.FirstOrDefault(w => w.Data.TryGetValue("action", out var a) && a.ToString() == "base_ref_resolved");
+        Assert.NotNull(baseRefResolved);
+        Assert.Equal("auto_rebased_target", baseRefResolved.Data["reason"].ToString());
+
+        // Done transition
+        var stateTransitions = events.Events.Where(e => e.Kind == EventKind.StateTransition).ToList();
+        Assert.Contains(stateTransitions, t => t.Data["to"].ToString() == "Done");
     }
 
     [Fact]
@@ -1013,6 +1083,7 @@ public class ShipPhaseTests
         public int RebaseAbortCallCount { get; private set; }
         public int FastForwardCallCount { get; private set; }
         public int PushCallCount { get; private set; }
+        public string? LastPushedBranch { get; private set; }
         public List<(string branch, bool force)> DeleteBranchCalls { get; } = new();
         public List<string> RebaseOntoRefs { get; } = new();
 
@@ -1092,6 +1163,7 @@ public class ShipPhaseTests
         public Task<GitOpResult> PushAsync(string remote, string branch, string workingDirectory, CancellationToken ct)
         {
             PushCallCount++;
+            LastPushedBranch = branch;
             return Task.FromResult(PushResult);
         }
 
