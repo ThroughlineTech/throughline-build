@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using ThroughlineBuild.Briefs;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Workers.Common;
 
 namespace ThroughlineBuild.Phases;
 
@@ -66,11 +67,21 @@ public class DraftPhase : IWorkflowPhase
             return new DraftResult(DraftOutcome.WorkerFailed, null,
                 workerResult.FailureReason ?? workerResult.Status.ToString());
 
-        // Step 5: Extract body_markdown from metadata.
-        var bodyMarkdown = GetString(workerResult.Metadata, "body_markdown");
-        if (bodyMarkdown is null)
-            return new DraftResult(DraftOutcome.InvalidWorkerOutput, null,
-                "Worker metadata missing required key: body_markdown");
+        // Step 5: Resolve body_markdown_ref from fenced block (primary), or fall back to body_markdown (legacy).
+        string? bodyMarkdown;
+        if (!FencedBlockResolver.TryResolveRef(
+            workerResult.Blocks ?? new Dictionary<string, string>(),
+            workerResult.Metadata,
+            "body_markdown_ref",
+            out bodyMarkdown,
+            out var blockError))
+        {
+            // Fallback: try direct body_markdown key (backward compat)
+            bodyMarkdown = GetString(workerResult.Metadata, "body_markdown");
+            if (bodyMarkdown is null)
+                return new DraftResult(DraftOutcome.InvalidWorkerOutput, null,
+                    "Worker metadata missing body_markdown_ref (fenced block) and body_markdown (legacy): " + (blockError ?? "no block found"));
+        }
 
         // Step 6: Validate minimal required sections (loose v1: title + non-empty description).
         var missing = ValidateSections(bodyMarkdown);
