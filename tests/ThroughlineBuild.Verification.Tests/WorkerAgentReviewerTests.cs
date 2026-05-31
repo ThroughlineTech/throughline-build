@@ -437,4 +437,73 @@ public class WorkerAgentReviewerTests
         Assert.Equal(Status.Ok, reviewer.LastWorkerResult.Status);
         Assert.Equal("review complete", reviewer.LastWorkerResult.Summary);
     }
+
+    // -------------------------------------------------------------------------
+    // Test 13: rationale_ref resolves from REVIEW_CRITIQUE fenced block -
+    // content with quotes, backticks, backslashes survives without JSON-escape issues
+    // -------------------------------------------------------------------------
+    [Fact]
+    public async Task RationaleRef_ResolvesFromReviewCritiqueBlock_QuoteHeavyContent()
+    {
+        // Content that would break JSON encoding if embedded directly in the envelope.
+        const string critique = "The function `foo()` returns `null` unexpectedly.\n" +
+            "Line 42: `return bar ?? \"default\"` should be `return bar ?? string.Empty`.\n" +
+            "Also: backslash test C:\\Users\\foo and \"quoted string\" here.";
+
+        var blocks = new Dictionary<string, string>
+        {
+            ["REVIEW_CRITIQUE"] = critique
+        };
+        var metadata = new Dictionary<string, object>
+        {
+            ["verdict"] = "Rework",
+            ["rationale_ref"] = "REVIEW_CRITIQUE",
+            ["checks_failed"] = new List<string> { "unit-tests" }
+        };
+        var workerResult = new WorkerResult(Status.Ok, "review complete", Array.Empty<string>(), null, metadata, blocks);
+        var agent = new StubWorkerAgent(workerResult);
+        var reviewer = BuildReviewer(agent);
+
+        var verdict = await reviewer.VerifyAsync(
+            BuildImplementerBrief(),
+            BuildDiff(),
+            BuildImplementerResult(),
+            CancellationToken.None);
+
+        Assert.Equal(VerdictKind.Rework, verdict.Kind);
+        Assert.Equal(critique, verdict.Rationale);
+        Assert.Equal(new[] { "unit-tests" }, verdict.ChecksFailed);
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 14: rationale_ref takes precedence over direct "rationale" key
+    // -------------------------------------------------------------------------
+    [Fact]
+    public async Task RationaleRef_TakesPrecedenceOverDirectRationaleKey()
+    {
+        const string blockContent = "critique from block";
+        var blocks = new Dictionary<string, string>
+        {
+            ["REVIEW_CRITIQUE"] = blockContent
+        };
+        var metadata = new Dictionary<string, object>
+        {
+            ["verdict"] = "Pass",
+            ["rationale_ref"] = "REVIEW_CRITIQUE",
+            ["rationale"] = "this should be ignored",
+            ["checks_failed"] = new List<string>()
+        };
+        var workerResult = new WorkerResult(Status.Ok, "review complete", Array.Empty<string>(), null, metadata, blocks);
+        var agent = new StubWorkerAgent(workerResult);
+        var reviewer = BuildReviewer(agent);
+
+        var verdict = await reviewer.VerifyAsync(
+            BuildImplementerBrief(),
+            BuildDiff(),
+            BuildImplementerResult(),
+            CancellationToken.None);
+
+        Assert.Equal(VerdictKind.Pass, verdict.Kind);
+        Assert.Equal(blockContent, verdict.Rationale);
+    }
 }

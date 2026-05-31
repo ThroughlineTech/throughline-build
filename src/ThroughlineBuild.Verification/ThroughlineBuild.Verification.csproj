@@ -9,5 +9,6 @@
   <ItemGroup>
     <ProjectReference Include="..\ThroughlineBuild.Contracts\ThroughlineBuild.Contracts.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.Briefs\ThroughlineBuild.Briefs.csproj" />
+    <ProjectReference Include="..\ThroughlineBuild.Workers.Common\ThroughlineBuild.Workers.Common.csproj" />
   </ItemGroup>
 </Project>
