@@ -26,11 +26,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.x'
+          dotnet-version: '10.x'
       - run: dotnet restore
       - run: dotnet test --no-restore
       - run: dotnet publish src/ThroughlineBuild.Cli -r ${{ matrix.rid }} -c Release --no-restore
       - uses: actions/upload-artifact@v4
         with:
           name: build-${{ matrix.rid }}
-          path: src/ThroughlineBuild.Cli/bin/Release/net8.0/${{ matrix.rid }}/publish/${{ matrix.artifact }}
+          path: src/ThroughlineBuild.Cli/bin/Release/net10.0/${{ matrix.rid }}/publish/${{ matrix.artifact }}
