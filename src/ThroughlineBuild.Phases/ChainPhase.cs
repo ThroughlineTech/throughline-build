@@ -3,11 +3,17 @@ using System.Net;
 using System.Text.Json;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Git;
 using ThroughlineBuild.Helpers;
 
 namespace ThroughlineBuild.Phases;
 
-public record ChainPhaseOptions(string TicketId, bool Debug, Action<ChainStep>? OnStep = null, bool NoAutoResolve = false);
+public record ChainPhaseOptions(
+    string TicketId,
+    bool Debug,
+    Action<ChainStep>? OnStep = null,
+    bool NoAutoResolve = false,
+    string? SharedWorktreePath = null);
 
 public class ChainPhase
 {
@@ -19,10 +25,14 @@ public class ChainPhase
     private readonly Func<BuildOptions, ImplementPhaseOptions, ImplementPhase> _implementFactory;
     private readonly Func<BuildOptions, ReviewPhase> _reviewFactory;
     private readonly Func<BuildOptions, ShipPhase> _shipFactory;
+    // Ship factory used within the parent-chain path: produces a ShipPhase with SkipDecruft=true
+    // so the shared worktree is not torn down after each ticket. Falls back to _shipFactory when null.
+    private readonly Func<BuildOptions, ShipPhase>? _chainShipFactory;
     private readonly Func<string> _sessionIdGenerator;
     private readonly string _workingDirectory;
     private readonly BuildOptions _baseOptions;
     private readonly Func<BuildOptions, IObsoleteRatifier>? _ratifierFactory;
+    private readonly IGitClient _git;
 
     public ChainPhase(
         ITicketing ticketing,
@@ -34,7 +44,9 @@ public class ChainPhase
         Func<BuildOptions, ShipPhase> shipFactory,
         Func<string>? sessionIdGenerator = null,
         string? workingDirectory = null,
-        Func<BuildOptions, IObsoleteRatifier>? ratifierFactory = null)
+        Func<BuildOptions, IObsoleteRatifier>? ratifierFactory = null,
+        Func<BuildOptions, ShipPhase>? chainShipFactory = null,
+        IGitClient? gitClient = null)
     {
         _ticketing = ticketing;
         _events = events;
@@ -43,9 +55,11 @@ public class ChainPhase
         _implementFactory = implementFactory;
         _reviewFactory = reviewFactory;
         _shipFactory = shipFactory;
+        _chainShipFactory = chainShipFactory;
         _sessionIdGenerator = sessionIdGenerator ?? (() => Guid.NewGuid().ToString("N"));
         _workingDirectory = workingDirectory ?? Directory.GetCurrentDirectory();
         _ratifierFactory = ratifierFactory;
+        _git = gitClient ?? new ProcessGitClient();
     }
 
     public async Task<ChainResult> RunAsync(ChainPhaseOptions options, CancellationToken ct)
@@ -194,7 +208,11 @@ public class ChainPhase
         var shipSessionId = _sessionIdGenerator();
         var shipBuildOpts = _baseOptions with { SessionId = shipSessionId };
         var shipSw = Stopwatch.StartNew();
-        var shipResult = await _shipFactory(shipBuildOpts).RunAsync(options.TicketId, _workingDirectory, ct)
+        // When running inside a parent-chain shared worktree, use the chain ship factory (SkipDecruft=true).
+        var activeShipFactory = (options.SharedWorktreePath is not null && _chainShipFactory is not null)
+            ? _chainShipFactory
+            : _shipFactory;
+        var shipResult = await activeShipFactory(shipBuildOpts).RunAsync(options.TicketId, _workingDirectory, ct)
             .ConfigureAwait(false);
         shipSw.Stop();
 
@@ -262,7 +280,7 @@ public class ChainPhase
         {
             var implSessionId = _sessionIdGenerator();
             var implBuildOpts = _baseOptions with { SessionId = implSessionId };
-            var implPhaseOpts = new ImplementPhaseOptions(feedback);
+            var implPhaseOpts = new ImplementPhaseOptions(feedback, options.SharedWorktreePath);
             var implSw = Stopwatch.StartNew();
             var implResult = await _implementFactory(implBuildOpts, implPhaseOpts)
                 .RunAsync(options.TicketId, _workingDirectory, ct).ConfigureAwait(false);
@@ -585,6 +603,38 @@ public class ChainPhase
         var siblingGraph = await BuildSiblingGraphAsync(eligible, ct).ConfigureAwait(false);
         var levels = TopologicalSorter.ComputeLevels(siblingGraph);
 
+        // Create one shared worktree for the entire parent chain. Each child ticket creates
+        // its own branch inside this worktree; ship skips decruft so the worktree stays alive
+        // until all children are done. The worktree is removed once here at chain end.
+        var sharedWorktreeNames = PhaseWorktreeLayout.Compute(parentTicket.Id, parentTicket.Title, _workingDirectory);
+        string? sharedWorktreePath = null;
+        string? baseRefForSharedWt = null;
+        try
+        {
+            (baseRefForSharedWt, _) = await BaseRefResolver.ResolveAsync(_git, _workingDirectory, _baseOptions.TargetBranch, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            // If we cannot resolve the base ref we fall back to null and let each child
+            // handle ref resolution independently (standalone worktree per ticket path).
+            baseRefForSharedWt = null;
+        }
+
+        if (baseRefForSharedWt is not null && eligible.Count > 0)
+        {
+            var createResult = await _git.CreateWorktreeAsync(
+                sharedWorktreeNames.WorktreePath,
+                // Initial branch name in the shared worktree - first child will immediately
+                // create its own branch and switch, so this is just a placeholder.
+                $"chain/{sharedWorktreeNames.Slug}",
+                baseRefForSharedWt,
+                _workingDirectory,
+                ct).ConfigureAwait(false);
+            if (createResult.Success)
+                sharedWorktreePath = sharedWorktreeNames.WorktreePath;
+            // If creation fails (e.g. path already exists) we fall back to per-ticket worktrees.
+        }
+
         var semaphore = new SemaphoreSlim(1, 1);
         var allChildResults = new List<ChainResult>();
         bool anyStoppedEarly = false;
@@ -613,7 +663,8 @@ public class ChainPhase
                         PhaseSessionId: _sessionIdGenerator());
                     options.OnStep?.Invoke(startStep);
 
-                    var childResult = await RunAsync(options with { TicketId = child.Id }, ct).ConfigureAwait(false);
+                    var childOptions = options with { TicketId = child.Id, SharedWorktreePath = sharedWorktreePath };
+                    var childResult = await RunAsync(childOptions, ct).ConfigureAwait(false);
 
                     var ok = IsChainSuccess(childResult.Outcome);
                     var doneStep = new ChainStep(
@@ -640,6 +691,17 @@ public class ChainPhase
         }
 
         var childResults = allChildResults;
+
+        // Remove the shared worktree now that all children are done. Failure is non-fatal.
+        if (sharedWorktreePath is not null)
+        {
+            try
+            {
+                var decrufter = new WorktreeDecrufter(_git);
+                await decrufter.DecruftAsync(sharedWorktreePath, _workingDirectory, ct).ConfigureAwait(false);
+            }
+            catch { /* non-fatal: ticket transitions are already committed */ }
+        }
 
         // Attempt parent rollup (fail-soft)
         try { await _ticketing.RollupParentAsync(options.TicketId, ct).ConfigureAwait(false); }

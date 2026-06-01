@@ -111,6 +111,13 @@ public interface IGitClient
     Task<IReadOnlyList<string>> GetConflictedPathsAsync(string workingDirectory, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
 
+    // Creates a new branch from fromRef inside an existing worktree (git checkout -b <branch> <fromRef>).
+    // Used by the shared-chain-worktree path to set up each ticket's branch without a new worktree add.
+    // Default returns failure so existing test fakes remain unchanged.
+    // Never throws - failure is returned as GitOpResult(false, ...).
+    Task<GitOpResult> CreateBranchAsync(string branch, string fromRef, string worktreePath, CancellationToken ct) =>
+        Task.FromResult(new GitOpResult(false, "not implemented"));
+
     // Returns raw stash list lines from "git stash list" (e.g. "stash@{0}: On ticket/tlb-1-foo: WIP").
     // Default returns empty so existing FakeGitClients remain unchanged (TLB-374).
     // Never throws - returns empty on git failure.

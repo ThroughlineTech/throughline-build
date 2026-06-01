@@ -12,7 +12,8 @@ public record ShipOptions(
     string BaseBranch,
     bool DeleteFeatureBranch = true,
     bool NoAutoMerge = false,
-    string? TargetBranch = null);
+    string? TargetBranch = null,
+    bool SkipDecruft = false);
 
 public record ShipResult(
     bool Success,
@@ -552,28 +553,33 @@ public class ShipPhase : IWorkflowPhase
             ["to"] = "Done"
         }, ct).ConfigureAwait(false);
 
-        // Step 12: Decruft worktree. Failure must not unwind Done.
-        ReportProgress("[ship] cleaning up worktree...");
-        string decruftHaltedAt;
-        string? decruftError = null;
-        try
+        // Step 12: Decruft worktree. Skipped when SkipDecruft is set (the chain owns the
+        // shared worktree and will remove it once after all tickets complete). Failure must
+        // not unwind Done in any case.
+        if (!_shipOptions.SkipDecruft)
         {
-            var decruftResult = await _decrufter.DecruftAsync(canonicalWorktreePath, workingDirectory, ct).ConfigureAwait(false);
-            decruftHaltedAt = decruftResult.HaltedAt?.ToString() ?? "complete";
+            ReportProgress("[ship] cleaning up worktree...");
+            string decruftHaltedAt;
+            string? decruftError = null;
+            try
+            {
+                var decruftResult = await _decrufter.DecruftAsync(canonicalWorktreePath, workingDirectory, ct).ConfigureAwait(false);
+                decruftHaltedAt = decruftResult.HaltedAt?.ToString() ?? "complete";
+            }
+            catch (Exception ex)
+            {
+                decruftHaltedAt = "exception";
+                decruftError = ex.Message;
+            }
+            var decruftData = new Dictionary<string, object>
+            {
+                ["action"] = "decruft",
+                ["halted_at"] = decruftHaltedAt
+            };
+            if (decruftError is not null)
+                decruftData["error"] = decruftError;
+            await EmitAsync(EventKind.TicketWrite, ticketId, decruftData, ct).ConfigureAwait(false);
         }
-        catch (Exception ex)
-        {
-            decruftHaltedAt = "exception";
-            decruftError = ex.Message;
-        }
-        var decruftData = new Dictionary<string, object>
-        {
-            ["action"] = "decruft",
-            ["halted_at"] = decruftHaltedAt
-        };
-        if (decruftError is not null)
-            decruftData["error"] = decruftError;
-        await EmitAsync(EventKind.TicketWrite, ticketId, decruftData, ct).ConfigureAwait(false);
 
         // Step 13: Optionally delete feature branch. Failure does not unwind Done.
         if (_shipOptions.DeleteFeatureBranch)

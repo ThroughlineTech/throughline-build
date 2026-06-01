@@ -1443,6 +1443,24 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             git: new ProcessGitClient(cwd));
     };
 
+    // Ship factory used within the parent-chain shared-worktree path: identical to
+    // shipPhaseFactory but with SkipDecruft=true so the shared worktree is not torn
+    // down after each ticket. ChainPhase removes it once after all children complete.
+    var chainShipPhaseFactory = (BuildOptions buildOpts) =>
+    {
+        var chainShipOptions = new ShipOptions(
+            RegressionChecks: config2.Ship.RegressionChecks,
+            Remote: config2.Ship.Remote,
+            BaseBranch: config2.Ship.BaseBranch,
+            DeleteFeatureBranch: config2.Ship.DeleteFeatureBranch,
+            NoAutoMerge: noAutoMerge,
+            TargetBranch: config2.ResolveTargetBranch(),
+            SkipDecruft: true);
+        var gitClient = new ProcessGitClient(cwd);
+        var checksRunner = new AutomatedChecksRunner();
+        return new ShipPhase(ticketing, eventSink, buildOpts, chainShipOptions, gitClient: gitClient, checksRunner: checksRunner);
+    };
+
     var chainPhase = new ChainPhase(
         ticketing,
         eventSink,
@@ -1452,7 +1470,8 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
         reviewPhaseFactory,
         shipPhaseFactory,
         workingDirectory: cwd,
-        ratifierFactory: ratifierFactory);
+        ratifierFactory: ratifierFactory,
+        chainShipFactory: chainShipPhaseFactory);
 
     // Multi-ticket path: if additional positional IDs were supplied, use ParallelDispatcher.
     if (extraTicketIds.Count > 0)

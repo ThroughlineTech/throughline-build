@@ -8,7 +8,9 @@ using ThroughlineBuild.Workers.Common;
 
 namespace ThroughlineBuild.Phases;
 
-public record ImplementPhaseOptions(ReviewFeedback? ReviewFeedback = null);
+public record ImplementPhaseOptions(
+    ReviewFeedback? ReviewFeedback = null,
+    string? SharedWorktreePath = null);
 
 public record ImplementResult(
     bool Success,
@@ -141,11 +143,21 @@ public class ImplementPhase : IWorkflowPhase
         var topLevelEntries = Directory.EnumerateFileSystemEntries(workingDirectory).ToList().AsReadOnly();
         var repoState = new RepoState(mainSha, topLevelEntries);
 
-        // Step 7: Resolve canonical worktree (rework scans git list with prefix fallback; initial uses computed names)
+        // Step 7: Resolve canonical worktree.
+        // Shared-worktree path: the chain pre-created a worktree; each ticket creates its own
+        // branch inside it using CreateBranchAsync.
+        // Rework path: locate the existing worktree by branch or path.
+        // Initial path (no shared worktree): CreateWorktreeAsync below.
+        bool isSharedWorktree = _phaseOptions.SharedWorktreePath is not null;
         string canonicalBranchName = worktreeNames.BranchName;
-        string canonicalWorktreePath = worktreeNames.WorktreePath;
+        string canonicalWorktreePath = isSharedWorktree
+            ? _phaseOptions.SharedWorktreePath!
+            : worktreeNames.WorktreePath;
+
         if (isRework)
         {
+            // Rework always resolves by scanning git worktree list; the shared-worktree path
+            // also appears in the list so this branch is correct for both cases.
             var existingWorktrees = await _git.ListWorktreesAsync(ct).ConfigureAwait(false);
             bool reworkWorktreeFound = false;
             foreach (var w in existingWorktrees)
@@ -159,7 +171,8 @@ public class ImplementPhase : IWorkflowPhase
                 string wPathFull;
                 try { wPathFull = Path.GetFullPath(w.Path); }
                 catch { wPathFull = w.Path; }
-                if (string.Equals(wPathFull, worktreeNames.WorktreePath, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(wPathFull, worktreeNames.WorktreePath, StringComparison.OrdinalIgnoreCase) ||
+                    (isSharedWorktree && string.Equals(wPathFull, Path.GetFullPath(_phaseOptions.SharedWorktreePath!), StringComparison.OrdinalIgnoreCase)))
                 {
                     canonicalWorktreePath = w.Path;
                     canonicalBranchName = string.IsNullOrEmpty(w.Branch) ? worktreeNames.BranchName : w.Branch;
@@ -179,6 +192,8 @@ public class ImplementPhase : IWorkflowPhase
             // that return empty from ListWorktreesAsync but create the directory on disk.
             if (!reworkWorktreeFound && Directory.Exists(worktreeNames.WorktreePath))
                 reworkWorktreeFound = true;
+            if (!reworkWorktreeFound && isSharedWorktree && Directory.Exists(_phaseOptions.SharedWorktreePath!))
+                reworkWorktreeFound = true;
             if (!reworkWorktreeFound)
             {
                 var failureReason = $"rework expected existing worktree at {worktreeNames.WorktreePath} but it does not exist";
@@ -190,20 +205,41 @@ public class ImplementPhase : IWorkflowPhase
         // Step 8: Build brief
         var brief = ImplementBriefBuilder.Build(_worker.Name, ticket, repoState, canonicalBranchName, canonicalWorktreePath, _project, _phaseOptions.ReviewFeedback);
 
-        // Step 9: Create worktree (initial only; rework reuses the existing one found above)
+        // Step 9: Set up the working directory for the ticket.
+        // - Shared-worktree (initial): create the ticket branch inside the pre-existing worktree.
+        // - Standalone (initial): create a new worktree with the ticket branch.
+        // - Rework: reuses the existing worktree found above; no git operation needed.
         if (!isRework)
         {
-            var createResult = await _git.CreateWorktreeAsync(
-                canonicalWorktreePath,
-                canonicalBranchName,
-                baseRef,
-                workingDirectory,
-                ct).ConfigureAwait(false);
-            if (!createResult.Success)
+            if (isSharedWorktree)
             {
-                var failureReason = $"worktree create failed: {createResult.FailureReason}";
-                EarlyExitManifest.Write(_options.DebugCaptureDirectory, Phase.Implement.ToString(), ticketId, failureReason);
-                return new ImplementResult(false, ticketId, null, canonicalBranchName, canonicalWorktreePath, failureReason);
+                // Create the ticket's branch inside the chain's shared worktree.
+                var branchResult = await _git.CreateBranchAsync(
+                    canonicalBranchName,
+                    baseRef,
+                    canonicalWorktreePath,
+                    ct).ConfigureAwait(false);
+                if (!branchResult.Success)
+                {
+                    var failureReason = $"branch create in shared worktree failed: {branchResult.FailureReason}";
+                    EarlyExitManifest.Write(_options.DebugCaptureDirectory, Phase.Implement.ToString(), ticketId, failureReason);
+                    return new ImplementResult(false, ticketId, null, canonicalBranchName, canonicalWorktreePath, failureReason);
+                }
+            }
+            else
+            {
+                var createResult = await _git.CreateWorktreeAsync(
+                    canonicalWorktreePath,
+                    canonicalBranchName,
+                    baseRef,
+                    workingDirectory,
+                    ct).ConfigureAwait(false);
+                if (!createResult.Success)
+                {
+                    var failureReason = $"worktree create failed: {createResult.FailureReason}";
+                    EarlyExitManifest.Write(_options.DebugCaptureDirectory, Phase.Implement.ToString(), ticketId, failureReason);
+                    return new ImplementResult(false, ticketId, null, canonicalBranchName, canonicalWorktreePath, failureReason);
+                }
             }
         }
 

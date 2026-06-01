@@ -221,6 +221,37 @@ public sealed class ProcessGitClient : IGitClient
         }
     }
 
+    public async Task<GitOpResult> CreateBranchAsync(string branch, string fromRef, string worktreePath, CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = worktreePath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("checkout");
+            psi.ArgumentList.Add("-b");
+            psi.ArgumentList.Add(branch);
+            psi.ArgumentList.Add(fromRef);
+
+            using var proc = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start git process");
+            var stderr = await proc.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
+            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+            if (proc.ExitCode != 0)
+                return new GitOpResult(false, stderr.Trim());
+            return new GitOpResult(true, null);
+        }
+        catch (Exception ex)
+        {
+            return new GitOpResult(false, ex.Message);
+        }
+    }
+
     public async Task<WorktreeCreateResult> CheckoutWorktreeAsync(string worktreePath, string existingBranch, string mainWorktreePath, CancellationToken ct)
     {
         try
