@@ -34,7 +34,8 @@ public class ShipCliTests
         // TLB-122 also --quiet, declared as the [--debug|--quiet] pair).
         // TLB-191 added [--agent <name>] before the debug/quiet flags.
         // TLB-310 added multi-ticket support.
-        Assert.Contains("build plan <ticket-id> [ticket-id ...] [--agent <name>] [--debug|--quiet]", CliUsage.UsageText);
+        // Brief 02 (op-29) added [--from-brief] to the plan line.
+        Assert.Contains("build plan <ticket-id> [ticket-id ...] [--agent <name>] [--from-brief] [--debug|--quiet]", CliUsage.UsageText);
         Assert.Contains("build implement <ticket-id> [ticket-id ...] [--agent <name>] [--debug|--quiet]", CliUsage.UsageText);
         Assert.Contains("build review <ticket-id> [ticket-id ...] [--agent <name>] [--debug|--quiet]", CliUsage.UsageText);
     }

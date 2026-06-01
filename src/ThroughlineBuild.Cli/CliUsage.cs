@@ -6,11 +6,11 @@ public static class CliUsage
 build - Throughline Build
 
 Usage:
-  build plan <ticket-id> [ticket-id ...] [--agent <name>] [--debug|--quiet] [--summary-json]       Run the plan phase for a ticket (multiple tickets dispatch sequentially, stops at first failure)
+  build plan <ticket-id> [ticket-id ...] [--agent <name>] [--from-brief] [--debug|--quiet] [--summary-json]       Run the plan phase for a ticket (multiple tickets dispatch sequentially, stops at first failure)
   build implement <ticket-id> [ticket-id ...] [--agent <name>] [--debug|--quiet] [--summary-json]  Run the implement phase for a ticket (multiple tickets dispatch sequentially, stops at first failure)
   build review <ticket-id> [ticket-id ...] [--agent <name>] [--debug|--quiet] [--summary-json]  Run the review phase for a ticket (multiple tickets dispatch sequentially, stops at first failure)
   build ship <ticket-id> [ticket-id ...] [--debug] [--summary-json] [--no-auto-merge]               Ship a reviewed ticket; local fast-forward merge, no push to remote; multiple tickets dispatch sequentially, stops at first failure; --debug accepted but is a no-op (ship has no worker subprocess)
-  build chain <ticket-id> [ticket-id ...] [--agent <name>] [--agent-plan <name>] [--agent-implement <name>] [--agent-review <name>] [--debug] [--no-auto-resolve] [--no-auto-merge] [--continue-past-failure]  Run the full chain for one or more tickets; multi-ticket dispatch is level-synchronous (dependency-ordered, concurrency bounded by workers.max_concurrency); streams per-phase output to stdout. --continue-past-failure: by default, descendants of a failed ancestor are skipped; use this flag to run them anyway.
+  build chain <ticket-id> [ticket-id ...] [--agent <name>] [--agent-plan <name>] [--agent-implement <name>] [--agent-review <name>] [--from-brief] [--debug] [--no-auto-resolve] [--no-auto-merge] [--continue-past-failure]  Run the full chain for one or more tickets; multi-ticket dispatch is level-synchronous (dependency-ordered, concurrency bounded by workers.max_concurrency); streams per-phase output to stdout. --continue-past-failure: by default, descendants of a failed ancestor are skipped; use this flag to run them anyway.
   build new <body-path> [--title "..."] [--type "..."] [--label "..."]* [--review] [--debug]  Create a new ticket from a body file (file mode: arg must be an existing file)
   build new <text> [--title "..."] [--type "..."] [--label "..."]* [--review] [--debug]       Create a new ticket from free-form text (draft mode: arg is not an existing file)
   build new - [--title "..."] [--type "..."] [--label "..."]* [--review] [--debug]            Read operator text from stdin, then create a new ticket (draft mode)
@@ -56,6 +56,11 @@ Flags:
   --review         (draft mode only) After drafting, open an interactive review loop before filing.
                    Choose [a]ccept to file with the current body, [e]dit to open $EDITOR, [r]egenerate
                    to re-run the drafter (optionally with extra context), or [q]uit to abort (exit 0).
+  --from-brief     (plan and chain only) Skip the worker investigation and promote the Backlog ticket
+                   to Ready in place, using the description already present on the ticket as the plan.
+                   Equivalent to setting [plan] mode = "promote" in config.toml. When both the flag
+                   and the config key are set, the flag wins. Use for op-doc-scaffolded tickets whose
+                   plan is already authored in the ticket description.
   --error-location When set, prints the C# source filename, method, and line where a parse error or
                    fatal exception originated. Off by default. For parse errors the location is captured
                    at compile time (works in AOT); for exceptions it reads ex.StackTrace (requires
@@ -74,6 +79,13 @@ Summary contract:
   the in-memory event stream, the phase result, Plane queries, and local git. Redirection works
   cleanly: `build plan TLB-N 2>/dev/null > summary.txt`. The --quiet flag (when introduced) will
   suppress the summary too.
+
+Config keys (in .build/config.toml):
+  [plan]
+  mode = "investigate"  (default) Spawn a worker to produce the plan from the ticket description.
+  mode = "promote"                Bypass the worker and promote the Backlog ticket to Ready in place.
+                                  Equivalent to passing --from-brief on the command line. The CLI
+                                  flag overrides this key when both are present.
 
 Exit codes:
   0  Success

@@ -45,6 +45,14 @@ public record ShipConfig(
 
 public record WorkConfig(string? TargetBranch);
 
+// [plan] section: controls whether PlanPhase runs a worker investigation or promotes in place.
+// mode = "investigate" (default) - spawn worker to produce plan; mode = "promote" - bypass worker.
+public record PlanConfig(string Mode)
+{
+    public bool IsPromote => string.Equals(Mode, "promote", StringComparison.OrdinalIgnoreCase);
+    public static PlanConfig Default => new PlanConfig("investigate");
+}
+
 public record BuildConfig(
     TicketingConfig Ticketing,
     LlmConfig Llm,
@@ -53,7 +61,8 @@ public record BuildConfig(
     ReviewConfig Review,
     ShipConfig Ship,
     WorkConfig Work,
-    ProjectContext Project)
+    ProjectContext Project,
+    PlanConfig Plan)
 {
     public string ResolveTargetBranch() => Work.TargetBranch ?? Ship.BaseBranch;
 }
@@ -110,8 +119,9 @@ public static class BuildConfigLoader
         var ship = ReadShipSection(root);
         var work = ReadWorkSection(root);
         var project = ReadProjectSection(root, path);
+        var plan = ReadPlanSection(root);
 
-        return new BuildConfig(ticketing, llm, workers, events, review, ship, work, project);
+        return new BuildConfig(ticketing, llm, workers, events, review, ship, work, project, plan);
     }
 
     public static string ResolveLogDirectory(string configFilePath, string rawLogDir, string cwdFallback)
@@ -390,6 +400,20 @@ public static class BuildConfigLoader
         if (t.TryGetValue("target_branch", out var tbVal) && tbVal is string tbStr && !string.IsNullOrEmpty(tbStr))
             targetBranch = tbStr;
         return new WorkConfig(TargetBranch: targetBranch);
+    }
+
+    private static PlanConfig ReadPlanSection(TomlTable root)
+    {
+        if (!root.TryGetValue("plan", out var val) || val is not TomlTable t)
+            return PlanConfig.Default;
+
+        var mode = OptionalString(t, "mode", "investigate");
+        if (!string.Equals(mode, "investigate", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(mode, "promote", StringComparison.OrdinalIgnoreCase))
+            throw new ConfigException(
+                $"key 'mode' in [plan] must be either \"investigate\" or \"promote\", got \"{mode}\"");
+
+        return new PlanConfig(mode);
     }
 
     private static ProjectContext ReadProjectSection(TomlTable root, string configPath)

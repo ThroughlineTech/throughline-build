@@ -39,6 +39,7 @@ static async Task<int> RunAsync(string[] args)
     bool noAutoMerge = false;
     bool continuePastFailure = false;
     bool forceParallel = false;
+    bool fromBrief = false;
     var filteredArgs = new List<string>(args.Length);
     foreach (var a in args)
     {
@@ -58,6 +59,8 @@ static async Task<int> RunAsync(string[] args)
             continuePastFailure = true;
         else if (a == "--max-parallel")
             forceParallel = true;
+        else if (a == "--from-brief")
+            fromBrief = true;
         else
             filteredArgs.Add(a);
     }
@@ -833,7 +836,7 @@ static async Task<int> RunAsync(string[] args)
             verb, ticketId, args, cwd, ticketing, workerFactory, config2,
             ResolveLogDir(config2.Events.LogDirectory), sessionContext,
             debugMode, quietMode, summaryJson, errorLocation, noAutoMerge,
-            noAutoResolve, continuePastFailure, forceParallel, EffectiveAgentFor);
+            noAutoResolve, continuePastFailure, forceParallel, fromBrief, EffectiveAgentFor);
         dispatchExitCode = iterCode;
         if (iterAction == 2) return iterCode;
         if (iterAction == 1) break;
@@ -1039,6 +1042,7 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
     bool noAutoResolve,
     bool continuePastFailure,
     bool forceParallel,
+    bool fromBrief,
     Func<string, string> effectiveAgentFor)
 {
     var sessionId = Guid.NewGuid().ToString("N");
@@ -1067,6 +1071,8 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
         && (!Console.IsErrorRedirected || Environment.GetEnvironmentVariable("BUILD_PROGRESS") == "1");
 
     var eventSink = new RecordingEventSink(jsonlEventSink);
+    // --from-brief flag overrides config; config [plan].mode = "promote" also enables promotion.
+    bool effectivePromotePlan = fromBrief || config2.Plan.IsPromote;
     var buildOptions = new BuildOptions(
         SessionId: sessionId,
         WorkerName: config2.Workers.DefaultAgent,
@@ -1075,7 +1081,8 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
         LiveStdoutSink: debugMode ? Console.Out : null,
         LiveStderrSink: debugMode ? Console.Error : null,
         ProgressDigestSink: enableDigest ? Console.Error : null,
-        TargetBranch: config2.ResolveTargetBranch());
+        TargetBranch: config2.ResolveTargetBranch(),
+        PromotePlan: effectivePromotePlan);
 
     string planeUrl = BuildPlaneUrl(config2.Ticketing.PlaneBaseUrl, config2.Ticketing.PlaneWorkspaceSlug, ticketId);
     string? artifactsPath = debugCaptureDir is not null
@@ -1354,7 +1361,7 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
         var (chainCode, chainDirect) = await RunChainVerbAsync(
             ticketId, args, cwd, ticketing, eventSink, buildOptions, config2,
             workerFactory, debugMode, debugCaptureDir, enableDigest,
-            noAutoMerge, noAutoResolve, continuePastFailure, forceParallel, effectiveAgentFor);
+            noAutoMerge, noAutoResolve, continuePastFailure, forceParallel, fromBrief, effectiveAgentFor);
         // chainDirect=true means return from RunAsync; false means set dispatchExitCode + break
         return (chainCode, chainDirect ? 2 : 1);
     }
@@ -1380,6 +1387,7 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
     bool noAutoResolve,
     bool continuePastFailure,
     bool forceParallel,
+    bool fromBrief,
     Func<string, string> effectiveAgentFor)
 {
     // Collect additional positional ticket IDs beyond args[1] (args[0] is the verb).
