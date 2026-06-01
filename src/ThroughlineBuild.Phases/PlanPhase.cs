@@ -16,7 +16,8 @@ public record BuildOptions(
     System.IO.TextWriter? LiveStdoutSink = null,
     System.IO.TextWriter? LiveStderrSink = null,
     System.IO.TextWriter? ProgressDigestSink = null,
-    string TargetBranch = "main");
+    string TargetBranch = "main",
+    bool PromotePlan = false);
 
 public record PlanResult(
     bool Success,
@@ -75,6 +76,9 @@ public class PlanPhase : IWorkflowPhase
         {
             return new PlanResult(false, ticketId, null, null, null, $"git rev-parse failed: {ex.Message}");
         }
+
+        if (_options.PromotePlan)
+            return await RunPromoteAsync(ticketId, ticket, mainSha, ct).ConfigureAwait(false);
 
         var topLevelEntries = Directory.EnumerateFileSystemEntries(workingDirectory)
             .ToList()
@@ -194,6 +198,35 @@ public class PlanPhase : IWorkflowPhase
         filtered.Add($"risk:{riskLabel}");
         filtered.Add($"size:{sizeLabel}");
         return filtered;
+    }
+
+    private async Task<PlanResult> RunPromoteAsync(string ticketId, Ticket ticket, string mainSha, CancellationToken ct)
+    {
+        await _ticketing.TransitionAsync(ticketId, TicketState.Planning, ct).ConfigureAwait(false);
+
+        var riskLabel = ticket.Risk.ToString().ToLowerInvariant();
+        var sizeLabel = ticket.Size.ToString();
+        var mergedLabels = MergeRiskSizeLabels(ticket.Labels, riskLabel, sizeLabel);
+        await _ticketing.ApplyLabelsAsync(ticketId, mergedLabels, ct).ConfigureAwait(false);
+        await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
+        {
+            ["action"] = "apply_labels"
+        }, ct).ConfigureAwait(false);
+
+        await _ticketing.CreateCommentAsync(ticketId, $"<p>[planned_at: {mainSha}]</p>", ct).ConfigureAwait(false);
+        await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
+        {
+            ["action"] = "create_comment"
+        }, ct).ConfigureAwait(false);
+
+        await _ticketing.TransitionAsync(ticketId, TicketState.Ready, ct).ConfigureAwait(false);
+        await EmitAsync(EventKind.StateTransition, ticketId, new Dictionary<string, object>
+        {
+            ["from"] = "Backlog",
+            ["to"] = "Ready"
+        }, ct).ConfigureAwait(false);
+
+        return new PlanResult(true, ticketId, riskLabel, sizeLabel, mainSha, null);
     }
 
     private static (string? riskLabel, string? sizeLabel, string? plannedAtSha)
