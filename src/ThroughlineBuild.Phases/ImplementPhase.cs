@@ -160,6 +160,11 @@ public class ImplementPhase : IWorkflowPhase
                     break;
                 }
             }
+            // Last-resort fallback: check if the computed path exists on disk.
+            // Handles manually-created worktrees not registered with git, and test fakes
+            // that return empty from ListWorktreesAsync but create the directory on disk.
+            if (!reworkWorktreeFound && Directory.Exists(worktreeNames.WorktreePath))
+                reworkWorktreeFound = true;
             if (!reworkWorktreeFound)
             {
                 var failureReason = $"rework expected existing worktree at {worktreeNames.WorktreePath} but it does not exist";
