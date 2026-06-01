@@ -556,6 +556,20 @@ public class GetRelationsAsyncTests
         Assert.Equal("blocks", relations[0].Kind);
         Assert.Equal("ffffffff-0000-0000-0000-000000000001", relations[0].TargetId);
     }
+
+    [Fact]
+    public async Task GetRelationsAsync_NullResultsField_ReturnsEmpty()
+    {
+        // Plane API may return {"results": null} - must not throw ArgumentNullException
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson("""{"results": null}"""));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var relations = await client.GetRelationsAsync("TLB-24", CancellationToken.None);
+
+        Assert.Empty(relations);
+    }
 }
 
 public class TicketSizeResolutionTests

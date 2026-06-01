@@ -193,7 +193,7 @@ public sealed class PlaneTicketingClient : ITicketing
         {
             if (_statesByName is not null) return _statesByName;
             var list = await GetJsonAsync<PlaneStateList>(StatesBase, PlaneJsonContext.Default, ct).ConfigureAwait(false);
-            _statesByName = list.Results.ToDictionary(s => s.Name, s => s.Id, StringComparer.OrdinalIgnoreCase);
+            _statesByName = (list.Results ?? []).ToDictionary(s => s.Name, s => s.Id, StringComparer.OrdinalIgnoreCase);
             return _statesByName;
         }
         finally
@@ -211,7 +211,7 @@ public sealed class PlaneTicketingClient : ITicketing
         {
             if (_labelsByName is not null) return _labelsByName;
             var list = await GetJsonAsync<PlaneLabelList>(LabelsBase, PlaneJsonContext.Default, ct).ConfigureAwait(false);
-            _labelsByName = list.Results.ToDictionary(l => l.Name, l => l.Id, StringComparer.OrdinalIgnoreCase);
+            _labelsByName = (list.Results ?? []).ToDictionary(l => l.Name, l => l.Id, StringComparer.OrdinalIgnoreCase);
             return _labelsByName;
         }
         finally
@@ -229,7 +229,7 @@ public sealed class PlaneTicketingClient : ITicketing
         {
             if (_issueTypesByName is not null) return _issueTypesByName;
             var list = await GetJsonAsync<PlaneIssueTypeList>(IssueTypesBase, PlaneJsonContext.Default, ct).ConfigureAwait(false);
-            _issueTypesByName = list.Results.ToDictionary(t => t.Name, t => t.Id, StringComparer.OrdinalIgnoreCase);
+            _issueTypesByName = (list.Results ?? []).ToDictionary(t => t.Name, t => t.Id, StringComparer.OrdinalIgnoreCase);
             return _issueTypesByName;
         }
         finally
@@ -263,7 +263,7 @@ public sealed class PlaneTicketingClient : ITicketing
 
             var issueList = await GetJsonAsync<PlaneIssueList>(
                 $"{IssuesBase}?per_page=100", PlaneJsonContext.Default, ct).ConfigureAwait(false);
-            var issue = issueList.Results.FirstOrDefault(i => i.SequenceId == seq)
+            var issue = (issueList.Results ?? []).FirstOrDefault(i => i.SequenceId == seq)
                 ?? throw new KeyNotFoundException($"Issue with sequence_id {seq} not found in Plane");
 
             _issueBySeq[seq] = issue;
@@ -444,7 +444,7 @@ public sealed class PlaneTicketingClient : ITicketing
             var relationList = await GetJsonAsync<PlaneRelationList>(
                 $"{IssuesBase}{issue.Id}/relations/", PlaneJsonContext.Default, token).ConfigureAwait(false);
 
-            return relationList.Results
+            return (relationList.Results ?? [])
                 .Select(r => new Relation(r.RelationType, r.RelatedIssue))
                 .ToList()
                 .AsReadOnly();
@@ -679,7 +679,7 @@ public sealed class PlaneTicketingClient : ITicketing
                 ? baseUrl
                 : $"{baseUrl}&cursor={Uri.EscapeDataString(cursor)}";
             var list = await GetJsonAsync<PlaneIssueList>(url, PlaneJsonContext.Default, ct).ConfigureAwait(false);
-            all.AddRange(list.Results);
+            all.AddRange(list.Results ?? []);
 
             if (string.IsNullOrEmpty(list.NextCursor) || string.Equals(list.NextCursor, cursor, StringComparison.Ordinal))
                 break;
@@ -699,7 +699,7 @@ public sealed class PlaneTicketingClient : ITicketing
                 ? baseUrl
                 : $"{baseUrl}&cursor={Uri.EscapeDataString(cursor)}";
             var list = await GetJsonAsync<PlaneIssueExpandedList>(url, PlaneJsonContext.Default, ct).ConfigureAwait(false);
-            all.AddRange(list.Results);
+            all.AddRange(list.Results ?? []);
 
             if (string.IsNullOrEmpty(list.NextCursor) || string.Equals(list.NextCursor, cursor, StringComparison.Ordinal))
                 break;
