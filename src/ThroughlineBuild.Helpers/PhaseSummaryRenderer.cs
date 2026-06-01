@@ -10,12 +10,6 @@ namespace ThroughlineBuild.Helpers;
 // breaks redirection-and-grep workflows (build plan TLB-N > out.txt).
 public static class PhaseSummaryRenderer
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
-    };
-
     public static string RenderText(PhaseSummary summary)
     {
         return summary switch
@@ -32,15 +26,16 @@ public static class PhaseSummaryRenderer
     public static string RenderJson(PhaseSummary summary)
     {
         // Serialize as the typed record so order is deterministic per record shape.
-        // No source-generated context required for net8.0 host (AOT is not the build target).
+        // Routed through the source-generated PhaseSummaryJsonContext so the
+        // --summary-json path is trim/AOT-safe under the CLI's PublishAot build.
         return summary switch
         {
-            PlanPhaseSummary p => JsonSerializer.Serialize(p, JsonOptions),
-            ImplementPhaseSummary i => JsonSerializer.Serialize(i, JsonOptions),
-            ReviewPhaseSummary r => JsonSerializer.Serialize(r, JsonOptions),
-            ShipPhaseSummary s => JsonSerializer.Serialize(s, JsonOptions),
-            DecomposePhaseSummary d => JsonSerializer.Serialize(d, JsonOptions),
-            _ => JsonSerializer.Serialize(summary, JsonOptions),
+            PlanPhaseSummary p => JsonSerializer.Serialize(p, PhaseSummaryJsonContext.Default.PlanPhaseSummary),
+            ImplementPhaseSummary i => JsonSerializer.Serialize(i, PhaseSummaryJsonContext.Default.ImplementPhaseSummary),
+            ReviewPhaseSummary r => JsonSerializer.Serialize(r, PhaseSummaryJsonContext.Default.ReviewPhaseSummary),
+            ShipPhaseSummary s => JsonSerializer.Serialize(s, PhaseSummaryJsonContext.Default.ShipPhaseSummary),
+            DecomposePhaseSummary d => JsonSerializer.Serialize(d, PhaseSummaryJsonContext.Default.DecomposePhaseSummary),
+            _ => JsonSerializer.Serialize(summary, PhaseSummaryJsonContext.Default.PhaseSummary),
         };
     }
 

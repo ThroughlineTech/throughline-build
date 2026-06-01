@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using Polly;
 using Polly.Retry;
 using ThroughlineBuild.Contracts;
@@ -173,11 +174,7 @@ public sealed class PlaneTicketingClient : ITicketing
 
     private async Task<string> PatchJsonAsync<TBody>(string url, TBody body, JsonSerializerContext ctx, CancellationToken ct)
     {
-        var json = JsonSerializer.Serialize(body, typeof(TBody), new JsonSerializerOptions
-        {
-            TypeInfoResolver = ctx,
-            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
-        });
+        var json = JsonSerializer.Serialize(body, WriteTypeInfo<TBody>(ctx));
         using var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
         await _throttle.AcquireAsync(ct).ConfigureAwait(false);
         var response = await _http.PatchAsync(url, content, ct).ConfigureAwait(false);
@@ -189,11 +186,7 @@ public sealed class PlaneTicketingClient : ITicketing
 
     private async Task<string> PostJsonAsync<TBody>(string url, TBody body, JsonSerializerContext ctx, CancellationToken ct)
     {
-        var json = JsonSerializer.Serialize(body, typeof(TBody), new JsonSerializerOptions
-        {
-            TypeInfoResolver = ctx,
-            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
-        });
+        var json = JsonSerializer.Serialize(body, WriteTypeInfo<TBody>(ctx));
         using var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
         await _throttle.AcquireAsync(ct).ConfigureAwait(false);
         var response = await _http.PostAsync(url, content, ct).ConfigureAwait(false);
@@ -201,6 +194,20 @@ public sealed class PlaneTicketingClient : ITicketing
         if (!response.IsSuccessStatusCode)
             throw new PlaneApiException((int)response.StatusCode, responseBody, ParseRetryAfter(response));
         return responseBody;
+    }
+
+    // Resolves the source-generated JsonTypeInfo for a write body, with the relaxed encoder
+    // applied. Plane stores HTML in description_html / comments; the default encoder would
+    // \uXXXX-escape <, >, & on the wire. Using the resolved JsonTypeInfo lets the write path
+    // call the AOT-safe Serialize(value, JsonTypeInfo) overload instead of the reflection-
+    // capable Serialize(value, Type, options) overload that trips IL2026/IL3050 under AOT.
+    private static JsonTypeInfo WriteTypeInfo<TBody>(JsonSerializerContext ctx)
+    {
+        var options = new JsonSerializerOptions(ctx.Options)
+        {
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+        };
+        return options.GetTypeInfo(typeof(TBody));
     }
 
     // ------------------------------------------------------------------ state/label caches

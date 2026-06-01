@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ThroughlineBuild.Contracts.Models;
@@ -381,7 +382,7 @@ internal static class FencedBlockResolver
         IReadOnlyDictionary<string, string> blocks,
         IReadOnlyDictionary<string, object> metadata,
         string refFieldName,
-        out string? content,
+        [NotNullWhen(true)] out string? content,
         out string? error)
     {
         content = null;

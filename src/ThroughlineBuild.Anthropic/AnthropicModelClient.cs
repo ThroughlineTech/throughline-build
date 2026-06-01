@@ -121,7 +121,7 @@ public class AnthropicModelClient : IModelClient
         string? currentEventType = null;
         string? currentData = null;
 
-        while (!reader.EndOfStream && !ct.IsCancellationRequested)
+        while (!ct.IsCancellationRequested)
         {
             var line = await reader.ReadLineAsync(ct);
             if (line == null) break;

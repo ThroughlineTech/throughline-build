@@ -10,6 +10,14 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <IlcOptimizationPreference>Size</IlcOptimizationPreference>
     <IlcMaxParallelism>1</IlcMaxParallelism>
+    <!--
+      IL2104: Tomlyn rolls up trim-analysis warnings from its reflection-based ToModel<T>
+      path. We only call the dynamic-model API (Toml.ToModel(string) -> TomlTable with
+      TryGetValue/pattern-matching; see Config.cs / SetTargetCommand.cs), never the generic
+      reflection path, so that code is unreachable at runtime and safe to trim. Suppress the
+      assembly-level rollup so the AOT publish stays warning-clean.
+    -->
+    <NoWarn>$(NoWarn);IL2104</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\ThroughlineBuild.Contracts\ThroughlineBuild.Contracts.csproj" />

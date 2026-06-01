@@ -62,7 +62,7 @@ public class DecomposeVerdictTests
         var specs = new[]
         {
             MakeChildSpec("Child 1", scopeBoundary: ""),
-            MakeChildSpec("Child 2", scopeBoundary: null),
+            MakeChildSpec("Child 2", scopeBoundary: null!),  // deliberate: exercises the null-scope path
             MakeChildSpec("Child 3", scopeBoundary: "   ")  // whitespace
         };
 
