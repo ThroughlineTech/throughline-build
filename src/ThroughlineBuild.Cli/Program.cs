@@ -1669,6 +1669,10 @@ static string? WireUpConditionalCommands(
     if (verb != "close" && verb != "defer" && verb != "reopen")
         return null;
 
+    // close/defer/reopen use the LLM only to translate the reason text to English,
+    // which is non-essential. If no real client can be built (e.g. no API key),
+    // fall back to an echo client so the ticket transition still runs - the reason
+    // is recorded verbatim. Do NOT abort: these are deterministic state commands.
     ILlmClient llmClient;
     try
     {
@@ -1676,7 +1680,9 @@ static string? WireUpConditionalCommands(
     }
     catch (ConfigException ex)
     {
-        return ex.Message;
+        Console.Error.WriteLine(
+            $"WARNING: LLM unavailable ({ex.Message}); recording reason verbatim without translation.");
+        llmClient = new EchoLlmClient();
     }
     var translator = new ReasonTranslator(llmClient);
 
