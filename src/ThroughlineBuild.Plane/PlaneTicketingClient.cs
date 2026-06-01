@@ -50,6 +50,11 @@ public sealed class PlaneTicketingClient : ITicketing
     // or a Transition racing an ApplyLabels) compose against the live value instead of
     // clobbering each other. Keeping the seq index as seq->uuid (not seq->issue) means there
     // is only one mutable copy of an issue, so the two indexes can never drift.
+    //
+    // Freshness scope: the snapshot reflects every write THIS client makes (state/labels/parent
+    // are stored verbatim by Plane; descriptions are re-read from the PATCH response). It does
+    // not poll for changes made by other processes mid-run - the project is treated as stable
+    // for the run's duration, which is the operating assumption that makes the one-shot load safe.
     private readonly ConcurrentDictionary<string, PlaneIssue> _issueByUuid = new();
     private volatile bool _snapshotLoaded;
     private readonly SemaphoreSlim _snapshotLock = new(1, 1);
@@ -293,10 +298,7 @@ public sealed class PlaneTicketingClient : ITicketing
             if (_snapshotLoaded) return;
             var all = await FetchAllIssuesAsync($"{IssuesBase}?per_page=100", ct).ConfigureAwait(false);
             foreach (var issue in all)
-            {
-                _seqToUuid[issue.SequenceId] = issue.Id;
-                _issueByUuid[issue.Id] = issue;
-            }
+                IndexIssue(issue);
             _snapshotLoaded = true;
         }
         finally
@@ -315,6 +317,37 @@ public sealed class PlaneTicketingClient : ITicketing
     /// more than once under contention, which is fine. The seq index is identity-only and never
     /// touched here, so the two indexes cannot drift.
     /// </summary>
+    /// <summary>
+    /// Inserts or replaces an issue in both indexes. Used by the snapshot load and by the
+    /// creators so a ticket made on this client is visible to a later lookup or parent-probe in
+    /// the same process (otherwise the snapshot, captured before the create, would never see it).
+    /// </summary>
+    private void IndexIssue(PlaneIssue issue)
+    {
+        _seqToUuid[issue.SequenceId] = issue.Id;
+        _issueByUuid[issue.Id] = issue;
+    }
+
+    /// <summary>
+    /// Reads the <c>description_html</c> back from a PATCH response so the cache holds the value
+    /// Plane actually stored (it may normalize HTML) rather than the optimistic value we sent -
+    /// important because descriptions are appended to, so divergence would compound. Returns null
+    /// if the body isn't a parseable issue; the caller falls back to the sent value.
+    /// </summary>
+    private static string? TryReadDescription(string patchResponseBody)
+    {
+        try
+        {
+            var issue = (PlaneIssue?)JsonSerializer.Deserialize(
+                patchResponseBody, typeof(PlaneIssue), PlaneJsonContext.Default);
+            return issue?.DescriptionHtml;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private void UpdateCachedIssue(string uuid, Func<PlaneIssue, PlaneIssue> update)
     {
         // Cache keys are never removed, so a present key stays present: the add factory is
@@ -439,13 +472,17 @@ public sealed class PlaneTicketingClient : ITicketing
             var existing = issue.DescriptionHtml ?? string.Empty;
             var combined = existing + html;
 
-            await PatchJsonAsync(
+            var responseBody = await PatchJsonAsync(
                 $"{IssuesBase}{issue.Id}/",
                 new AppendDescriptionRequest(combined),
                 PlaneJsonContext.Default,
                 token).ConfigureAwait(false);
 
-            UpdateCachedIssue(issue.Id, i => i with { DescriptionHtml = combined });
+            // Cache what Plane stored (it may normalize the HTML) so a later append builds on the
+            // canonical value, not our optimistic concat. Composed onto the live issue so a
+            // concurrent state/label write is not lost; falls back to the value we sent.
+            var stored = TryReadDescription(responseBody) ?? combined;
+            UpdateCachedIssue(issue.Id, i => i with { DescriptionHtml = stored });
         }, ct).ConfigureAwait(false);
     }
 
@@ -654,6 +691,19 @@ public sealed class PlaneTicketingClient : ITicketing
                 responseBody, typeof(PlaneCreateIssueResponse), PlaneJsonContext.Default)
                 ?? throw new InvalidOperationException("Deserialized null for PlaneCreateIssueResponse");
 
+            // Seed the snapshot so a later lookup/parent-probe on this client sees the new ticket.
+            // The create response carries no state; a new issue lands in the default (Backlog), and
+            // an empty StateId resolves to Backlog in ToTicketAsync, so leaving it empty is correct.
+            IndexIssue(new PlaneIssue(
+                Id: response.Id,
+                SequenceId: response.SequenceId,
+                Name: title,
+                DescriptionHtml: descriptionHtml,
+                StateId: string.Empty,
+                LabelIds: labelIds,
+                ParentId: null,
+                Type: typeId));
+
             return new NewTicketResult(
                 Id: $"{_options.ProjectIdentifier}-{response.SequenceId}",
                 Uuid: response.Id,
@@ -713,7 +763,16 @@ public sealed class PlaneTicketingClient : ITicketing
                 issues = issues.Where(i => string.Equals(i.ParentId, query.ParentId, StringComparison.Ordinal));
 
             if (!string.IsNullOrEmpty(query.Type))
-                issues = issues.Where(i => string.Equals(i.Type, query.Type, StringComparison.Ordinal));
+            {
+                // query.Type is a human issue-type name (e.g. "Bug"); the cached issue carries the
+                // issue-type UUID. Resolve name -> UUID the same way CreateTicketAsync does so the
+                // comparison is UUID-vs-UUID. (Requires the issue-types feature; without it this
+                // throws, matching create-with-type. An unknown type name matches nothing.)
+                var typesByName = await GetIssueTypesByNameAsync(token).ConfigureAwait(false);
+                issues = typesByName.TryGetValue(query.Type, out var typeUuid)
+                    ? issues.Where(i => string.Equals(i.Type, typeUuid, StringComparison.Ordinal))
+                    : Enumerable.Empty<PlaneIssue>();
+            }
 
             var tickets = new List<Ticket>();
             foreach (var issue in issues)
@@ -744,10 +803,19 @@ public sealed class PlaneTicketingClient : ITicketing
             var list = await GetJsonAsync<PlaneIssueList>(url, PlaneJsonContext.Default, ct).ConfigureAwait(false);
             all.AddRange(list.Results ?? []);
 
+            // Natural end: no further pages (or the server is repeating a cursor).
             if (string.IsNullOrEmpty(list.NextCursor) || string.Equals(list.NextCursor, cursor, StringComparison.Ordinal))
-                break;
+                return all;
             cursor = list.NextCursor;
         }
+
+        // Fell out via the page cap while the server still had more pages. Since the snapshot
+        // is now the single source of truth for every lookup, a truncated load silently makes
+        // issues beyond the cap unresolvable for the whole run - warn loudly rather than fail quietly.
+        Console.Error.WriteLine(
+            $"[plane] WARNING: issue-list pagination hit the {MaxListPages}-page cap ({MaxListPages * 100} issues) " +
+            "with more pages available - the project snapshot is TRUNCATED for this run and lookups for issues " +
+            "beyond the cap will throw 'not found'. Raise MaxListPages or narrow the project.");
         return all;
     }
 
@@ -833,13 +901,15 @@ public sealed class PlaneTicketingClient : ITicketing
             var seq = ParseSequenceId(id);
             var issue = await FindIssueAsync(seq, token).ConfigureAwait(false);
 
-            await PatchJsonAsync(
+            var responseBody = await PatchJsonAsync(
                 $"{IssuesBase}{issue.Id}/",
                 new UpdateDescriptionRequest(html),
                 PlaneJsonContext.Default,
                 token).ConfigureAwait(false);
 
-            UpdateCachedIssue(issue.Id, i => i with { DescriptionHtml = html });
+            // Cache the server-stored description (Plane may normalize HTML); fall back to ours.
+            var stored = TryReadDescription(responseBody) ?? html;
+            UpdateCachedIssue(issue.Id, i => i with { DescriptionHtml = stored });
         }, ct).ConfigureAwait(false);
     }
 
@@ -900,6 +970,18 @@ public sealed class PlaneTicketingClient : ITicketing
                     failures.Add($"{child.Title}: deserialized null response");
                     continue;
                 }
+
+                // Seed the snapshot with the new child (parented to parentUuid) so a subsequent
+                // parent-probe on this client sees it. Empty StateId -> Backlog in ToTicketAsync.
+                IndexIssue(new PlaneIssue(
+                    Id: response.Id,
+                    SequenceId: response.SequenceId,
+                    Name: child.Title,
+                    DescriptionHtml: child.DescriptionHtml,
+                    StateId: string.Empty,
+                    LabelIds: labelIds,
+                    ParentId: parentUuid,
+                    Type: null));
 
                 created.Add(new CreatedChild(
                     Id: $"{_options.ProjectIdentifier}-{response.SequenceId}",

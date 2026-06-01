@@ -76,15 +76,17 @@ internal sealed class FakeMessageHandler : HttpMessageHandler
 internal sealed class RoutingOkHandler : HttpMessageHandler
 {
     private readonly Func<HttpRequestMessage, string> _bodyFor;
-    private int _requests;
+    private readonly object _lock = new();
 
     public RoutingOkHandler(Func<HttpRequestMessage, string> bodyFor) => _bodyFor = bodyFor;
 
-    public int RequestCount => Volatile.Read(ref _requests);
+    // Thread-safe request log (method + uri) for assertions under concurrency.
+    public List<(HttpMethod Method, string Uri)> Log { get; } = new();
 
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
-        Interlocked.Increment(ref _requests);
+        lock (_lock)
+            Log.Add((request.Method, request.RequestUri!.ToString()));
         var json = _bodyFor(request);
         return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -436,6 +438,28 @@ public class AppendDescriptionAsyncTests
         var patchReq = handler.Requests[1];
         Assert.Contains("<p>existing</p>", patchReq.Body);
         Assert.Contains("<p>new</p>", patchReq.Body);
+    }
+
+    [Fact]
+    public async Task AppendDescriptionAsync_CachesServerStoredDescription_NotOptimisticConcat()
+    {
+        // Plane may normalize the HTML it stores. The write-through must cache what the PATCH
+        // response returned (so a later read / further append builds on the canonical value),
+        // not the value we optimistically sent.
+        var serverNormalized =
+            $$"""{"id":"{{TestData.IssueUuid}}","sequence_id":24,"name":"plane-client","description_html":"<p>A</p><p>B-normalized</p>","state":"{{TestData.StateUuid}}","label_ids":[],"parent":null,"type":null}""";
+
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson(descHtml: "<p>A</p>"))); // snapshot
+        handler.Enqueue(FakeMessageHandler.OkJson(serverNormalized));                             // PATCH response
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));                     // GetAsync ToTicket states
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));                     // GetAsync ToTicket labels
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        await client.AppendDescriptionAsync("TLB-24", "<p>B</p>", CancellationToken.None);
+
+        var ticket = await client.GetAsync("TLB-24", CancellationToken.None);
+        Assert.Equal("<p>A</p><p>B-normalized</p>", ticket.DescriptionHtml); // server value, not "<p>A</p><p>B</p>"
     }
 }
 
@@ -1041,5 +1065,142 @@ public class IssueCacheTests
         var ticket = await client.GetAsync("TLB-24", CancellationToken.None);
         Assert.Equal(TicketState.InProgress, ticket.State);  // a racing label write did not revert the transition
         Assert.Contains(ticket.Labels, l => l.Equals("Size: S", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task CreateTicketAsync_SeedsSnapshot_LaterGetSeesIt_WithoutReload()
+    {
+        const string newUuid = "99999999-0000-0000-0000-000000000200";
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));   // snapshot warm (TLB-24)
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));   // ToTicket states
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));   // ToTicket labels
+        handler.Enqueue(FakeMessageHandler.OkJson(
+            CreateChildTestData.CreateIssueResponseJson(newUuid, 200)));        // POST create
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        // Warm the snapshot FIRST so the create cannot be picked up by a (no-op) reload.
+        await client.GetAsync("TLB-24", CancellationToken.None);
+        var created = await client.CreateTicketAsync("New ticket", null, "<p>body</p>", null, CancellationToken.None);
+        Assert.Equal("TLB-200", created.Id);
+
+        var ticket = await client.GetAsync("TLB-200", CancellationToken.None);
+        Assert.Equal(newUuid, ticket.Uuid);
+        Assert.Equal(TicketState.Backlog, ticket.State);  // new ticket defaults to Backlog (empty StateId)
+
+        // The project was paginated exactly once (the warm); the created ticket came from the seed.
+        var listGets = handler.Requests
+            .Where(r => r.Method == HttpMethod.Get && r.RequestUri!.ToString().Contains("per_page=100"))
+            .ToList();
+        Assert.Single(listGets);
+    }
+
+    [Fact]
+    public async Task CreateChildTicketsAsync_SeedsSnapshot_ParentProbeSeesNewChild()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));               // snapshot warm (no children of parent)
+        handler.Enqueue(FakeMessageHandler.OkJson(CreateChildTestData.LabelListJson()));    // create label cache
+        handler.Enqueue(FakeMessageHandler.OkJson(
+            CreateChildTestData.CreateIssueResponseJson(CreateChildTestData.Child1Uuid, 100))); // POST child
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));               // ToTicket states for the child
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        // Warm the snapshot; the parent has no children yet.
+        var before = await client.QueryAsync(new TicketQuery(ParentId: CreateChildTestData.ParentUuid), CancellationToken.None);
+        Assert.Empty(before);
+
+        var result = await client.CreateChildTicketsAsync(
+            CreateChildTestData.ParentUuid,
+            new[] { new ChildTicketSpec("Child A", "<p>desc</p>", Array.Empty<string>()) },
+            CancellationToken.None);
+        Assert.Single(result.Created);
+
+        // The parent-probe now sees the freshly created child via the seed (no reload).
+        var after = await client.QueryAsync(new TicketQuery(ParentId: CreateChildTestData.ParentUuid), CancellationToken.None);
+        var child = Assert.Single(after);
+        Assert.Equal(CreateChildTestData.Child1Uuid, child.Uuid);
+        Assert.Equal(CreateChildTestData.ParentUuid, child.ParentId);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot load: single-flight + multi-page cursor pagination
+// ---------------------------------------------------------------------------
+public class SnapshotLoadTests
+{
+    private static string IssueJson(int seq, string uuid) =>
+        $$"""{ "id": "{{uuid}}", "sequence_id": {{seq}}, "name": "t{{seq}}", "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "label_ids": [], "parent": null, "type": null }""";
+
+    private static PlaneClientOptions FastOptions() => new()
+    {
+        BaseUrl = "https://plane.example.com",
+        ApiToken = "test-token",
+        WorkspaceSlug = "my-workspace",
+        ProjectId = "my-project",
+        ProjectIdentifier = "TLB",
+        RequestsPerMinute = 1_000_000  // don't let the throttle serialize sends (which would itself mask races)
+    };
+
+    [Fact]
+    public async Task EnsureSnapshot_IsSingleFlight_ConcurrentReadsPaginateProjectOnce()
+    {
+        var issues = "{\"results\":[" + string.Join(",", new[]
+        {
+            IssueJson(24, "aaaaaaaa-0000-0000-0000-000000000024"),
+            IssueJson(25, "aaaaaaaa-0000-0000-0000-000000000025"),
+            IssueJson(26, "aaaaaaaa-0000-0000-0000-000000000026"),
+            IssueJson(27, "aaaaaaaa-0000-0000-0000-000000000027"),
+        }) + "]}";
+
+        var handler = new RoutingOkHandler(req =>
+            req.RequestUri!.AbsolutePath.Contains("/states/") ? TestData.StateListJson()
+            : req.RequestUri!.AbsolutePath.Contains("/labels/") ? TestData.LabelListJson()
+            : issues);
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), FastOptions());
+
+        // Four concurrent first-readers; the snapshot must load exactly once.
+        var tasks = new[] { 24, 25, 26, 27 }.Select(seq => client.GetAsync($"TLB-{seq}", CancellationToken.None));
+        var tickets = await Task.WhenAll(tasks);
+
+        Assert.Equal(4, tickets.Length);
+        var listGets = handler.Log
+            .Where(r => r.Method == HttpMethod.Get && r.Uri.Contains("per_page=100"))
+            .ToList();
+        Assert.Single(listGets);
+    }
+
+    [Fact]
+    public async Task EnsureSnapshot_WalksAllCursorPages_AndEncodesCursorExactlyOnce()
+    {
+        // Page 1 hands back a cursor with characters that require escaping (':' and '='); the
+        // loader must follow it AND encode it exactly once (a double-encode would corrupt page 2).
+        const string rawCursor = "100:1:abc==";
+        var page1 = $$"""{ "results": [ {{IssueJson(24, "aaaaaaaa-0000-0000-0000-000000000024")}} ], "next_cursor": "{{rawCursor}}" }""";
+        var page2 = $$"""{ "results": [ {{IssueJson(25, "aaaaaaaa-0000-0000-0000-000000000025")}} ], "next_cursor": null }""";
+
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(page1));                    // page 0 (no cursor)
+        handler.Enqueue(FakeMessageHandler.OkJson(page2));                    // page 1 (with cursor)
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson())); // ToTicket states
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson())); // ToTicket labels
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var tickets = await client.QueryAsync(new TicketQuery(), CancellationToken.None);
+
+        // Both pages were indexed.
+        Assert.Equal(2, tickets.Count);
+        Assert.Contains(tickets, t => t.Id == "TLB-24");
+        Assert.Contains(tickets, t => t.Id == "TLB-25");
+
+        // Page-2 request carried the cursor encoded once: ':' -> %3A, '=' -> %3D, and crucially
+        // no '%25' (which is what a double-encode of those '%' would produce).
+        var page2Req = handler.Requests[1];
+        var uri = page2Req.RequestUri!.ToString();
+        Assert.Contains("cursor=100%3A1%3Aabc%3D%3D", uri);
+        Assert.DoesNotContain("%25", uri);
     }
 }

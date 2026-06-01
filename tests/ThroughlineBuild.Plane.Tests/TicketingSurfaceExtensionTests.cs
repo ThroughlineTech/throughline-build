@@ -172,20 +172,24 @@ public class QueryAsyncTests
     }
 
     [Fact]
-    public async Task QueryAsync_TypeFilter_ReturnsOnlyMatchingType()
+    public async Task QueryAsync_TypeFilter_ResolvesNameToUuid_ReturnsOnlyMatchingType()
     {
+        // Issues carry the issue-type UUID; the query carries the human name "Task". The filter
+        // must resolve name -> UUID via the issue-types cache and compare UUIDs (not name vs UUID).
+        const string bugTypeUuid = "eeeeeeee-1111-0000-0000-000000000002";
         var typedIssues = $$"""
         {
           "results": [
-            { "id": "aaaaaaaa-0000-0000-0000-000000000001", "sequence_id": 24, "name": "task-one", "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "label_ids": [], "parent": null, "type": "Task" },
-            { "id": "aaaaaaaa-0000-0000-0000-000000000002", "sequence_id": 25, "name": "bug-one",  "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "label_ids": [], "parent": null, "type": "Bug" }
+            { "id": "aaaaaaaa-0000-0000-0000-000000000001", "sequence_id": 24, "name": "task-one", "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "label_ids": [], "parent": null, "type": "{{TestData.IssueTypeUuid}}" },
+            { "id": "aaaaaaaa-0000-0000-0000-000000000002", "sequence_id": 25, "name": "bug-one",  "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "label_ids": [], "parent": null, "type": "{{bugTypeUuid}}" }
           ]
         }
         """;
         var handler = new FakeMessageHandler();
-        handler.Enqueue(FakeMessageHandler.OkJson(typedIssues));
-        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
-        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(typedIssues));                  // snapshot
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueTypeListJson())); // name -> uuid resolve
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));     // ToTicket states
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));     // ToTicket labels
 
         var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
         var tickets = await client.QueryAsync(new TicketQuery(Type: "Task"), CancellationToken.None);
