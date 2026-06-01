@@ -55,6 +55,11 @@ public sealed class ParallelDispatcher
             return new ParallelDispatchResult(false, Array.Empty<ChainResult>(), ex.Message);
         }
 
+        // Print the dependency order derived from the ticket graph before any phase runs
+        // so a wrong or missing edge is visible up front (Brief 17). Tickets in the same
+        // level have no blocked_by edge between them and are unordered relative to each other.
+        PrintDispatchOrder(ticketIds, levels);
+
         // Emit DispatchStart
         await _eventSink.EmitAsync(new WorkflowEvent(
             SessionId: dispatchSessionId,
@@ -156,5 +161,27 @@ public sealed class ParallelDispatcher
             Success: !failed,
             Results: allResults.AsReadOnly(),
             FailureReason: failureReason);
+    }
+
+    /// <summary>
+    /// Prints the dependency-ordered dispatch sequence before the first phase runs.
+    /// Each level is a set of tickets with no blocked_by edge between them; within a
+    /// level they are unordered relative to each other, making a missing edge obvious.
+    /// </summary>
+    private static void PrintDispatchOrder(
+        IReadOnlyList<string> ticketIds,
+        IReadOnlyList<IReadOnlyList<string>> levels)
+    {
+        Console.WriteLine($"dispatch order ({ticketIds.Count} ticket{(ticketIds.Count == 1 ? "" : "s")}, {levels.Count} level{(levels.Count == 1 ? "" : "s")}):");
+        for (int i = 0; i < levels.Count; i++)
+        {
+            // Only include IDs that are in the requested ticketIds set (same filter as dispatch loop).
+            var level = levels[i].Where(id => ticketIds.Contains(id)).ToList();
+            if (level.Count == 0)
+                continue;
+            var ticketList = string.Join(", ", level);
+            var unorderedNote = level.Count > 1 ? " (unordered)" : "";
+            Console.WriteLine($"  level {i + 1}: {ticketList}{unorderedNote}");
+        }
     }
 }

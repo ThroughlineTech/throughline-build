@@ -608,6 +608,11 @@ public class ChainPhase
         var siblingGraph = await BuildSiblingGraphAsync(eligible, ct).ConfigureAwait(false);
         var levels = TopologicalSorter.ComputeLevels(siblingGraph);
 
+        // Print the dependency order derived from Plane before any phase runs so a wrong
+        // or missing edge is visible up front. Tickets in the same level have no blocked_by
+        // edge between them and are unordered relative to each other (Brief 17).
+        PrintDispatchOrder(options.TicketId, levels);
+
         // Create one shared worktree for the entire parent chain. Each child ticket creates
         // its own branch inside this worktree; ship skips decruft so the worktree stays alive
         // until all children are done. The worktree is removed once here at chain end.
@@ -757,6 +762,23 @@ public class ChainPhase
             TotalDuration: totalSw.Elapsed,
             FinalRationale: finalRationale,
             ChildResults: childResults.AsReadOnly());
+    }
+
+    /// <summary>
+    /// Prints the dependency-ordered dispatch sequence before the first phase runs.
+    /// Each level is a set of tickets with no blocked_by edge between them; within a
+    /// level they are unordered relative to each other, making a missing edge obvious.
+    /// </summary>
+    private static void PrintDispatchOrder(string parentId, IReadOnlyList<IReadOnlyList<string>> levels)
+    {
+        Console.WriteLine($"[{parentId}] dispatch order ({levels.Count} level{(levels.Count == 1 ? "" : "s")}):");
+        for (int i = 0; i < levels.Count; i++)
+        {
+            var level = levels[i];
+            var ticketList = string.Join(", ", level);
+            var unorderedNote = level.Count > 1 ? " (unordered)" : "";
+            Console.WriteLine($"  level {i + 1}: {ticketList}{unorderedNote}");
+        }
     }
 
     private async Task<TicketGraph> BuildSiblingGraphAsync(IReadOnlyList<Ticket> eligible, CancellationToken ct)
