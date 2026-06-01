@@ -25,6 +25,14 @@ public record ImplementResult(
 
 public class ImplementPhase : IWorkflowPhase
 {
+    // Compile-time gate for the chain-handoff pointer feature (Plan C, Brief 10).
+    // When false, the implement brief is identical to the pre-Plan-C baseline: no
+    // touched-files in RelevantFiles and no chain_pointer in Context. The derivation
+    // in ChainPhase still runs (it is cheap and harmless), but the result is discarded
+    // here at the consumption side where the brief-token cost actually lands.
+    // Set to false to opt out; rebuild to apply the change.
+    private const bool HandoffPointerEnabled = true;
+
     private readonly ITicketing _ticketing;
     private readonly IWorkerAgent _worker;
     private readonly IEventSink _events;
@@ -203,8 +211,12 @@ public class ImplementPhase : IWorkflowPhase
             }
         }
 
-        // Step 8: Build brief
-        var brief = ImplementBriefBuilder.Build(_worker.Name, ticket, repoState, canonicalBranchName, canonicalWorktreePath, _project, _phaseOptions.ReviewFeedback, _phaseOptions.ChainCommitRange);
+        // Step 8: Build brief.
+        // When HandoffPointerEnabled is false the range is suppressed at the consumption side
+        // so the brief is byte-identical to the pre-Plan-C baseline. The derivation in
+        // ChainPhase still ran (it is cheap and harmless); we simply discard the result here.
+        var effectiveChainRange = HandoffPointerEnabled ? _phaseOptions.ChainCommitRange : null;
+        var brief = ImplementBriefBuilder.Build(_worker.Name, ticket, repoState, canonicalBranchName, canonicalWorktreePath, _project, _phaseOptions.ReviewFeedback, effectiveChainRange);
 
         // Step 9: Set up the working directory for the ticket.
         // - Shared-worktree (initial): create the ticket branch inside the pre-existing worktree.
