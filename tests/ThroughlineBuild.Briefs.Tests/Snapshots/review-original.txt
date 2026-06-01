@@ -34,6 +34,11 @@ Fixture implementer summary.
 Test 'X' failed: expected Y got Z
 ```
 
+## Constraints
+- You are read-only with respect to git: do NOT run git stash, git checkout, git reset, or git rebase. The stash stack is repo-global and leaks across worktrees; any mutation of git state in the review phase can corrupt a later ticket's working tree.
+- Base your verdict on the synthesized diff and the automated check results supplied above. Do not run builds, stash uncommitted changes, or probe the working tree yourself.
+- If you need to understand the code state, read the diff and the file contents as shown. You do not need a clean build to reach a verdict.
+
 ## Required output
 
 Before emitting the WORKER_RESULT envelope, emit your review critique as a named fenced block:
