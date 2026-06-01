@@ -14,6 +14,23 @@ public class InitCommandTests
     // Minimal fake console
     // ------------------------------------------------------------------
 
+    private sealed class FakeInteractiveConsole : IConsole
+    {
+        private readonly System.Text.StringBuilder _stdout = new();
+        private readonly System.Text.StringBuilder _stderr = new();
+        public Queue<string?> Responses { get; } = new Queue<string?>();
+
+        public string Stdout => _stdout.ToString();
+        public string Stderr => _stderr.ToString();
+
+        public bool IsInputRedirected => false;
+        public void WriteLine(string value) => _stdout.AppendLine(value);
+        public void Write(string value) => _stdout.Append(value);
+        public void ErrorWriteLine(string value) => _stderr.AppendLine(value);
+        public string? ReadLine() => Responses.Count > 0 ? Responses.Dequeue() : null;
+        public char? ReadKeyChar() => null;
+    }
+
     private sealed class FakeConsole : IConsole
     {
         private readonly System.Text.StringBuilder _stdout = new();
@@ -403,6 +420,72 @@ public class InitCommandTests
         Assert.Contains("--project-id", CliUsage.UsageText);
         Assert.Contains("--token", CliUsage.UsageText);
         Assert.Contains("--token-env", CliUsage.UsageText);
+    }
+
+    // ------------------------------------------------------------------
+    // Execute: interactive prompting
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void Execute_InteractiveAllPrompts_FillsAllPlaceholders()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new FakeInteractiveConsole();
+            console.Responses.Enqueue("https://plane.example.com");
+            console.Responses.Enqueue("my-workspace");
+            console.Responses.Enqueue("my-project-id");
+            console.Responses.Enqueue("my-api-token");
+
+            var result = InitCommand.Execute(dir, force: false, printTemplate: false, console);
+
+            Assert.Equal(0, result);
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+            Assert.DoesNotContain("REQUIRED_PLANE_BASE_URL", written);
+            Assert.DoesNotContain("REQUIRED_PLANE_WORKSPACE_SLUG", written);
+            Assert.DoesNotContain("REQUIRED_PLANE_PROJECT_ID", written);
+            Assert.DoesNotContain("REQUIRED_PLANE_API_TOKEN", written);
+            Assert.Contains("https://plane.example.com", written);
+            Assert.Contains("my-workspace", written);
+            Assert.Contains("my-project-id", written);
+            Assert.Contains("my-api-token", written);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Execute_InteractivePartialFlags_OnlyPromptsMissing()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new FakeInteractiveConsole();
+            console.Responses.Enqueue("my-workspace");
+            console.Responses.Enqueue("my-project-id");
+            console.Responses.Enqueue("my-api-token");
+
+            var result = InitCommand.Execute(dir, force: false, printTemplate: false, console,
+                planeUrl: "https://api.plane.so");
+
+            Assert.Equal(0, result);
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+            Assert.Contains("https://api.plane.so", written);
+            Assert.DoesNotContain("REQUIRED_PLANE_BASE_URL", written);
+            Assert.DoesNotContain("REQUIRED_PLANE_WORKSPACE_SLUG", written);
+            Assert.DoesNotContain("REQUIRED_PLANE_PROJECT_ID", written);
+            Assert.DoesNotContain("REQUIRED_PLANE_API_TOKEN", written);
+            Assert.Contains("my-workspace", written);
+            Assert.Contains("my-project-id", written);
+            Assert.Contains("my-api-token", written);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
     }
 
     // ------------------------------------------------------------------

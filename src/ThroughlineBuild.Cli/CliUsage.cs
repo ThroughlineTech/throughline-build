@@ -20,7 +20,7 @@ Usage:
   If it looks like a path (contains / or \, or ends in .md/.txt) but no file exists, a stderr notice
   is printed and a brief pause allows Ctrl-C before proceeding in draft mode. Multiple positional args
   are joined with spaces as draft text (e.g. build new fix the readme typo).
-  build init [--force] [--print-template] [--plane-url URL] [--workspace SLUG] [--project-id UUID] [--token TOKEN | --token-env VAR]   Write .build/config.toml from the built-in template; --force overwrites an existing file; --print-template prints to stdout; flag values replace the corresponding REQUIRED_ placeholders
+  build init [--force] [--print-template] [--plane-url URL] [--workspace SLUG] [--project-id UUID] [--token TOKEN | --token-env VAR]   Write .build/config.toml from the built-in template; --force overwrites an existing file; --print-template prints to stdout; flag values replace the corresponding REQUIRED_ placeholders; when stdin is a TTY, prompts for any REQUIRED_ values not supplied as flags
   build user-guide [--force] [--print-template]   Write the operator user guide to docs/throughline_build_userguide.md; --force overwrites an existing file; --print-template prints to stdout
   build settarget <branch>     Validate <branch> exists as a local git ref and write target_branch = "<branch>" under [work] in .build/config.toml; exits 2 if branch not found locally (run git checkout -b <branch> first)
   build settarget --unset      Remove target_branch from [work] in .build/config.toml; noop if key is already absent

@@ -309,15 +309,73 @@ public class ChainPhaseTests
     }
 
     [Fact]
-    public async Task RunAsync_InitialStateInProgress_RefusedInitialState_ZeroSteps()
+    public async Task RunAsync_InitialStateInProgress_NoCommits_ResetsToReady_ResumesAtImplement_Completed()
     {
+        // Interrupted *initial* implement: Ready->InProgress fired but the worker never committed,
+        // so the branch carries no work. The chain prunes the orphan and restarts implement cleanly.
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.InProgress));
-        var chain = BuildChain(ticketing, new FakeWorkerAgent(null), new FakeWorkerAgent(null), new Queue<IVerifier>());
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
 
+        var chain = BuildChain(ticketing, new FakeWorkerAgent(null), implWorker, verifiers);
         var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
 
-        Assert.Equal(ChainOutcome.RefusedInitialState, result.Outcome);
-        Assert.Empty(result.Steps);
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+        // Reset InProgress -> Ready happened before the implement round.
+        Assert.Contains(ticketing.Transitions, t => t.state == TicketState.Ready);
+        // Fresh implement (round 0) -> review -> ship; no plan (already past Backlog).
+        Assert.Equal(3, result.Steps.Count);
+        Assert.Equal("implement", result.Steps[0].PhaseName);
+        Assert.Equal(0, result.Steps[0].ReworkRoundNumber);
+        Assert.Equal("review", result.Steps[1].PhaseName);
+        Assert.Equal("ship", result.Steps[2].PhaseName);
+    }
+
+    [Fact]
+    public async Task RunAsync_InitialStateInProgress_WithCommits_ResumesAsReworkRound_Completed()
+    {
+        // In-progress branch carries real work (interrupted rework): resume in place via the rework
+        // path (round 1, reuses the worktree) - no reset to Ready, no prune.
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.InProgress));
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        var git = new FakeGitClientChain(revListCount: 1);
+
+        var chain = BuildChain(ticketing, new FakeWorkerAgent(null), implWorker, verifiers, git: git, forwardGitToChain: true);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+        // No reset-to-Ready and no prune: resumed in place.
+        Assert.DoesNotContain(ticketing.Transitions, t => t.state == TicketState.Ready);
+        Assert.Empty(git.DeletedBranches);
+        // Implement resumes as rework round 1 -> review -> ship.
+        Assert.Equal(3, result.Steps.Count);
+        Assert.Equal("implement", result.Steps[0].PhaseName);
+        Assert.Equal(1, result.Steps[0].ReworkRoundNumber);
+        Assert.Equal("review", result.Steps[1].PhaseName);
+        Assert.Equal("ship", result.Steps[2].PhaseName);
+    }
+
+    [Fact]
+    public async Task RunAsync_InitialStatePlanning_ResetsToBacklog_ResumesAtPlan_Completed()
+    {
+        // Plan started but never finished (stuck in Planning): reset to Backlog and replan from scratch.
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Planning));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+        Assert.Contains(ticketing.Transitions, t => t.state == TicketState.Backlog);
+        // Full plan -> implement -> review -> ship.
+        Assert.Equal(4, result.Steps.Count);
+        Assert.Equal("plan", result.Steps[0].PhaseName);
     }
 
     [Fact]
@@ -1071,6 +1129,32 @@ public class ChainPhaseTests
         Assert.Contains(result.ChildResults, r => r.Outcome != ChainOutcome.Completed);
     }
 
+    [Fact]
+    public async Task RunAsync_ParentWithInProgressChild_ResumesChild_ParentCompleted()
+    {
+        // Regression for the TLB-368 failure: a child left InProgress by an interrupted run was
+        // "eligible" (not Done/Cancelled) but the router refused it, flipping the whole parent to
+        // ParentStoppedEarly. The chain must now resume the InProgress child instead of refusing.
+        var parent = MakeTicket(TicketState.Backlog);
+        var inProgressChild = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.InProgress);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { inProgressChild });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        var only = Assert.Single(result.ChildResults!);
+        Assert.Equal("TLB-2", only.TicketId);
+        Assert.Equal(ChainOutcome.Completed, only.Outcome);
+    }
+
     // -------------------------------------------------------------------------
     // Sibling dep-analysis tests (TLB-329)
     // -------------------------------------------------------------------------
@@ -1190,11 +1274,15 @@ public class ChainPhaseTests
         private readonly bool _shipFails;
         private readonly List<WorktreeInfo> _worktrees = new();
         private readonly IReadOnlyList<string> _stashEntries;
+        private readonly int _revListCount;
+        public List<string> RemovedWorktrees { get; } = new();
+        public List<string> DeletedBranches { get; } = new();
 
-        public FakeGitClientChain(bool shipFails = false, IReadOnlyList<string>? stashEntries = null)
+        public FakeGitClientChain(bool shipFails = false, IReadOnlyList<string>? stashEntries = null, int revListCount = 0)
         {
             _shipFails = shipFails;
             _stashEntries = stashEntries ?? Array.Empty<string>();
+            _revListCount = revListCount;
             // Seed the default single-ticket worktree for backward compatibility.
             _worktrees.Add(new WorktreeInfo("/fake/worktree", BranchName, CommitSha, false, false));
         }
@@ -1208,8 +1296,12 @@ public class ChainPhaseTests
         public Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<WorktreeInfo>>(_worktrees.AsReadOnly());
 
-        public Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct) =>
-            Task.FromResult(new WorktreeRemoveResult(true, null));
+        public Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct)
+        {
+            RemovedWorktrees.Add(path);
+            _worktrees.RemoveAll(w => string.Equals(w.Path, path, StringComparison.OrdinalIgnoreCase));
+            return Task.FromResult(new WorktreeRemoveResult(true, null));
+        }
 
         public Task<IReadOnlyList<string>> GetBranchesNotMergedAsync(string pattern, string baseBranch, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
@@ -1244,11 +1336,14 @@ public class ChainPhaseTests
         public Task<GitOpResult> FastForwardMergeAsync(string mergeRef, string mainWorktreePath, CancellationToken ct) =>
             Task.FromResult(new GitOpResult(true, null));
 
-        public Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct) =>
-            Task.FromResult(new GitOpResult(true, null));
+        public Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct)
+        {
+            DeletedBranches.Add(branch);
+            return Task.FromResult(new GitOpResult(true, null));
+        }
 
         public Task<int> RevListCountAsync(string range, string workingDirectory, CancellationToken ct) =>
-            Task.FromResult(0);
+            Task.FromResult(_revListCount);
 
         public Task<IReadOnlyList<string>> LogOnelineAsync(string range, int limit, string workingDirectory, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());

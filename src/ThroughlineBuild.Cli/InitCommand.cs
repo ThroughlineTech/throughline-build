@@ -33,6 +33,10 @@ public static class InitCommand
         string? tokenEnv = null)
     {
         var template = ConfigTemplateLoader.Load();
+
+        if (!console.IsInputRedirected)
+            PromptForMissingValues(console, ref planeUrl, ref workspace, ref projectId, ref token);
+
         var content = ApplyFlags(template, planeUrl, workspace, projectId, token, tokenEnv);
 
         if (printTemplate)
@@ -57,6 +61,42 @@ public static class InitCommand
         console.WriteLine("Fill in the REQUIRED fields before running other build commands.");
         console.WriteLine("Run 'build user-guide' to write the operator setup guide to docs/.");
         return 0;
+    }
+
+    private static void PromptForMissingValues(
+        IConsole console,
+        ref string? planeUrl,
+        ref string? workspace,
+        ref string? projectId,
+        ref string? token)
+    {
+        if (planeUrl is null)
+        {
+            console.Write("Plane base URL: ");
+            var response = console.ReadLine()?.Trim();
+            if (!string.IsNullOrEmpty(response)) planeUrl = response;
+        }
+
+        if (workspace is null)
+        {
+            console.Write("Plane workspace slug: ");
+            var response = console.ReadLine()?.Trim();
+            if (!string.IsNullOrEmpty(response)) workspace = response;
+        }
+
+        if (projectId is null)
+        {
+            console.Write("Plane project ID: ");
+            var response = console.ReadLine()?.Trim();
+            if (!string.IsNullOrEmpty(response)) projectId = response;
+        }
+
+        if (token is null)
+        {
+            console.Write("Plane API token (leave blank to fill in later): ");
+            var response = console.ReadLine()?.Trim();
+            if (!string.IsNullOrEmpty(response)) token = response;
+        }
     }
 
     /// <summary>

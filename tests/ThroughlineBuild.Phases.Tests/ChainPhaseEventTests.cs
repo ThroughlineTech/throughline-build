@@ -244,11 +244,12 @@ public class ChainPhaseEventTests
         Assert.True((long)chainEndEv.Data["total_duration_ms"] >= 0);
     }
 
-    // Test 5: RefusedInitialState emits ChainStart then ChainEnd with phases_run=0, no other events between
+    // Test 5: RefusedInitialState emits ChainStart then ChainEnd with phases_run=0, no other events between.
+    // Uses a terminal state (Done) - the only states the chain still refuses now that Planning/InProgress resume.
     [Fact]
     public async Task RefusedInitialState_EmitsChainStartAndChainEnd_NothingBetween_PhasesRunZero()
     {
-        var ticketing = new EventChainFakeTicketing(MakeTicket(TicketState.InProgress));
+        var ticketing = new EventChainFakeTicketing(MakeTicket(TicketState.Done));
         var (chain, sink) = BuildChain(
             ticketing,
             new EventFakeWorkerAgent(null),
