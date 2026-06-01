@@ -68,7 +68,10 @@ public sealed class RequestThrottle
                 // At budget: hard-wait until the oldest call leaves the window.
                 var waitFor = _window - (now - _admitted.Peek());
                 if (waitFor > TimeSpan.Zero)
+                {
+                    Console.Error.WriteLine($"[throttle] rate-limit budget full; waiting {waitFor.TotalSeconds:F1}s");
                     await _delay(waitFor, ct).ConfigureAwait(false);
+                }
             }
         }
         finally

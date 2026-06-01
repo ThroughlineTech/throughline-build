@@ -102,6 +102,7 @@ public class ShipPhase : IWorkflowPhase
         var ticket = await _ticketing.GetAsync(ticketId, ct).ConfigureAwait(false);
 
         // Parent-ticket ship path: validate all children Done
+        ReportProgress("[ship] checking for child tickets...");
         var shipChildren = await _ticketing.QueryAsync(new TicketQuery(ParentId: ticket.Uuid), ct).ConfigureAwait(false);
         if (shipChildren.Count > 0)
         {

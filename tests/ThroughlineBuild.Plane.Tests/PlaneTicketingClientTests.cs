@@ -899,3 +899,32 @@ public class CreateChildTicketsAsyncTests
         Assert.Equal(2, result.Failures.Count);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Issue cache tests
+// ---------------------------------------------------------------------------
+public class IssueCacheTests
+{
+    [Fact]
+    public async Task FindIssueAsync_CachesResult_SecondOperationSkipsIssueListFetch()
+    {
+        var handler = new FakeMessageHandler();
+        // GetAsync: issue list + states + labels
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
+        // CreateCommentAsync: cached issue - only the POST comment needed
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.CommentJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        await client.GetAsync("TLB-24", CancellationToken.None);
+        await client.CreateCommentAsync("TLB-24", "<p>cached</p>", CancellationToken.None);
+
+        // Only one GET to the issues list endpoint across both operations
+        var issueListGets = handler.Requests
+            .Where(r => r.Method == HttpMethod.Get
+                && r.RequestUri!.ToString().Contains("per_page=100"))
+            .ToList();
+        Assert.Single(issueListGets);
+    }
+}

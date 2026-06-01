@@ -34,6 +34,10 @@ public sealed class PlaneTicketingClient : ITicketing
     private Dictionary<string, string>? _issueTypesByName;
     private readonly SemaphoreSlim _issueTypeLock = new(1, 1);
 
+    // Issue cache: seq -> PlaneIssue, lazy-loaded on first use per seq
+    private readonly Dictionary<int, PlaneIssue> _issueBySeq = new();
+    private readonly SemaphoreSlim _issueSeqLock = new(1, 1);
+
     private static readonly JsonSerializerOptions _jsonOptions = new()
     {
         TypeInfoResolver = PlaneJsonContext.Default,
@@ -75,6 +79,11 @@ public sealed class PlaneTicketingClient : ITicketing
                         return new ValueTask<TimeSpan?>(capped);
                     }
                     return new ValueTask<TimeSpan?>((TimeSpan?)null);
+                },
+                OnRetry = args =>
+                {
+                    Console.Error.WriteLine($"[plane] retry {args.AttemptNumber + 1} after {args.RetryDelay.TotalSeconds:F1}s");
+                    return default;
                 }
             })
             .Build();
@@ -246,20 +255,37 @@ public sealed class PlaneTicketingClient : ITicketing
 
     private async Task<PlaneIssue> FindIssueAsync(int seq, CancellationToken ct)
     {
-        var issueList = await GetJsonAsync<PlaneIssueList>(
-            $"{IssuesBase}?per_page=100", PlaneJsonContext.Default, ct).ConfigureAwait(false);
-        return issueList.Results.FirstOrDefault(i => i.SequenceId == seq)
-            ?? throw new KeyNotFoundException($"Issue with sequence_id {seq} not found in Plane");
+        await _issueSeqLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_issueBySeq.TryGetValue(seq, out var cached))
+                return cached;
+
+            var issueList = await GetJsonAsync<PlaneIssueList>(
+                $"{IssuesBase}?per_page=100", PlaneJsonContext.Default, ct).ConfigureAwait(false);
+            var issue = issueList.Results.FirstOrDefault(i => i.SequenceId == seq)
+                ?? throw new KeyNotFoundException($"Issue with sequence_id {seq} not found in Plane");
+
+            _issueBySeq[seq] = issue;
+            return issue;
+        }
+        finally
+        {
+            _issueSeqLock.Release();
+        }
     }
 
     private async Task<Ticket> ToTicketAsync(PlaneIssue issue, CancellationToken ct)
     {
-        var states = await GetStatesByNameAsync(ct).ConfigureAwait(false);
+        var statesTask = GetStatesByNameAsync(ct);
+        var labelsTask = GetLabelsByNameAsync(ct);
+
+        var states = await statesTask.ConfigureAwait(false);
         var statesById = states.ToDictionary(kvp => kvp.Value, kvp => new PlaneState(kvp.Value, kvp.Key, string.Empty));
         var stateName = statesById.TryGetValue(issue.StateId, out var st) ? st.Name : string.Empty;
         var ticketState = _stateNameMap.TryGetValue(stateName, out var ts) ? ts : TicketState.Backlog;
 
-        var labelsByName = await GetLabelsByNameAsync(ct).ConfigureAwait(false);
+        var labelsByName = await labelsTask.ConfigureAwait(false);
         var labelsById = labelsByName.ToDictionary(kvp => kvp.Value, kvp => kvp.Key, StringComparer.OrdinalIgnoreCase);
         var resolvedLabels = (issue.LabelIds ?? [])
             .Where(uid => labelsById.ContainsKey(uid))
