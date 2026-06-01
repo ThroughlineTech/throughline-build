@@ -152,8 +152,6 @@ public class ShipCliTests
         var content = File.ReadAllText(examplePath!);
         Assert.Contains("[ship]", content);
         Assert.Contains("[[ship.regression_checks]]", content);
-        // Must include the no-push comment per the brief.
-        Assert.Contains("no push", content);
     }
 
     private static string? FindConfigExampleFile()

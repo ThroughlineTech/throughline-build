@@ -75,6 +75,7 @@ public class EnumExhaustivenessTests
             ChainOutcome.StoppedAtShip,
             ChainOutcome.ReworkCapExceeded,
             ChainOutcome.RefusedInitialState,
+            ChainOutcome.RefusedDirtyTree,
             ChainOutcome.RatifiedObsolete,
             ChainOutcome.ParentCompleted,
             ChainOutcome.ParentStoppedEarly,
