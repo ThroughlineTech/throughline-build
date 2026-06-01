@@ -1107,38 +1107,6 @@ public class ChainPhaseTests
         Assert.Equal(2, ticketing.GetRelationsCallCount);
     }
 
-    [Fact]
-    public async Task RunAsync_ParentWithDependentChildren_ForceParallelOverride_BothRunConcurrently()
-    {
-        // ForceParallel: true collapses all siblings into one level, skipping dep analysis.
-        var parent = MakeTicket(TicketState.Backlog);
-        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
-        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Backlog);
-
-        var ticketing = new ChainFakeTicketing(parent);
-        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
-        // TLB-3 would normally be blocked by TLB-2, but ForceParallel bypasses this
-        ticketing.SeedRelations("TLB-3", new[] { new Relation("blocked_by", "TLB-2") });
-
-        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
-        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
-        var verifiers = new Queue<IVerifier>();
-        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
-        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
-
-        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
-        // ForceParallel: true -> skip relation fetch, all in one level
-        var result = await chain.RunAsync(
-            new ChainPhaseOptions(TicketId, false, ForceParallel: true), CancellationToken.None);
-
-        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
-        Assert.NotNull(result.ChildResults);
-        Assert.Equal(2, result.ChildResults!.Count);
-        Assert.All(result.ChildResults, r => Assert.Equal(ChainOutcome.Completed, r.Outcome));
-        // Dep analysis was NOT run (GetRelationsAsync never called when ForceParallel=true)
-        Assert.Equal(0, ticketing.GetRelationsCallCount);
-    }
-
     private sealed class FakeGitClientChain : IGitClient
     {
         private readonly bool _shipFails;

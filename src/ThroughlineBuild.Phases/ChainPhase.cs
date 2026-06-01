@@ -7,7 +7,7 @@ using ThroughlineBuild.Helpers;
 
 namespace ThroughlineBuild.Phases;
 
-public record ChainPhaseOptions(string TicketId, bool Debug, Action<ChainStep>? OnStep = null, bool NoAutoResolve = false, bool ForceParallel = false);
+public record ChainPhaseOptions(string TicketId, bool Debug, Action<ChainStep>? OnStep = null, bool NoAutoResolve = false);
 
 public class ChainPhase
 {
@@ -581,23 +581,11 @@ public class ChainPhase
         }
 
         // Build a level-based execution schedule from sibling blocked_by relations so that
-        // dependent siblings are serialized while independent siblings still run in parallel.
-        // ForceParallel collapses all siblings into one level, restoring prior behavior.
-        IReadOnlyList<IReadOnlyList<string>> levels;
-        if (options.ForceParallel)
-        {
-            levels = new List<IReadOnlyList<string>>
-            {
-                eligible.Select(c => c.Id).ToList().AsReadOnly()
-            }.AsReadOnly();
-        }
-        else
-        {
-            var siblingGraph = await BuildSiblingGraphAsync(eligible, ct).ConfigureAwait(false);
-            levels = TopologicalSorter.ComputeLevels(siblingGraph);
-        }
+        // dependent siblings are serialized while independent siblings still run in order.
+        var siblingGraph = await BuildSiblingGraphAsync(eligible, ct).ConfigureAwait(false);
+        var levels = TopologicalSorter.ComputeLevels(siblingGraph);
 
-        var semaphore = new SemaphoreSlim(MaxParentChainConcurrency, MaxParentChainConcurrency);
+        var semaphore = new SemaphoreSlim(1, 1);
         var allChildResults = new List<ChainResult>();
         bool anyStoppedEarly = false;
 
@@ -696,10 +684,6 @@ public class ChainPhase
         outcome is ChainOutcome.Completed
             or ChainOutcome.RatifiedObsolete
             or ChainOutcome.ParentCompleted;
-
-    // Upper bound on leaf children chained in parallel under a single parent. The Plane
-    // rate gate handles API pacing; this caps local worktree/git concurrency.
-    private const int MaxParentChainConcurrency = 1; // eliminiate parallelism for now to reduce risk of git conflicts, etc. in parent chains
 
     private enum StartPhase { Plan, Implement, Review, Refused }
 }
