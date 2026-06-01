@@ -16,7 +16,9 @@ You are a reviewing agent. Your job is to assess the implementation against the 
 {{implementer_summary}}
 
 {{changed_files_section}}{{patch_content_section}}{{automated_checks_section}}## Constraints
-- Do NOT use git stash or the shared stash stack; the stash stack is repo-global and leaks across worktrees, which can corrupt a later ticket's working tree. If you need a clean state to build, build in place rather than stashing.
+- You are read-only with respect to git: do NOT run git stash, git checkout, git reset, or git rebase. The stash stack is repo-global and leaks across worktrees; any mutation of git state in the review phase can corrupt a later ticket's working tree.
+- Base your verdict on the synthesized diff and the automated check results supplied above. Do not run builds, stash uncommitted changes, or probe the working tree yourself.
+- If you need to understand the code state, read the diff and the file contents as shown. You do not need a clean build to reach a verdict.
 
 ## Required output
 

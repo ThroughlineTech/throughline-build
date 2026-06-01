@@ -506,4 +506,101 @@ public class WorkerAgentReviewerTests
         Assert.Equal(VerdictKind.Pass, verdict.Kind);
         Assert.Equal(blockContent, verdict.Rationale);
     }
+
+    // -------------------------------------------------------------------------
+    // Test 15: Review brief contains read-only-git constraint
+    // The template must state the verifier is read-only with respect to git,
+    // naming stash, checkout, reset, and rebase as forbidden.
+    // -------------------------------------------------------------------------
+    [Fact]
+    public async Task ReviewBrief_ContainsReadOnlyGitConstraint()
+    {
+        var metadata = new Dictionary<string, object>
+        {
+            ["verdict"] = "Pass",
+            ["rationale"] = "ok",
+            ["checks_failed"] = new List<string>()
+        };
+        var agent = new StubWorkerAgent(OkResultWithMetadata(metadata));
+        var reviewer = BuildReviewer(agent);
+
+        await reviewer.VerifyAsync(
+            BuildImplementerBrief(),
+            BuildDiff(),
+            BuildImplementerResult(),
+            CancellationToken.None);
+
+        var captured = agent.CapturedBrief;
+        Assert.NotNull(captured);
+
+        var instruction = captured!.Instruction;
+
+        // Template must state the verifier is read-only with respect to git.
+        Assert.Contains("read-only", instruction, StringComparison.OrdinalIgnoreCase);
+
+        // The forbidden git operations must be named explicitly.
+        Assert.Contains("git stash", instruction, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("git checkout", instruction, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("git reset", instruction, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("git rebase", instruction, StringComparison.OrdinalIgnoreCase);
+
+        // Template must direct the verifier to use the synthesized diff and automated checks.
+        Assert.Contains("synthesized diff", instruction, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 16: Review verdict comes from diff and checks, not git mutation
+    // WorkerAgentReviewer receives the pre-built diff and checkResults,
+    // passes them to ReviewBriefBuilder, and returns a verdict without
+    // making any git call itself (the stub worker never calls git).
+    // -------------------------------------------------------------------------
+    [Fact]
+    public async Task VerifyAsync_VerdictDerivedFromDiffAndChecks_NoGitMutation()
+    {
+        // Arrange: a diff with one changed file and one failed check result
+        var diff = new GitDiff(
+            "main",
+            "ticket/tlb-99",
+            new[]
+            {
+                new DiffEntry("src/Bar.cs", DiffKind.Modified, null, 5, 2, null)
+            });
+
+        var checkResults = new[]
+        {
+            new CheckResult("build", false, 1, "", "Build failed.", TimeSpan.FromSeconds(1))
+        };
+
+        var metadata = new Dictionary<string, object>
+        {
+            ["verdict"] = "Rework",
+            ["rationale"] = "build is broken",
+            ["checks_failed"] = new List<string> { "build" }
+        };
+
+        var agent = new StubWorkerAgent(OkResultWithMetadata(metadata));
+        var options = new WorkerOptions(TimeSpan.FromMinutes(5));
+        var reviewer = new WorkerAgentReviewer(
+            agent,
+            BuildTicket(),
+            checkResults,
+            options,
+            "/repo");
+
+        // Act
+        var verdict = await reviewer.VerifyAsync(
+            BuildImplementerBrief(),
+            diff,
+            BuildImplementerResult(),
+            CancellationToken.None);
+
+        // Assert: verdict is derived from the injected diff and checkResults
+        Assert.Equal(VerdictKind.Rework, verdict.Kind);
+        Assert.Equal(new[] { "build" }, verdict.ChecksFailed);
+
+        // The brief instruction received by the worker must reference the changed file and the failed check.
+        var instruction = agent.CapturedBrief!.Instruction;
+        Assert.Contains("src/Bar.cs", instruction, StringComparison.Ordinal);
+        Assert.Contains("FAIL", instruction, StringComparison.Ordinal);
+    }
 }
