@@ -789,7 +789,8 @@ public sealed class PlaneTicketingClient : ITicketing
     /// <summary>
     /// Walks every cursor page for an issues-list URL and returns the flattened results.
     /// <paramref name="baseUrl"/> must already carry its leading query string (it is
-    /// extended with <c>&amp;cursor=</c>). Stops on an empty/repeated cursor or the page cap.
+    /// extended with <c>&amp;cursor=</c>). Stops when Plane reports no further page
+    /// (<c>next_page_results=false</c>), on an empty/repeated cursor or empty page, or at the cap.
     /// </summary>
     private async Task<List<PlaneIssue>> FetchAllIssuesAsync(string baseUrl, CancellationToken ct)
     {
@@ -801,10 +802,16 @@ public sealed class PlaneTicketingClient : ITicketing
                 ? baseUrl
                 : $"{baseUrl}&cursor={Uri.EscapeDataString(cursor)}";
             var list = await GetJsonAsync<PlaneIssueList>(url, PlaneJsonContext.Default, ct).ConfigureAwait(false);
-            all.AddRange(list.Results ?? []);
+            var batch = list.Results ?? [];
+            all.AddRange(batch);
 
-            // Natural end: no further pages (or the server is repeating a cursor).
-            if (string.IsNullOrEmpty(list.NextCursor) || string.Equals(list.NextCursor, cursor, StringComparison.Ordinal))
+            // Plane echoes a non-empty, advancing next_cursor even past the last page, so the
+            // cursor alone never ends the walk - next_page_results is the authoritative signal.
+            // Also stop on an empty page or a missing/repeated cursor as defensive fallbacks.
+            if (list.NextPageResults == false
+                || batch.Count == 0
+                || string.IsNullOrEmpty(list.NextCursor)
+                || string.Equals(list.NextCursor, cursor, StringComparison.Ordinal))
                 return all;
             cursor = list.NextCursor;
         }
@@ -830,9 +837,14 @@ public sealed class PlaneTicketingClient : ITicketing
                 ? baseUrl
                 : $"{baseUrl}&cursor={Uri.EscapeDataString(cursor)}";
             var list = await GetJsonAsync<PlaneIssueExpandedList>(url, PlaneJsonContext.Default, ct).ConfigureAwait(false);
-            all.AddRange(list.Results ?? []);
+            var batch = list.Results ?? [];
+            all.AddRange(batch);
 
-            if (string.IsNullOrEmpty(list.NextCursor) || string.Equals(list.NextCursor, cursor, StringComparison.Ordinal))
+            // Same as FetchAllIssuesAsync: next_page_results is the authoritative end signal.
+            if (list.NextPageResults == false
+                || batch.Count == 0
+                || string.IsNullOrEmpty(list.NextCursor)
+                || string.Equals(list.NextCursor, cursor, StringComparison.Ordinal))
                 break;
             cursor = list.NextCursor;
         }

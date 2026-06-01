@@ -1174,33 +1174,63 @@ public class SnapshotLoadTests
     }
 
     [Fact]
-    public async Task EnsureSnapshot_WalksAllCursorPages_AndEncodesCursorExactlyOnce()
+    public async Task EnsureSnapshot_StopsOnNextPageResultsFalse_EvenWithNonEmptyCursor_AndEncodesCursorOnce()
     {
-        // Page 1 hands back a cursor with characters that require escaping (':' and '='); the
-        // loader must follow it AND encode it exactly once (a double-encode would corrupt page 2).
-        const string rawCursor = "100:1:abc==";
-        var page1 = $$"""{ "results": [ {{IssueJson(24, "aaaaaaaa-0000-0000-0000-000000000024")}} ], "next_cursor": "{{rawCursor}}" }""";
-        var page2 = $$"""{ "results": [ {{IssueJson(25, "aaaaaaaa-0000-0000-0000-000000000025")}} ], "next_cursor": null }""";
+        // Real Plane keeps echoing an advancing next_cursor past the last page; next_page_results
+        // is the authoritative end signal. Page 2 carries a NON-empty cursor but
+        // next_page_results=false, so the loader must stop after page 2 - a page-3 fetch would hit
+        // the empty queue's 404 and fail this test. This is the regression that caused build chain
+        // to walk to the 50-page cap and trip the throttle on every run.
+        var page1 = $$"""{ "results": [ {{IssueJson(24, "aaaaaaaa-0000-0000-0000-000000000024")}} ], "next_cursor": "100:1:0", "next_page_results": true }""";
+        var page2 = $$"""{ "results": [ {{IssueJson(25, "aaaaaaaa-0000-0000-0000-000000000025")}} ], "next_cursor": "100:2:0", "next_page_results": false }""";
 
         var handler = new FakeMessageHandler();
-        handler.Enqueue(FakeMessageHandler.OkJson(page1));                    // page 0 (no cursor)
-        handler.Enqueue(FakeMessageHandler.OkJson(page2));                    // page 1 (with cursor)
+        handler.Enqueue(FakeMessageHandler.OkJson(page1));                    // page 0
+        handler.Enqueue(FakeMessageHandler.OkJson(page2));                    // page 1 (last)
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson())); // ToTicket states
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson())); // ToTicket labels
 
         var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
         var tickets = await client.QueryAsync(new TicketQuery(), CancellationToken.None);
 
-        // Both pages were indexed.
         Assert.Equal(2, tickets.Count);
         Assert.Contains(tickets, t => t.Id == "TLB-24");
         Assert.Contains(tickets, t => t.Id == "TLB-25");
 
-        // Page-2 request carried the cursor encoded once: ':' -> %3A, '=' -> %3D, and crucially
-        // no '%25' (which is what a double-encode of those '%' would produce).
-        var page2Req = handler.Requests[1];
-        var uri = page2Req.RequestUri!.ToString();
-        Assert.Contains("cursor=100%3A1%3Aabc%3D%3D", uri);
+        // Exactly two issue-list GETs: the walk stopped at the last page, it did not run to the cap.
+        var listGets = handler.Requests
+            .Where(r => r.Method == HttpMethod.Get && r.RequestUri!.ToString().Contains("per_page=100"))
+            .ToList();
+        Assert.Equal(2, listGets.Count);
+
+        // Page-2 request carried page-1's cursor encoded exactly once (':' -> %3A, no '%25').
+        var uri = handler.Requests[1].RequestUri!.ToString();
+        Assert.Contains("cursor=100%3A1%3A0", uri);
         Assert.DoesNotContain("%25", uri);
+    }
+
+    [Fact]
+    public async Task EnsureSnapshot_StopsOnEmptyPage_WhenNextPageResultsAbsent()
+    {
+        // Defensive fallback: if a response omits next_page_results and keeps echoing a cursor,
+        // an empty results page must still end the walk (rather than running to the cap).
+        var page1 = $$"""{ "results": [ {{IssueJson(24, "aaaaaaaa-0000-0000-0000-000000000024")}} ], "next_cursor": "100:1:0" }""";
+        var page2 = """{ "results": [], "next_cursor": "100:2:0" }""";
+
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(page1));
+        handler.Enqueue(FakeMessageHandler.OkJson(page2));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var tickets = await client.QueryAsync(new TicketQuery(), CancellationToken.None);
+
+        Assert.Single(tickets);
+        Assert.Equal("TLB-24", tickets[0].Id);
+        var listGets = handler.Requests
+            .Where(r => r.Method == HttpMethod.Get && r.RequestUri!.ToString().Contains("per_page=100"))
+            .ToList();
+        Assert.Equal(2, listGets.Count);  // page1 + the empty page, then stop
     }
 }

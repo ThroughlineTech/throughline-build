@@ -70,7 +70,11 @@ public record PlaneRelationList(
 
 public record PlaneIssueList(
     [property: JsonPropertyName("results")] List<PlaneIssue> Results,
-    [property: JsonPropertyName("next_cursor")] string? NextCursor = null
+    [property: JsonPropertyName("next_cursor")] string? NextCursor = null,
+    // Plane echoes a non-empty, advancing next_cursor even past the last page; this flag is the
+    // authoritative "is there another page" signal (false on the final page). Without it the
+    // cursor-only loop walks to the page cap on every load.
+    [property: JsonPropertyName("next_page_results")] bool? NextPageResults = null
 );
 
 // Expanded DTOs - used for ?expand=state requests (state is an object, not a UUID string)
@@ -88,7 +92,8 @@ internal record PlaneIssueExpanded(
 
 internal record PlaneIssueExpandedList(
     [property: JsonPropertyName("results")] List<PlaneIssueExpanded> Results,
-    [property: JsonPropertyName("next_cursor")] string? NextCursor = null
+    [property: JsonPropertyName("next_cursor")] string? NextCursor = null,
+    [property: JsonPropertyName("next_page_results")] bool? NextPageResults = null
 );
 
 // Request body types
