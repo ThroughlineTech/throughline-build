@@ -15,7 +15,10 @@ You are a reviewing agent. Your job is to assess the implementation against the 
 ## Implementer summary
 {{implementer_summary}}
 
-{{changed_files_section}}{{patch_content_section}}{{automated_checks_section}}## Required output
+{{changed_files_section}}{{patch_content_section}}{{automated_checks_section}}## Constraints
+- Do NOT use git stash or the shared stash stack; the stash stack is repo-global and leaks across worktrees, which can corrupt a later ticket's working tree. If you need a clean state to build, build in place rather than stashing.
+
+## Required output
 
 Before emitting the WORKER_RESULT envelope, emit your review critique as a named fenced block:
 
