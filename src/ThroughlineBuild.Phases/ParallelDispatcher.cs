@@ -28,7 +28,11 @@ public sealed class ParallelDispatcher
     {
         _runChain = runChain;
         _eventSink = eventSink;
-        _maxConcurrency = maxConcurrency > 0 ? maxConcurrency : 1;
+        // Width is pinned to 1: the topological order is load-bearing; concurrency is
+        // the disposable part. Running width-1 removes the cross-worker worktree races
+        // that the merge-contention machinery existed to handle. The maxConcurrency
+        // parameter is retained for API stability; it is ignored.
+        _maxConcurrency = 1;
         _sessionIdGenerator = sessionIdGenerator ?? (() => Guid.NewGuid().ToString("N"));
     }
 

@@ -1079,7 +1079,8 @@ public class ChainPhaseTests
     [Fact]
     public async Task RunAsync_ParentWithIndependentChildren_BothRunConcurrently_NoDepsRequired()
     {
-        // Two siblings with no relations: both land in the same level and run concurrently.
+        // Two siblings with no relations: both land in the same level. With width-1 dispatch
+        // they run sequentially within that level, but both complete (same outcome as before).
         // Regression guard: behavior identical to pre-TLB-329 fan-out when no deps exist.
         var parent = MakeTicket(TicketState.Backlog);
         var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);

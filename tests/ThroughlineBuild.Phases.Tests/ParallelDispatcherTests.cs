@@ -255,12 +255,13 @@ public class ParallelDispatcherTests
             ["B"] = MakeOkResult("B")
         };
 
+        // Concurrency is pinned to 1 regardless of the constructor argument (width-1 dispatch).
         var (dispatcher, sink) = MakeDispatcher(results, maxConcurrency: 2);
         await dispatcher.RunAsync(ids, g, BaseOptions, CancellationToken.None);
 
         var start = sink.Events.Single(e => e.Kind == EventKind.DispatchStart);
         Assert.Equal(2, Convert.ToInt32(start.Data["ticket_count"]));
-        Assert.Equal(2, Convert.ToInt32(start.Data["max_concurrency"]));
+        Assert.Equal(1, Convert.ToInt32(start.Data["max_concurrency"]));
     }
 
     [Fact]
