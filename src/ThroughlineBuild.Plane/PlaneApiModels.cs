@@ -141,7 +141,7 @@ public record UpdateDescriptionRequest(
 
 public record CreateRelationRequest(
     [property: JsonPropertyName("relation_type")] string RelationType,
-    [property: JsonPropertyName("related_issue")] string RelatedIssue
+    [property: JsonPropertyName("issues")] List<string> Issues
 );
 
 [JsonSerializable(typeof(PlaneIssue))]

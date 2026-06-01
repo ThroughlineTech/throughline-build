@@ -1234,3 +1234,28 @@ public class SnapshotLoadTests
         Assert.Equal(2, listGets.Count);  // page1 + the empty page, then stop
     }
 }
+
+public class AddRelationAsyncTests
+{
+    [Fact]
+    public async Task AddRelationAsync_PostsIssuesListNotRelatedIssue()
+    {
+        // Regression: Plane's create-relation endpoint requires the related issue under an
+        // "issues" array, not a singular "related_issue" field. Sending "related_issue" gets a
+        // 400 {"issues":["This field is required."]} - the key names the missing field. The old
+        // payload mirrored the GET *response* shape (related_issue) onto the POST *request*.
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson())); // snapshot (both lookups)
+        handler.Enqueue(FakeMessageHandler.OkJson("{}"));                     // POST relations
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        await client.AddRelationAsync("TLB-24", "TLB-24", CancellationToken.None);
+
+        var postReq = handler.Requests[^1];
+        Assert.Equal(HttpMethod.Post, postReq.Method);
+        Assert.EndsWith($"issues/{TestData.IssueUuid}/relations/", postReq.RequestUri!.AbsolutePath);
+        Assert.Contains("\"relation_type\":\"blocked_by\"", postReq.Body);
+        Assert.Contains($"\"issues\":[\"{TestData.IssueUuid}\"]", postReq.Body);
+        Assert.DoesNotContain("related_issue", postReq.Body);
+    }
+}

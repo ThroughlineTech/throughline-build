@@ -1027,7 +1027,7 @@ public sealed class PlaneTicketingClient : ITicketing
 
             await PostJsonAsync(
                 $"{IssuesBase}{blockedIssue.Id}/relations/",
-                new CreateRelationRequest("blocked_by", blockerIssue.Id),
+                new CreateRelationRequest("blocked_by", new List<string> { blockerIssue.Id }),
                 PlaneJsonContext.Default,
                 token).ConfigureAwait(false);
         }, ct).ConfigureAwait(false);
