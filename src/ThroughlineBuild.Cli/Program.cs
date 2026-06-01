@@ -1631,6 +1631,7 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
                     ChainOutcome.RatifiedObsolete => 0,
                     ChainOutcome.ParentCompleted => 0,
                     ChainOutcome.RefusedInitialState => 2,
+                    ChainOutcome.RefusedDirtyTree => 2,
                     ChainOutcome.ParentHasGrandchildren => 2,
                     ChainOutcome.StoppedAtPlan => 3,
                     ChainOutcome.ParentStoppedEarly => 3,

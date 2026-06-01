@@ -72,6 +72,37 @@ public class ChainPhase
 
         var ticket = await _ticketing.GetAsync(options.TicketId, ct).ConfigureAwait(false);
 
+        // Preflight hygiene gate: run ONCE at the outermost chain entry (children recurse
+        // with SharedWorktreePath set, so they are skipped here). The stash stack is
+        // repo-global and leaks across worktrees, so a dangling stash or conflict left on
+        // the tree can corrupt a ticket mid-chain. Catch it here - before any planning -
+        // instead of burning a plan round and failing opaquely inside implement.
+        if (options.SharedWorktreePath is null)
+        {
+            var preflightPrefix = $"ticket/{ticket.Id.ToLowerInvariant()}-";
+            var preflightFailure = await WorkingTreeHygieneGate
+                .CheckAsync(_git, _workingDirectory, preflightPrefix, ct).ConfigureAwait(false);
+            if (preflightFailure is not null)
+            {
+                await _events.EmitAsync(new WorkflowEvent(
+                    SessionId: chainSessionId,
+                    Timestamp: DateTimeOffset.UtcNow,
+                    Kind: EventKind.GateFailure,
+                    TicketId: options.TicketId,
+                    Phase: Phase.Chain,
+                    Data: new Dictionary<string, object>
+                    {
+                        ["kind"] = "hygiene_gate_preflight",
+                        ["detail"] = preflightFailure
+                    }), ct).ConfigureAwait(false);
+                totalSw.Stop();
+                var refused = new ChainResult(options.TicketId, steps, ChainOutcome.RefusedDirtyTree,
+                    totalSw.Elapsed, preflightFailure);
+                await EmitChainEndAsync(refused, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
+                return refused;
+            }
+        }
+
         // Parent-ticket chain path: recurse to non-terminal children
         var chainChildren = await _ticketing.QueryAsync(new TicketQuery(ParentId: ticket.Uuid), ct).ConfigureAwait(false);
         if (chainChildren.Count > 0)

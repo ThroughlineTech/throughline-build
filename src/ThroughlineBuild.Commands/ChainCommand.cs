@@ -155,6 +155,9 @@ public sealed class ChainCommand : ITicketCommand
             ChainOutcome.RefusedInitialState =>
                 $"[{ticketId}] chain stopped: initial state does not allow chain execution",
 
+            ChainOutcome.RefusedDirtyTree =>
+                $"[{ticketId}] chain refused: working tree not clean ({result.FinalRationale})",
+
             ChainOutcome.StoppedAtPlan =>
                 $"[{ticketId}] chain stopped: planning failed",
 
@@ -264,6 +267,9 @@ public sealed class ChainCommand : ITicketCommand
             ChainOutcome.RefusedInitialState =>
                 GetRefusedInitialStateTriage(ticketId),
 
+            ChainOutcome.RefusedDirtyTree =>
+                GetRefusedDirtyTreeTriage(ticketId, result),
+
             ChainOutcome.StoppedAtPlan =>
                 GetStoppedAtPlanTriage(ticketId),
 
@@ -288,9 +294,10 @@ public sealed class ChainCommand : ITicketCommand
         if (suggestions == null)
             return string.Empty;
 
-        // Include final rationale if available (for review-based stops).
+        // Include final rationale if available (for review-based stops). Skip for
+        // RefusedDirtyTree: no reviewer ran, and the triage text restates the detail itself.
         var output = new StringBuilder();
-        if (!string.IsNullOrEmpty(result.FinalRationale))
+        if (!string.IsNullOrEmpty(result.FinalRationale) && result.Outcome != ChainOutcome.RefusedDirtyTree)
         {
             output.AppendLine("Final reviewer rationale:");
             output.AppendLine();
@@ -305,6 +312,26 @@ public sealed class ChainCommand : ITicketCommand
     private static string GetRefusedInitialStateTriage(string ticketId)
     {
         return $"Operator triage: Chain cannot run from current ticket state. The ticket must be in Backlog, Ready, or InReview state. Check the ticket state on Plane and transition if needed.";
+    }
+
+    private static string GetRefusedDirtyTreeTriage(string ticketId, ChainResult result)
+    {
+        var detail = string.IsNullOrEmpty(result.FinalRationale)
+            ? "unrelated stash or conflicted paths"
+            : result.FinalRationale;
+
+        var output = new StringBuilder();
+        output.AppendLine($"Operator triage: chain refused before planning - working tree is not clean: {detail}.");
+        output.AppendLine("The git stash stack is repo-global and shared across all worktrees, so a leftover");
+        output.AppendLine("stash from unrelated work can be restored into a ticket's tree mid-chain and corrupt it.");
+        output.AppendLine("Clean up, then re-run the chain:");
+        output.AppendLine("  git stash list                 # see what is stashed");
+        output.AppendLine("  git stash show -p stash@{0}    # inspect the contents");
+        output.AppendLine("  git stash drop stash@{0}       # discard it (if not needed)");
+        output.AppendLine("  # or: git stash pop            # restore it into the working tree, then commit/clean");
+        output.AppendLine("If the report named conflicted paths instead, resolve them (git status) and commit or reset.");
+        output.Append($"Then re-run: build chain {ticketId}");
+        return output.ToString();
     }
 
     private static string GetStoppedAtPlanTriage(string ticketId)

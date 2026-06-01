@@ -186,6 +186,32 @@ public class ChainCommandTests
         Assert.Contains("Operator triage", output);
     }
 
+    // --- outcome: RefusedDirtyTree ---
+
+    [Fact]
+    public async Task RefusedDirtyTree_returns_failure_with_cleanup_instructions()
+    {
+        var (cmd, runner, _) = BuildCommand(MakeTicket(TicketState.Backlog));
+        runner.Result = new ChainResult(
+            TicketId: "TLB-1",
+            Steps: Array.Empty<ChainStep>(),
+            Outcome: ChainOutcome.RefusedDirtyTree,
+            TotalDuration: TimeSpan.Zero,
+            FinalRationale: "dangling stash from unrelated ticket/branch: stash@{0}: WIP on main: 06a1156 TLB-343");
+
+        var (result, output) = await RunCapturingStdout(cmd, MakeCtx());
+
+        Assert.False(result.Success);
+        Assert.Contains("chain refused: working tree not clean", output);
+        Assert.Contains("Operator triage", output);
+        // Cleanup instructions must be present and actionable.
+        Assert.Contains("git stash list", output);
+        Assert.Contains("git stash drop stash@{0}", output);
+        Assert.Contains("build chain TLB-1", output);
+        // The detail is surfaced once via the triage, not under a misleading "reviewer rationale" header.
+        Assert.DoesNotContain("Final reviewer rationale", output);
+    }
+
     // --- outcome: StoppedAtPlan ---
 
     [Fact]

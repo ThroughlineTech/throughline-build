@@ -84,7 +84,8 @@ public class ChainPhaseTests
         Queue<IVerifier> verifierQueue,
         IWorkerAgent? shipWorker = null,
         FakeGitClientChain? git = null,
-        Func<BuildOptions, IObsoleteRatifier>? ratifierFactory = null)
+        Func<BuildOptions, IObsoleteRatifier>? ratifierFactory = null,
+        bool forwardGitToChain = false)
     {
         _sessionCounter = 0;
         var events = new FakeEventSinkChain();
@@ -117,7 +118,8 @@ public class ChainPhaseTests
             planFactory, implFactory, reviewFactory, shipFactory,
             sessionIdGenerator: NextSessionId,
             workingDirectory: WorkDir,
-            ratifierFactory: ratifierFactory);
+            ratifierFactory: ratifierFactory,
+            gitClient: forwardGitToChain ? git : null);
     }
 
     [Fact]
@@ -1111,17 +1113,65 @@ public class ChainPhaseTests
         Assert.Equal(2, ticketing.GetRelationsCallCount);
     }
 
+    [Fact]
+    public async Task RunAsync_DirtyTree_UnrelatedStash_RefusesBeforeAnyPhase()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        // Repo-global stash from unrelated work on main - does not mention ticket/tlb-1-.
+        var git = new FakeGitClientChain(stashEntries: new[]
+        {
+            "stash@{0}: WIP on main: 06a1156 TLB-343: document decompose decision"
+        });
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, git: git, forwardGitToChain: true);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, Debug: false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.RefusedDirtyTree, result.Outcome);
+        Assert.Contains("dangling stash", result.FinalRationale);
+        // Refused before planning: no phase steps were recorded and the ticket never moved.
+        Assert.Empty(result.Steps);
+        Assert.Empty(ticketing.Transitions);
+    }
+
+    [Fact]
+    public async Task RunAsync_StashForThisTicket_DoesNotRefuse()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        // A stash that mentions this ticket's branch prefix is treated as related, not dangling.
+        var git = new FakeGitClientChain(stashEntries: new[]
+        {
+            $"stash@{{0}}: On {BranchName}: in-progress work"
+        });
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, git: git, forwardGitToChain: true);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, Debug: false), CancellationToken.None);
+
+        Assert.NotEqual(ChainOutcome.RefusedDirtyTree, result.Outcome);
+    }
+
     private sealed class FakeGitClientChain : IGitClient
     {
         private readonly bool _shipFails;
         private readonly List<WorktreeInfo> _worktrees = new();
+        private readonly IReadOnlyList<string> _stashEntries;
 
-        public FakeGitClientChain(bool shipFails = false)
+        public FakeGitClientChain(bool shipFails = false, IReadOnlyList<string>? stashEntries = null)
         {
             _shipFails = shipFails;
+            _stashEntries = stashEntries ?? Array.Empty<string>();
             // Seed the default single-ticket worktree for backward compatibility.
             _worktrees.Add(new WorktreeInfo("/fake/worktree", BranchName, CommitSha, false, false));
         }
+
+        public Task<IReadOnlyList<string>> ListStashEntriesAsync(string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(_stashEntries);
 
         public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
             Task.FromResult(MainSha);
