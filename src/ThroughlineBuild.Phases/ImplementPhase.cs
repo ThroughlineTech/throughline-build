@@ -79,6 +79,21 @@ public class ImplementPhase : IWorkflowPhase
             return new ImplementResult(false, ticketId, null, null, null, reason);
         }
 
+        // Step 2b: Hygiene gate - refuse to proceed on a conflicted or stash-polluted tree
+        var ticketBranchPrefix = $"ticket/{ticket.Id.ToLowerInvariant()}-";
+        var hygieneFailure = await WorkingTreeHygieneGate.CheckAsync(_git, workingDirectory, ticketBranchPrefix, ct).ConfigureAwait(false);
+        if (hygieneFailure is not null)
+        {
+            var hygieneReason = $"working tree is not clean: {hygieneFailure}";
+            EarlyExitManifest.Write(_options.DebugCaptureDirectory, Phase.Implement.ToString(), ticketId, hygieneReason);
+            await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+            {
+                ["kind"] = "hygiene_gate",
+                ["detail"] = hygieneFailure
+            }, ct).ConfigureAwait(false);
+            return new ImplementResult(false, ticketId, null, null, null, hygieneReason);
+        }
+
         // Step 3: Resolve base ref (origin/main with fallback to local main) and its SHA
         string baseRef;
         string mainSha;
@@ -132,7 +147,6 @@ public class ImplementPhase : IWorkflowPhase
         if (isRework)
         {
             var existingWorktrees = await _git.ListWorktreesAsync(ct).ConfigureAwait(false);
-            var ticketBranchPrefix = $"ticket/{ticket.Id.ToLowerInvariant()}-";
             bool reworkWorktreeFound = false;
             foreach (var w in existingWorktrees)
             {

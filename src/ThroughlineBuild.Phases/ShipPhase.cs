@@ -196,6 +196,23 @@ public class ShipPhase : IWorkflowPhase
         }
 
         // Step 3b: Pre-flight dirty check - both feature and main worktrees must be clean
+        // First run the precise hygiene gate to surface conflict and stash state with attribution.
+        var hygieneDetail = await WorkingTreeHygieneGate.ShipPreflightAsync(
+            _git, canonicalWorktreePath, workingDirectory, ticketBranchPrefix, ct).ConfigureAwait(false);
+        if (hygieneDetail is not null)
+        {
+            var hygieneMessage = $"working tree is not clean: {hygieneDetail}";
+            await _ticketing.CreateCommentAsync(ticketId,
+                $"<p><strong>ship_blocked:</strong> {hygieneMessage}</p>", ct).ConfigureAwait(false);
+            await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+            {
+                ["kind"] = "pre_flight_hygiene",
+                ["detail"] = hygieneDetail
+            }, ct).ConfigureAwait(false);
+            return (new ShipResult(false, ticketId, null, hygieneMessage, ShipFailureStage.PreFlight), worktreeNames, null);
+        }
+
+        // Fall through to the general dirty-file check for uncommitted ordinary modifications.
         var featureChanges = await _git.GetTrackedChangesAsync(canonicalWorktreePath, ct).ConfigureAwait(false);
         var mainChanges = await _git.GetTrackedChangesAsync(workingDirectory, ct).ConfigureAwait(false);
         if (featureChanges.Count > 0 || mainChanges.Count > 0)

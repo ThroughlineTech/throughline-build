@@ -1,0 +1,25 @@
+<Project>
+  <!--
+    AOT publish fix: findvcvarsall.bat calls vswhere.exe to discover MSVC tools, but
+    vswhere.exe is not in the system PATH in this environment. Setting
+    IlcUseEnvironmentalTools=true skips that discovery; CppLinker and CppLibCreator
+    then point directly at the known MSVC toolchain paths on this machine.
+    AdditionalNativeLibraryDirectories provides the lib search paths the linker needs.
+
+    This only takes effect during a native-AOT publish (-r win-x64 -c Release).
+    Managed builds and tests are unaffected because IlcUseEnvironmentalTools only
+    matters when the ILC native-link target runs.
+  -->
+  <PropertyGroup>
+    <IlcUseEnvironmentalTools>true</IlcUseEnvironmentalTools>
+    <_VcToolsRoot>C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207</_VcToolsRoot>
+    <_WinSdkLib>C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0</_WinSdkLib>
+    <CppLinker>$(_VcToolsRoot)\bin\Hostx64\x64\link.exe</CppLinker>
+    <CppLibCreator>$(_VcToolsRoot)\bin\Hostx64\x64\lib.exe</CppLibCreator>
+  </PropertyGroup>
+  <ItemGroup>
+    <AdditionalNativeLibraryDirectories Include="$(_VcToolsRoot)\lib\x64" />
+    <AdditionalNativeLibraryDirectories Include="$(_WinSdkLib)\ucrt\x64" />
+    <AdditionalNativeLibraryDirectories Include="$(_WinSdkLib)\um\x64" />
+  </ItemGroup>
+</Project>

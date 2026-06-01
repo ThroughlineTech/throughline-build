@@ -787,6 +787,92 @@ public sealed class ProcessGitClient : IGitClient
         }
     }
 
+    public async Task<IReadOnlyList<string>> GetConflictedPathsAsync(string workingDirectory, CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = workingDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("status");
+            psi.ArgumentList.Add("--porcelain");
+
+            using var proc = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start git process");
+            var stdout = await proc.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+            if (proc.ExitCode != 0)
+                return Array.Empty<string>();
+
+            var paths = new List<string>();
+            foreach (var rawLine in stdout.Split('\n'))
+            {
+                var line = rawLine.TrimEnd('\r');
+                if (line.Length < 4) continue;
+                // porcelain format: XY<space>path
+                // Conflict codes involve U (unmerged) in either column, or DD/AA
+                var x = line[0];
+                var y = line[1];
+                if (IsConflictCode(x, y))
+                    paths.Add(line.Substring(3));
+            }
+            return paths;
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+    // Conflict codes per git status --porcelain spec:
+    //   DD (both deleted), AU, UD, UA, DU, AA (both added), UU (both modified)
+    private static bool IsConflictCode(char x, char y) =>
+        (x == 'U' || y == 'U') ||
+        (x == 'A' && y == 'A') ||
+        (x == 'D' && y == 'D');
+
+    public async Task<IReadOnlyList<string>> ListStashEntriesAsync(string workingDirectory, CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = workingDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("stash");
+            psi.ArgumentList.Add("list");
+
+            using var proc = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start git process");
+            var stdout = await proc.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+            if (proc.ExitCode != 0)
+                return Array.Empty<string>();
+
+            var entries = new List<string>();
+            foreach (var rawLine in stdout.Split('\n'))
+            {
+                var line = rawLine.TrimEnd('\r').Trim();
+                if (line.Length > 0)
+                    entries.Add(line);
+            }
+            return entries;
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
+    }
+
     public async Task<bool> RemoteExistsAsync(string remote, string workingDirectory, CancellationToken ct)
     {
         try

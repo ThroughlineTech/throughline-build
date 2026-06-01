@@ -103,4 +103,17 @@ public interface IGitClient
     // Never throws - returns "main" on git failure.
     Task<string> CurrentBranchAsync(string workingDirectory, CancellationToken ct) =>
         Task.FromResult("main");
+
+    // Returns paths that have unmerged / conflict status codes in git status --porcelain.
+    // Conflict codes are: DD, AU, UD, UA, DU, AA, UU (both columns contain U, A, or D in conflict combinations).
+    // Default returns empty so existing FakeGitClients remain unchanged (TLB-374).
+    // Never throws - returns empty on git failure.
+    Task<IReadOnlyList<string>> GetConflictedPathsAsync(string workingDirectory, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+    // Returns raw stash list lines from "git stash list" (e.g. "stash@{0}: On ticket/tlb-1-foo: WIP").
+    // Default returns empty so existing FakeGitClients remain unchanged (TLB-374).
+    // Never throws - returns empty on git failure.
+    Task<IReadOnlyList<string>> ListStashEntriesAsync(string workingDirectory, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
 }
