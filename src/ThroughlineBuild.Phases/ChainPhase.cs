@@ -13,7 +13,8 @@ public record ChainPhaseOptions(
     bool Debug,
     Action<ChainStep>? OnStep = null,
     bool NoAutoResolve = false,
-    string? SharedWorktreePath = null);
+    string? SharedWorktreePath = null,
+    ChainCommitRange? ChainCommitRange = null);
 
 public class ChainPhase
 {
@@ -280,7 +281,11 @@ public class ChainPhase
         {
             var implSessionId = _sessionIdGenerator();
             var implBuildOpts = _baseOptions with { SessionId = implSessionId };
-            var implPhaseOpts = new ImplementPhaseOptions(feedback, options.SharedWorktreePath);
+            // Pass the chain's prior-commit pointer on the first implement round only.
+            // Rework rounds (feedback != null) reuse the same worktree with the agent's
+            // own edits already in place, so replaying the handoff is redundant.
+            var implChainRange = (feedback is null) ? options.ChainCommitRange : null;
+            var implPhaseOpts = new ImplementPhaseOptions(feedback, options.SharedWorktreePath, implChainRange);
             var implSw = Stopwatch.StartNew();
             var implResult = await _implementFactory(implBuildOpts, implPhaseOpts)
                 .RunAsync(options.TicketId, _workingDirectory, ct).ConfigureAwait(false);
@@ -673,7 +678,29 @@ public class ChainPhase
                         PhaseSessionId: _sessionIdGenerator());
                     options.OnStep?.Invoke(startStep);
 
-                    var childOptions = options with { TicketId = child.Id, SharedWorktreePath = sharedWorktreePath };
+                    // Derive the chain's prior-commit pointer before each ticket so the
+                    // implement brief lists the files already touched by shipped siblings.
+                    // This is a best-effort computation: any git failure leaves the pointer null,
+                    // which is safe - the brief is identical to the no-pointer baseline.
+                    ChainCommitRange? childCommitRange = null;
+                    if (chainStartSha is not null && baseRefForSharedWt is not null)
+                    {
+                        try
+                        {
+                            var currentTargetSha = await _git.RevParseAsync(
+                                baseRefForSharedWt, _workingDirectory, ct).ConfigureAwait(false);
+                            childCommitRange = await ChainCommitRangeHelper.ComputeAsync(
+                                _git, chainStartSha, currentTargetSha, _workingDirectory, ct).ConfigureAwait(false);
+                        }
+                        catch { /* non-fatal: pointer stays null */ }
+                    }
+
+                    var childOptions = options with
+                    {
+                        TicketId = child.Id,
+                        SharedWorktreePath = sharedWorktreePath,
+                        ChainCommitRange = childCommitRange
+                    };
                     var childResult = await RunAsync(childOptions, ct).ConfigureAwait(false);
 
                     var ok = IsChainSuccess(childResult.Outcome);

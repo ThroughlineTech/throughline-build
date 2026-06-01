@@ -10,7 +10,8 @@ namespace ThroughlineBuild.Phases;
 
 public record ImplementPhaseOptions(
     ReviewFeedback? ReviewFeedback = null,
-    string? SharedWorktreePath = null);
+    string? SharedWorktreePath = null,
+    ChainCommitRange? ChainCommitRange = null);
 
 public record ImplementResult(
     bool Success,
@@ -203,7 +204,7 @@ public class ImplementPhase : IWorkflowPhase
         }
 
         // Step 8: Build brief
-        var brief = ImplementBriefBuilder.Build(_worker.Name, ticket, repoState, canonicalBranchName, canonicalWorktreePath, _project, _phaseOptions.ReviewFeedback);
+        var brief = ImplementBriefBuilder.Build(_worker.Name, ticket, repoState, canonicalBranchName, canonicalWorktreePath, _project, _phaseOptions.ReviewFeedback, _phaseOptions.ChainCommitRange);
 
         // Step 9: Set up the working directory for the ticket.
         // - Shared-worktree (initial): create the ticket branch inside the pre-existing worktree.
