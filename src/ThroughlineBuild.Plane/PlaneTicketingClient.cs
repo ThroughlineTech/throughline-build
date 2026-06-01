@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Encodings.Web;
@@ -34,9 +35,18 @@ public sealed class PlaneTicketingClient : ITicketing
     private Dictionary<string, string>? _issueTypesByName;
     private readonly SemaphoreSlim _issueTypeLock = new(1, 1);
 
-    // Issue cache: seq -> PlaneIssue, lazy-loaded on first use per seq
-    private readonly Dictionary<int, PlaneIssue> _issueBySeq = new();
-    private readonly SemaphoreSlim _issueSeqLock = new(1, 1);
+    // Operation-wide issue snapshot. Within a single run the project's issue set, the
+    // seq<->uuid identity map, and the parent/child hierarchy do not change, so we paginate
+    // the whole project exactly once and answer every FindIssueAsync lookup and QueryAsync
+    // parent-probe from memory. Ticket STATE does change across phases, so each mutating call
+    // updates the cached issue in place (write-through) - we own every write, so a read through
+    // the snapshot is never stale. This collapses what used to be O(tickets x project_pages)
+    // HTTP calls (a full pagination per phase, per ticket) down to one pagination per run, which
+    // is what kept `build chain` hammering Plane's rate limiter as the project grew. (TLB-366)
+    private readonly ConcurrentDictionary<int, PlaneIssue> _issueBySeq = new();
+    private readonly ConcurrentDictionary<string, PlaneIssue> _issueByUuid = new();
+    private volatile bool _snapshotLoaded;
+    private readonly SemaphoreSlim _snapshotLock = new(1, 1);
 
     private static readonly JsonSerializerOptions _jsonOptions = new()
     {
@@ -255,23 +265,52 @@ public sealed class PlaneTicketingClient : ITicketing
 
     private async Task<PlaneIssue> FindIssueAsync(int seq, CancellationToken ct)
     {
-        await _issueSeqLock.WaitAsync(ct).ConfigureAwait(false);
+        await EnsureSnapshotAsync(ct).ConfigureAwait(false);
+        if (_issueBySeq.TryGetValue(seq, out var cached))
+            return cached;
+        throw new KeyNotFoundException($"Issue with sequence_id {seq} not found in Plane");
+    }
+
+    /// <summary>
+    /// Paginates the entire project exactly once per client and indexes every issue by both
+    /// sequence id and uuid. Single-flight: concurrent callers (parallel dispatch shares one
+    /// client) trigger one load, not N. The previous design fetched only page one and cached a
+    /// single matched issue per call, so each distinct seq re-fetched the list and any issue
+    /// past the first 100 was unreachable; loading the full project once fixes both.
+    /// </summary>
+    private async Task EnsureSnapshotAsync(CancellationToken ct)
+    {
+        if (_snapshotLoaded) return;
+        await _snapshotLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            if (_issueBySeq.TryGetValue(seq, out var cached))
-                return cached;
-
-            var issueList = await GetJsonAsync<PlaneIssueList>(
-                $"{IssuesBase}?per_page=100", PlaneJsonContext.Default, ct).ConfigureAwait(false);
-            var issue = (issueList.Results ?? []).FirstOrDefault(i => i.SequenceId == seq)
-                ?? throw new KeyNotFoundException($"Issue with sequence_id {seq} not found in Plane");
-
-            _issueBySeq[seq] = issue;
-            return issue;
+            if (_snapshotLoaded) return;
+            var all = await FetchAllIssuesAsync($"{IssuesBase}?per_page=100", ct).ConfigureAwait(false);
+            foreach (var issue in all)
+            {
+                _issueBySeq[issue.SequenceId] = issue;
+                _issueByUuid[issue.Id] = issue;
+            }
+            _snapshotLoaded = true;
         }
         finally
         {
-            _issueSeqLock.Release();
+            _snapshotLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Write-through cache update applied after a successful mutation so a later read sees the
+    /// new state/labels/description/parent without another GET. No-op if the issue isn't cached
+    /// (e.g. a write by uuid for an issue the snapshot never loaded). Keeps both indexes in sync.
+    /// </summary>
+    private void UpdateCachedIssue(string uuid, Func<PlaneIssue, PlaneIssue> update)
+    {
+        if (_issueByUuid.TryGetValue(uuid, out var existing))
+        {
+            var updated = update(existing);
+            _issueByUuid[uuid] = updated;
+            _issueBySeq[updated.SequenceId] = updated;
         }
     }
 
@@ -370,6 +409,10 @@ public sealed class PlaneTicketingClient : ITicketing
                 new TransitionRequest(stateId),
                 PlaneJsonContext.Default,
                 token).ConfigureAwait(false);
+
+            // Write-through: keep the snapshot's state fresh so the next phase's state guard
+            // reads the state this transition just wrote, not the value cached at first load.
+            UpdateCachedIssue(issue.Id, i => i with { StateId = stateId });
         }, ct).ConfigureAwait(false);
     }
 
@@ -388,6 +431,8 @@ public sealed class PlaneTicketingClient : ITicketing
                 new AppendDescriptionRequest(combined),
                 PlaneJsonContext.Default,
                 token).ConfigureAwait(false);
+
+            UpdateCachedIssue(issue.Id, i => i with { DescriptionHtml = combined });
         }, ct).ConfigureAwait(false);
     }
 
@@ -431,6 +476,8 @@ public sealed class PlaneTicketingClient : ITicketing
                 new ApplyLabelsRequest(labelIds),
                 PlaneJsonContext.Default,
                 token).ConfigureAwait(false);
+
+            UpdateCachedIssue(issue.Id, i => i with { LabelIds = labelIds });
         }, ct).ConfigureAwait(false);
     }
 
@@ -530,6 +577,8 @@ public sealed class PlaneTicketingClient : ITicketing
                 PlaneJsonContext.Default,
                 ct).ConfigureAwait(false);
 
+            UpdateCachedIssue(parentId, i => i with { StateId = desiredStateId });
+
             // POST comment: [rollup] marker is load-bearing
             var commentHtml = $"<p>[rollup] {_options.ProjectIdentifier}-{childIssue.SequenceId} -> {childStateName}; parent -> {desired}</p>";
             await PostJsonAsync(
@@ -608,6 +657,8 @@ public sealed class PlaneTicketingClient : ITicketing
                 new SetParentRequest(parentUuid),
                 PlaneJsonContext.Default,
                 token).ConfigureAwait(false);
+
+            UpdateCachedIssue(childUuid, i => i with { ParentId = parentUuid });
         }, ct).ConfigureAwait(false);
     }
 
@@ -615,8 +666,16 @@ public sealed class PlaneTicketingClient : ITicketing
     {
         return await _pipeline.ExecuteAsync(async token =>
         {
-            var sb = new System.Text.StringBuilder(IssuesBase);
-            sb.Append("?per_page=100");
+            // Plane's list endpoint silently ignores its query filters (notably `parent=`) and
+            // returns the whole project, so historically every QueryAsync re-paginated the entire
+            // project and filtered client-side - once per phase, per ticket. That re-fetch is what
+            // made `build chain` saturate the rate limiter as the project grew. The project's issue
+            // set is stable within a run, so we load it once (EnsureSnapshotAsync) and filter the
+            // cached snapshot in memory; write-through keeps state/parent fields current. The
+            // client-side parent filter is still load-bearing: without it a leaf looks like a parent.
+            await EnsureSnapshotAsync(token).ConfigureAwait(false);
+
+            IEnumerable<PlaneIssue> issues = _issueByUuid.Values;
 
             if (query.State.HasValue)
             {
@@ -632,27 +691,18 @@ public sealed class PlaneTicketingClient : ITicketing
                     _ => throw new ArgumentOutOfRangeException(nameof(query))
                 };
                 var statesByName = await GetStatesByNameAsync(token).ConfigureAwait(false);
-                if (statesByName.TryGetValue(stateName, out var stateUuid))
-                    sb.Append($"&state={stateUuid}");
+                issues = statesByName.TryGetValue(stateName, out var stateUuid)
+                    ? issues.Where(i => string.Equals(i.StateId, stateUuid, StringComparison.Ordinal))
+                    : Enumerable.Empty<PlaneIssue>();
             }
 
             if (!string.IsNullOrEmpty(query.ParentId))
-                sb.Append($"&parent={query.ParentId}");
+                issues = issues.Where(i => string.Equals(i.ParentId, query.ParentId, StringComparison.Ordinal));
 
             if (!string.IsNullOrEmpty(query.Type))
-                sb.Append($"&type={Uri.EscapeDataString(query.Type)}");
+                issues = issues.Where(i => string.Equals(i.Type, query.Type, StringComparison.Ordinal));
 
-            // Plane's list endpoint silently ignores unknown query params, including
-            // `parent=`. So we cannot trust server-side parent filtering: we fetch every
-            // page and filter by parent ourselves. Without this, a parent query returns
-            // the whole project and every ticket looks like it has children - which made
-            // `build chain` recurse until it tripped Plane's rate limiter. (TLB)
-            var issues = await FetchAllIssuesAsync(sb.ToString(), token).ConfigureAwait(false);
-
-            if (!string.IsNullOrEmpty(query.ParentId))
-                issues = issues.Where(i => string.Equals(i.ParentId, query.ParentId, StringComparison.Ordinal)).ToList();
-
-            var tickets = new List<Ticket>(issues.Count);
+            var tickets = new List<Ticket>();
             foreach (var issue in issues)
                 tickets.Add(await ToTicketAsync(issue, token).ConfigureAwait(false));
 
@@ -758,6 +808,8 @@ public sealed class PlaneTicketingClient : ITicketing
                 new TransitionRequest(stateId),
                 PlaneJsonContext.Default,
                 token).ConfigureAwait(false);
+
+            UpdateCachedIssue(issue.Id, i => i with { StateId = stateId });
         }, ct).ConfigureAwait(false);
     }
 
@@ -773,6 +825,8 @@ public sealed class PlaneTicketingClient : ITicketing
                 new UpdateDescriptionRequest(html),
                 PlaneJsonContext.Default,
                 token).ConfigureAwait(false);
+
+            UpdateCachedIssue(issue.Id, i => i with { DescriptionHtml = html });
         }, ct).ConfigureAwait(false);
     }
 

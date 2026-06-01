@@ -941,4 +941,35 @@ public class IssueCacheTests
             .ToList();
         Assert.Single(issueListGets);
     }
+
+    [Fact]
+    public async Task TransitionAsync_WriteThrough_LaterReadSeesNewState_WithoutRefetch()
+    {
+        // Regression for the stale-state bug behind StoppedAtImplement: the issue cache was
+        // frozen at first fetch, so after plan transitioned Backlog -> Ready, implement's
+        // GetAsync still saw Backlog and failed its state guard. Write-through must make the
+        // post-transition read reflect the new state without paginating the project again.
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));   // snapshot (Backlog)
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));   // states cache
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));   // labels cache
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.PatchOkJson()));     // PATCH transition
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        var before = await client.GetAsync("TLB-24", CancellationToken.None);
+        Assert.Equal(TicketState.Backlog, before.State);
+
+        await client.TransitionAsync("TLB-24", TicketState.InProgress, CancellationToken.None);
+
+        var after = await client.GetAsync("TLB-24", CancellationToken.None);
+        Assert.Equal(TicketState.InProgress, after.State);
+
+        // The whole sequence paginated the project exactly once.
+        var issueListGets = handler.Requests
+            .Where(r => r.Method == HttpMethod.Get
+                && r.RequestUri!.ToString().Contains("per_page=100"))
+            .ToList();
+        Assert.Single(issueListGets);
+    }
 }

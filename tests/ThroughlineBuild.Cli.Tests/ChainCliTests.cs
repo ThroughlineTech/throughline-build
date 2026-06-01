@@ -68,7 +68,11 @@ public class ChainCliTests
         var exe = LocateBuildExecutable();
         if (exe is null) return;
 
-        var (exitCode, _, stderr) = await RunProcess(exe, new[] { "chain", "TLB-1", "TLB-2" });
+        // Use sequence ids far beyond any real ticket so the multi-ticket pre-flight resolve
+        // (GetBatchAsync) fails fast with "Ticket not found" and never dispatches real chain
+        // work. (Earlier this used TLB-1/TLB-2, which only looked unresolved because the client
+        // scanned only the first page of issues; it now paginates the whole project.)
+        var (exitCode, _, stderr) = await RunProcess(exe, new[] { "chain", "TLB-999001", "TLB-999002" });
 
         Assert.Equal(2, exitCode);
         Assert.Contains("Ticket not found:", stderr);

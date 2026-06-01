@@ -60,42 +60,53 @@ public class QueryAsyncTests
     }
 
     [Fact]
-    public async Task QueryAsync_StateFilter_AppendsStateUuidInQueryString()
+    public async Task QueryAsync_StateFilter_ReturnsOnlyMatchingState()
     {
+        // Two issues in the project; only the Backlog one should survive a Backlog query.
+        // Filtering is now in memory against the one-shot snapshot - no &state= round-trip.
+        var twoIssues = $$"""
+        {
+          "results": [
+            { "id": "aaaaaaaa-0000-0000-0000-000000000001", "sequence_id": 24, "name": "backlog-one",     "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "label_ids": [], "parent": null, "type": null },
+            { "id": "aaaaaaaa-0000-0000-0000-000000000002", "sequence_id": 25, "name": "in-progress-one", "description_html": "<p>d</p>", "state": "bbbbbbbb-0000-0000-0000-000000000002", "label_ids": [], "parent": null, "type": null }
+          ]
+        }
+        """;
         var handler = new FakeMessageHandler();
-        // First: states cache (needed to resolve TicketState.Backlog -> UUID)
-        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
-        // Second: issue list (with state filter applied)
-        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
-        // Third + fourth: state/label caches for ToTicketAsync
-        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(twoIssues));                 // snapshot load
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));  // state resolve + ToTicket
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));  // ToTicket labels
 
         var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
         var tickets = await client.QueryAsync(new TicketQuery(State: TicketState.Backlog), CancellationToken.None);
 
-        // Find the GET request to the issues list (has state filter)
-        var issuesReq = handler.Requests.FirstOrDefault(r =>
-            r.Method == HttpMethod.Get && r.RequestUri!.ToString().Contains("&state="));
-
-        Assert.NotNull(issuesReq);
-        Assert.Contains(TestData.StateUuid, issuesReq!.RequestUri!.ToString());
+        var only = Assert.Single(tickets);
+        Assert.Equal("TLB-24", only.Id);
+        Assert.Equal(TicketState.Backlog, only.State);
     }
 
     [Fact]
-    public async Task QueryAsync_ParentFilter_AppendsParentInQueryString()
+    public async Task QueryAsync_LoadsProjectOnce_AcrossRepeatedQueries()
     {
+        // The snapshot is paginated once per client; a second parent-probe must not re-fetch.
+        // This is the core fix: per-phase parent-probes used to re-paginate the whole project.
         const string parentUuid = "pppppppp-0000-0000-0000-000000000042";
 
         var handler = new FakeMessageHandler();
-        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(MixedParentsListJson(parentUuid)));
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
 
         var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
-        var tickets = await client.QueryAsync(new TicketQuery(ParentId: parentUuid), CancellationToken.None);
+        var first = await client.QueryAsync(new TicketQuery(ParentId: parentUuid), CancellationToken.None);
+        var second = await client.QueryAsync(new TicketQuery(ParentId: parentUuid), CancellationToken.None);
 
-        var req = handler.Requests[0];
-        Assert.Contains($"&parent={parentUuid}", req.RequestUri!.ToString());
+        Assert.Single(first);
+        Assert.Single(second);
+        var issueListGets = handler.Requests
+            .Where(r => r.Method == HttpMethod.Get && r.RequestUri!.ToString().Contains("per_page=100"))
+            .ToList();
+        Assert.Single(issueListGets);
     }
 
     // Plane silently ignores the server-side `parent=` filter and returns the whole
@@ -161,18 +172,26 @@ public class QueryAsyncTests
     }
 
     [Fact]
-    public async Task QueryAsync_TypeFilter_AppendsTypeInQueryString()
+    public async Task QueryAsync_TypeFilter_ReturnsOnlyMatchingType()
     {
+        var typedIssues = $$"""
+        {
+          "results": [
+            { "id": "aaaaaaaa-0000-0000-0000-000000000001", "sequence_id": 24, "name": "task-one", "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "label_ids": [], "parent": null, "type": "Task" },
+            { "id": "aaaaaaaa-0000-0000-0000-000000000002", "sequence_id": 25, "name": "bug-one",  "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "label_ids": [], "parent": null, "type": "Bug" }
+          ]
+        }
+        """;
         var handler = new FakeMessageHandler();
-        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(typedIssues));
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
 
         var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
         var tickets = await client.QueryAsync(new TicketQuery(Type: "Task"), CancellationToken.None);
 
-        var req = handler.Requests[0];
-        Assert.Contains("&type=Task", req.RequestUri!.ToString());
+        var only = Assert.Single(tickets);
+        Assert.Equal("TLB-24", only.Id);
     }
 }
 
