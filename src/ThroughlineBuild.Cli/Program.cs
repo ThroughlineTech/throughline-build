@@ -157,6 +157,14 @@ static async Task<int> RunAsync(string[] args)
         return SetTargetCommand.Execute(rawCwd, stBranch, unset, SystemConsole.Instance);
     }
 
+    // 'build user-guide' writes the embedded operator guide; runs without config.
+    if (verb == "user-guide")
+    {
+        var force = filteredArgs.Contains("--force");
+        var printTemplate = filteredArgs.Contains("--print-template");
+        return UserGuideCommand.Execute(rawCwd, force, printTemplate, SystemConsole.Instance);
+    }
+
     var resolverGit = new ProcessGitClient(rawCwd);
     var resolvedCwd = await MainWorktreeResolver.ResolveAsync(resolverGit, rawCwd, CancellationToken.None);
 

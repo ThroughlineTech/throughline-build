@@ -55,6 +55,7 @@ public static class InitCommand
 
         console.WriteLine($"Created {target}");
         console.WriteLine("Fill in the REQUIRED fields before running other build commands.");
+        console.WriteLine("Run 'build user-guide' to write the operator setup guide to docs/.");
         return 0;
     }
 
