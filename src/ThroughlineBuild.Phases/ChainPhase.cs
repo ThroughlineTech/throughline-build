@@ -7,7 +7,7 @@ using ThroughlineBuild.Helpers;
 
 namespace ThroughlineBuild.Phases;
 
-public record ChainPhaseOptions(string TicketId, bool Debug, Action<ChainStep>? OnStep = null, bool NoAutoResolve = false);
+public record ChainPhaseOptions(string TicketId, bool Debug, Action<ChainStep>? OnStep = null, bool NoAutoResolve = false, bool ForceParallel = false);
 
 public class ChainPhase
 {
@@ -580,47 +580,78 @@ public class ChainPhase
                 FinalRationale: $"Tree is deeper than one level. Chain the intermediate ticket(s) directly: {string.Join(", ", deeperTickets)}.");
         }
 
-        // All eligible children are leaves: run their chains concurrently (bounded). The
-        // Plane rate gate (RequestThrottle) keeps the parallel API traffic under budget.
-        var semaphore = new SemaphoreSlim(MaxParentChainConcurrency, MaxParentChainConcurrency);
-        var tasks = eligible.Select(async child =>
+        // Build a level-based execution schedule from sibling blocked_by relations so that
+        // dependent siblings are serialized while independent siblings still run in parallel.
+        // ForceParallel collapses all siblings into one level, restoring prior behavior.
+        IReadOnlyList<IReadOnlyList<string>> levels;
+        if (options.ForceParallel)
         {
-            await semaphore.WaitAsync(ct).ConfigureAwait(false);
-            try
+            levels = new List<IReadOnlyList<string>>
             {
-                var startStep = new ChainStep(
-                    PhaseName: "chain",
-                    ReworkRoundNumber: -1,
-                    Status: Status.Ok,
-                    FailureReason: null,
-                    Verdict: null,
-                    Duration: TimeSpan.Zero,
-                    PhaseSessionId: _sessionIdGenerator());
-                options.OnStep?.Invoke(startStep);
+                eligible.Select(c => c.Id).ToList().AsReadOnly()
+            }.AsReadOnly();
+        }
+        else
+        {
+            var siblingGraph = await BuildSiblingGraphAsync(eligible, ct).ConfigureAwait(false);
+            levels = TopologicalSorter.ComputeLevels(siblingGraph);
+        }
 
-                var childResult = await RunAsync(options with { TicketId = child.Id }, ct).ConfigureAwait(false);
+        var semaphore = new SemaphoreSlim(MaxParentChainConcurrency, MaxParentChainConcurrency);
+        var allChildResults = new List<ChainResult>();
+        bool anyStoppedEarly = false;
 
-                var ok = IsChainSuccess(childResult.Outcome);
-                var doneStep = new ChainStep(
-                    PhaseName: "chain",
-                    ReworkRoundNumber: -1,
-                    Status: ok ? Status.Ok : Status.Failed,
-                    FailureReason: ok ? null : $"child {child.Id} stopped: {childResult.Outcome}",
-                    Verdict: null,
-                    Duration: childResult.TotalDuration,
-                    PhaseSessionId: _sessionIdGenerator());
-                options.OnStep?.Invoke(doneStep);
+        foreach (var level in levels)
+        {
+            if (anyStoppedEarly)
+                break;
 
-                return childResult;
-            }
-            finally
+            var levelTickets = level
+                .Select(id => eligible.First(c => string.Equals(c.Id, id, StringComparison.Ordinal)))
+                .ToList();
+
+            var levelTasks = levelTickets.Select(async child =>
             {
-                semaphore.Release();
-            }
-        }).ToList();
+                await semaphore.WaitAsync(ct).ConfigureAwait(false);
+                try
+                {
+                    var startStep = new ChainStep(
+                        PhaseName: "chain",
+                        ReworkRoundNumber: -1,
+                        Status: Status.Ok,
+                        FailureReason: null,
+                        Verdict: null,
+                        Duration: TimeSpan.Zero,
+                        PhaseSessionId: _sessionIdGenerator());
+                    options.OnStep?.Invoke(startStep);
 
-        var childResults = (await Task.WhenAll(tasks).ConfigureAwait(false)).ToList();
-        var anyStoppedEarly = childResults.Any(r => !IsChainSuccess(r.Outcome));
+                    var childResult = await RunAsync(options with { TicketId = child.Id }, ct).ConfigureAwait(false);
+
+                    var ok = IsChainSuccess(childResult.Outcome);
+                    var doneStep = new ChainStep(
+                        PhaseName: "chain",
+                        ReworkRoundNumber: -1,
+                        Status: ok ? Status.Ok : Status.Failed,
+                        FailureReason: ok ? null : $"child {child.Id} stopped: {childResult.Outcome}",
+                        Verdict: null,
+                        Duration: childResult.TotalDuration,
+                        PhaseSessionId: _sessionIdGenerator());
+                    options.OnStep?.Invoke(doneStep);
+
+                    return childResult;
+                }
+                finally
+                {
+                    semaphore.Release();
+                }
+            }).ToList();
+
+            var levelResults = (await Task.WhenAll(levelTasks).ConfigureAwait(false)).ToList();
+            allChildResults.AddRange(levelResults);
+            anyStoppedEarly = levelResults.Any(r => !IsChainSuccess(r.Outcome));
+        }
+
+        var childResults = allChildResults;
 
         // Attempt parent rollup (fail-soft)
         try { await _ticketing.RollupParentAsync(options.TicketId, ct).ConfigureAwait(false); }
@@ -639,6 +670,26 @@ public class ChainPhase
             TotalDuration: totalSw.Elapsed,
             FinalRationale: finalRationale,
             ChildResults: childResults.AsReadOnly());
+    }
+
+    private async Task<TicketGraph> BuildSiblingGraphAsync(IReadOnlyList<Ticket> eligible, CancellationToken ct)
+    {
+        var graph = new TicketGraph();
+        var eligibleIdSet = new HashSet<string>(eligible.Select(e => e.Id), StringComparer.OrdinalIgnoreCase);
+        foreach (var ticket in eligible)
+            graph.AddNode(ticket.Id);
+
+        foreach (var ticket in eligible)
+        {
+            var relations = await _ticketing.GetRelationsAsync(ticket.Id, ct).ConfigureAwait(false);
+            foreach (var rel in relations)
+            {
+                if (rel.Kind == "blocked_by" && eligibleIdSet.Contains(rel.TargetId))
+                    graph.AddEdge(rel.TargetId, ticket.Id); // TargetId is the blocker
+            }
+        }
+
+        return graph;
     }
 
     private static bool IsChainSuccess(ChainOutcome outcome) =>

@@ -485,8 +485,10 @@ public class ChainPhaseTests
         private readonly List<TicketComment> _seededComments = new();
         private readonly Dictionary<string, Ticket> _extraTickets = new(StringComparer.Ordinal);
         private readonly Dictionary<string, List<Ticket>> _childrenByParentUuid = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, List<Relation>> _relationsByTicketId = new(StringComparer.Ordinal);
         public List<(string id, TicketState state)> Transitions { get; } = new();
         public List<(string id, string html)> PostedComments { get; } = new();
+        public int GetRelationsCallCount { get; private set; }
 
         public ChainFakeTicketing(Ticket ticket) { _ticket = ticket; }
 
@@ -506,6 +508,10 @@ public class ChainPhaseTests
             foreach (var c in children)
                 _extraTickets[c.Id] = c;
         }
+
+        /// <summary>Seed relations returned for a given ticket ID.</summary>
+        public void SeedRelations(string ticketId, IReadOnlyList<Relation> rels) =>
+            _relationsByTicketId[ticketId] = rels.ToList();
 
         public BackendCapabilities Capabilities => new BackendCapabilities(true, true, true, false);
 
@@ -557,8 +563,13 @@ public class ChainPhaseTests
 
         public Task ApplyLabelsAsync(string id, IEnumerable<string> labels, CancellationToken ct) => Task.CompletedTask;
 
-        public Task<IReadOnlyList<Relation>> GetRelationsAsync(string id, CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<Relation>>(Array.Empty<Relation>());
+        public Task<IReadOnlyList<Relation>> GetRelationsAsync(string id, CancellationToken ct)
+        {
+            GetRelationsCallCount++;
+            if (_relationsByTicketId.TryGetValue(id, out var rels))
+                return Task.FromResult<IReadOnlyList<Relation>>(rels.AsReadOnly());
+            return Task.FromResult<IReadOnlyList<Relation>>(Array.Empty<Relation>());
+        }
 
         public Task<RollupResult> RollupParentAsync(string id, CancellationToken ct) =>
             Task.FromResult(new RollupResult(false, null, null));
@@ -1023,6 +1034,108 @@ public class ChainPhaseTests
         Assert.NotNull(result.ChildResults);
         Assert.Equal(2, result.ChildResults!.Count);
         Assert.Contains(result.ChildResults, r => r.Outcome != ChainOutcome.Completed);
+    }
+
+    // -------------------------------------------------------------------------
+    // Sibling dep-analysis tests (TLB-329)
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task RunAsync_ParentWithDependentChildren_DepRespected_SecondRunsAfterFirst()
+    {
+        // child-2 (TLB-3) is blocked_by child-1 (TLB-2).
+        // Level analysis must produce [[TLB-2], [TLB-3]]; TLB-2 must appear first in ChildResults.
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+        // TLB-3 is blocked_by TLB-2 -> TLB-2 must run first
+        ticketing.SeedRelations("TLB-3", new[] { new Relation("blocked_by", "TLB-2") });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        // 2 children * 1 review pass each
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        Assert.Equal(2, result.ChildResults!.Count);
+        // Both complete
+        Assert.All(result.ChildResults, r => Assert.Equal(ChainOutcome.Completed, r.Outcome));
+        // Level ordering: TLB-2 (level 0) appears before TLB-3 (level 1)
+        Assert.Equal("TLB-2", result.ChildResults[0].TicketId);
+        Assert.Equal("TLB-3", result.ChildResults[1].TicketId);
+        // Dep analysis ran (GetRelationsAsync called for each eligible child)
+        Assert.Equal(2, ticketing.GetRelationsCallCount);
+    }
+
+    [Fact]
+    public async Task RunAsync_ParentWithIndependentChildren_BothRunConcurrently_NoDepsRequired()
+    {
+        // Two siblings with no relations: both land in the same level and run concurrently.
+        // Regression guard: behavior identical to pre-TLB-329 fan-out when no deps exist.
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+        // No relations seeded -> both children independent
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        Assert.Equal(2, result.ChildResults!.Count);
+        Assert.All(result.ChildResults, r => Assert.Equal(ChainOutcome.Completed, r.Outcome));
+        // Dep analysis still ran even though no deps were found
+        Assert.Equal(2, ticketing.GetRelationsCallCount);
+    }
+
+    [Fact]
+    public async Task RunAsync_ParentWithDependentChildren_ForceParallelOverride_BothRunConcurrently()
+    {
+        // ForceParallel: true collapses all siblings into one level, skipping dep analysis.
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+        // TLB-3 would normally be blocked by TLB-2, but ForceParallel bypasses this
+        ticketing.SeedRelations("TLB-3", new[] { new Relation("blocked_by", "TLB-2") });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
+        // ForceParallel: true -> skip relation fetch, all in one level
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, ForceParallel: true), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        Assert.Equal(2, result.ChildResults!.Count);
+        Assert.All(result.ChildResults, r => Assert.Equal(ChainOutcome.Completed, r.Outcome));
+        // Dep analysis was NOT run (GetRelationsAsync never called when ForceParallel=true)
+        Assert.Equal(0, ticketing.GetRelationsCallCount);
     }
 
     private sealed class FakeGitClientChain : IGitClient

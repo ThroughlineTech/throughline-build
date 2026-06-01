@@ -38,6 +38,7 @@ static async Task<int> RunAsync(string[] args)
     bool noAutoResolve = false;
     bool noAutoMerge = false;
     bool continuePastFailure = false;
+    bool forceParallel = false;
     var filteredArgs = new List<string>(args.Length);
     foreach (var a in args)
     {
@@ -55,6 +56,8 @@ static async Task<int> RunAsync(string[] args)
             noAutoMerge = true;
         else if (a == "--continue-past-failure")
             continuePastFailure = true;
+        else if (a == "--max-parallel")
+            forceParallel = true;
         else
             filteredArgs.Add(a);
     }
@@ -822,7 +825,7 @@ static async Task<int> RunAsync(string[] args)
             verb, ticketId, args, cwd, ticketing, workerFactory, config2,
             ResolveLogDir(config2.Events.LogDirectory), sessionContext,
             debugMode, quietMode, summaryJson, errorLocation, noAutoMerge,
-            noAutoResolve, continuePastFailure, EffectiveAgentFor);
+            noAutoResolve, continuePastFailure, forceParallel, EffectiveAgentFor);
         dispatchExitCode = iterCode;
         if (iterAction == 2) return iterCode;
         if (iterAction == 1) break;
@@ -1027,6 +1030,7 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
     bool noAutoMerge,
     bool noAutoResolve,
     bool continuePastFailure,
+    bool forceParallel,
     Func<string, string> effectiveAgentFor)
 {
     var sessionId = Guid.NewGuid().ToString("N");
@@ -1342,7 +1346,7 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
         var (chainCode, chainDirect) = await RunChainVerbAsync(
             ticketId, args, cwd, ticketing, eventSink, buildOptions, config2,
             workerFactory, debugMode, debugCaptureDir, enableDigest,
-            noAutoMerge, noAutoResolve, continuePastFailure, effectiveAgentFor);
+            noAutoMerge, noAutoResolve, continuePastFailure, forceParallel, effectiveAgentFor);
         // chainDirect=true means return from RunAsync; false means set dispatchExitCode + break
         return (chainCode, chainDirect ? 2 : 1);
     }
@@ -1367,6 +1371,7 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
     bool noAutoMerge,
     bool noAutoResolve,
     bool continuePastFailure,
+    bool forceParallel,
     Func<string, string> effectiveAgentFor)
 {
     // Collect additional positional ticket IDs beyond args[1] (args[0] is the verb).
@@ -1497,7 +1502,8 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
         var baseChainOptions = new ThroughlineBuild.Phases.ChainPhaseOptions(
             TicketId: ticketId,
             Debug: debugMode,
-            NoAutoResolve: noAutoResolve);
+            NoAutoResolve: noAutoResolve,
+            ForceParallel: forceParallel);
 
         ThroughlineBuild.Contracts.Models.ParallelDispatchResult dispatchResult;
         try
