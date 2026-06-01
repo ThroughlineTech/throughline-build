@@ -1,427 +1,535 @@
 # Operation: investigation-provenance
 
-Pay for investigation once. The op-doc is the human's investigation handed to the first agent; the chain's own commits are each agent's investigation handed to the next. This operation makes the chain stop re-paying that cost: skip the redundant plan worker when the ticket already carries an op-doc plan (Plan A), remove the parallelism that forces every worker to cold-start and re-grep in isolation and reuse one worktree per chain (Plan B), and point each agent at the commits already sitting in its own history instead of having a worker re-author a summary (Plan C). It also folds in a git-hygiene fix surfaced during planning: workers doing freelance `git stash` surgery against the repo-global stash stack have wedged real chains, so Plan D forbids it and adds a fail-fast entry gate. Finally, a chain only runs in the right order if the op-doc's declared sequence reaches Plane as `blocked_by` relations and the chain reads them back; a run where a dependent ticket executed ahead of its dependency showed that link is not guaranteed, so Plan E makes the op-doc -> scaffold -> chain sequence contract complete and verifiable at both ends.
+Make the sequential ticket chain cheap and correct. Skip the redundant plan worker when a ticket already carries its op-doc plan (A); drop in-chain parallelism and reuse one worktree per chain (B); point each ticket at the commits already in its checkout instead of a worker-authored summary (C); forbid the worker `git stash` surgery that has wedged real chains and add a fail-fast entry gate (D); and make the op-doc's declared sequence reach Plane as `blocked_by` relations the chain reads back (E). Together they stop the chain paying for the same investigation, or the same merge race, twice.
 
 ## Why this exists
 
-A scaffolded brief-ticket lands in `Backlog`, so `build chain` routes it `Backlog -> Plan` and spawns a plan worker that re-investigates and writes a fresh `PLAN_BODY` - even though the ticket description already is the plan written deliberatively in the op-doc. That is wasted tokens and a fidelity leak: the worker can re-plan differently than the op-doc intended.
+A scaffolded brief-ticket lands in Backlog, so `build chain` routes it Backlog -> Plan and spawns a plan worker that re-investigates and rewrites a plan the op-doc already contains. That is wasted tokens and a fidelity leak: the worker can re-plan differently than the deliberately authored op-doc intended.
 
-Parallel chain dispatch buys wall-clock at the cost of N duplicated investigations on sibling tickets that almost always share a code region, plus the entire merge-contention apparatus. For a solo operator paying per token, wall-clock is not the binding constraint. Once dispatch is sequential, there is no reason to add and tear down a worktree per ticket - one worktree per chain, with a branch per ticket inside it, cuts the churn while keeping independent shipping, clean per-ticket review diffs, and failure isolation.
+Parallel dispatch buys wall-clock at the cost of duplicated investigations on sibling tickets that share a code region, plus the merge-contention machinery (`MainWorktreeLock`, the divergence probe) that exists only because concurrent chains race on the shared worktree. For a solo operator paying per token, wall-clock is not the binding constraint. Once dispatch is sequential and each ticket ships before the next implements, the prior commits already sit in the next agent's checkout, so the handoff is a deterministic pointer to those commits, not a worker-authored prose digest.
 
-With the chain sequential and shipping each ticket into the target before the next implements, the prior tickets' commits are already present in the next agent's checkout. So the handoff is not an authored prose digest (eager, lossy, token-costly) - it is a deterministic pointer: the cumulative touched-files and the commit range, derived from data the chain already holds. The next agent dereferences only what it needs.
+Chain 319 wedged: a worker had stashed WIP during ticket 349, the repo-global stash stack carried it across worktree boundaries, a later apply conflicted onto main as `both modified: ShipPhase.cs`, and nothing resolved or aborted it, so every subsequent ship preflight failed. Worktree isolation did not help because the stash stack ignores it.
 
-Separately: a worker stashed WIP during an unrelated ticket, the repo-global stash stack carried it across worktree boundaries, a later apply conflicted onto the main checkout, and nothing resolved or aborted it - wedging every subsequent ship preflight. Worktree isolation did not help because the stash stack ignores it. The fix is to stop workers using stash at all and to detect a dirty or conflicted tree at phase entry instead of 26 minutes later at ship.
-
-Also separately: in one run two sibling tickets - a loader and the verb that consumes it - ran in the wrong order, the dependent ahead of its dependency, and each independently created the same file. That is a sequence break, not a concurrency break: width-1 dispatch preserves the existing topological order but does not invent it, and the order is only as good as the `blocked_by` edges among the siblings. Those edges have a chain of custody: the op-doc declares the dependency in its `Deps` / `Depends on` columns, scaffold must translate every declared dependency into a Plane `blocked_by` relation, and the chain must read those relations back when it orders. The op-doc is the right source because it has the context and is defining the work. Each link must hold and be visible, or a missing edge surfaces only as duplicated, conflicting work several tickets downstream.
+In the same run two sibling tickets, a loader and the verb that consumes it, executed in the wrong order, the dependent ahead of its dependency, and each independently created the same file. That is a sequence break, not a concurrency break: width-1 dispatch preserves the existing order but does not invent it, and the order is only as good as the `blocked_by` edges, which depend on the op-doc declaring them, scaffold encoding them into Plane, and the chain reading them back. Each link must hold and be visible.
 
 ## Dispatch order
 
 | Plan | Name | Depends on | Effort |
-|---|---|---|---|
-| A | investigation-bypass | - | 1 day |
-| B | sequential-chain | - | 2 days |
-| C | handoff-addendum | B | 1 day |
-| D | worker-git-hygiene | - | 1 day |
-| E | sequence-contract | - | 1 day |
+| ---- | ---- | ---------- | ------ |
+| A | investigation-bypass | - | S |
+| B | sequential-chain | - | M |
+| C | handoff-addendum | B | M |
+| D | worker-git-hygiene | - | M |
+| E | sequence-contract | - | S |
+
+A, B, D, and E are independent; C depends on B because the commit pointer only works once dispatch is sequential and each ticket ships before the next implements.
 
 ## Plan A: investigation-bypass
 
 ### Goal
 
-A ticket whose description already carries an op-doc plan can enter the chain at Implement without a plan-worker investigation, by deterministically promoting it to a planned state. Default behavior (worker investigation) is preserved; promotion is opt-in.
+After this plan, a Backlog ticket whose description already carries its op-doc plan can be promoted to Ready deterministically and enter the chain at Implement with no plan-worker investigation. The worker-investigation path remains the default; promotion is opt-in.
 
 ### Briefs
 
 | # | Slug | Intent | Deps | Files |
-|---|---|---|---|---|
-| 01 | plan-promote-path | Deterministic promote branch in PlanPhase: no worker, stamp marker, apply labels, transition to Ready | - | PlanPhase.cs, Config.cs |
-| 02 | wire-promote-flag | CLI flag + config default selecting promote over investigate; chain honors it on a Backlog entry | 01 | Program.cs, CliUsage.cs, ChainPhase.cs |
-| 03 | promote-tests | Cover the promote path end to end | 02 | ThroughlineBuild.Phases.Tests |
+|---|------|--------|------|-------|
+| 01 | plan-promote-path | Deterministic promote branch in PlanPhase: no worker, stamp marker, label, go to Ready | - | src/ThroughlineBuild.Phases/PlanPhase.cs, src/ThroughlineBuild.Cli/Config.cs |
+| 02 | wire-promote-flag | CLI flag and config default selecting promote; chain honors it on a Backlog entry | 01 | src/ThroughlineBuild.Cli/Program.cs, src/ThroughlineBuild.Cli/CliUsage.cs, src/ThroughlineBuild.Phases/ChainPhase.cs |
+| 03 | promote-tests | Cover promotion and the preserved default | 02 | tests/ThroughlineBuild.Phases.Tests/ |
 
 ### Briefs - detail
 
 #### Brief 01: plan-promote-path
 
-**Goal.** Add a deterministic promotion branch to `PlanPhase` that reuses the existing fetch / parent-guard / `Backlog` state-guard and the existing label-apply, marker-post, and transition steps, but skips the worker run and `PLAN_BODY` resolution.
+Goal: PlanPhase gains a deterministic promotion path that turns a Backlog ticket already carrying its plan into a Ready ticket without spawning a worker, so an op-doc-authored ticket is not re-planned by an agent that might diverge from the authored intent.
 
-**Inputs.** A `Backlog` ticket whose description is already the plan; the resolved current main SHA via `BaseRefResolver`.
+Inputs: src/ThroughlineBuild.Phases/PlanPhase.cs read end-to-end (the existing fetch, parent-guard, Backlog state-guard, label-apply, marker-post, and transition steps); the main-SHA resolution via BaseRefResolver; the [planned_at] marker format.
 
-**Outputs.** The ticket transitioned `Backlog -> Planning -> Ready`, with a `[planned_at: <currentMainSha>]` marker and any `risk:` / `size:` labels applied. No `WorkerSpawn`, no `LlmCall`, no description mutation.
+Outputs:
+- A promotion branch in PlanPhase that skips the worker run and PLAN_BODY resolution while reusing the existing guards and the label/marker/transition steps.
+- A [planned_at: <currentMainSha>] marker posted at promotion time.
+- Transition Backlog -> Planning -> Ready with no WorkerSpawn and no LlmCall emitted.
+- The ticket description left unmodified.
 
-**Acceptance criteria.**
-- [ ] A promoted ticket reaches `Ready` without spawning a worker.
-- [ ] The ticket description is unchanged by promotion.
-- [ ] A `[planned_at: <sha>]` marker is posted with the current main SHA, so `ImplementPhase`'s drift check has a baseline.
-- [ ] The promote branch is selected by an explicit option, not by default; absent it, `PlanPhase` runs the worker as before.
+Acceptance:
+- [ ] A promoted ticket reaches Ready with no worker spawned
+- [ ] The ticket description is byte-identical before and after promotion
+- [ ] A [planned_at: <sha>] marker equal to the resolved main SHA is posted
+- [ ] Promotion runs only when the explicit option is set; otherwise the worker plan runs
 
-**Notes / gotchas.** Stamping `planned_at` at promote time keeps the drift gate live rather than silently disabling it. Same WHAT/HOW split as the two-system division: the human already did the investigation, so the phase only stamps provenance.
+Notes: Stamping planned_at at promotion time exists so ImplementPhase's drift check keeps a baseline rather than silently losing one. The promotion is the WHAT/HOW split applied to planning: the op-doc already encodes the investigation, so re-running an investigating worker only adds cost and a chance of divergence from authored intent.
 
-**Out of scope.** Auto-detecting whether a description is already a plan - selection is explicit.
+OOS:
+- The CLI flag and config key (Brief 02 owns)
+- Auto-detecting whether a description is already a plan
+- Any change to ImplementPhase
 
 #### Brief 02: wire-promote-flag
 
-**Goal.** Make the promote path reachable from the CLI and from `chain`.
+Goal: The promotion path is reachable from the CLI and honored by the chain, so a single invocation takes an op-doc Backlog ticket from promotion straight into the implement-review loop.
 
-**Inputs.** Brief 01's promote branch; the `[plan]` config section and verb dispatch.
+Inputs: Brief 01's promotion branch; the verb dispatch in src/ThroughlineBuild.Cli/Program.cs; the [plan] config section in Config.cs; ChainPhase's Backlog routing.
 
-**Outputs.** A `--from-brief` flag on `plan` and `chain`, plus a `[plan].mode` config key (`investigate` default, `promote` opt-in). When set, `ChainPhase` routes a `Backlog` entry through promotion instead of the worker plan, then continues into the implement-review loop unchanged.
+Outputs:
+- A --from-brief flag on the plan and chain verbs.
+- A [plan].mode config key with values investigate (default) and promote.
+- ChainPhase routing a Backlog entry through promotion when selected, then continuing into the implement-review loop unchanged.
+- Usage text documenting the flag and config key.
 
-**Acceptance criteria.**
-- [ ] `build chain <id> --from-brief` on a `Backlog` op-doc ticket reaches Implement with no plan-worker spawn.
-- [ ] Without the flag and with default config, `chain` behavior is unchanged.
-- [ ] The flag and config key appear in usage output.
+Acceptance:
+- [ ] build chain <id> --from-brief on a Backlog op-doc ticket reaches Implement with no plan-worker spawn
+- [ ] Without the flag and with default config, chain behavior is unchanged
+- [ ] The flag and config key appear in usage output
 
-**Notes / gotchas.** Default stays `investigate` so non-op-doc Backlog tickets are unaffected. Flag wins over config.
+Notes: The default stays investigate so non-op-doc Backlog tickets are unaffected. The flag overrides the config key when both are present, because an explicit per-run choice should win over a repo default.
 
-**Out of scope.** Changing where `scaffold` lands tickets.
+OOS:
+- The promotion behavior itself (Brief 01 owns)
+- Changing where scaffold lands tickets
+- Tests (Brief 03 owns)
 
 #### Brief 03: promote-tests
 
-**Goal.** Lock the promote contract.
+Goal: The promotion contract and the preserved default are locked by tests so a later change cannot silently re-enable worker planning on a promoted ticket or break the no-op default.
 
-**Inputs.** Briefs 01-02.
+Inputs: Briefs 01-02; the existing phase-test fakes for ticketing and events.
 
-**Outputs.** Tests covering promotion and the preserved default.
+Outputs:
+- A test asserting a promoted ticket emits no WorkerSpawn or LlmCall and ends in Ready.
+- A test asserting the description is unchanged across promotion.
+- A test asserting the [planned_at] marker equals the resolved main SHA.
+- A test asserting default (no flag) still runs the worker plan.
 
-**Acceptance criteria.**
-- [ ] A test asserts a promoted ticket emits no `WorkerSpawn`/`LlmCall` and ends in `Ready`.
-- [ ] A test asserts the description is byte-identical before and after promotion.
-- [ ] A test asserts the `[planned_at]` marker equals the resolved main SHA.
-- [ ] A test asserts default (no flag) still runs the worker plan.
+Acceptance:
+- [ ] Promotion emits no WorkerSpawn/LlmCall and ends in Ready
+- [ ] Description is byte-identical across promotion
+- [ ] [planned_at] marker equals the resolved main SHA
+- [ ] Default path still runs the worker plan
 
-**Notes / gotchas.** AOT-sensitive paths follow the existing reflection-disabled test discipline.
+Notes: The tests follow the existing reflection-disabled discipline used by the parser tests so they exercise AOT-relevant paths under the same switch the rest of the suite uses.
 
-**Out of scope.** Implement-phase tests beyond confirming the drift baseline is found.
+OOS:
+- Implement-phase coverage beyond confirming the drift baseline is found
+- Integration testing against a live Plane
+- The CLI flag wiring (Brief 02 owns)
 
 ## Plan B: sequential-chain
 
 ### Goal
 
-Remove concurrency from chain execution while keeping dependency-ordered sequencing, and reuse a single worktree per chain. The dependency graph becomes a pure sequencer; the per-ticket worktree churn goes away. Per-ticket branches, per-ticket review diffs, and per-ticket shipping are preserved.
+After this plan, a chain runs its tickets one at a time in dependency order with at most one worker alive, inside a single worktree created once at chain start and removed once at chain end. Per-ticket branches, per-ticket review diffs, and per-ticket shipping are preserved, and the parallelism surface is gone.
 
 ### Briefs
 
 | # | Slug | Intent | Deps | Files |
-|---|---|---|---|---|
-| 01 | width-1-dispatch | Force chain concurrency to 1 while preserving blocked_by topological order | - | ParallelDispatcher.cs, ChainPhase.cs, Config.cs |
-| 02 | retire-parallel-surface | Remove the --max-parallel flag, the parent-concurrency constant, and the now-unreachable parallelism types | 01 | ChainPhase.cs, Program.cs, CliUsage.cs, TicketGraph.cs, SequentialChainDispatcher.cs, MainWorktreeLock.cs |
-| 03 | shared-chain-worktree | One worktree per chain, branch per ticket inside it; create once, remove once | 01 | ImplementPhase.cs, ShipPhase.cs, ChainPhase.cs, PhaseWorktreeLayout.cs, WorktreeDecrufter.cs |
-| 04 | sequential-tests | Sequential dependency-ordered execution and single-worktree reuse | 02, 03 | ThroughlineBuild.Phases.Tests |
+|---|------|--------|------|-------|
+| 04 | width-1-dispatch | Force chain concurrency to 1 while preserving blocked_by ordering | - | src/ThroughlineBuild.Phases/ParallelDispatcher.cs, src/ThroughlineBuild.Phases/ChainPhase.cs, src/ThroughlineBuild.Cli/Config.cs |
+| 05 | retire-parallel-surface | Remove --max-parallel, the parent-concurrency constant, and now-dead parallelism types | 04 | src/ThroughlineBuild.Phases/ChainPhase.cs, src/ThroughlineBuild.Cli/Program.cs, src/ThroughlineBuild.Cli/CliUsage.cs, src/ThroughlineBuild.Phases/TicketGraph.cs |
+| 06 | shared-chain-worktree | One worktree per chain, branch per ticket inside it, created and removed once | 05 | src/ThroughlineBuild.Phases/ImplementPhase.cs, src/ThroughlineBuild.Phases/ShipPhase.cs, src/ThroughlineBuild.Phases/ChainPhase.cs |
+| 07 | sequential-tests | Sequential dependency-ordered execution and single-worktree reuse | 06 | tests/ThroughlineBuild.Phases.Tests/ |
 
 ### Briefs - detail
 
-#### Brief 01: width-1-dispatch
+#### Brief 04: width-1-dispatch
 
-**Goal.** Run chain tickets strictly one at a time, keeping `TopologicalSorter.ComputeLevels` ordering intact.
+Goal: The multi-ticket dispatch and parent-chain paths run tickets strictly one at a time while keeping the blocked_by topological order, so dependent work still follows its dependency but no two workers run at once.
 
-**Inputs.** The multi-ticket `ParallelDispatcher` path and the parent-chain `RunParentChainAsync` path; `workers.max_concurrency`; `MaxParentChainConcurrency`.
+Inputs: ParallelDispatcher's level-synchronous loop; ChainPhase.RunParentChainAsync; the workers.max_concurrency config and the MaxParentChainConcurrency constant; TopologicalSorter.ComputeLevels.
 
-**Outputs.** Both paths execute with effective concurrency 1. `blocked_by` ordering still drives sequence; no two tickets in a level run at once. Ancestor-skip and the success/exit-code mapping are unchanged.
+Outputs:
+- Both dispatch paths executing with effective concurrency 1.
+- The topological order preserved (levels are still computed and walked, just one ticket at a time).
+- Ancestor-skip and the success/exit-code mapping unchanged.
 
-**Acceptance criteria.**
-- [ ] At no point do two worker subprocesses run concurrently within a chain.
-- [ ] A ticket blocked by another runs after its blocker; independent tickets run in input order.
-- [ ] `--continue-past-failure` and ancestor-skip behavior are preserved.
+Acceptance:
+- [ ] No two worker subprocesses run concurrently within a chain
+- [ ] A blocked ticket runs after its blocker; independent tickets run in input order
+- [ ] --continue-past-failure and ancestor-skip behavior are preserved
 
-**Notes / gotchas.** Pin width to 1; keep the topological sort - the ordering is the part worth keeping.
+Notes: Width is pinned to 1 rather than deleting the topological sort because the ordering is the load-bearing part and the concurrency was the disposable part. Running width-1 also removes the cross-worker worktree races that the merge-contention machinery existed to handle.
 
-**Out of scope.** Removing types (Brief 02) and worktree reuse (Brief 03).
+OOS:
+- Removing the now-dead types (Brief 05 owns)
+- Worktree reuse (Brief 06 owns)
+- Tests (Brief 07 owns)
 
-#### Brief 02: retire-parallel-surface
+#### Brief 05: retire-parallel-surface
 
-**Goal.** Delete the parallelism surface area now that width is 1.
+Goal: The parallelism surface area is removed now that width is 1, collapsing the sharpest orchestration seam in the tree (two TicketGraph types and a shadowed sequential dispatcher).
 
-**Inputs.** Brief 01.
+Inputs: Brief 04; the --max-parallel flag and ChainPhaseOptions.ForceParallel; MaxParentChainConcurrency; the two TicketGraph types; the shadowed SequentialChainDispatcher; MainWorktreeLock.
 
-**Outputs.** `--max-parallel` / `ForceParallel` removed; `MaxParentChainConcurrency` removed; the unreachable second `TicketGraph` type and the shadowed `SequentialChainDispatcher` removed if no longer referenced. `MainWorktreeLock` removed if provably unreachable, else kept as a documented cheap guard.
+Outputs:
+- --max-parallel and ForceParallel removed.
+- MaxParentChainConcurrency removed.
+- The unreachable second TicketGraph type and the shadowed SequentialChainDispatcher removed where no longer referenced.
+- MainWorktreeLock removed if provably unreachable, else retained with a comment explaining the single remaining guard role.
 
-**Acceptance criteria.**
-- [ ] The build has a single `TicketGraph` type.
-- [ ] `--max-parallel` no longer appears in usage or argument parsing.
-- [ ] The solution builds and existing tests pass after the removals.
+Acceptance:
+- [ ] The build has a single TicketGraph type
+- [ ] --max-parallel no longer appears in usage or argument parsing
+- [ ] The solution builds and existing tests pass after the removals
+- [ ] AOT publish succeeds
 
-**Notes / gotchas.** This is the sharpest seam the state-of-system set flags. Remove only what becomes unreachable; if a type still has a live caller, leave it and note why.
+Notes: Only code that becomes unreachable after width-1 is removed; anything with a live caller is left in place, because a removal that breaks an active path would trade a cleanup for a regression. The ShipPhase divergence and rebase logic is retained, since sequential chains still rebase onto the target.
 
-**Out of scope.** The `ShipPhase` divergence/rebase logic stays - sequential chains still rebase onto the target.
+OOS:
+- Width-1 behavior (Brief 04 owns)
+- Worktree reuse (Brief 06 owns)
+- The divergence and rebase logic in ShipPhase
 
-#### Brief 03: shared-chain-worktree
+#### Brief 06: shared-chain-worktree
 
-**Goal.** Use one worktree for the whole chain run, reused across tickets, instead of one per ticket.
+Goal: A chain uses one worktree for its whole run, reused across tickets, instead of adding and tearing one down per ticket, while each ticket still works on its own branch and ships independently.
 
-**Inputs.** Brief 01 (sequential is the precondition); existing per-ticket `git worktree add` in `ImplementPhase`, `WorktreeDecrufter`, `PhaseWorktreeLayout`.
+Inputs: Brief 05; the per-ticket git worktree add in ImplementPhase; WorktreeDecrufter; PhaseWorktreeLayout; ShipPhase's worktree-locate and merge steps.
 
-**Outputs.** The chain creates one worktree at start and removes it once at end. Each ticket checks out its own `ticket/<slug>` branch off the current target head inside that worktree, implements, and commits; review diffs `target..ticket/<slug>`; ship rebases and FF-merges per ticket into the target as today. The reused worktree is verified clean before each ticket starts. Single-ticket `build implement` (no chain) still creates its own worktree.
+Outputs:
+- The chain creating one worktree at start and removing it once at end.
+- Each ticket checking out its own ticket/<slug> branch off the current target head inside that worktree, implementing and committing there.
+- Per-ticket review diff (target..ticket/<slug>) and per-ticket ship (rebase plus ff-merge into target) unchanged.
+- The reused worktree verified clean before each ticket starts, deferring to Plan D's entry gate when present.
+- Single-ticket build implement (no chain) still creating its own worktree.
 
-**Acceptance criteria.**
-- [ ] A chain of N tickets creates one worktree and removes it once, not N add/remove cycles.
-- [ ] Each ticket works on its own branch; per-ticket review diff and per-ticket ship are unchanged.
-- [ ] The reused worktree is asserted clean before each ticket; a dirty or conflicted reused worktree stops with a clear reason rather than proceeding.
-- [ ] A failed ticket leaves its branch isolated; already-shipped siblings are unaffected.
+Acceptance:
+- [ ] A chain of N tickets creates one worktree and removes it once, not N add/remove cycles
+- [ ] Each ticket works on its own branch; per-ticket review diff and ship are unchanged
+- [ ] A failed ticket leaves its branch isolated; already-shipped siblings are unaffected
+- [ ] AOT publish succeeds
 
-**Notes / gotchas.** No single-shared-branch parent mode - children keep independent branches and independent ship, for failure isolation. The clean-before-each-ticket assert overlaps Plan D's entry gate; if Plan D is present, defer to it rather than building a second gate.
+Notes: There is deliberately no single-shared-branch parent mode; children keep independent branches and independent ship so a failed child's commits stay isolated rather than intermingled on a shared branch. The clean-before-each-ticket check overlaps Plan D's entry gate, so when Plan D is present the worktree reuse defers to it rather than building a second gate.
 
-**Out of scope.** A single shared branch for a parent; removing worktrees entirely.
+OOS:
+- A single shared branch for a parent ticket
+- Removing worktrees entirely
+- Tests (Brief 07 owns)
 
-#### Brief 04: sequential-tests
+#### Brief 07: sequential-tests
 
-**Goal.** Prove sequential dependency-ordered execution and single-worktree reuse.
+Goal: Sequential dependency-ordered execution and single-worktree reuse are pinned by tests so a future change cannot reintroduce concurrency or per-ticket worktree churn unnoticed.
 
-**Inputs.** Briefs 01-03.
+Inputs: Briefs 04-06; the dispatcher and git test fakes.
 
-**Outputs.** Tests asserting one-at-a-time execution, preserved ordering/skip/exit-code semantics, and one-worktree-per-chain.
+Outputs:
+- A test asserting a multi-ticket chain dispatches sequentially in dependency order.
+- A test asserting ancestor-skip still fires on an upstream failure and the single-ticket exit-code mapping is unchanged.
+- A test asserting a multi-ticket chain creates and removes exactly one worktree.
 
-**Acceptance criteria.**
-- [ ] A test asserts a multi-ticket chain dispatches sequentially in dependency order.
-- [ ] A test asserts ancestor-skip still fires on an upstream failure and the single-ticket exit-code mapping is unchanged.
-- [ ] A test asserts a multi-ticket chain creates and removes exactly one worktree.
+Acceptance:
+- [ ] A multi-ticket chain dispatches sequentially in dependency order
+- [ ] Ancestor-skip fires on upstream failure; single-ticket exit codes unchanged
+- [ ] A multi-ticket chain creates and removes exactly one worktree
 
-**Notes / gotchas.** Use the existing dispatcher and git test fakes; no real worker subprocess needed.
+Notes: The git fakes simulate worktree add and remove so the single-worktree assertion does not require a real repository; this keeps the test hermetic and fast, matching the existing phase-test approach.
 
-**Out of scope.** Performance/timing assertions.
+OOS:
+- Performance or timing assertions
+- Live Plane integration
+- Real git subprocess execution
 
 ## Plan C: handoff-addendum
 
 ### Goal
 
-In a sequential chain, point each ticket's implement brief at the commits the chain has already produced - the cumulative touched-files and the commit range - so the next agent re-greps less. Fully deterministic: no worker authors anything. Compile-time disable-able; an empty range is a no-op.
+After this plan, the second and later tickets in a chain receive a deterministic pointer to the commits the chain has already produced (their cumulative touched-files and the commit range), folded into the implement brief, so an agent re-greps less and does not recreate a sibling's file. Nothing is authored by a worker, and the whole feature can be compiled out.
 
 ### Briefs
 
 | # | Slug | Intent | Deps | Files |
-|---|---|---|---|---|
-| 01 | derive-chain-commits | Compute the chain's commit range and cumulative diff --stat from data the chain already holds | - | ChainPhase.cs, ChainCommitRange.cs, IGitClient.cs |
-| 02 | inject-pointer | Fold the touched-files into the next implement brief's RelevantFiles and a pointer line into Context | 01 | ImplementPhaseOptions.cs, ImplementPhase.cs, ImplementBriefBuilder.cs |
-| 03 | handoff-compile-flag | Compile-time constant gating injection; disabled => baseline-identical brief | 02 | ChainPhase.cs, ImplementPhase.cs |
-| 04 | handoff-tests | Pointer threading, empty-range no-op, compile-disabled baseline | 03 | ThroughlineBuild.Phases.Tests |
+|---|------|--------|------|-------|
+| 08 | derive-chain-commits | Compute the chain's commit range and cumulative diff --stat from data the chain already holds | B | src/ThroughlineBuild.Phases/ChainPhase.cs, src/ThroughlineBuild.Helpers/ChainCommitRange.cs, src/ThroughlineBuild.Contracts/IGitClient.cs |
+| 09 | inject-pointer | Fold touched-files into RelevantFiles and a pointer line into Context for the next implement brief | 08 | src/ThroughlineBuild.Phases/ImplementPhase.cs, src/ThroughlineBuild.Briefs/ImplementBriefBuilder.cs |
+| 10 | handoff-compile-flag | Compile-time constant gating injection; disabled yields a baseline-identical brief | 09 | src/ThroughlineBuild.Phases/ChainPhase.cs, src/ThroughlineBuild.Phases/ImplementPhase.cs |
+| 11 | handoff-tests | Pointer threading, empty-range no-op, compile-disabled baseline | 10 | tests/ThroughlineBuild.Phases.Tests/ |
 
 ### Briefs - detail
 
-#### Brief 01: derive-chain-commits
+#### Brief 08: derive-chain-commits
 
-**Goal.** Deterministically compute what the chain has done so far, without a worker.
+Goal: A helper deterministically computes what the chain has done so far (the commit range from chain start to the current target head, plus the cumulative touched-files) without any worker or LLM call, giving the pointer its content.
 
-**Inputs.** The target-branch head SHA captured at chain start; the current target head; the per-ticket `[implemented_at]` / `[shipped_at]` markers the chain already parses; `IGitClient` (it already exposes `LogShas`).
+Inputs: The target-head SHA captured at ChainStart; the current target head; the per-ticket [implemented_at] and [shipped_at] markers the chain already parses; IGitClient (it already exposes LogShas).
 
-**Outputs.** A helper that returns the commit range `chainStart..currentHead`, the count of commits in it, and the cumulative `git diff --stat` touched-files for that range. A stat method is added to `IGitClient` if one is not present.
+Outputs:
+- A ChainCommitRange helper returning the commit range, the commit count, and the cumulative git diff --stat touched-files for that range.
+- A diff --stat method added to IGitClient if one is not already present.
+- The chain capturing the target head SHA once at ChainStart.
 
-**Acceptance criteria.**
-- [ ] Given a chain that has shipped M tickets, the helper returns the range bounding exactly those M tickets' commits and their touched-files.
-- [ ] At the first ticket of a chain (nothing shipped yet) the range is empty and the touched-files list is empty.
-- [ ] The computation makes no LLM call and spawns no worker.
+Acceptance:
+- [ ] For a chain that has shipped M tickets, the helper returns the range bounding exactly those commits and their touched-files
+- [ ] At the first ticket of a chain, the range and touched-files are empty
+- [ ] The computation makes no LLM call and spawns no worker
+- [ ] AOT publish succeeds
 
-**Notes / gotchas.** In the shared-worktree + per-ticket-ship model, each shipped ticket advances the target head, so `chainStart..currentHead` is exactly the chain's prior work. Capture `chainStart` once at `ChainStart`.
+Notes: In the shared-worktree, ship-per-ticket model each shipped ticket advances the target head, so chainStart..currentHead is exactly the chain's prior work and needs no separate bookkeeping. The range is anchored once at ChainStart because deriving it per-ticket from markers alone would be more fragile than reading the branch.
 
-**Out of scope.** Authoring any prose; emitting a dedicated handoff event (the markers and git history already record this - add an event later only if audit needs it).
+OOS:
+- Authoring any prose summary
+- Injecting the pointer into a brief (Brief 09 owns)
+- A dedicated handoff event (markers and git history already record this)
 
-#### Brief 02: inject-pointer
+#### Brief 09: inject-pointer
 
-**Goal.** Put the pointer in front of the next agent.
+Goal: The next ticket's implement brief opens already listing the files the chain's prior tickets touched and a one-line pointer to the commit range, so the agent uses existing work instead of rediscovering or recreating it.
 
-**Inputs.** Brief 01's range + stat; `ImplementPhaseOptions`; `ImplementBriefBuilder`; `Brief(..., RelevantFiles, ..., Context)`.
+Inputs: Brief 08's range and touched-files; ImplementPhaseOptions; ImplementBriefBuilder; the Brief record's RelevantFiles and Context fields.
 
-**Outputs.** The chain passes the derived touched-files and range on `ImplementPhaseOptions`; `ImplementBriefBuilder` folds the touched-files into `RelevantFiles` and a single bounded line into `Context` ("N commits this chain, range X..Y; reference for detail"). An empty range produces a brief identical to the no-handoff case.
+Outputs:
+- The chain passing the derived touched-files and range on ImplementPhaseOptions.
+- ImplementBriefBuilder folding the touched-files into RelevantFiles (deduped) and a single bounded line into Context.
+- An empty range producing a brief identical to the no-pointer case.
 
-**Acceptance criteria.**
-- [ ] In a 2-ticket sequential chain, the second ticket's implement brief lists the first ticket's touched-files and the range pointer.
-- [ ] An empty range leaves the implement brief unchanged - no empty headers, no stray context.
-- [ ] The touched-files list is deduped (a file touched by several prior tickets appears once).
+Acceptance:
+- [ ] In a two-ticket chain, the second ticket's brief lists the first ticket's touched-files and the range pointer
+- [ ] An empty range leaves the brief unchanged, with no empty headers or stray context
+- [ ] A file touched by several prior tickets appears once
 
-**Notes / gotchas.** This is the cheap, grep-killing part (the file list) plus a lazy pointer for the rest. Keep the carried text bounded so it does not regrow the unbounded-context cost it is meant to avoid. Beyond saving greps, the file list is content-level coordination: a later ticket that sees an earlier sibling already created a file uses it instead of recreating it - the antidote to the duplicate-file collision that out-of-order siblings produced. Effective only when the order is right (Plan E); the pointer cannot help a dependent that runs before its dependency.
+Notes: The file list is the cheap, grep-killing half and the range pointer is a lazy reference for anything deeper, so the carried text stays bounded and does not regrow the unbounded-context cost the pointer is meant to avoid. The same file list is content-level coordination: a later ticket that sees a sibling already created a file uses it rather than recreating it, which is the antidote to the duplicate-file collision out-of-order siblings produced. It is effective only when the order is right, which is why Plan E exists.
 
-**Out of scope.** Carrying full diffs into the brief; capturing dead-ends or negative findings (those are not in commits - revisit only if chains re-walk the same ground).
+OOS:
+- Carrying full diffs into the brief
+- Capturing dead-ends or negative findings not present in commits
+- The compile-time gate (Brief 10 owns)
 
-#### Brief 03: handoff-compile-flag
+#### Brief 10: handoff-compile-flag
 
-**Goal.** Let the pointer be turned off at compile time.
+Goal: The pointer feature can be turned off at compile time, so an operator who does not want it pays nothing and gets a brief identical to the pre-Plan-C baseline.
 
-**Inputs.** Brief 02's injection path.
+Inputs: Brief 09's injection path.
 
-**Outputs.** A compile-time constant (a `const bool`, or a `DefineConstants` symbol with `#if`) that gates injection. Defaults on. When off, the next ticket's implement brief is byte-identical to a pre-Plan-C baseline.
+Outputs:
+- A compile-time constant (a const bool or a DefineConstants symbol with #if) gating injection, defaulting on.
+- With the constant off, the next ticket's implement brief byte-identical to a pre-Plan-C baseline.
 
-**Acceptance criteria.**
-- [ ] With the constant false, the next ticket's implement brief is byte-identical to a no-pointer baseline.
-- [ ] The off-switch is compile-time, not a runtime config key or flag.
-- [ ] With the constant true (default), Brief 02 behavior holds.
+Acceptance:
+- [ ] With the constant false, the next ticket's brief is byte-identical to a no-pointer baseline
+- [ ] The off-switch is compile-time, not a runtime config key or flag
+- [ ] With the constant true (default), Brief 09 behavior holds
 
-**Notes / gotchas.** A single well-named constant in one place, not scattered guards.
+Notes: A single well-named constant in one place is chosen over scattered guards because the goal is a clean, auditable off-switch rather than per-call conditionals. Gating the consumption side is the meaningful switch since that is where the brief-token cost lands.
 
-**Out of scope.** Per-ticket or per-repo runtime toggles.
+OOS:
+- Per-ticket or per-repo runtime toggles
+- Removing the derivation when disabled (it is cheap and harmless)
+- Tests (Brief 11 owns)
 
-#### Brief 04: handoff-tests
+#### Brief 11: handoff-tests
 
-**Goal.** Lock the pointer, the no-op, and the off-switch.
+Goal: The pointer, the empty-range no-op, and the compile-time off-switch are pinned by tests so the feature cannot silently change the brief or fail to disable.
 
-**Inputs.** Briefs 01-03.
+Inputs: Briefs 08-10.
 
-**Outputs.** Tests covering threading, the empty-range no-op, and the compile-disabled baseline.
+Outputs:
+- A test asserting a two-ticket chain threads ticket 1's touched-files and range into ticket 2's brief.
+- A test asserting an empty range yields an unchanged brief.
+- A test or build variant asserting the disabled build produces the baseline brief.
 
-**Acceptance criteria.**
-- [ ] A test asserts a 2-ticket chain threads ticket 1's touched-files and range into ticket 2's brief.
-- [ ] A test asserts an empty range yields an unchanged brief.
-- [ ] A test (or compile-time variant) asserts the disabled build produces the baseline brief.
+Acceptance:
+- [ ] A two-ticket chain threads the first ticket's touched-files and range into the second brief
+- [ ] An empty range yields an unchanged brief
+- [ ] The disabled build produces the baseline brief
 
-**Notes / gotchas.** The disabled assertion may need a separate build configuration or direct exercise of the gated path.
+Notes: The disabled-build assertion may require a separate build configuration or direct exercise of the gated path, depending on how the constant is implemented; the test approach follows whichever the implementation chooses.
 
-**Out of scope.** Token-cost measurement.
+OOS:
+- Token-cost measurement
+- Integration testing against live git history
+- The derivation helper internals (Brief 08 owns)
 
 ## Plan D: worker-git-hygiene
 
 ### Goal
 
-Stop workers from corrupting git state. Forbid `git stash` and other freelance git surgery in workers, make the verifier read-only, and add a fail-fast entry gate that detects a dirty, conflicted, or stash-polluted working tree and stops with a precise reason instead of failing opaquely at ship.
+After this plan, no worker uses git stash, the verifier does not mutate git, and a chain that starts on a dirty, conflicted, or stash-polluted tree stops at phase entry with a message naming the offending files and any unrelated stash, instead of running a full phase and failing opaquely at ship.
 
 ### Briefs
 
 | # | Slug | Intent | Deps | Files |
-|---|---|---|---|---|
-| 01 | no-worker-stash | Implement + review templates across all four agents forbid git stash and operating on the shared stash stack | - | Briefs/Templates/{claude-code,codex,gemini,copilot}/{implement,review}.md |
-| 02 | read-only-verifier | Review posture forbids git mutation; verifier leans on the deterministic diff + AutomatedChecksRunner | - | Briefs/Templates/*/review.md, WorkerAgentReviewer.cs, ReviewPhase.cs |
-| 03 | hygiene-entry-gate | Phase entry and ship preflight detect dirty/unmerged/stash-polluted state and stop with a precise, attributed reason | - | ImplementPhase.cs, ShipPhase.cs, IGitClient.cs |
-| 04 | hygiene-tests | Gate fires on conflicted/dirty/stash state; clean tree passes | 01, 02, 03 | ThroughlineBuild.Phases.Tests |
+|---|------|--------|------|-------|
+| 12 | no-worker-stash | Implement and review templates across all four agents forbid git stash | - | src/ThroughlineBuild.Briefs/Templates/{claude-code,codex,gemini,copilot}/{implement,review}.md |
+| 13 | read-only-verifier | Review posture forbids git mutation; verifier leans on the deterministic diff and AutomatedChecksRunner | 12 | src/ThroughlineBuild.Briefs/Templates/{claude-code,codex,gemini,copilot}/review.md, src/ThroughlineBuild.Verification/WorkerAgentReviewer.cs, src/ThroughlineBuild.Phases/ReviewPhase.cs |
+| 14 | hygiene-entry-gate | Phase entry and ship preflight detect dirty/unmerged/stash-polluted state and stop with an attributed reason | 13 | src/ThroughlineBuild.Phases/ImplementPhase.cs, src/ThroughlineBuild.Phases/ShipPhase.cs, src/ThroughlineBuild.Contracts/IGitClient.cs |
+| 15 | hygiene-tests | Gate fires on conflicted/dirty/stash state; clean tree passes | 14 | tests/ThroughlineBuild.Phases.Tests/ |
 
 ### Briefs - detail
 
-#### Brief 01: no-worker-stash
+#### Brief 12: no-worker-stash
 
-**Goal.** Take `git stash` out of the workers' hands.
+Goal: The implement and review templates for every agent instruct the worker never to use git stash or the shared stash stack, removing the practice that stashed WIP and leaked it across worktrees.
 
-**Inputs.** The four per-agent implement and review templates.
+Inputs: The four per-agent implement.md and review.md templates under src/ThroughlineBuild.Briefs/Templates/.
 
-**Outputs.** Each implement and review template explicitly instructs the worker never to run `git stash` or otherwise operate on the shared stash stack, and states that if a clean build is needed it must be done in place, never by stashing.
+Outputs:
+- A no-stash instruction in all four implement templates and all four review templates.
+- The instruction naming the failure mode (the stash stack is repo-global and leaks across worktrees) so the worker understands the constraint.
+- A stated alternative: if a clean build is needed, build in place rather than stashing.
 
-**Acceptance criteria.**
-- [ ] All four implement templates and all four review templates carry the no-stash instruction.
-- [ ] The instruction names the failure mode (the stash stack is repo-global and leaks across worktrees).
+Acceptance:
+- [ ] All four implement templates and all four review templates carry the no-stash instruction
+- [ ] The instruction names the repo-global stash-leak failure mode
 
-**Notes / gotchas.** This is prevention by instruction; it cannot hard-block a worker from running stash, which is why Brief 03 is the backstop. Keep the wording in sync across all eight files by hand - nothing enforces it.
+Notes: This is prevention by instruction and cannot hard-block a worker that ignores it, which is why Brief 14 is the runtime backstop. The wording must be kept in sync across all eight files by hand, since nothing enforces cross-template consistency.
 
-**Out of scope.** Plan/draft/decompose templates.
+OOS:
+- Hard sandboxing of git (not feasible without heavier measures)
+- Plan, draft, and decompose templates
+- The runtime gate (Brief 14 owns)
 
-#### Brief 02: read-only-verifier
+#### Brief 13: read-only-verifier
 
-**Goal.** Make review incapable of mutating git state.
+Goal: Review cannot mutate git state; the verifier reaches its verdict from the deterministic diff and the orchestrator-run checks rather than freelancing stash and build cycles in the worktree.
 
-**Inputs.** The review templates; `WorkerAgentReviewer`; `ReviewPhase`'s deterministic diff synthesis and `AutomatedChecksRunner`.
+Inputs: The review templates; WorkerAgentReviewer; ReviewPhase's deterministic diff synthesis and AutomatedChecksRunner.
 
-**Outputs.** The review posture forbids any git mutation (no stash, no checkout, no reset, no rebase); the verifier relies on the already-synthesized diff and the orchestrator-run checks rather than freelancing stash/build cycles.
+Outputs:
+- Review templates stating the verifier is read-only with respect to git (no stash, checkout, reset, or rebase).
+- The verifier relying on the synthesized diff and AutomatedChecksRunner for its verdict.
 
-**Acceptance criteria.**
-- [ ] The review templates state the verifier is read-only with respect to git.
-- [ ] Review continues to surface its verdict from the synthesized diff + automated checks without the worker mutating the tree.
+Acceptance:
+- [ ] The review templates state the verifier is read-only with respect to git
+- [ ] Review produces its verdict from the synthesized diff and automated checks without mutating the tree
 
-**Notes / gotchas.** Review already gets a deterministic diff - it has no legitimate need to touch git.
+Notes: Review already receives a deterministically synthesized diff, so it has no legitimate need to touch git; the confused stash-and-build spelunking seen in the wedged run was the verifier doing work it was never supposed to do.
 
-**Out of scope.** Changing what the automated checks are.
+OOS:
+- Changing which automated checks run
+- The no-stash instruction in implement templates (Brief 12 owns)
+- The entry gate (Brief 14 owns)
 
-#### Brief 03: hygiene-entry-gate
+#### Brief 14: hygiene-entry-gate
 
-**Goal.** Catch a poisoned working tree at the door, not at ship.
+Goal: A poisoned working tree is caught at phase entry and at ship preflight with a precise, attributed message, so an orphaned conflict or stash fails fast and obviously instead of after a full plan-implement-review that then dies at ship.
 
-**Inputs.** `git status --porcelain` (it already surfaces conflict codes like `UU`/`AA`); `git stash list`; the existing ship clean-check.
+Inputs: git status --porcelain (it surfaces conflict codes such as UU and AA); git stash list; the existing ship clean-check.
 
-**Outputs.** Phase entry refuses to proceed when the working tree has unmerged/conflicted paths, naming them. It also detects a dangling stash from another ticket and reports it. The stop message distinguishes orphaned state (not from this ticket) from this ticket's expected changes. The ship preflight reports the same precise state ("unresolved conflict in X, Y; stash from ticket/Z, unrelated to this ticket") instead of "N modified tracked files".
+Outputs:
+- Phase entry refusing to proceed when the tree has unmerged or conflicted paths, naming them.
+- Detection and reporting of a dangling stash that belongs to another ticket.
+- A stop message distinguishing orphaned state (not from this ticket) from this ticket's expected changes.
+- The ship preflight reporting the same precise state (conflict in X, Y; stash from ticket/Z, unrelated) instead of "N modified tracked files".
 
-**Acceptance criteria.**
-- [ ] A phase started on a tree with unmerged paths stops immediately, naming the conflicted files.
-- [ ] A dangling stash from an unrelated ticket is detected and named.
-- [ ] The ship preflight message identifies conflict state and unrelated stashes precisely rather than as generic "modified tracked files".
-- [ ] A clean tree passes the gate with no change in behavior.
+Acceptance:
+- [ ] A phase started on a tree with unmerged paths stops immediately, naming the conflicted files
+- [ ] A dangling stash from an unrelated ticket is detected and named
+- [ ] The ship preflight identifies conflict state and unrelated stashes precisely
+- [ ] A clean tree passes the gate with no behavior change
+- [ ] AOT publish succeeds
 
-**Notes / gotchas.** Detect and stop - do not auto-clean. Auto-dropping a stash or resetting a conflict could destroy real WIP. This gate would have stopped the second child at entry instead of after a full plan/implement/review.
+Notes: The gate detects and stops rather than auto-cleaning, because automatically dropping a stash or resetting a conflict could destroy real WIP; the safe action is to surface the state and let the operator decide. This gate is also the cleanliness check the shared chain worktree relies on.
 
-**Out of scope.** Automatic recovery or stash cleanup.
+OOS:
+- Automatic recovery or stash cleanup
+- The template instructions (Briefs 12 and 13 own)
+- Tests (Brief 15 owns)
 
-#### Brief 04: hygiene-tests
+#### Brief 15: hygiene-tests
 
-**Goal.** Lock the gate behavior.
+Goal: The entry gate and preflight messaging are pinned by tests so a clean tree keeps passing and a conflicted or stash-polluted tree keeps being caught.
 
-**Inputs.** Briefs 01-03.
+Inputs: Briefs 12-14; git test fakes that can simulate conflict and stash states.
 
-**Outputs.** Tests over the entry gate and preflight messaging.
+Outputs:
+- A test asserting a phase started on a conflicted tree stops and names the files.
+- A test asserting a dangling unrelated stash is reported.
+- A test asserting a clean tree passes unchanged.
 
-**Acceptance criteria.**
-- [ ] A test asserts a phase started on a conflicted tree stops and names the files.
-- [ ] A test asserts a dangling unrelated stash is reported.
-- [ ] A test asserts a clean tree passes unchanged.
+Acceptance:
+- [ ] A phase on a conflicted tree stops and names the files
+- [ ] A dangling unrelated stash is reported
+- [ ] A clean tree passes unchanged
 
-**Notes / gotchas.** Use git test fakes to simulate conflict and stash states.
+Notes: The git fakes simulate conflict and stash states so the gate is exercised without a real repository, keeping the tests hermetic in line with the existing phase-test approach.
 
-**Out of scope.** Testing the template instruction text (it is prose, not code).
+OOS:
+- Asserting the template prose (it is not code)
+- Live git integration
+- Automatic recovery behavior (not built)
 
 ## Plan E: sequence-contract
 
 ### Goal
 
-Make the op-doc -> scaffold -> chain sequence contract complete and verifiable at both ends, so declared dependencies become Plane `blocked_by` relations and the chain orders by them - and so a missing or wrong edge is visible immediately, not as duplicated work downstream.
+After this plan, every dependency the op-doc declares becomes a Plane blocked_by relation that scaffold reports as it creates it, and a chain prints the dependency order it read back from Plane before running, so a dependent ticket runs after its dependency and a missing edge is visible before any work starts.
 
 ### Briefs
 
 | # | Slug | Intent | Deps | Files |
-|---|---|---|---|---|
-| 01 | scaffold-encodes-deps | Scaffold translates every declared dependency into a Plane blocked_by relation and reports the edges it created | - | ScaffoldPhase.cs, OpDocParser.cs, OpDocValidator.cs, PlaneTicketingClient.cs |
-| 02 | chain-surfaces-order | Chain prints the dispatch/sibling order it read from Plane before executing | - | ChainPhase.cs, ParallelDispatcher.cs, ChainCommand.cs |
-| 03 | sequence-tests | Declared deps round-trip to relations; chain orders by them | 01, 02 | ThroughlineBuild.Scaffold.Tests, ThroughlineBuild.Phases.Tests |
+|---|------|--------|------|-------|
+| 16 | scaffold-encodes-deps | Scaffold translates every declared dependency into a Plane blocked_by relation and reports the edges | - | src/ThroughlineBuild.Scaffold/ScaffoldPhase.cs, src/ThroughlineBuild.Scaffold/OpDocParser.cs, src/ThroughlineBuild.Scaffold/OpDocValidator.cs |
+| 17 | chain-surfaces-order | Chain prints the dispatch/sibling order it read from Plane before executing | 16 | src/ThroughlineBuild.Phases/ChainPhase.cs, src/ThroughlineBuild.Phases/ParallelDispatcher.cs, src/ThroughlineBuild.Commands/ChainCommand.cs |
+| 18 | sequence-tests | Declared deps round-trip to relations; chain orders by them | 17 | tests/ThroughlineBuild.Scaffold.Tests/, tests/ThroughlineBuild.Phases.Tests/ |
 
 ### Briefs - detail
 
-#### Brief 01: scaffold-encodes-deps
+#### Brief 16: scaffold-encodes-deps
 
-**Goal.** Guarantee scaffold faithfully encodes the op-doc's declared sequence into Plane.
+Goal: Scaffold faithfully encodes the op-doc's declared sequence into Plane, creating a blocked_by relation for every declared dependency and reporting the edges, so an under-declared op-doc shows as zero edges instead of silently losing ordering.
 
-**Inputs.** The Dispatch-order `Depends on` column (plan-group level) and the Briefs-table `Deps` column (sibling level); the existing relation-creation path in scaffold; `OpDocValidator`.
+Inputs: The Dispatch-order Depends-on column (plan level) and the Briefs-table Deps column (sibling level); the existing relation-creation path in ScaffoldPhase; OpDocValidator.
 
-**Outputs.** Scaffold creates a Plane `blocked_by` relation for every declared dependency at both levels, and emits a summary of the edges it created (count and the actual blocker -> blocked pairs). A declared dependency that references an unknown plan or brief is a validation error, not a silently dropped edge.
+Outputs:
+- A Plane blocked_by relation for every declared dependency at both the plan and brief level.
+- A printed summary of the created edges (count and blocker -> blocked pairs).
+- A validation error when a Deps entry references an unknown plan or brief, rather than a silently dropped edge.
 
-**Acceptance criteria.**
-- [ ] Every `Depends on` and `Deps` entry in a parsed op-doc produces a corresponding `blocked_by` relation in Plane.
-- [ ] Scaffold prints the created dependency edges so the operator can confirm the graph matches the op-doc.
-- [ ] A `Deps` entry naming a brief or plan that does not exist fails validation with a clear message.
+Acceptance:
+- [ ] Every Depends-on and Deps entry produces a corresponding blocked_by relation in Plane
+- [ ] Scaffold prints the created dependency edges
+- [ ] A Deps entry naming a nonexistent brief or plan fails validation with a clear message
+- [ ] AOT publish succeeds
 
-**Notes / gotchas.** The mechanism already exists (a prior run created 16 relations); this brief makes it total and visible. Cross-plan brief-to-brief dependencies are rare and the format is not being extended for them: when one occurs, keep the dependent brief in its dependency's plan, or order the plans so the dependency's plan completes first via the Dispatch `Depends on` edge. This brief encodes whatever the format declares; it does not invent edges the op-doc did not state.
+Notes: The relation-creation mechanism already exists (a prior run created sixteen relations); this brief makes it total and visible rather than inventing it. Cross-plan brief-to-brief dependencies are rare and the format is not extended for them; when one occurs the dependent brief is kept in its dependency's plan, or the plans are ordered so the dependency's plan completes first.
 
-**Out of scope.** Changing the op-doc format's expressiveness (a separate decision).
+OOS:
+- Extending the op-doc format's expressiveness
+- The chain-side order surfacing (Brief 17 owns)
+- Tests (Brief 18 owns)
 
-#### Brief 02: chain-surfaces-order
+#### Brief 17: chain-surfaces-order
 
-**Goal.** Make the order the chain will run visible before it runs.
+Goal: The chain prints the dependency order it derived from Plane before executing, so a wrong or missing edge (a dependent ahead of its dependency) is visible up front rather than discovered as duplicate work several tickets later.
 
-**Inputs.** The sibling/dispatch graph the chain builds from Plane `blocked_by` relations (`BuildSiblingGraphAsync`, `TopologicalSorter.ComputeLevels`).
+Inputs: The sibling and dispatch graph the chain builds from Plane blocked_by relations (BuildSiblingGraphAsync, TopologicalSorter.ComputeLevels).
 
-**Outputs.** Before executing, the chain prints the computed order (and, for a parent chain, the per-level grouping) read from Plane, so "about to run 322 before 321" is visible up front.
+Outputs:
+- The chain printing the computed order, and for a parent chain the per-level grouping, before the first phase runs.
+- Tickets with no edge between them shown as unordered relative to each other, making a missing edge obvious.
 
-**Acceptance criteria.**
-- [ ] A multi-ticket or parent chain prints the dependency-ordered sequence it derived from Plane before the first phase runs.
-- [ ] Tickets with no `blocked_by` edge between them are shown as unordered relative to each other, making a missing edge obvious.
+Acceptance:
+- [ ] A multi-ticket or parent chain prints the dependency-ordered sequence derived from Plane before the first phase runs
+- [ ] Tickets with no blocked_by edge between them are shown as unordered relative to each other
 
-**Notes / gotchas.** This is the read-back half of the contract: it closes the loop by showing what the chain actually got from Plane, regardless of which upstream link failed.
+Notes: This is the read-back half of the sequence contract; it closes the loop by showing what the chain actually got from Plane, so a break is attributable regardless of which upstream link failed. It surfaces the order without changing the ordering algorithm.
 
-**Out of scope.** Changing the ordering algorithm; this only surfaces it.
+OOS:
+- Changing the ordering algorithm
+- The scaffold encoding (Brief 16 owns)
+- Tests (Brief 18 owns)
 
-#### Brief 03: sequence-tests
+#### Brief 18: sequence-tests
 
-**Goal.** Pin the contract at both ends.
+Goal: The sequence contract is pinned at both ends so declared deps keep becoming relations and the chain keeps ordering by them.
 
-**Inputs.** Briefs 01-02.
+Inputs: Briefs 16-17.
 
-**Outputs.** Tests over scaffold encoding and chain ordering.
+Outputs:
+- A test asserting a sample op-doc's declared deps become the expected blocked_by relations.
+- A test asserting the chain, given those relations, computes and runs the dependency-correct order.
+- A test asserting a validation error when a Deps entry references an unknown brief.
 
-**Acceptance criteria.**
-- [ ] A test asserts a sample op-doc's declared deps become the expected `blocked_by` relations.
-- [ ] A test asserts the chain, given those relations, computes and runs the dependency-correct order.
-- [ ] A test asserts a validation error when a `Deps` entry references an unknown brief.
+Acceptance:
+- [ ] A sample op-doc's declared deps become the expected blocked_by relations
+- [ ] The chain computes and runs the dependency-correct order given those relations
+- [ ] A Deps entry referencing an unknown brief raises a validation error
 
-**Notes / gotchas.** Scaffold and chain are tested separately; a full op-doc-to-execution round trip is not required in one test.
+Notes: Scaffold and chain are tested separately because a full op-doc-to-execution round trip would require a live Plane; the two halves together still pin the contract.
 
-**Out of scope.** Plane API integration testing.
+OOS:
+- Plane API integration testing
+- Round-trip testing through a live backend
+- The format-expressiveness question (decided: not extended)
 
 ## What done looks like
 
-Running `build chain <id> --from-brief` on an op-doc-scaffolded `Backlog` ticket takes it straight to Implement with no plan worker spawning and no plan `LlmCall` in the log; the description still holds exactly the op-doc plan, now stamped with `[planned_at]`. Without the flag, planning behaves as it always did.
-
-A multi-ticket chain runs its tickets one at a time, in `blocked_by` dependency order, with never more than one worker alive at once, inside a single worktree created once at the start and removed once at the end. The `--max-parallel` flag is gone and there is one `TicketGraph` type. Each ticket still works on its own branch and ships independently into the target; ship still rebases as before.
-
-The second and later tickets in a chain open their implement brief already listing the files the chain's prior tickets touched, with a one-line pointer to the commit range for anything deeper - no worker authored it, it was derived from the commits already in the checkout. A chain with nothing shipped yet adds nothing. Flipping the compile-time constant off returns the brief to byte-for-byte what it was before this operation.
-
-No worker runs `git stash`, the verifier does not mutate git, and a chain that starts on a dirty, conflicted, or stash-polluted tree stops at the door with a message that names the offending files and any unrelated stash - rather than burning a full phase and failing opaquely at ship.
-
-Every dependency the op-doc declares becomes a Plane `blocked_by` relation that scaffold reports as it creates it, and when a chain runs it first prints the dependency order it read back from Plane - so a dependent ticket runs after its dependency, and a missing edge is visible before any work starts rather than as a duplicate file three tickets later.
+A `build chain` run on an op-doc-scaffolded backlog ticket goes straight to Implement when invoked with --from-brief, with no plan worker spawned and the authored plan left intact; the chain then runs its tickets one at a time in the dependency order it prints up front, inside a single worktree, with each ticket shipping into the target before the next implements. The second and later tickets open their implement brief already listing the files prior tickets touched, so the agent does not rediscover or recreate them, and turning off one compile-time constant returns those briefs to exactly what they were before. No worker stashes, the verifier never mutates git, and a chain that starts on a dirty, conflicted, or stash-polluted tree stops at the door naming the offending files and any unrelated stash rather than burning a phase and failing at ship.
