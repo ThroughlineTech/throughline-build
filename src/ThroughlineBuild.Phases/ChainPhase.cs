@@ -699,7 +699,7 @@ public class ChainPhase
 
     // Upper bound on leaf children chained in parallel under a single parent. The Plane
     // rate gate handles API pacing; this caps local worktree/git concurrency.
-    private const int MaxParentChainConcurrency = 4;
+    private const int MaxParentChainConcurrency = 1; // eliminiate parallelism for now to reduce risk of git conflicts, etc. in parent chains
 
     private enum StartPhase { Plan, Implement, Review, Refused }
 }

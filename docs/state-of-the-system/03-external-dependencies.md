@@ -30,8 +30,8 @@ Every HTTP send blocks on a shared `RequestThrottle` before it goes out, capped 
 
 | Method | Verb | Path | Used by |
 |---|---|---|---|
-| `GetAsync(id)` | GET | `issues/?per_page=100` then filter by sequence id ([:210-216](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L210-L216)) | every phase fetches the ticket |
-| `GetBatchAsync(ids)` | GET (parallel `GetAsync`) | same | (not currently called) |
+| `GetAsync(id)` | GET (first call only) | resolves the sequence id through `FindIssueAsync` against the per-run snapshot ([:277-289](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L277-L289)); the snapshot is loaded once via `EnsureSnapshotAsync` ([:292-308](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L292-L308)) | every phase fetches the ticket |
+| `GetBatchAsync(ids)` | (in-memory, after snapshot) | parallel `GetAsync`, all served from the snapshot after the first load | multi-ticket chain dependency graph |
 | `TransitionAsync(id, state)` | PATCH | `issues/{uuid}/` | all phase transitions |
 | `AppendDescriptionAsync(id, html)` | PATCH | `issues/{uuid}/` | `PlanPhase` (read-modify-write append) |
 | `UpdateDescriptionAsync(id, html)` | PATCH | `issues/{uuid}/` ([:701-714](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L701-L714)) | description replace (TLB-251) |
@@ -42,7 +42,7 @@ Every HTTP send blocks on a shared `RequestThrottle` before it goes out, capped 
 | `RollupParentAsync(id)` | GET (`?expand=state`) + PATCH + POST | mixed ([:417-484](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L417-L484)) | `CloseCommand`, `DeferCommand` |
 | `CreateTicketAsync(title, type, html, labels)` | POST | `issues/` ([:486-537](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L486-L537)) | `NewPhase`, `ScaffoldPhase` |
 | `SetParentAsync(child, parent)` | PATCH | `issues/{uuid}/` (`parent` field) | `ScaffoldPhase` |
-| `QueryAsync(query)` | GET (cursor-paginated) | `issues/?per_page=100&state=&parent=&type=` ([:551-598](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L551-L598)) | tree walk, child detection, chain (TLB-251) |
+| `QueryAsync(query)` | (in-memory, after snapshot) | loads the snapshot once, then filters `_issueByUuid.Values` by state/parent/type client-side ([:728-741](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L728-L741)) | tree walk, child detection, chain (TLB-251) |
 | `TransitionLifecycleAsync(id, transition, reason)` | POST comment + PATCH | `issues/{uuid}/comments/` then `issues/{uuid}/` ([:648-699](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L648-L699)) | `close` / `defer` / `reopen` (TLB-251) |
 | `CreateChildTicketsAsync(parent, children)` | POST (per child) | `issues/` with `parent` field set ([:716-785](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L716-L785)) | `ScaffoldPhase` / `DecomposePhase` sub-issue creation (TLB-262) |
 
@@ -51,7 +51,7 @@ New since the architecture doc:
 - **`CreateChildTicketsAsync` (TLB-262):** batched sub-issue creation. Resolves the label cache once, then POSTs each child as an issue with `parent` set to `parentUuid`. Never throws - per-child failures are collected into `CreateChildTicketsResult.Failures`; unknown label names are silently skipped ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:738-784](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L738-L784)).
 - **`QueryAsync` / `TransitionLifecycleAsync` / `UpdateDescriptionAsync` (TLB-251):** filtered listing, lifecycle transitions with marker comments, and full description replace.
 - **Issue-type NAME -> UUID resolution (TLB-213/214):** `CreateTicketAsync` resolves a `type` string against an `issue-types/` cache and PATCHes the resolved UUID; an unknown type throws `InvalidOperationException` ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:508-514](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L508-L514)).
-- **Client-side parent filtering (TLB-327):** Plane silently ignores the `parent=` list-query param, so `QueryAsync` walks every cursor page and filters by `ParentId` itself ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:582-590](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L582-L590)). `RollupParentAsync` applies the same client-side filter on siblings ([:439-446](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L439-L446)). Page walks are capped at `MaxListPages = 50` ([:602](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L602)).
+- **Per-run snapshot cache + correct pagination (TLB-366):** Plane silently ignores the list endpoint's query filters (notably `parent=`) and returns the whole project, so the client no longer re-paginates per lookup. Instead the entire project is paginated once into an in-memory snapshot and every `FindIssueAsync` / `QueryAsync` answer is computed from it client-side - see "Per-run issue snapshot cache" below. This eliminated the redundant page walks that kept `build chain` hammering Plane's rate limiter as the project grew.
 
 ### Deep-link URL (TLB-292, 9450889)
 
@@ -59,13 +59,26 @@ Status: Functional.
 
 The Plane work-item URL printed to the operator uses the `?next_path=` redirect pattern: `{base}/?next_path=/{workspaceSlug}/browse/{ticketId}` ([src/ThroughlineBuild.Cli/Program.cs:1579-1583](../../src/ThroughlineBuild.Cli/Program.cs#L1579-L1583), duplicated in [src/ThroughlineBuild.Commands/NewCommand.cs:100](../../src/ThroughlineBuild.Commands/NewCommand.cs#L100)). Empty if any of base URL / slug / ticket id is unset.
 
-### Caches held in memory per invocation
+### Per-run issue snapshot cache (TLB-366)
 
-- State name -> UUID map: lazy-loaded on first transition, semaphore-guarded ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:141-157](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L141-L157)).
-- Label name -> UUID map: lazy-loaded on first label application, case-insensitive matching ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:159-175](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L159-L175)).
-- Issue-type name -> UUID map: lazy-loaded on first ticket create with a type ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:177-193](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L177-L193)).
+Status: Functional.
 
-None persists across invocations (the binary exits between calls).
+The dominant cache is the issue snapshot. On the first lookup that needs it, `EnsureSnapshotAsync` paginates the entire project once and indexes it into two `ConcurrentDictionary` fields ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:47-58,292-329](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L47-L58)):
+
+- `_seqToUuid` (`int -> string`): sequence-id -> issue UUID, write-once identity index.
+- `_issueByUuid` (`string -> PlaneIssue`): UUID -> full issue, the mutable source of truth.
+
+Load is single-flight (double-checked `SemaphoreSlim` so concurrent callers share one load). Thereafter `FindIssueAsync` answers seq lookups from `_seqToUuid` + `_issueByUuid` with no network call, throwing `KeyNotFoundException` for an unknown seq ([:277-289](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L277-L289)), and `QueryAsync` filters `_issueByUuid.Values` in memory ([:728-741](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L728-L741)).
+
+Every mutating call (`TransitionAsync`, `AppendDescriptionAsync`, `ApplyLabelsAsync`, `RollupParentAsync`, `SetParentAsync`, `TransitionLifecycleAsync`, `UpdateDescriptionAsync`) performs a **write-through** update so the snapshot stays current for the rest of the run: `UpdateCachedIssue` runs the mutation inside `ConcurrentDictionary.AddOrUpdate` with a pure `Func<PlaneIssue,PlaneIssue>` closure ([:351-361](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L351-L361)), so two concurrent field updates compose rather than clobber (the lost-update race the atomic-update commit fixed). Newly created tickets are seeded into the snapshot by `IndexIssue` so a later parent-probe in the same run sees them. The pagination loop stops on the authoritative `next_page_results == false` flag rather than the cursor alone ([:799-816](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L799-L816), flag defined at [src/ThroughlineBuild.Plane/PlaneApiModels.cs:71-78](../../src/ThroughlineBuild.Plane/PlaneApiModels.cs#L71-L78)) - Plane echoes an advancing cursor past the last page, so a cursor-only loop walked to the page cap on every load.
+
+### Other caches held in memory per invocation
+
+- State name -> UUID map: lazy-loaded on first transition, semaphore-guarded.
+- Label name -> UUID map: lazy-loaded on first label application, case-insensitive matching.
+- Issue-type name -> UUID map: lazy-loaded on first ticket create with a type.
+
+None of the caches (snapshot included) persists across invocations - the binary exits between calls, so each `build` run reloads.
 
 ### Capabilities advertised
 
@@ -79,7 +92,7 @@ BackendCapabilities(TypedRelations: true, TypedLabels: true, RichHtmlComments: t
 
 - **No token in config or env:** `BuildConfigLoader.ResolveSecrets` throws `ConfigException` with message `plane_api_token not set in config and required environment variable '<env_name>' is not set` ([src/ThroughlineBuild.Cli/Config.cs:123-125](../../src/ThroughlineBuild.Cli/Config.cs#L123-L125)). The CLI catches it eagerly and exits 3, prefixing the message with `Secret error:` ([src/ThroughlineBuild.Cli/Program.cs:181-185](../../src/ThroughlineBuild.Cli/Program.cs#L181-L185)).
 - **Unauthorized (401/403) response from Plane:** raised as `PlaneApiException(status, body)` and surfaces as a phase failure with exit 1.
-- **Rate limit (429) or transient 5xx:** the throttle makes a client-side 429 nearly impossible; a server-origin 429 or 5xx is retried 3 times by Polly before raising.
+- **Rate limit (429) or transient 5xx:** the throttle makes a client-side 429 nearly impossible; a server-origin 429 or 5xx is retried up to `MaxRetryAttempts` (default 5) times by Polly before raising ([src/ThroughlineBuild.Plane/PlaneClientOptions.cs:26](../../src/ThroughlineBuild.Plane/PlaneClientOptions.cs#L26)).
 - **Workspace or project UUID wrong:** Plane returns 404 - same path as unauthorized.
 - **State not installed in the project:** `TransitionAsync` / `TransitionLifecycleAsync` warn to stderr and leave the ticket where it is rather than throwing ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:295-303](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L295-L303)).
 - **Network unreachable:** `HttpClient` throws `HttpRequestException`; depending on the call site, surfaces as `PhaseInfraFailure` or propagates to CLI as an uncaught exception (exit 1).
@@ -90,7 +103,8 @@ BackendCapabilities(TypedRelations: true, TypedLabels: true, RichHtmlComments: t
 - **Rollup ranking** (`StateRank`, [src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:799-809](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L799-L809)) and `ApplyRollupRules` ([:811-836](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L811-L836)) hardcode priority ordering; no extensibility for custom state hierarchies.
 - **`[rollup]` comment marker** ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:471](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L471)) is load-bearing for the rollup comment format - no versioning if the format changes.
 - **`Ticket.Risk`** is always returned as `Risk.Medium` from Plane reads ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:248](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L248)). `Ticket.Size` now IS extracted from a `size:s|m|l` label ([:232-239](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L232-L239)) - the architecture doc's claim that size is always `M` is stale.
-- **Page cap of 50** (5000 issues) silently truncates very large projects; a parent query that overflows would under-report children.
+- **Page cap of 50** (`MaxListPages`, 5000 issues) still bounds the snapshot load, but truncation is no longer silent: if the cap is hit with a live cursor, `FetchAllIssuesAsync` writes a loud stderr warning that the snapshot is truncated and lookups beyond the cap will throw "not found" ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:819-826](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L819-L826)). Very large projects must raise the cap or narrow the project.
+- **Snapshot staleness across processes:** the write-through snapshot only reflects mutations made by *this* client instance. A concurrent second `build` process mutating the same project will not be seen until the next run reloads. Within a single run this is correct; across runs it is reload-on-start.
 
 ---
 

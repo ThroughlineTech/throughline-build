@@ -8,7 +8,7 @@ For each major operation, how it fails and whether re-running is safe. Exit code
 
 | Operation | Pre-flight gates | Common failures | Failed-at state | Idempotent on rerun? |
 |---|---|---|---|---|
-| `plan` | ticket exists; not a parent; state == `Backlog`; `git rev-parse main` resolves | worker non-Ok status; missing required metadata keys (`plan_html`, `risk_label`, `size_label`, `planned_at_sha`) | ticket left in `Planning` once the worker has run (transition precedes the status check) | partial - rerun fails the `Backlog` guard once parked in `Planning`; operator must reset state |
+| `plan` | ticket exists; not a parent; state == `Backlog`; `git rev-parse main` resolves | worker non-Ok status; unresolvable `plan_body_ref` -> `PLAN_BODY` fenced block; missing scalar metadata keys (`risk_label`, `size_label`, `planned_at_sha`) | ticket left in `Planning` once the worker has run (transition precedes the status check) | partial - rerun fails the `Backlog` guard once parked in `Planning`; operator must reset state |
 | `implement` | ticket exists; not a parent; state == `Ready` (initial) or `InProgress` (rework); `git worktree add` succeeds | worktree creation fails; worker non-Ok; missing `commit_sha` metadata | `Ready` if pre-worker; `InProgress` if worker ran but didn't deliver | yes if worktree was created (rerun reuses it via the rework path) |
 | `review` | ticket exists; state == `InReview`; worktree locatable; `[implemented_at]` marker present | check timeout (non-fatal); verifier subprocess crash; missing verdict metadata | state unchanged (only `Rework` changes it) | yes - rerun re-runs checks and verifier; one extra verdict comment posted |
 | `ship` | ticket exists; state == `InReview`; worktree locatable; build.exe not inside it; both worktrees clean; bases not diverged-with-conflict; rebase succeeds; no conflict markers; regression checks pass; FF merge + push succeed | listed at each stage via `ShipFailureStage` | enum value identifies stage (`StateCheck`, `PreFlight`, `Fetch`, `Rebase`, `ConflictMarkerScan`, `RegressionChecks`, `FastForwardMerge`, `Push`, `Decruft`) | partially - rebase + checks idempotent; post-merge transitions not retried by `ship` itself |
@@ -37,7 +37,7 @@ For each major operation, how it fails and whether re-running is safe. Exit code
 - **Wrong state:** "ticket not in Backlog state" ([src/ThroughlineBuild.Phases/PlanPhase.cs:65-66](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L65-L66)). CLI exit 1.
 - **`git rev-parse` failure:** "git rev-parse failed: ..." ([src/ThroughlineBuild.Phases/PlanPhase.cs:73-76](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L73-L76)).
 - **Worker failure:** worker `Status != Ok` returns the envelope reason ([src/ThroughlineBuild.Phases/PlanPhase.cs:105-108](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L105-L108)). The ticket is already in `Planning` at this point. If the status is `Escalate`, the `WorkerResult` is returned as `EscalationWorkerResult` so the chain can run obsolete-claim ratification.
-- **Missing metadata keys:** "worker metadata missing required keys (...)" ([src/ThroughlineBuild.Phases/PlanPhase.cs:120-122](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L120-L122)).
+- **Unresolvable plan body / missing metadata keys:** the plan body now arrives as the `PLAN_BODY` fenced block referenced by `plan_body_ref`; an unresolvable ref fails with "worker metadata missing or unresolvable plan_body_ref: ..." and the scalar keys (`risk_label`, `size_label`, `planned_at_sha`) are still required ([src/ThroughlineBuild.Phases/PlanPhase.cs:120-125](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L120-L125)). The resolved markdown is rendered to HTML by `MarkdownRenderer` before the description append.
 - **Idempotency caveat:** a prior run that posted the description but died before the marker comment will append the description a second time on rerun - the append is `existing + html` so duplication is visible.
 
 ### `implement` (`ImplementPhase`)
@@ -72,16 +72,16 @@ By stage ([src/ThroughlineBuild.Phases/ShipPhase.cs:23-34](../../src/Throughline
 | Stage | Trigger | Recovery |
 |---|---|---|
 | `StateCheck` | ticket not `InReview`; worktree not found; (parent) children not Done | fix state via `review`/`implement`; recreate worktree; finish children |
-| `PreFlight` | build.exe running from inside the worktree; either worktree dirty | move binary; commit or stash; rerun |
-| `Fetch` | `git fetch` failed; bases diverged-with-conflict, or diverged and `--no-auto-merge`, or auto-rebase raced to conflict | resolve `main` vs `origin/main` manually; rerun |
+| `PreFlight` | build.exe running from inside the worktree; either worktree dirty; (non-default target) main worktree not checked out on the target branch (`wrong_worktree_branch`) | move binary; commit or stash; `git checkout <target>`; rerun |
+| `Fetch` | `git fetch` failed; target branch diverged-with-conflict, or diverged and `--no-auto-merge`, or auto-rebase raced to conflict | resolve local `<target>` vs `<remote>/<target>` manually; rerun |
 | `Rebase` | rebase conflicts; rebase fails otherwise. Aborted by `RebaseAbortAsync` | resolve conflicts on the feature branch; rerun |
 | `ConflictMarkerScan` | leftover `<<<<<<<` / `=======` / `>>>>>>>` in committed files | clean up; recommit; rerun |
 | `RegressionChecks` | a `CheckSpec` returned non-zero or timed out | fix on the feature branch; rerun |
 | `FastForwardMerge` | rare - usually a race | refetch; rerun |
-| `Push` | `git push <remote> <baseBranch>` failed after the local FF merge already landed | the merge is local-only until push succeeds; push manually or rerun |
+| `Push` | `git push <remote> <target>` failed after the local FF merge already landed | the merge is local-only until push succeeds; push manually or rerun |
 | `Decruft` | post-merge worktree cleanup failed | merge already landed; clean up manually |
 
-The fetch, the main auto-rebase, and the FF merge run under `MainWorktreeLock` so concurrent chains do not race on the shared main worktree ([src/ThroughlineBuild.Phases/ShipPhase.cs:194, 243-246, 380-383](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L194)).
+The fetch, the target-branch auto-rebase, and the FF merge run under `MainWorktreeLock` so concurrent chains do not race on the shared main worktree ([src/ThroughlineBuild.Phases/ShipPhase.cs:268-271, 318-321, 496-498](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L268-L271)).
 
 **Failed ship leaves the worktree and the feature branch on disk by design** for inspection.
 
@@ -146,7 +146,7 @@ The chain emits `ChainStart`/`ChainEnd` around every run, `ReworkRound` per rewo
 - **Title missing:** `NewPhaseValidationException` "No title found: ...".
 - **Body empty:** `NewPhaseValidationException` "Body is empty".
 - **Non-fatal warnings** (missing Acceptance / Out of scope / Type, short body) are surfaced but do not block.
-- Draft-mode failure paths add: draft worker non-Ok, missing `body_markdown`, missing required sections.
+- Draft-mode failure paths add: draft worker non-Ok, an unresolvable `body_markdown_ref` -> `DRAFT_BODY` fenced block with no legacy `body_markdown` fallback, missing required sections ([src/ThroughlineBuild.Phases/DraftPhase.cs:70-84](../../src/ThroughlineBuild.Phases/DraftPhase.cs#L70-L84)).
 
 ### `scaffold` (`ScaffoldPhase`)
 
@@ -179,8 +179,10 @@ Each rejects terminal state (or non-terminal for `reopen`) up front. `close`/`de
 
 ### Plane unreachable / throttled
 
-- Every Plane HTTP call first awaits `RequestThrottle.AcquireAsync` - a hard rate gate admitting at most `RequestsPerMinute` (default 60) calls per rolling minute, blocking when the budget is spent so the process never trips a 429 ([src/ThroughlineBuild.Plane/RequestThrottle.cs:13-75](../../src/ThroughlineBuild.Plane/RequestThrottle.cs#L13-L75), [src/ThroughlineBuild.Plane/PlaneClientOptions.cs:17](../../src/ThroughlineBuild.Plane/PlaneClientOptions.cs#L17)). The throttle is process-wide, so parallel dispatch and parent chains stay under budget.
-- On top of the gate, a Polly retry strategy retries up to 3 times on `PlaneApiException` with `Status == 429 || Status >= 500`; other statuses throw immediately ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:54-58](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L54-L58)). Unauthenticated (401/403) is not retried - it throws `PlaneApiException` and the CLI surfaces exit 1.
+- Every Plane HTTP call first awaits `RequestThrottle.AcquireAsync` - a hard rate gate admitting at most `RequestsPerMinute` (default 40) calls per rolling minute, blocking when the budget is spent so the process stays well under Plane's server-side 60/min limit ([src/ThroughlineBuild.Plane/RequestThrottle.cs](../../src/ThroughlineBuild.Plane/RequestThrottle.cs), [src/ThroughlineBuild.Plane/PlaneClientOptions.cs:20](../../src/ThroughlineBuild.Plane/PlaneClientOptions.cs#L20)). The 40/min default leaves headroom for a second `build` instance sharing the same token. The throttle is process-wide, so parallel dispatch and parent chains stay under budget. The TLB-366 per-run snapshot cache further cuts call volume: the project is paginated once, then `FindIssueAsync`/`QueryAsync` answer from memory instead of re-paginating per ticket (the root cause of the throttle pressure that grew with the project).
+- On top of the gate, a Polly retry strategy retries up to `MaxRetryAttempts` (default 5) times on `PlaneApiException` with `Status == 429 || Status >= 500`, honoring a `Retry-After` header when present; other statuses throw immediately ([src/ThroughlineBuild.Plane/PlaneClientOptions.cs:26](../../src/ThroughlineBuild.Plane/PlaneClientOptions.cs#L26)). Unauthenticated (401/403) is not retried - it throws `PlaneApiException` and the CLI surfaces exit 1.
+- **Snapshot truncation:** the snapshot load is capped at `MaxListPages = 50` (5000 issues); hitting the cap with a live cursor writes a loud stderr warning that the snapshot is truncated and out-of-cap lookups will throw "not found" ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:819-826](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L819-L826)).
+- **Unknown ticket id in a multi-ticket chain:** `FindIssueAsync` throws `KeyNotFoundException` for a seq absent from the snapshot; the chain multi-ticket batch path catches it and exits 2 ("Ticket not found") rather than crashing unhandled ([src/ThroughlineBuild.Cli/Program.cs:1226-1231](../../src/ThroughlineBuild.Cli/Program.cs#L1226-L1231)).
 
 ### Anthropic rate-limited / key absent
 
@@ -188,7 +190,7 @@ Each rejects terminal state (or non-terminal for `reopen`) up front. `close`/`de
 
 ### git divergence / conflict
 
-- `ship` probes diverged local/remote `main` via `ProbeDivergenceAsync` (`git merge-tree`). `DivergedNoConflict` auto-rebases local main onto origin (unless `--no-auto-merge`), emitting `MainAutoRebased`; `DivergedWithConflict`, a raced auto-rebase, or `--no-auto-merge` produce a `diverged_bases` `GateFailure` and fail at `Fetch` ([src/ThroughlineBuild.Phases/ShipPhase.cs:230-298](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L230-L298)). See [10-lifecycle-orchestration.md](10-lifecycle-orchestration.md) "Divergence and merge orchestration".
+- `ship` probes the diverged local/remote target branch via `ProbeDivergenceAsync` (`git merge-tree`). `DivergedNoConflict` auto-rebases the local target onto `<remote>/<target>` (unless `--no-auto-merge`), emitting `TargetAutoRebased`; `DivergedWithConflict`, a raced auto-rebase, or `--no-auto-merge` produce a `GateFailure` and fail at `Fetch` ([src/ThroughlineBuild.Phases/ShipPhase.cs:305-345](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L305-L345)). See [10-lifecycle-orchestration.md](10-lifecycle-orchestration.md) "Divergence and merge orchestration".
 
 ### MainWorktreeLock contention
 
@@ -213,7 +215,7 @@ Each rejects terminal state (or non-terminal for `reopen`) up front. `close`/`de
 ### Loose ends
 
 - The Anthropic key being soft for worker phases means a misconfigured key is not caught until a `close`/`defer`/`reopen` runs.
-- `RequestThrottle` + Polly are process-scoped; they do not protect against multiple `build` processes collectively exceeding Plane's 60/min.
+- `RequestThrottle` (40/min) + Polly are process-scoped; they do not protect against multiple `build` processes collectively exceeding Plane's server-side 60/min. The snapshot cache only sees this process's own writes, so a concurrent second `build` mutating the same project is invisible until the next run reloads.
 
 ---
 

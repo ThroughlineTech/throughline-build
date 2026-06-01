@@ -1,6 +1,6 @@
 # 00 - State of the System: latticeflow
 
-This doc set is a code-true map of the `latticeflow` repository as it exists at commit `68d6fa2` on `main` (refresh history in [PROMPT.md](PROMPT.md)).
+This doc set is a code-true map of the `latticeflow` repository as it exists at commit `e8d9a95` on `main` (refresh history in [PROMPT.md](PROMPT.md)).
 
 The repository is **Throughline Build** - a `.NET 8` native-AOT CLI named `build` that orchestrates an Agile ticket workflow against a Plane backend by spawning an external coding-agent CLI as a worker subprocess for the LLM-bearing phases and running everything else as deterministic C# code. As of this refresh the worker subprocess is no longer claude-only: four agents (`claude-code`, `codex`, `gemini`, `copilot`) are implemented and selectable by config or `--agent` flag. The architecture is described in [docs/throughline-build-architecture.md](../throughline-build-architecture.md); that document is a forward-looking proposal and disagrees with the tree in several places - this doc set documents what is actually in the source, and calls out the disagreements as loose ends.
 
@@ -63,12 +63,12 @@ Voice: technical, `file:line` references throughout, status-tagged. The reader i
             +-------+ ModelClient / IModelClient (built + tested, UNWIRED)
 ```
 
-The CLI dispatches one of fifteen action verbs (`plan`, `implement`, `review`, `ship`, `chain`, `rework`, `decompose`, `new`, `init`, `scaffold`, `list`, `amend`, `close`, `defer`, `reopen`), plus a `--help`/`help` token; any other token returns exit 2 ([src/ThroughlineBuild.Cli/CliUsage.cs](../../src/ThroughlineBuild.Cli/CliUsage.cs), dispatch is a chain of `if (verb == ...)` blocks in [src/ThroughlineBuild.Cli/Program.cs](../../src/ThroughlineBuild.Cli/Program.cs)). Most verbs route to a phase or command, which composes calls against `ITicketing` (Plane), `IWorkerAgent` (the selected agent CLI), `IGitClient` (git subprocesses), and `IEventSink` (JSONL log). The whole binary exits at the end of each verb - there is no daemon, no shared in-process state across invocations.
+The CLI dispatches one of sixteen action verbs (`plan`, `implement`, `review`, `ship`, `chain`, `rework`, `decompose`, `new`, `init`, `settarget`, `scaffold`, `list`, `amend`, `close`, `defer`, `reopen`), plus a `--help`/`help` token; any other token returns exit 2 ([src/ThroughlineBuild.Cli/CliUsage.cs](../../src/ThroughlineBuild.Cli/CliUsage.cs), dispatch is a chain of `if (verb == ...)` blocks in [src/ThroughlineBuild.Cli/Program.cs](../../src/ThroughlineBuild.Cli/Program.cs)). `settarget` is a config-editing verb (like `init`) that runs ahead of config load and writes `[work].target_branch` into `.build/config.toml` ([src/ThroughlineBuild.Cli/SetTargetCommand.cs](../../src/ThroughlineBuild.Cli/SetTargetCommand.cs)). Most verbs route to a phase or command, which composes calls against `ITicketing` (Plane), `IWorkerAgent` (the selected agent CLI), `IGitClient` (git subprocesses), and `IEventSink` (JSONL log). The whole binary exits at the end of each verb - there is no daemon, no shared in-process state across invocations.
 
 Coordination between phases happens through three persistent channels:
 
 - **Plane**: ticket state, labels, description, comments (with markers like `[planned_at: <sha>]`, `[decomposed_at: ...]`), and parent/child sub-issue links.
-- **Git**: the feature branch `ticket/<slug>` and its worktree at `.worktrees/ticket-<slug>/`; ship now fetches, auto-rebases local `main` onto `origin/main` on a clean divergence, and pushes after the fast-forward merge.
+- **Git**: the feature branch `ticket/<slug>` and its worktree at `.worktrees/ticket-<slug>/`; ship fetches, auto-rebases the local target branch onto `<remote>/<target>` on a clean divergence, fast-forward-merges the feature branch in, and pushes. The merge target defaults to `[ship].base_branch` (`main`) but can be redirected to a feature integration branch via `[work].target_branch` (set with `build settarget`); when the target is non-default, ship preflight-guards that the main worktree is actually on that branch before merging ([src/ThroughlineBuild.Phases/ShipPhase.cs:225-247](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L225-L247)).
 - **`.build/events/<stem>.jsonl`**: the append-only event log.
 
 LLM contact splits into three tiers (architecture Section 3), but at two different maturity levels - see [11-llm-architecture.md](11-llm-architecture.md):

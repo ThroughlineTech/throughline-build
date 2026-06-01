@@ -17,13 +17,14 @@ build <verb> [args] [--debug | --quiet] [--summary-json] [--error-location]
   implement <id> [id ...] [--agent <name>]
   review <id> [id ...]    [--agent <name>]
   ship <id> [id ...]      [--no-auto-merge]
-  chain <id> [id ...]     [--agent <name>] [--agent-plan <name>] [--agent-implement <name>] [--agent-review <name>] [--no-auto-resolve] [--no-auto-merge] [--continue-past-failure]
+  chain <id> [id ...]     [--agent <name>] [--agent-plan <name>] [--agent-implement <name>] [--agent-review <name>] [--no-auto-resolve] [--no-auto-merge] [--continue-past-failure] [--max-parallel]
   rework <id> [--feedback "..."]
   decompose <id> [--agent <name>]
   new <body-path | text | -> [--title "..."] [--type "..."] [--label "..."]* [--review]
   new --print-template
   scaffold <op-doc-path> [--validate-only] [--dry-run] [--accept-warnings]
   init [--force] [--print-template] [--plane-url URL] [--workspace SLUG] [--project-id UUID] [--token TOKEN | --token-env VAR]
+  settarget [<branch> | --unset]
   list [--state <name>] [--parent <id>] [--type <name>]
   amend <id> [--size S|M|L] [--note "..."] [--description <path|->] [--ac <path|->]
   close <id> <reason>
@@ -79,8 +80,8 @@ The global mapping (any verb that does not override it):
 
 - Always reads `.build/config.toml` from the nearest ancestor directory.
 - Always resolves the main worktree root before phase dispatch, so `build` invoked from inside a feature worktree still operates on the right paths.
-- Never pushes to a remote.
-- Never amends or force-resets anything.
+- `ship` pushes the merge target to the configured remote after a fast-forward merge (no other verb pushes); see [05-state-and-persistence.md](05-state-and-persistence.md).
+- Never amends or force-resets anything (no `git push --force`, `git reset --hard`, or interactive rebase anywhere).
 - Single-shot, no daemon, no shared state between invocations.
 
 ### Loose ends (CLI surface)
@@ -131,7 +132,7 @@ The phase classes are the next-most-public surface - any new orchestrator (e.g.,
 | `PlanPhase` | `ITicketing, IWorkerAgent, IEventSink, BuildOptions, IGitClient?, ProjectContext?` | `PlanResult(Success, TicketId, RiskLabel, SizeLabel, PlannedAtSha, FailureReason)` |
 | `ImplementPhase` | same + optional `ImplementPhaseOptions` (for rework feedback) | `ImplementResult(Success, TicketId, CommitSha, BranchName, WorktreePath, FailureReason, ReworkRoundNumber)` |
 | `ReviewPhase` | same + `ReviewOptions` + optional `IVerifier`/`AutomatedChecksRunner` overrides | `ReviewResult(Success, TicketId, VerdictKind?, VerdictRationale, ChecksFailed[], FailureReason)` |
-| `ShipPhase` | `ITicketing, IEventSink, BuildOptions, ShipOptions, IGitClient?, AutomatedChecksRunner?, ConflictMarkerScannerFn?, WorktreeDecrufter?, processPathProvider?` | `ShipResult(Success, TicketId, MergedSha?, FailureReason, FailedAt?)` |
+| `ShipPhase` | `ITicketing, IEventSink, BuildOptions, ShipOptions (now carries `TargetBranch`), IGitClient?, AutomatedChecksRunner?, ConflictMarkerScannerFn?, WorktreeDecrufter?, processPathProvider?, TextWriter? progressWriter, bool verbose` | `ShipResult(Success, TicketId, MergedSha?, FailureReason, FailedAt?)` |
 | `ChainPhase` | `ITicketing, IEventSink, BuildOptions, planFactory, implementFactory, reviewFactory, shipFactory, sessionIdGenerator?, workingDirectory?` | `ChainResult(TicketId, Steps[], Outcome, TotalDuration, FinalRationale?)` |
 | `ReworkPhase` | `ITicketing, IWorkerAgent, IEventSink, BuildOptions, IReviewFeedbackRetriever, ReworkPhaseOptions, IGitClient?, ProjectContext?` | `ReworkResult(TicketId, Outcome, ImplementResult?, FailureReason, FeedbackSource)` |
 | `NewPhase` | `ITicketing, IEventSink, BuildOptions` | `NewResult(Id, Uuid, ValidationWarnings[])` |
@@ -172,7 +173,18 @@ The `WORKER_RESULT` envelope contract (what a worker must emit at the end of its
 
 Parser rules ([WorkerResultParser.cs:73-174](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs#L73-L174)): the literal marker line `WORKER_RESULT` precedes the JSON payload (optionally fenced in triple backticks, with or without a `json` tag); multiple markers are tolerated and the LAST valid envelope wins (the first is often a template echo); `status` and a non-empty `summary` are required (a missing `status` fails loudly rather than defaulting to `Ok`).
 
-`metadata` is the extension point for phase-specific fields - `plan_html`, `risk_label`, `size_label`, `planned_at_sha` for plan; `commit_sha` for implement; `verdict`, `rationale`, `checks_failed` for review; `body_markdown` for draft. Required key sets are enforced per-phase, not at parse.
+**Fenced-block payload protocol (op-27, TLB-333/334).** Large markdown payloads (plan bodies, implement summaries, review critiques, draft bodies) are no longer JSON-string fields - the JSON envelope grew brittle when bodies contained quotes/newlines. Instead the worker emits named fenced blocks *before* the `WORKER_RESULT` marker, delimited by `<<<NAME_START` / `<<<NAME_END` (block names must match `^[A-Z][A-Z0-9_]*$`), and the envelope references them by a `*_ref` metadata field. The parser runs a **fenced-block pre-pass** over stdout up to the marker, captures the blocks into a `Dictionary<string,string>`, and returns them alongside the parsed result; `FencedBlockResolver.TryResolveRef(blocks, metadata, "<field>_ref", out content, out error)` later resolves a ref field to its block body. The per-phase block names and ref fields:
+
+| Phase | Block name | Metadata ref field | Consumer |
+|---|---|---|---|
+| plan | `PLAN_BODY` | `plan_body_ref` | `PlanPhase` -> `MarkdownRenderer.Render` -> Plane description |
+| implement | `IMPLEMENT_SUMMARY` | `summary_ref` | `ImplementPhase` -> rendered HTML comment (optional) |
+| review | `REVIEW_CRITIQUE` | `rationale_ref` | `WorkerAgentReviewer` -> `Verdict.Rationale` (falls back to direct `rationale`) |
+| draft | `DRAFT_BODY` | `body_markdown_ref` | `DraftPhase` (falls back to legacy `body_markdown`) |
+
+`metadata` is otherwise the extension point for phase-specific scalar fields - `risk_label`, `size_label`, `planned_at_sha` for plan; `commit_sha` for implement; `verdict`, `checks_failed` for review. Required key sets are enforced per-phase, not at parse. The draft and review consumers retain backward-compatible fallbacks to the pre-op-27 direct-string fields.
+
+**`MarkdownRenderer` (TLB-335).** Resolved block bodies are markdown; `MarkdownRenderer.Render` ([src/ThroughlineBuild.Workers.Common/MarkdownRenderer.cs](../../src/ThroughlineBuild.Workers.Common/MarkdownRenderer.cs)) turns them into the HTML Plane stores. It is a hand-rolled CommonMark *subset* (headings, paragraphs, fenced/inline code, ordered+unordered lists, bold/italic, links, with HTML escaping) chosen over Markdig to stay AOT-safe with zero reflection. Constructs outside the subset (tables, blockquotes, strikethrough) pass through as literal text.
 
 Two `metadata` keys are parsed structurally:
 
@@ -213,7 +225,7 @@ Each line is a serialized `EventLineDto` ([src/ThroughlineBuild.EventLog/EventLi
 | 7 | `ChainEnd` |
 | 8 | `ReworkRound` |
 | 9 | `TicketSubsumed` |
-| 10 | `MainAutoRebased` |
+| 10 | `TargetAutoRebased` (renamed from `MainAutoRebased`; ordinal unchanged) |
 | 11 | `DispatchStart` |
 | 12 | `DispatchEnd` |
 
@@ -258,6 +270,7 @@ This project also holds two newer types that target the `IModelClient` abstracti
 ## Surfaces called out for stability
 
 - **`WORKER_RESULT` envelope JSON schema** is the contract between every worker agent and the orchestrator (all four agents emit it; the parser lives in `Workers.Common`). Breaking it breaks every phase that dispatches a worker. The `metadata.escalation` / `subsumed_by` sub-schema and the `metadata.llm_usage` shape are part of this contract.
+- **Fenced-block payload protocol** (`<<<NAME_START`/`<<<NAME_END` markers + `*_ref` metadata fields, spec in `docs/op-docs/op-27-worker-result-fenced-payloads.md`) is now part of the worker contract for plan/implement/review/draft bodies; the per-agent brief templates emit it and `FencedBlockResolver` consumes it. The `MarkdownRenderer` CommonMark-subset is the rendering contract for those bodies into Plane HTML.
 - **Plane marker comment formats** (`[planned_at: <sha>]`, `[implemented_at: <sha>]`, `[decomposed_at: <sha>]`, `[shipped_at: <sha>]`, `<strong>wontfix:</strong>`, `<strong>deferred:</strong>`, `<strong>reopened:</strong>`). Changing any of these strings breaks subsequent phases / commands that read them (e.g. `ReopenCommand` keys off the prior `deferred:` / `wontfix:` marker). Markers are emitted as HTML `<p>`/`<strong>` and parsed back through `MarkerParser` after HTML-tag stripping ([src/ThroughlineBuild.Helpers/MarkerParser.cs:8](../../src/ThroughlineBuild.Helpers/MarkerParser.cs#L8)).
 - **JSONL event log line schema** (`EventLineDto`, including the `EventKind` integer ordinals) - the `analyze-event-log` and `token-audit` tools depend on it. Backward-compat is preserved via `[JsonIgnore(WhenWritingNull)]` on the four newer fields.
 - **CLI exit code mapping** is the contract any CI workflow relies on - including the `ChainOutcome` overrides for `chain`.

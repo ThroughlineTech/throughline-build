@@ -10,7 +10,7 @@ For installation-time concerns (including the `build init` bootstrap) see [02-in
 
 The single source of operator-controlled configuration. Discovered by walking up from cwd looking for `.build/config.toml` ([src/ThroughlineBuild.Cli/Config.cs:64-75](../../src/ThroughlineBuild.Cli/Config.cs#L64-L75)). Missing file: exit 2 with `Config error: config file not found: searched from <cwd> upwards for .build/config.toml` ([src/ThroughlineBuild.Cli/Program.cs:151-162](../../src/ThroughlineBuild.Cli/Program.cs#L151-L162)).
 
-Parsed by `Tomlyn` into the typed records `TicketingConfig`, `LlmConfig`, `WorkersConfig` (containing `AgentConfig` per agent), `EventsConfig`, `ReviewConfig`, `ShipConfig`, and `ProjectContext` ([src/ThroughlineBuild.Cli/Config.cs:9-53](../../src/ThroughlineBuild.Cli/Config.cs#L9-L53)). The section readers run at [src/ThroughlineBuild.Cli/Config.cs:99-107](../../src/ThroughlineBuild.Cli/Config.cs#L99-L107).
+Parsed by `Tomlyn` into the typed records `TicketingConfig`, `LlmConfig`, `WorkersConfig` (containing `AgentConfig` per agent), `EventsConfig`, `ReviewConfig`, `ShipConfig`, `WorkConfig`, and `ProjectContext` ([src/ThroughlineBuild.Cli/Config.cs:9-58](../../src/ThroughlineBuild.Cli/Config.cs#L9-L58)). The section readers run in `Load` ([src/ThroughlineBuild.Cli/Config.cs:99-116](../../src/ThroughlineBuild.Cli/Config.cs#L99-L116)).
 
 Two templates exist and the project comment requires them to be kept in lockstep:
 - [.build/config.toml.example](../../.build/config.toml.example) - the hand-edit reference, with codex/gemini/copilot agent blocks present but commented out.
@@ -91,6 +91,16 @@ Maps phase names to agent names (TLB-189/190/191). Allowed keys: `plan`, `implem
 Resolution per phase: `AgentFor(phase)` returns the `[workers.phases]` mapping if present, else `default_agent` ([src/ThroughlineBuild.Cli/Program.cs:781-782](../../src/ThroughlineBuild.Cli/Program.cs#L781-L782)). `EffectiveAgentFor(phase)` then layers CLI flags on top: a per-phase flag (`--agent-plan` / `--agent-implement` / `--agent-review`) wins over `--agent` (all phases), which wins over config (TLB-191 cli-flag-override) ([src/ThroughlineBuild.Cli/Program.cs:786-790](../../src/ThroughlineBuild.Cli/Program.cs#L786-L790)). The agent flags are extracted before dispatch ([src/ThroughlineBuild.Cli/Program.cs:63-66](../../src/ThroughlineBuild.Cli/Program.cs#L63-L66), [src/ThroughlineBuild.Cli/CliArgParser.cs:25-52](../../src/ThroughlineBuild.Cli/CliArgParser.cs#L25-L52)).
 
 The orchestrator constructs one agent per name referenced by `default_agent` or any phase mapping (plus any agent named on a CLI flag), selecting the implementation by name: `gemini`, `codex`, `copilot`, else `ClaudeCodeAgent` as fallback ([src/ThroughlineBuild.Cli/Program.cs:725-778](../../src/ThroughlineBuild.Cli/Program.cs#L725-L778)). See [02-install-build-run.md](02-install-build-run.md) "Worker CLIs" for the per-agent table.
+
+### `[work]` (optional section) - Functional
+
+`ReadWorkSection` ([src/ThroughlineBuild.Cli/Config.cs:385-393](../../src/ThroughlineBuild.Cli/Config.cs#L385-L393)). Parsed into `WorkConfig(string? TargetBranch)` ([src/ThroughlineBuild.Cli/Config.cs:46](../../src/ThroughlineBuild.Cli/Config.cs#L46)).
+
+| Key | Required | Default | Notes |
+|---|---|---|---|
+| `target_branch` | no | `null` | The branch `ship` merges into and pushes, overriding `[ship].base_branch`. An empty string is rejected (treated as unset) at read time ([src/ThroughlineBuild.Cli/Config.cs:390](../../src/ThroughlineBuild.Cli/Config.cs#L390)). |
+
+`BuildConfig.ResolveTargetBranch()` returns `Work.TargetBranch ?? Ship.BaseBranch` ([src/ThroughlineBuild.Cli/Config.cs:58](../../src/ThroughlineBuild.Cli/Config.cs#L58)); that resolved value flows into `ShipOptions.TargetBranch` and `BuildOptions.TargetBranch` and is consumed by `ShipPhase` and the target-aware `BaseRefResolver` (see [01-inventory.md](01-inventory.md) ship verb, [10-lifecycle-orchestration.md](10-lifecycle-orchestration.md)). The intended editing path is the `build settarget` verb, which validates the branch exists locally before writing the key and preserves config comments via line-edit; hand-editing the TOML works too. When `target_branch != base_branch`, ship enforces that the main worktree is checked out on the target branch before merging.
 
 ### `[events]` (required section) - Functional
 

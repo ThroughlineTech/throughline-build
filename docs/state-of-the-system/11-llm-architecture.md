@@ -42,7 +42,7 @@ Supporting types ([IWorkerAgent.cs:43-51](../../src/ThroughlineBuild.Contracts/I
 
 - `Brief(TicketId, Phase, Instruction, RelevantFiles, AllowedWrites, Context)` - the unit of work. Built by `*BriefBuilder` classes from per-agent, per-phase templates.
 - `WorkerOptions(Timeout, AllowedTools?, EnvironmentVariables?, DebugCaptureDirectory?, LiveStdoutSink?, LiveStderrSink?, ProgressDigestSink?, Size = WorkerSize.Medium)` - process-level controls. `Size` (the worker-domain size signal, default `Medium`) lets each agent map an abstract size to its own model tier. `AllowedTools` remains a Claude-Code-shaped concept (other agents map or ignore it).
-- `WorkerResult(Status, Summary, FilesChanged, FailureReason?, Metadata)` - parsed from a `WORKER_RESULT` envelope the agent emits at the end of its session.
+- `WorkerResult(Status, Summary, FilesChanged, FailureReason?, Metadata, Blocks? = null)` - parsed from a `WORKER_RESULT` envelope the agent emits at the end of its session; `Blocks` carries the fenced payload blocks captured in the parser pre-pass (op-27).
 - `IWorkerProgressDigester` ([src/ThroughlineBuild.Contracts/IWorkerProgressDigester.cs](../../src/ThroughlineBuild.Contracts/IWorkerProgressDigester.cs)) - `string? FormatLine(string rawNdjsonLine)`, best-effort (must not throw).
 - `IWorkerAgentFactory` ([src/ThroughlineBuild.Contracts/IWorkerAgentFactory.cs](../../src/ThroughlineBuild.Contracts/IWorkerAgentFactory.cs)) - `IWorkerAgent Create(string agentName)`.
 
@@ -60,7 +60,7 @@ All four live in their own `ThroughlineBuild.Workers.<Vendor>` project, implemen
 Common across all four:
 
 - A `BypassPermissions` option (default true) decides whether to emit the agent's unattended-mode flag: `--dangerously-skip-permissions` (Claude Code), `--full-auto` (Codex), `--yolo` (Gemini); Copilot always passes `-s --no-ask-user`.
-- All four call the shared `WorkerResultParser.TryParse` in `Workers.Common` ([src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs:73-174](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs#L73-L174)) - the parser scans for the `WORKER_RESULT` marker line and deserializes the JSON after it, last-valid-envelope-wins. The vendor wrappers differ only in what they feed the parser (the Claude `.Result` string, the Gemini `.response` string, or raw stdout).
+- All four call the shared `WorkerResultParser.TryParse` in `Workers.Common` ([src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs:73-174](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs#L73-L174)) - a fenced-block pre-pass captures any `<<<NAME_START`/`<<<NAME_END` payload blocks emitted before the marker, then the parser scans for the `WORKER_RESULT` marker line and deserializes the JSON after it, last-valid-envelope-wins. The captured blocks are returned on `WorkerResult.Blocks` and resolved by `FencedBlockResolver` against `*_ref` metadata fields (op-27; see [06-public-surfaces.md](06-public-surfaces.md) / [07-contracts.md](07-contracts.md)). The vendor wrappers differ only in what they feed the parser (the Claude `.Result` string, the Gemini `.response` string, or raw stdout).
 - Each builds an `llm_usage` metadata dictionary and merges it onto the parsed result. The `vendor` string is the per-agent constant above; `model`, `wall_clock_ms`, token counts, and (Claude only) `cost_usd` are filled when available. Claude Code reports full input/output/cache token splits and cost; Gemini reports a single combined token total in `input_tokens` (output left 0, cost null); Codex and Copilot emit zeroed token counts and null cost (their CLIs do not surface usage in these modes).
 
 ### Usage and cost capture
@@ -170,7 +170,7 @@ A map of the vendor-specific touchpoints in each layer.
 
 ### Worker layer (per agent)
 
-Each agent's vendor specifics are isolated in its own project. The common shape (subprocess spawn, cancellation, debug capture, calling `WorkerResultParser`) is duplicated across the four agents rather than abstracted into `Workers.Common`, which holds only the parser today.
+Each agent's vendor specifics are isolated in its own project. The common shape (subprocess spawn, cancellation, debug capture, calling `WorkerResultParser`) is duplicated across the four agents rather than abstracted into `Workers.Common`, which holds the parser (plus `FencedBlockResolver`) and the AOT-safe `MarkdownRenderer` today.
 
 | Project / file | Vendor specifics |
 |---|---|
@@ -194,7 +194,7 @@ Each agent's vendor specifics are isolated in its own project. The common shape 
 
 ### Vendor-neutral contracts that **don't** change per provider
 
-- The `WORKER_RESULT` JSON envelope ([src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs:38-70](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs#L38-L70)) - any worker that emits this shape is parsed by the same `WorkerResultParser` in `Workers.Common`. The four agents already do this; the brief templates instruct each model to emit it.
+- The `WORKER_RESULT` JSON envelope ([src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs:38-70](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs#L38-L70)) and the op-27 fenced-block payload protocol (`<<<NAME_START`/`*_ref` + `MarkdownRenderer`) - any worker that emits this shape is parsed by the same `WorkerResultParser` in `Workers.Common`. The four agents already do this; the per-agent brief templates instruct each model to emit both the envelope and the fenced bodies.
 - The per-agent brief templates under [src/ThroughlineBuild.Briefs/Templates/](../../src/ThroughlineBuild.Briefs/Templates/) - markdown with `{{variable}}` substitution. A new agent adds its own subdirectory; the substitution mechanism (`TemplateExtensions.Substitute`) and loader (`TemplateLoader.Load`) are shared.
 - The phase classes take `IWorkerAgent` (and the verifier takes any injected agent) and do not depend on a concrete type.
 - `Brief`, `WorkerResult`, `WorkerOptions`, `WorkerSize`, `Status`, `Verdict` in `ThroughlineBuild.Contracts`.

@@ -86,8 +86,8 @@ Step sequence ([src/ThroughlineBuild.Phases/PlanPhase.cs:56-151](../../src/Throu
 10. Emit `VerifierVerdict` (status of the worker run).
 11. On worker `Status != Ok`: return; if the status is `Escalate`, the `WorkerResult` is carried back as `EscalationWorkerResult` for obsolete-claim ratification ([src/ThroughlineBuild.Phases/PlanPhase.cs:105-108](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L105-L108)).
 12. Optionally emit `LlmCall` from worker metadata.
-13. Validate required metadata keys (`plan_html`, `risk_label`, `size_label`, `planned_at_sha`).
-14. Append plan HTML to description.
+13. Resolve the plan body: `FencedBlockResolver.TryResolveRef(blocks, metadata, "plan_body_ref")` -> `PLAN_BODY` block; render to HTML via `MarkdownRenderer.Render` ([src/ThroughlineBuild.Phases/PlanPhase.cs:120-125](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L120-L125)). Validate the scalar keys (`risk_label`, `size_label`, `planned_at_sha`).
+14. Append the rendered plan HTML to description.
 15. Apply merged risk + size labels.
 16. Post `[planned_at: <sha>]` comment.
 17. Transition `Planning -> Ready`.
@@ -109,7 +109,7 @@ Step sequence ([src/ThroughlineBuild.Phases/ImplementPhase.cs:52-241](../../src/
 10. Emit `WorkerSpawn`. Run worker inside the worktree.
 11. Emit `VerifierVerdict` (worker status). On non-Ok, return early; `Escalate` is carried as `EscalationWorkerResult` ([src/ThroughlineBuild.Phases/ImplementPhase.cs:203-206](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L203-L206)).
 12. Validate `commit_sha` metadata. Compare against actual `git rev-parse HEAD` in worktree; actual wins on discrepancy (a discrepancy note is folded into the marker comment).
-13. Post `[implemented_at: <actualSha>]` comment naming the branch.
+13. Post `[implemented_at: <actualSha>]` comment naming the branch; if the worker supplied a `summary_ref` -> `IMPLEMENT_SUMMARY` fenced block, render it via `MarkdownRenderer` and append it to the comment ([src/ThroughlineBuild.Phases/ImplementPhase.cs:252-271](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L252-L271)).
 14. Transition `InProgress -> InReview`.
 
 ### `ReviewPhase` ([src/ThroughlineBuild.Phases/ReviewPhase.cs](../../src/ThroughlineBuild.Phases/ReviewPhase.cs))
@@ -138,25 +138,28 @@ Step sequence ([src/ThroughlineBuild.Phases/ReviewPhase.cs:60-237](../../src/Thr
 
 Status: **Functional**.
 
-Deterministic - no LLM, no worker. Step sequence ([src/ThroughlineBuild.Phases/ShipPhase.cs:81-456](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L81-L456)):
+Deterministic - no LLM, no worker. The merge **target** is `[work].target_branch` if set, else `[ship].base_branch` (resolved by `BuildConfig.ResolveTargetBranch()` and carried on `ShipOptions.TargetBranch`, [src/ThroughlineBuild.Phases/ShipPhase.cs:225](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L225)). Step sequence:
 1. Fetch ticket. Parent-ticket ship branch if it has children (see "Tree-aware chain").
 2. State guard `InReview`.
-3. Locate worktree.
+3. Locate worktree (by `ticket/<id>-` prefix; falls back to creating one from a matching local branch).
 4. Pre-flight: `build` binary not running from inside the worktree.
 5. Pre-flight: both feature and main worktrees clean of tracked changes.
-6. Conditionally fetch from remote. If no remote: skip, use local base branch.
-7. Determine rebase target via divergence handling (see "Divergence and merge orchestration"). Fetch and the auto-rebase of local main are wrapped in `MainWorktreeLock`.
-8. Emit `base_ref_resolved` (a `TicketWrite` event).
-9. Rebase feature branch onto resolved base ref. On conflict: `git rebase --abort`, fail at `Rebase`.
-10. Conflict-marker scan of the rebased diff's files.
-11. Run `ship.regression_checks`.
-12. Fast-forward merge into local base branch, under `MainWorktreeLock` ([src/ThroughlineBuild.Phases/ShipPhase.cs:378-387](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L378-L387)).
-13. Push base branch to remote when a remote exists; failure fails the ship at the `Push` stage ([src/ThroughlineBuild.Phases/ShipPhase.cs:389-397](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L389-L397)).
-14. Read merged HEAD SHA.
-15. Post `[shipped_at: <mergedSha>]` comment.
-16. Transition `InReview -> Done`.
-17. `WorktreeDecrufter.DecruftAsync` (failure non-fatal post-merge).
-18. Optionally `git branch -d ticket/<slug>` (failure non-fatal).
+6. Pre-flight (non-default target only): the main worktree is checked out on the target branch, else `wrong_worktree_branch` `GateFailure` and fail at `PreFlight` ([src/ThroughlineBuild.Phases/ShipPhase.cs:227-247](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L227-L247)).
+7. Conditionally fetch from remote. If no remote: skip, use the local target branch.
+8. Determine rebase target via divergence handling (see "Divergence and merge orchestration"). Fetch and the auto-rebase of the local target branch are wrapped in `MainWorktreeLock`.
+9. Emit `base_ref_resolved` (a `TicketWrite` event).
+10. Rebase feature branch onto resolved target ref. On conflict: `git rebase --abort`, fail at `Rebase`.
+11. Conflict-marker scan of the rebased diff's files.
+12. Run `ship.regression_checks`. Under `--debug` all check results stream to stderr; otherwise only failed checks do.
+13. Fast-forward merge into the target branch, under `MainWorktreeLock` ([src/ThroughlineBuild.Phases/ShipPhase.cs:496-498](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L496-L498)).
+14. Push the target branch to remote when a remote exists; failure fails the ship at the `Push` stage ([src/ThroughlineBuild.Phases/ShipPhase.cs:509-510](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L509-L510)).
+15. Read merged HEAD SHA.
+16. Post `[shipped_at: <mergedSha>]` comment.
+17. Transition `InReview -> Done`.
+18. `WorktreeDecrufter.DecruftAsync` (failure non-fatal post-merge).
+19. Optionally `git branch -d ticket/<slug>` (failure non-fatal).
+
+`ShipPhase` emits phase-level progress lines ("[ship] fetching...", "[ship] merging into <target>...") to its progress writer, and under `--debug` (verbose) also streams raw git output.
 
 ### `DecomposePhase` ([src/ThroughlineBuild.Phases/DecomposePhase.cs](../../src/ThroughlineBuild.Phases/DecomposePhase.cs))
 
@@ -228,7 +231,7 @@ Status: **Functional**. Used by `build new` in draft mode and stdin draft mode.
 1. Validate non-empty operator text.
 2. Build `DraftBriefBuilder` brief.
 3. Run worker.
-4. Extract `body_markdown` from metadata.
+4. Resolve `body_markdown_ref` -> `DRAFT_BODY` fenced block (falling back to a legacy direct `body_markdown` field) ([src/ThroughlineBuild.Phases/DraftPhase.cs:70-84](../../src/ThroughlineBuild.Phases/DraftPhase.cs#L70-L84)).
 5. Validate minimal sections (title + description).
 6. Return `DraftResult.Ok` with body markdown.
 
@@ -324,9 +327,10 @@ When a chained ticket has children, `RunParentChainAsync` ([src/ThroughlineBuild
 
 1. Filter children to non-terminal (not `Done`/`Cancelled`) and never the parent itself.
 2. **Grandchild stop:** for each eligible child, query *its* children; if any are live, the tree is deeper than one level. Return `ParentHasGrandchildren` and tell the operator to chain the intermediate ticket directly ([src/ThroughlineBuild.Phases/ChainPhase.cs:548-581](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L548-L581)). This guards against the runaway recursion that previously hammered Plane's rate limiter.
-3. Recurse `RunAsync` on each eligible (leaf) child, bounded by `SemaphoreSlim(MaxParentChainConcurrency)` where `MaxParentChainConcurrency = 4` ([src/ThroughlineBuild.Phases/ChainPhase.cs:585, 651](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L585)). The shared Plane `RequestThrottle` paces the API traffic.
-4. After all children: attempt `RollupParentAsync` (fail-soft).
-5. Outcome is `ParentCompleted` if every child succeeded, else `ParentStoppedEarly`. Child results are carried on `ChainResult.ChildResults`.
+3. **Sibling dependency ordering (TLB-329):** build a `blocked_by` dependency graph over the eligible siblings (`BuildSiblingGraphAsync`, [src/ThroughlineBuild.Phases/ChainPhase.cs:675-693](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L675-L693)) and `TopologicalSorter.ComputeLevels` it into dependency-ordered levels ([src/ThroughlineBuild.Phases/ChainPhase.cs:596-597](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L596-L597)). Independent siblings run concurrently within a level; a sibling blocked by another waits for its blocker's level. The `--max-parallel` flag (`ChainPhaseOptions.ForceParallel`) collapses all siblings into one level and skips the relation fetch, restoring the prior all-concurrent behavior ([src/ThroughlineBuild.Phases/ChainPhase.cs:585-593](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L585-L593)).
+4. Recurse `RunAsync` on each eligible (leaf) child, level by level, bounded by `SemaphoreSlim(MaxParentChainConcurrency)` where `MaxParentChainConcurrency = 4` ([src/ThroughlineBuild.Phases/ChainPhase.cs:600,702](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L600)). A level stops the cascade if any child in it fails. The shared Plane `RequestThrottle` paces the API traffic.
+5. After all children: attempt `RollupParentAsync` (fail-soft).
+6. Outcome is `ParentCompleted` if every child succeeded, else `ParentStoppedEarly`. Child results are carried on `ChainResult.ChildResults`.
 
 Refusals enforcing the tree discipline:
 - **Plan/implement refuse parent tickets:** `PlanPhase` ([src/ThroughlineBuild.Phases/PlanPhase.cs:60-63](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L60-L63)) and `ImplementPhase` ([src/ThroughlineBuild.Phases/ImplementPhase.cs:57-64](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L57-L64)) refuse a ticket that has children.
@@ -380,18 +384,18 @@ The CLI prints a per-ticket `[id] outcome (Nms)` summary and returns 0 only if t
 
 Status: **Functional**. TLB-290/291/293/296/297/298.
 
-`ShipPhase` resolves the rebase target by ancestry, and when local `main` and `origin/main` have diverged it probes for conflicts ([src/ThroughlineBuild.Phases/ShipPhase.cs:203-299](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L203-L299)):
+`ShipPhase` resolves the rebase target (the configured target branch) by ancestry, and when the local target and `<remote>/<target>` have diverged it probes for conflicts ([src/ThroughlineBuild.Phases/ShipPhase.cs:278-345](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L278-L345)):
 
-- `localIsAncestorOfRemote && !remoteIsAncestorOfLocal` -> `origin/main` (reason `origin_main_ahead`).
-- `remoteIsAncestorOfLocal && !localIsAncestorOfRemote` -> local `main` (reason `local_main_ahead`).
+- `localIsAncestorOfRemote && !remoteIsAncestorOfLocal` -> `<remote>/<target>` (reason `origin_target_ahead`).
+- `remoteIsAncestorOfLocal && !localIsAncestorOfRemote` -> local `<target>` (reason `local_target_ahead`).
 - both -> same commit (reason `same_commit`).
-- neither (diverged) -> `IGitClient.ProbeDivergenceAsync` (TLB-296), which uses `git merge-tree --write-tree` to classify without mutating, returning a `DivergenceState`: `Clean, LocalAhead, RemoteAhead, DivergedNoConflict, DivergedWithConflict` ([src/ThroughlineBuild.Contracts/IGitClient.cs:22-29](../../src/ThroughlineBuild.Contracts/IGitClient.cs#L22-L29), [src/ThroughlineBuild.Git/ProcessGitClient.cs:866](../../src/ThroughlineBuild.Git/ProcessGitClient.cs#L866)).
-  - `DivergedNoConflict` and NOT `--no-auto-merge` (TLB-297/298): auto-rebase local `main` onto `origin/main` under `MainWorktreeLock`. On success emit `MainAutoRebased` (`outcome=clean`) and rebase the feature onto local `main`. On a race-to-conflict, abort the rebase, emit `MainAutoRebased` (`outcome=raced_to_conflict`) + a `diverged_bases` `GateFailure`, and fail at the `Fetch` stage ([src/ThroughlineBuild.Phases/ShipPhase.cs:235-282](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L235-L282)).
-  - Otherwise (conflict, or `--no-auto-merge`): post `ship_blocked` comment, emit `diverged_bases` `GateFailure`, fail at `Fetch` ([src/ThroughlineBuild.Phases/ShipPhase.cs:284-297](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L284-L297)).
+- neither (diverged) -> `IGitClient.ProbeDivergenceAsync` (TLB-296), which uses `git merge-tree --write-tree` to classify without mutating, returning a `DivergenceState`: `Clean, LocalAhead, RemoteAhead, DivergedNoConflict, DivergedWithConflict` ([src/ThroughlineBuild.Contracts/IGitClient.cs:22-29](../../src/ThroughlineBuild.Contracts/IGitClient.cs#L22-L29), [src/ThroughlineBuild.Git/ProcessGitClient.cs:962](../../src/ThroughlineBuild.Git/ProcessGitClient.cs#L962)).
+  - `DivergedNoConflict` and NOT `--no-auto-merge` (TLB-297/298): auto-rebase the local target onto `<remote>/<target>` under `MainWorktreeLock`. On success emit `TargetAutoRebased` (`outcome=clean`) and rebase the feature onto the local target. On a race-to-conflict, abort the rebase, emit `TargetAutoRebased` (`outcome=raced_to_conflict`) + a `GateFailure`, and fail at the `Fetch` stage ([src/ThroughlineBuild.Phases/ShipPhase.cs:310-345](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L310-L345)).
+  - Otherwise (conflict, or `--no-auto-merge`): post `ship_blocked` comment, emit `GateFailure`, fail at `Fetch`.
 
-`MainWorktreeLock` (TLB-290/291) is a per-path in-process `SemaphoreSlim` keyed on the normalized main-worktree path; it serializes the fetch, the main auto-rebase, and the fast-forward merge so concurrent chains (parallel dispatch, parent chain) cannot race on the shared main worktree ([src/ThroughlineBuild.Helpers/MainWorktreeLock.cs:6-29](../../src/ThroughlineBuild.Helpers/MainWorktreeLock.cs#L6-L29)).
+`MainWorktreeLock` (TLB-290/291) is a per-path in-process `SemaphoreSlim` keyed on the normalized main-worktree path; it serializes the fetch, the target-branch auto-rebase, and the fast-forward merge so concurrent chains (parallel dispatch, parent chain) cannot race on the shared main worktree ([src/ThroughlineBuild.Helpers/MainWorktreeLock.cs:6-29](../../src/ThroughlineBuild.Helpers/MainWorktreeLock.cs#L6-L29)).
 
-After a successful FF merge, when a remote exists the phase pushes the base branch to origin (TLB-293); a push failure fails the ship at the `Push` stage ([src/ThroughlineBuild.Phases/ShipPhase.cs:389-397](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L389-L397)).
+After a successful FF merge, when a remote exists the phase pushes the target branch to the remote (TLB-293); a push failure fails the ship at the `Push` stage ([src/ThroughlineBuild.Phases/ShipPhase.cs:509-510](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L509-L510)). When the target is non-default, the step-6 preflight guarantees the main worktree is on that branch before the FF merge advances it.
 
 ### Loose ends
 
@@ -454,7 +458,7 @@ Session ids flow into `WorkflowEvent.SessionId`, the JSONL file naming (via `Ses
 | `ChainEnd` | 7 | `ChainPhase` | outcome, phases_run, rework_rounds, total_duration_ms |
 | `ReworkRound` | 8 | `ChainPhase` | round, verdict_that_triggered, rationale_preview |
 | `TicketSubsumed` | 9 | `ChainPhase` (obsolete ratification Pass) | ticket_id, subsumed_by_commit, files, rationale |
-| `MainAutoRebased` | 10 | `ShipPhase` (DivergedNoConflict auto-rebase) | from_sha, onto_sha, local_commits_replayed, outcome (clean / raced_to_conflict) |
+| `TargetAutoRebased` | 10 | `ShipPhase` (DivergedNoConflict auto-rebase; renamed from `MainAutoRebased`) | from_sha, onto_sha, local_commits_replayed, outcome (clean / raced_to_conflict) |
 | `DispatchStart` | 11 | `ParallelDispatcher` | ticket_count, level_count, max_concurrency |
 | `DispatchEnd` | 12 | `ParallelDispatcher` | outcome (ok / partial), total_duration_ms |
 

@@ -47,6 +47,8 @@ Per [README.md:4-9](../../README.md#L4-L9). Produces `src/ThroughlineBuild.Cli/b
 
 Cross-platform RIDs are noted in the README: `osx-arm64`, `linux-x64`.
 
+**AOT code-gen memory mitigation.** The Cli csproj sets `<IlcOptimizationPreference>Size</IlcOptimizationPreference>` and `<IlcMaxParallelism>1</IlcMaxParallelism>` ([src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj:11-12](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L11-L12)) to keep the ILC/LLVM backend from OOM-ing during publish (the crash surfaced as ILC exit `-1073740791`). Single-threaded code-gen trades publish wall-time for a bounded memory footprint. The same fix split the oversized `RunAsync` in `Program.cs` into `RunTicketVerbBodyAsync` / `RunChainVerbAsync` so no single method blew up the code generator (commit `dd7d781`).
+
 ### Three-binary bundle via `build.sh` - Functional
 
 ```
@@ -90,7 +92,7 @@ Verb dispatch lives in [src/ThroughlineBuild.Cli/Program.cs](../../src/Throughli
 
 1. Strips bare bool flags `--debug`, `--quiet`, `--summary-json`, `--error-location`, `--no-auto-resolve`, `--no-auto-merge`, `--continue-past-failure` from `args` ([src/ThroughlineBuild.Cli/Program.cs:31-61](../../src/ThroughlineBuild.Cli/Program.cs#L31-L61)).
 2. Extracts the agent-selection flags `--agent` / `--agent-plan` / `--agent-implement` / `--agent-review` ([src/ThroughlineBuild.Cli/Program.cs:63-66](../../src/ThroughlineBuild.Cli/Program.cs#L63-L66)).
-3. For `init`, bootstraps the config file and exits before any config load ([src/ThroughlineBuild.Cli/Program.cs:128-144](../../src/ThroughlineBuild.Cli/Program.cs#L128-L144)) - see "The `build init` verb" below.
+3. For `init`, bootstraps the config file and exits before any config load ([src/ThroughlineBuild.Cli/Program.cs:128-144](../../src/ThroughlineBuild.Cli/Program.cs#L128-L144)) - see "The `build init` verb" below. `settarget` likewise dispatches here, before config load, since it edits `.build/config.toml` ([src/ThroughlineBuild.Cli/Program.cs:149-158](../../src/ThroughlineBuild.Cli/Program.cs#L149-L158)); see [01-inventory.md](01-inventory.md) and [04-configuration.md](04-configuration.md).
 4. Resolves the main worktree root via [src/ThroughlineBuild.Helpers/MainWorktreeResolver.cs](../../src/ThroughlineBuild.Helpers/MainWorktreeResolver.cs) so that being invoked from inside a feature worktree still locates `.build/config.toml` and the project root ([src/ThroughlineBuild.Cli/Program.cs:146-149](../../src/ThroughlineBuild.Cli/Program.cs#L146-L149)).
 5. Walks up from cwd to find `.build/config.toml` ([src/ThroughlineBuild.Cli/Config.cs:64-75](../../src/ThroughlineBuild.Cli/Config.cs#L64-L75)); missing file exits 2.
 6. Loads the TOML via `Tomlyn` and resolves secrets from config or environment ([src/ThroughlineBuild.Cli/Program.cs:164-186](../../src/ThroughlineBuild.Cli/Program.cs#L164-L186)).
