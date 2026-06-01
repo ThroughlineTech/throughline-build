@@ -591,9 +591,14 @@ public class ChainPhase
 
         // Filter to non-terminal children (skip Done and Cancelled), and never the parent
         // itself - a self-referential parent edge would otherwise recurse forever.
+        // Order by ascending ticket number: TopologicalSorter preserves input order as its
+        // within-level tiebreaker, so feeding it lowest-number-first makes unordered siblings
+        // (same dependency level, no blocked_by edge) dispatch lowest-number-first.
         var eligible = children
             .Where(c => c.State != TicketState.Done && c.State != TicketState.Cancelled)
             .Where(c => !string.Equals(c.Uuid, parentTicket.Uuid, StringComparison.Ordinal))
+            .OrderBy(c => TicketNumber(c.Id))
+            .ThenBy(c => c.Id, StringComparer.Ordinal)
             .ToList();
 
         // A parent chain operates exactly one level deep: it runs its direct children.
@@ -800,6 +805,17 @@ public class ChainPhase
     /// Each level is a set of tickets with no blocked_by edge between them; within a
     /// level they are unordered relative to each other, making a missing edge obvious.
     /// </summary>
+    // Extracts the trailing integer from a ticket id like "TLB-369" -> 369 for numeric ordering.
+    // Returns int.MaxValue when there is no parseable trailing number so malformed ids sort last
+    // (after which ThenBy on the full id keeps ordering deterministic).
+    private static int TicketNumber(string id)
+    {
+        var dash = id.LastIndexOf('-');
+        if (dash >= 0 && dash < id.Length - 1 && int.TryParse(id.AsSpan(dash + 1), out var n))
+            return n;
+        return int.MaxValue;
+    }
+
     private static void PrintDispatchOrder(string parentId, IReadOnlyList<IReadOnlyList<string>> levels)
     {
         Console.WriteLine($"[{parentId}] dispatch order ({levels.Count} level{(levels.Count == 1 ? "" : "s")}):");

@@ -944,6 +944,35 @@ public class ChainPhaseTests
     }
 
     [Fact]
+    public async Task RunAsync_ParentWithUnorderedChildren_DispatchesLowestTicketNumberFirst()
+    {
+        // Two unordered children (no blocked_by edge) seeded highest-number-first.
+        // Use TLB-10 and TLB-2 to prove numeric ordering, not lexicographic (where "10" < "2").
+        var parent = MakeTicket(TicketState.Backlog);
+        var high = MakeChildTicket("TLB-10", "child-uuid-high", TicketState.Backlog);
+        var low = MakeChildTicket("TLB-2", "child-uuid-low", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { high, low });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        Assert.Equal(2, result.ChildResults!.Count);
+        // ChildResults preserve dispatch order: lowest number first despite reverse seed order.
+        Assert.Equal("TLB-2", result.ChildResults![0].TicketId);
+        Assert.Equal("TLB-10", result.ChildResults![1].TicketId);
+    }
+
+    [Fact]
     public async Task RunAsync_ParentWhoseChildHasItsOwnChildren_StopsWithParentHasGrandchildren_RunsNothing()
     {
         // Operation -> plan -> brief: a 3-level tree. Chaining the operation must NOT
