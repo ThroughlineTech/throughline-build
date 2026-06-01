@@ -121,6 +121,12 @@ public sealed class ScaffoldPhase
         string opTicketId = string.Empty;
         string opTicketUuid = string.Empty;
 
+        // Track plan and brief ticket IDs for dependency relation creation.
+        // planIdToTicketId: Plan.Id -> human-readable ticket ID (e.g. "TLB-5")
+        var planIdToTicketId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // briefKeyToTicketId: "{PlanId}:{BriefNumber}" -> human-readable ticket ID
+        var briefKeyToTicketId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
         // 5a: create operation ticket
         string opStage = "op_create";
         try
@@ -177,6 +183,7 @@ public sealed class ScaffoldPhase
                 planTicketUuid = planResult.Uuid;
                 createdIds.Add(planTicketId);
                 plansCreated++;
+                planIdToTicketId[plan.Id] = planTicketId;
 
                 await EmitAsync(new Dictionary<string, object>
                 {
@@ -237,6 +244,7 @@ public sealed class ScaffoldPhase
                     briefTicketUuid = briefResult.Uuid;
                     createdIds.Add(briefTicketId);
                     briefsCreated++;
+                    briefKeyToTicketId[$"{plan.Id}:{brief.Number}"] = briefTicketId;
 
                     await EmitAsync(new Dictionary<string, object>
                     {
@@ -276,6 +284,104 @@ public sealed class ScaffoldPhase
             }
         }
 
+        // --- Step 6: create blocked_by dependency relations ---
+        var dependencyEdges = new List<DependencyEdge>();
+
+        // Plan-level dependencies (Dispatch order Depends-on column)
+        foreach (var entry in opDoc.DispatchOrder)
+        {
+            if (string.IsNullOrEmpty(entry.DependsOn) || entry.DependsOn == "-")
+                continue;
+
+            if (!planIdToTicketId.TryGetValue(entry.PlanId, out var blockedTicketId))
+                continue;
+            if (!planIdToTicketId.TryGetValue(entry.DependsOn, out var blockerTicketId))
+                continue;
+
+            string relStage = $"plan_{entry.PlanId}_blocked_by_{entry.DependsOn}";
+            try
+            {
+                await _ticketing.AddRelationAsync(blockedTicketId, blockerTicketId, ct)
+                    .ConfigureAwait(false);
+
+                dependencyEdges.Add(new DependencyEdge(blockedTicketId, blockerTicketId));
+
+                await EmitAsync(new Dictionary<string, object>
+                {
+                    ["action"] = "add_relation",
+                    ["kind"] = "blocked_by",
+                    ["blocked"] = blockedTicketId,
+                    ["blocker"] = blockerTicketId
+                }, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                failures.Add(new ScaffoldFailure(relStage, ex.Message));
+            }
+        }
+
+        // Brief-level dependencies (Briefs table Deps column)
+        foreach (var plan in opDoc.Plans)
+        {
+            foreach (var brief in plan.Briefs)
+            {
+                if (string.IsNullOrEmpty(brief.DependsOn) || brief.DependsOn == "-")
+                    continue;
+
+                string briefKey = $"{plan.Id}:{brief.Number}";
+                if (!briefKeyToTicketId.TryGetValue(briefKey, out var blockedTicketId))
+                    continue;
+
+                // DependsOn is a comma-separated list of brief numbers
+                var depParts = brief.DependsOn.Split(
+                    ',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+                foreach (var depPart in depParts)
+                {
+                    if (!int.TryParse(depPart, out int depNum))
+                        continue;
+
+                    // Find which plan owns brief depNum (it must be within the same plan per op-doc format)
+                    string depKey = $"{plan.Id}:{depNum}";
+                    if (!briefKeyToTicketId.TryGetValue(depKey, out var blockerTicketId))
+                        continue;
+
+                    string relStage = $"brief_{plan.Id}_{brief.Number:D2}_blocked_by_{depNum:D2}";
+                    try
+                    {
+                        await _ticketing.AddRelationAsync(blockedTicketId, blockerTicketId, ct)
+                            .ConfigureAwait(false);
+
+                        dependencyEdges.Add(new DependencyEdge(blockedTicketId, blockerTicketId));
+
+                        await EmitAsync(new Dictionary<string, object>
+                        {
+                            ["action"] = "add_relation",
+                            ["kind"] = "blocked_by",
+                            ["blocked"] = blockedTicketId,
+                            ["blocker"] = blockerTicketId
+                        }, ct).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        failures.Add(new ScaffoldFailure(relStage, ex.Message));
+                    }
+                }
+            }
+        }
+
+        // Print dependency edge summary
+        if (dependencyEdges.Count > 0)
+        {
+            Console.WriteLine($"[scaffold] dependency edges created: {dependencyEdges.Count}");
+            foreach (var edge in dependencyEdges)
+                Console.WriteLine($"  {edge.BlockerId} -> {edge.BlockedId} (blocked_by)");
+        }
+        else
+        {
+            Console.WriteLine("[scaffold] no dependency edges declared");
+        }
+
         return new ScaffoldResult(
             PlansCreated: plansCreated,
             BriefsCreated: briefsCreated,
@@ -285,7 +391,8 @@ public sealed class ScaffoldPhase
             WasAbortedByValidationErrors: false,
             WasBlockedByWarnings: false,
             WasDryRun: false,
-            OpTicketId: !string.IsNullOrEmpty(opTicketId) ? opTicketId : null);
+            OpTicketId: !string.IsNullOrEmpty(opTicketId) ? opTicketId : null,
+            DependencyEdges: dependencyEdges);
     }
 
     private Task EmitAsync(IReadOnlyDictionary<string, object> data, CancellationToken ct)

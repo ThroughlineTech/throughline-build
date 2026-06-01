@@ -12,7 +12,15 @@ public record ScaffoldResult(
     bool WasAbortedByValidationErrors,
     bool WasBlockedByWarnings,
     bool WasDryRun,
-    string? OpTicketId = null);
+    string? OpTicketId = null,
+    IReadOnlyList<DependencyEdge>? DependencyEdges = null);
+
+/// <summary>
+/// A single blocked_by relation created during scaffolding.
+/// </summary>
+/// <param name="BlockedId">Ticket ID of the blocked (dependent) ticket.</param>
+/// <param name="BlockerId">Ticket ID of the blocker (dependency) ticket.</param>
+public record DependencyEdge(string BlockedId, string BlockerId);
 
 /// <summary>
 /// Records a single per-step failure during scaffolding.

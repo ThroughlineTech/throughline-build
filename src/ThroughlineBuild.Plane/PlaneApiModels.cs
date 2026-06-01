@@ -139,6 +139,11 @@ public record UpdateDescriptionRequest(
     [property: JsonPropertyName("description_html")] string DescriptionHtml
 );
 
+public record CreateRelationRequest(
+    [property: JsonPropertyName("relation_type")] string RelationType,
+    [property: JsonPropertyName("related_issue")] string RelatedIssue
+);
+
 [JsonSerializable(typeof(PlaneIssue))]
 [JsonSerializable(typeof(PlaneIssueList))]
 [JsonSerializable(typeof(PlaneState))]
@@ -164,6 +169,7 @@ public record UpdateDescriptionRequest(
 [JsonSerializable(typeof(PlaneCreateIssueResponse))]
 [JsonSerializable(typeof(SetParentRequest))]
 [JsonSerializable(typeof(UpdateDescriptionRequest))]
+[JsonSerializable(typeof(CreateRelationRequest))]
 [JsonSerializable(typeof(List<PlaneState>))]
 [JsonSerializable(typeof(List<PlaneLabel>))]
 [JsonSerializable(typeof(List<PlaneRelationItem>))]

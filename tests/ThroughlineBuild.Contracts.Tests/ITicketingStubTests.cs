@@ -129,7 +129,11 @@ public class ITicketingStubTests
 
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             Task.CompletedTask;
-        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+    
+        public Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct) =>
+            Task.CompletedTask;
+
+    public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
             string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
             Task.FromResult(new CreateChildTicketsResult(
                 children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),

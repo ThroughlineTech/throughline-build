@@ -1008,6 +1008,24 @@ public sealed class PlaneTicketingClient : ITicketing
         return new CreateChildTicketsResult(created.AsReadOnly(), failures.AsReadOnly());
     }
 
+    public async Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct)
+    {
+        await _pipeline.ExecuteAsync(async token =>
+        {
+            var blockedSeq = ParseSequenceId(blockedId);
+            var blockedIssue = await FindIssueAsync(blockedSeq, token).ConfigureAwait(false);
+
+            var blockerSeq = ParseSequenceId(blockerId);
+            var blockerIssue = await FindIssueAsync(blockerSeq, token).ConfigureAwait(false);
+
+            await PostJsonAsync(
+                $"{IssuesBase}{blockedIssue.Id}/relations/",
+                new CreateRelationRequest("blocked_by", blockerIssue.Id),
+                PlaneJsonContext.Default,
+                token).ConfigureAwait(false);
+        }, ct).ConfigureAwait(false);
+    }
+
     // ------------------------------------------------------------------ rollup helpers
 
     private static string ExtractStateName(JsonElement stateElement)

@@ -288,7 +288,11 @@ public class ListCommandTests
 
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             throw new NotImplementedException();
-        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+    
+        public Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct) =>
+            Task.CompletedTask;
+
+    public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
             string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
             throw new NotImplementedException();
     }
@@ -343,7 +347,11 @@ public class ListCommandTests
 
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             throw new NotImplementedException();
-        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+    
+        public Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct) =>
+            Task.CompletedTask;
+
+    public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
             string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
             throw new NotImplementedException();
     }

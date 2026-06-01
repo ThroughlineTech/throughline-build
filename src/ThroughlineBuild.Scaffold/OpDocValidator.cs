@@ -170,6 +170,7 @@ public static class OpDocValidator
 
     private static void ValidateBriefs(Plan plan, List<ValidationError> errors, List<ValidationWarning> warnings)
     {
+        var briefNumbers = new HashSet<int>(plan.Briefs.Select(b => b.Number));
         foreach (var brief in plan.Briefs)
         {
             ValidateBriefSlug(brief, plan, errors);
@@ -178,6 +179,26 @@ public static class OpDocValidator
             ValidateBriefOutOfScope(brief, plan, errors, warnings);
             ValidateBriefAcceptanceCriteria(brief, plan, errors, warnings);
             ValidateBriefNotes(brief, plan, errors, warnings);
+            ValidateBriefDependsOn(brief, plan, briefNumbers, errors);
+        }
+    }
+
+    private static void ValidateBriefDependsOn(Brief brief, Plan plan, HashSet<int> briefNumbers, List<ValidationError> errors)
+    {
+        if (string.IsNullOrEmpty(brief.DependsOn) || brief.DependsOn == "-")
+            return;
+
+        // DependsOn is a comma-separated list of brief numbers (e.g. "01", "01, 02")
+        var parts = brief.DependsOn.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var part in parts)
+        {
+            if (!int.TryParse(part, out int depNum) || !briefNumbers.Contains(depNum))
+            {
+                errors.Add(new ValidationError(
+                    Code: "BRIEF_DEP_INVALID",
+                    Path: $"Plans[{plan.Id}].Briefs[{brief.Number:D2}].DependsOn",
+                    Message: $"Brief {brief.Number:D2} DependsOn references '{part}' which is not a known brief number in Plan {plan.Id}."));
+            }
         }
     }
 

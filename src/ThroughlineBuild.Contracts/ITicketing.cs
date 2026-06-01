@@ -49,6 +49,11 @@ public interface ITicketing
     Task<IReadOnlyList<Relation>> GetRelationsAsync(string id, CancellationToken ct);
 
     /// <summary>
+    /// Create a blocked_by relation: <paramref name="blockedId"/> is blocked by <paramref name="blockerId"/>.
+    /// </summary>
+    Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct);
+
+    /// <summary>
     /// Compute client-side rollup and transition the parent ticket if warranted.
     /// Internal errors are caught and surfaced in RollupResult.FailureReason; this method never throws.
     /// </summary>
