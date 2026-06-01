@@ -69,6 +69,31 @@ internal sealed class FakeMessageHandler : HttpMessageHandler
 }
 
 // ---------------------------------------------------------------------------
+// RoutingOkHandler: thread-safe handler that routes by URL/method and always 200s.
+// Unlike FakeMessageHandler (ordered, non-thread-safe queue) this can serve many
+// concurrent requests, so it can exercise the client's concurrency paths.
+// ---------------------------------------------------------------------------
+internal sealed class RoutingOkHandler : HttpMessageHandler
+{
+    private readonly Func<HttpRequestMessage, string> _bodyFor;
+    private int _requests;
+
+    public RoutingOkHandler(Func<HttpRequestMessage, string> bodyFor) => _bodyFor = bodyFor;
+
+    public int RequestCount => Volatile.Read(ref _requests);
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        Interlocked.Increment(ref _requests);
+        var json = _bodyFor(request);
+        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json")
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Shared test data
 // ---------------------------------------------------------------------------
 internal static class TestData
@@ -971,5 +996,50 @@ public class IssueCacheTests
                 && r.RequestUri!.ToString().Contains("per_page=100"))
             .ToList();
         Assert.Single(issueListGets);
+    }
+
+    [Fact]
+    public async Task WriteThrough_ConcurrentTransitionAndLabel_NeitherFieldReverts()
+    {
+        // Guards against a lost-update in write-through: under parallel dispatch many mutations
+        // hit the shared client concurrently. A non-atomic read-modify-write would let a label
+        // update (which copies StateId from its own stale read) revert a concurrent transition -
+        // resurrecting the stale-state class this cache exists to kill. The atomic AddOrUpdate
+        // composes against the live value, so both fields must survive regardless of interleaving.
+        var handler = new RoutingOkHandler(req =>
+            req.Method == HttpMethod.Patch ? TestData.PatchOkJson()
+            : req.RequestUri!.AbsolutePath.Contains("/states/") ? TestData.StateListJson()
+            : req.RequestUri!.AbsolutePath.Contains("/labels/") ? TestData.LabelListJson()
+            : TestData.IssueListJson());
+
+        // Uncap the throttle: it serializes HTTP sends, which would both slow this test and
+        // damp the contention we want. The write-through races after the PATCH returns, so a
+        // high budget fires the mutations near-simultaneously and maximizes interleaving.
+        var options = new PlaneClientOptions
+        {
+            BaseUrl = "https://plane.example.com",
+            ApiToken = "test-token",
+            WorkspaceSlug = "my-workspace",
+            ProjectId = "my-project",
+            ProjectIdentifier = "TLB",
+            RequestsPerMinute = 1_000_000
+        };
+        var client = new PlaneTicketingClient(new HttpClient(handler), options);
+
+        // Warm the snapshot + state/label caches (issue starts Backlog with no labels).
+        await client.GetAsync("TLB-24", CancellationToken.None);
+
+        // Interleave state and label write-throughs on the same issue, all in flight at once.
+        var tasks = new List<Task>();
+        for (int i = 0; i < 64; i++)
+        {
+            tasks.Add(client.TransitionAsync("TLB-24", TicketState.InProgress, CancellationToken.None));
+            tasks.Add(client.ApplyLabelsAsync("TLB-24", new[] { "Size: S" }, CancellationToken.None));
+        }
+        await Task.WhenAll(tasks);
+
+        var ticket = await client.GetAsync("TLB-24", CancellationToken.None);
+        Assert.Equal(TicketState.InProgress, ticket.State);  // a racing label write did not revert the transition
+        Assert.Contains(ticket.Labels, l => l.Equals("Size: S", StringComparison.OrdinalIgnoreCase));
     }
 }

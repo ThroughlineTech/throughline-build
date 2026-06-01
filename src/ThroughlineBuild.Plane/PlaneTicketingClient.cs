@@ -43,7 +43,13 @@ public sealed class PlaneTicketingClient : ITicketing
     // the snapshot is never stale. This collapses what used to be O(tickets x project_pages)
     // HTTP calls (a full pagination per phase, per ticket) down to one pagination per run, which
     // is what kept `build chain` hammering Plane's rate limiter as the project grew. (TLB-366)
-    private readonly ConcurrentDictionary<int, PlaneIssue> _issueBySeq = new();
+    // seq -> uuid is immutable identity: written once at load, never mutated.
+    private readonly ConcurrentDictionary<int, string> _seqToUuid = new();
+    // uuid -> issue is the single mutable source of truth. Write-through updates it via an
+    // atomic AddOrUpdate so concurrent mutations (parallel sibling rollups on a shared parent,
+    // or a Transition racing an ApplyLabels) compose against the live value instead of
+    // clobbering each other. Keeping the seq index as seq->uuid (not seq->issue) means there
+    // is only one mutable copy of an issue, so the two indexes can never drift.
     private readonly ConcurrentDictionary<string, PlaneIssue> _issueByUuid = new();
     private volatile bool _snapshotLoaded;
     private readonly SemaphoreSlim _snapshotLock = new(1, 1);
@@ -266,7 +272,7 @@ public sealed class PlaneTicketingClient : ITicketing
     private async Task<PlaneIssue> FindIssueAsync(int seq, CancellationToken ct)
     {
         await EnsureSnapshotAsync(ct).ConfigureAwait(false);
-        if (_issueBySeq.TryGetValue(seq, out var cached))
+        if (_seqToUuid.TryGetValue(seq, out var uuid) && _issueByUuid.TryGetValue(uuid, out var cached))
             return cached;
         throw new KeyNotFoundException($"Issue with sequence_id {seq} not found in Plane");
     }
@@ -288,7 +294,7 @@ public sealed class PlaneTicketingClient : ITicketing
             var all = await FetchAllIssuesAsync($"{IssuesBase}?per_page=100", ct).ConfigureAwait(false);
             foreach (var issue in all)
             {
-                _issueBySeq[issue.SequenceId] = issue;
+                _seqToUuid[issue.SequenceId] = issue.Id;
                 _issueByUuid[issue.Id] = issue;
             }
             _snapshotLoaded = true;
@@ -301,17 +307,24 @@ public sealed class PlaneTicketingClient : ITicketing
 
     /// <summary>
     /// Write-through cache update applied after a successful mutation so a later read sees the
-    /// new state/labels/description/parent without another GET. No-op if the issue isn't cached
-    /// (e.g. a write by uuid for an issue the snapshot never loaded). Keeps both indexes in sync.
+    /// new state/labels/description/parent without another GET. No-op if the issue isn't in the
+    /// snapshot (we never fabricate cache entries here). The update runs inside an atomic
+    /// <see cref="ConcurrentDictionary{TKey,TValue}.AddOrUpdate(TKey,Func{TKey,TValue},Func{TKey,TValue,TValue})"/>
+    /// so it composes against the live value - concurrent write-throughs to the same issue (or to
+    /// different fields of it) cannot lose each other's change. The closure is pure and may run
+    /// more than once under contention, which is fine. The seq index is identity-only and never
+    /// touched here, so the two indexes cannot drift.
     /// </summary>
     private void UpdateCachedIssue(string uuid, Func<PlaneIssue, PlaneIssue> update)
     {
-        if (_issueByUuid.TryGetValue(uuid, out var existing))
-        {
-            var updated = update(existing);
-            _issueByUuid[uuid] = updated;
-            _issueBySeq[updated.SequenceId] = updated;
-        }
+        // Cache keys are never removed, so a present key stays present: the add factory is
+        // unreachable and the update factory is what actually runs (atomically).
+        if (!_issueByUuid.ContainsKey(uuid))
+            return;
+        _issueByUuid.AddOrUpdate(
+            uuid,
+            _ => throw new InvalidOperationException("unreachable: snapshot key presence checked"),
+            (_, existing) => update(existing));
     }
 
     private async Task<Ticket> ToTicketAsync(PlaneIssue issue, CancellationToken ct)
