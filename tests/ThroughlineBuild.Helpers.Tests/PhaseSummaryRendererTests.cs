@@ -87,9 +87,8 @@ public class PhaseSummaryRendererTests
 
         var text = PhaseSummaryRenderer.RenderText(summary);
         Assert.Contains("TLB-3 Review Complete", text);
-        Assert.Contains("Verifier: Pass", text);
-        Assert.Contains("Scope Violations: none", text);
         Assert.Contains("Next: build ship TLB-3", text);
+        Assert.DoesNotContain("Verifier:", text);
     }
 
     [Fact]

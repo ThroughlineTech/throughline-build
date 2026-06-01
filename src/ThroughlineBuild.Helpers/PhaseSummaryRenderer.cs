@@ -126,6 +126,13 @@ public static class PhaseSummaryRenderer
             return sb.ToString().TrimEnd() + "\n";
         }
 
+        if (string.Equals(r.Verdict, "Pass", StringComparison.OrdinalIgnoreCase))
+        {
+            sb.AppendLine($"{r.TicketId} Review Complete");
+            sb.AppendLine($"Next: build ship {r.TicketId}");
+            return sb.ToString();
+        }
+
         sb.AppendLine($"{r.TicketId} Review Complete");
         sb.AppendLine();
         sb.AppendLine($"Verifier: {(r.Verdict ?? "?")}");
@@ -140,8 +147,6 @@ public static class PhaseSummaryRenderer
             sb.AppendLine();
             sb.AppendLine($"Plane: {r.PlaneUrl}");
         }
-        if (string.Equals(r.Verdict, "Pass", StringComparison.OrdinalIgnoreCase))
-            sb.AppendLine($"Next: build ship {r.TicketId}");
         return sb.ToString();
     }
 
