@@ -265,7 +265,10 @@ public sealed class ChainCommand : ITicketCommand
         var suggestions = result.Outcome switch
         {
             ChainOutcome.RefusedInitialState =>
-                GetRefusedInitialStateTriage(ticketId),
+                GetRefusedInitialStateTriage(ticketId, initialTicket.State),
+
+            ChainOutcome.ParentStoppedEarly =>
+                GetParentStoppedEarlyTriage(ticketId, result),
 
             ChainOutcome.RefusedDirtyTree =>
                 GetRefusedDirtyTreeTriage(ticketId, result),
@@ -295,9 +298,12 @@ public sealed class ChainCommand : ITicketCommand
             return string.Empty;
 
         // Include final rationale if available (for review-based stops). Skip for
-        // RefusedDirtyTree: no reviewer ran, and the triage text restates the detail itself.
+        // RefusedDirtyTree and ParentStoppedEarly: no reviewer ran, and the triage text
+        // restates the detail itself (the child list, for parent stops).
         var output = new StringBuilder();
-        if (!string.IsNullOrEmpty(result.FinalRationale) && result.Outcome != ChainOutcome.RefusedDirtyTree)
+        if (!string.IsNullOrEmpty(result.FinalRationale)
+            && result.Outcome != ChainOutcome.RefusedDirtyTree
+            && result.Outcome != ChainOutcome.ParentStoppedEarly)
         {
             output.AppendLine("Final reviewer rationale:");
             output.AppendLine();
@@ -309,9 +315,36 @@ public sealed class ChainCommand : ITicketCommand
         return output.ToString().TrimEnd();
     }
 
-    private static string GetRefusedInitialStateTriage(string ticketId)
+    private static string GetRefusedInitialStateTriage(string ticketId, TicketState state) => state switch
     {
-        return $"Operator triage: Chain cannot run from current ticket state. The ticket must be in Backlog, Ready, or InReview state. Check the ticket state on Plane and transition if needed.";
+        TicketState.Done =>
+            $"Operator triage: {ticketId} is already Done - the chain has nothing to do. If it needs further work, reopen it first ('build reopen {ticketId}').",
+        TicketState.Cancelled =>
+            $"Operator triage: {ticketId} is Cancelled - the chain will not run it. Reopen it ('build reopen {ticketId}') to bring it back to an active state first.",
+        _ =>
+            $"Operator triage: chain cannot run from {ticketId}'s current state ({state}). The chain handles Backlog, Ready, InReview, Planning, and InProgress; only Done/Cancelled are refused. Check the ticket state on Plane and transition if needed.",
+    };
+
+    private static string GetParentStoppedEarlyTriage(string ticketId, ChainResult result)
+    {
+        var output = new StringBuilder();
+        output.AppendLine($"Operator triage: parent chain {ticketId} stopped because one or more children did not complete.");
+        if (result.ChildResults is { Count: > 0 })
+        {
+            var failed = result.ChildResults
+                .Where(c => c.Outcome != ChainOutcome.Completed
+                    && c.Outcome != ChainOutcome.RatifiedObsolete
+                    && c.Outcome != ChainOutcome.ParentCompleted)
+                .ToList();
+            foreach (var c in failed)
+            {
+                var detail = string.IsNullOrEmpty(c.FinalRationale) ? "" : $" - {c.FinalRationale}";
+                output.AppendLine($"- {c.TicketId}: {c.Outcome}{detail}");
+            }
+        }
+        output.AppendLine("Completed children are already shipped and are skipped on a re-run.");
+        output.Append($"Resume a stopped child directly ('build chain <child-id>'), or fix it ('build review'/'build ship <child-id>'), then re-run: build chain {ticketId}");
+        return output.ToString();
     }
 
     private static string GetRefusedDirtyTreeTriage(string ticketId, ChainResult result)

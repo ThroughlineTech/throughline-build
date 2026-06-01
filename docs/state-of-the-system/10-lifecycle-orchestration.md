@@ -190,11 +190,13 @@ Status: **Functional**. The orchestrator. Constructed in `Program.cs` with per-p
 `RunAsync` entry ([src/ThroughlineBuild.Phases/ChainPhase.cs:51-224](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L51-L224)):
 
 1. Fetch the ticket. Query its children; if any exist, delegate to `RunParentChainAsync` (the tree-aware path) and return ([src/ThroughlineBuild.Phases/ChainPhase.cs:60-65](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L60-L65)).
-2. Otherwise route on state:
+2. Otherwise route on state (`ResolveEntryAsync`):
    - `Backlog` -> start at Plan
    - `Ready` -> start at Implement
    - `InReview` -> start at Review
-   - else -> emit `ChainStart`, return `RefusedInitialState`
+   - `Planning` -> a plan that never finished (the `Backlog -> Planning` transition precedes the worker, and no plan artifact is written until it succeeds): reset to `Backlog`, emit a `chain_resume` `StateTransition`, and start at Plan
+   - `InProgress` -> resume an interrupted implement. If the ticket's branch has **no commits beyond base** (an interrupted *initial* implement transitions `Ready -> InProgress` before the worker commits), prune the orphaned branch/worktree, reset to `Ready`, and start a clean Implement - in a parent chain this lets the branch be recreated inside the shared worktree instead of an orphaned standalone one. If the branch **has commits** (interrupted rework), resume in place via the rework path (round 1, reusing the worktree), recovering the last `Rework` feedback from the event log or synthesizing a neutral resume note
+   - `Done` / `Cancelled` -> emit `ChainStart`, return `RefusedInitialState` (the only genuinely un-runnable states)
 3. Emit `ChainStart`.
 4. If starting at Plan: run `PlanPhase`. On failure, if `!NoAutoResolve` and the worker `Escalate`d with reason `obsolete`, run obsolete-claim ratification (see "Obsolete-claim handling"). Otherwise return `StoppedAtPlan`.
 5. If Plan succeeded or starting at Implement: enter the implement-review loop (`RunImplementReviewLoopAsync`).
@@ -342,7 +344,9 @@ Refusals enforcing the tree discipline:
 
 - The parent chain is exactly one level deep by design; deeper trees require the operator to chain intermediate tickets first.
 - Child cascade close/defer failures are logged to stderr and do not abort the parent transition.
-- `MaxParentChainConcurrency = 4` is a separate constant from the multi-ticket `workers.max_concurrency`; the two paths do not share a budget.
+- Children run **serially** within a level (the dispatch semaphore is `SemaphoreSlim(1, 1)`; the former `MaxParentChainConcurrency = 4` constant was removed in op-29). Sibling dependency levels still gate ordering, but there is no within-level concurrency.
+- A child left `Planning`/`InProgress` by an interrupted run is now **resumed** by `ResolveEntryAsync`, not refused - so a single stuck sibling no longer flips the whole parent to `ParentStoppedEarly`. An interrupted-initial `InProgress` child's orphaned branch/worktree are pruned and the branch is recreated inside the shared worktree.
+- If the shared chain worktree cannot be created (commonly: its path survives a prior interrupted parent chain), the chain falls back to per-ticket standalone worktrees and now emits a loud `shared_worktree_unavailable` `GateFailure` + stderr warning instead of degrading silently.
 
 ---
 
@@ -480,7 +484,7 @@ Full event-line schema in [docs/event-log-format.md](../event-log-format.md).
 | `Completed` | 0 | shipped |
 | `RatifiedObsolete` | 0 | obsolete claim ratified; ticket -> Done |
 | `ParentCompleted` | 0 | all eligible children completed |
-| `RefusedInitialState` | 2 | state not `Backlog`/`Ready`/`InReview` |
+| `RefusedInitialState` | 2 | terminal state (`Done`/`Cancelled`); `Planning`/`InProgress` are now resumed, not refused |
 | `ParentHasGrandchildren` | 2 | tree deeper than one level |
 | `StoppedAtPlan` | 3 | planning failed |
 | `ParentStoppedEarly` | 3 | a child did not complete |
