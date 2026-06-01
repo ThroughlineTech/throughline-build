@@ -175,6 +175,35 @@ public class PlanPhasePromoteTests
         Assert.True(worker.WasInvoked);
     }
 
+    [Fact]
+    public async Task Promote_HappyPath_EmitsNoWorkerSpawnOrLlmCallEvent()
+    {
+        var ticketing = new FakeTicketing(MakeTicket());
+        var worker = new FakeWorkerAgent(OkWorkerResult());
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha);
+        var phase = new PlanPhase(ticketing, worker, events, MakePromoteOptions(), git);
+
+        await phase.RunAsync("TLB-99", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.WorkerSpawn);
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.LlmCall);
+    }
+
+    [Fact]
+    public async Task Default_NoFlag_EmitsWorkerSpawnEvent()
+    {
+        var ticketing = new FakeTicketing(MakeTicket());
+        var worker = new FakeWorkerAgent(OkWorkerResult());
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha);
+        var phase = new PlanPhase(ticketing, worker, events, MakeNormalOptions(), git);
+
+        await phase.RunAsync("TLB-99", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.Contains(events.Events, e => e.Kind == EventKind.WorkerSpawn);
+    }
+
     // --------------- Fakes ---------------
 
     private sealed class FakeTicketing : ITicketing
