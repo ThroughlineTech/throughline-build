@@ -222,10 +222,10 @@ public class ImplementPhase : IWorkflowPhase
         var workerResult = await _worker.ExecuteAsync(brief, canonicalWorktreePath, workerOptions, ct).ConfigureAwait(false);
 
         // Step 12: Emit VerifierVerdict
-        await EmitAsync(EventKind.VerifierVerdict, ticketId, new Dictionary<string, object>
-        {
-            ["status"] = workerResult.Status.ToString()
-        }, ct).ConfigureAwait(false);
+        var verdictData = new Dictionary<string, object> { ["status"] = workerResult.Status.ToString() };
+        var verdictReason = workerResult.FailureReason ?? (workerResult.Status != Status.Ok ? workerResult.Summary : null);
+        if (verdictReason is not null) verdictData["failure_reason"] = verdictReason;
+        await EmitAsync(EventKind.VerifierVerdict, ticketId, verdictData, ct).ConfigureAwait(false);
 
         // Step 13: LlmCall event if usage present
         if (workerResult.Metadata.TryGetValue("llm_usage", out var usageObj))
@@ -240,7 +240,7 @@ public class ImplementPhase : IWorkflowPhase
         // Step 14: If worker failed, leave in InProgress
         if (workerResult.Status != Status.Ok)
             return new ImplementResult(false, ticketId, null, canonicalBranchName, canonicalWorktreePath,
-                workerResult.FailureReason ?? workerResult.Status.ToString(),
+                workerResult.FailureReason ?? workerResult.Summary ?? workerResult.Status.ToString(),
                 EscalationWorkerResult: workerResult.Status == Status.Escalate ? workerResult : null);
 
         // Step 15: Extract commit_sha from metadata

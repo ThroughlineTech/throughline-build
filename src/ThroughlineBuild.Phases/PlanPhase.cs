@@ -98,14 +98,14 @@ public class PlanPhase : IWorkflowPhase
 
         await _ticketing.TransitionAsync(ticketId, TicketState.Planning, ct).ConfigureAwait(false);
 
-        await EmitAsync(EventKind.VerifierVerdict, ticketId, new Dictionary<string, object>
-        {
-            ["status"] = workerResult.Status.ToString()
-        }, ct).ConfigureAwait(false);
+        var verdictData = new Dictionary<string, object> { ["status"] = workerResult.Status.ToString() };
+        var verdictReason = workerResult.FailureReason ?? (workerResult.Status != Status.Ok ? workerResult.Summary : null);
+        if (verdictReason is not null) verdictData["failure_reason"] = verdictReason;
+        await EmitAsync(EventKind.VerifierVerdict, ticketId, verdictData, ct).ConfigureAwait(false);
 
         if (workerResult.Status != Status.Ok)
             return new PlanResult(false, ticketId, null, null, null,
-                workerResult.FailureReason ?? workerResult.Status.ToString(),
+                workerResult.FailureReason ?? workerResult.Summary ?? workerResult.Status.ToString(),
                 workerResult.Status == Status.Escalate ? workerResult : null);
 
         if (workerResult.Metadata.TryGetValue("llm_usage", out var usageObj))
