@@ -19,6 +19,7 @@ default_model = "anthropic:claude-opus-4-7"
 # anthropic_api_key_env = "ANTHROPIC_API_KEY"           # alternative for CI: read key from this env var
 
 [workers]
+# REQUIRED: name of the agent block that runs tickets by default ("claude-code", "codex", "gemini", "copilot").
 default_agent = "claude-code"
 timeout_minutes = 30
 
@@ -128,8 +129,8 @@ build_command = "dotnet build"
 test_command = "dotnet test"
 install_command = "dotnet restore"
 dev_command = "dotnet run"
-# Workflow tool used by the operator (default "build"). Valid values: "build" or "claude-config".
-# workflow_tool = "build"
+# REQUIRED: "build" if using this CLI; "claude-config" if using Claude Code slash commands.
+workflow_tool = "build"
 # Plane project browse URL prefix; informational for the worker.
 plane_project_url = "https://plane.example.com/workspace/browse/PROJ/"
 # Optional markdown file with extra project notes; path resolves relative to this config file.
