@@ -1076,6 +1076,45 @@ public sealed class ProcessGitClient : IGitClient
         }
     }
 
+    public async Task<IReadOnlyList<string>> DiffStatFilesAsync(string range, string workingDirectory, CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = workingDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("diff");
+            psi.ArgumentList.Add("--stat");
+            psi.ArgumentList.Add("--name-only");
+            psi.ArgumentList.Add(range);
+
+            using var proc = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start git process");
+            var stdout = await proc.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+            if (proc.ExitCode != 0)
+                return Array.Empty<string>();
+
+            var files = new List<string>();
+            foreach (var rawLine in stdout.Split('\n'))
+            {
+                var line = rawLine.TrimEnd('\r').Trim();
+                if (line.Length == 0) continue;
+                files.Add(line);
+            }
+            return files;
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
+    }
+
     public async Task<DivergenceState> ProbeDivergenceAsync(string mainWorktreePath, string baseBranch, string remote, CancellationToken ct)
     {
         try

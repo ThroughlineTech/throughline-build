@@ -123,4 +123,11 @@ public interface IGitClient
     // Never throws - returns empty on git failure.
     Task<IReadOnlyList<string>> ListStashEntriesAsync(string workingDirectory, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+    // Returns the distinct file paths touched by commits in the given range via "git diff --stat".
+    // The range should be a two-dot range (e.g. "abc123..def456") covering exactly the chain's prior work.
+    // Default returns empty so existing FakeGitClients remain unchanged (TLB-379).
+    // Never throws - returns empty on git failure.
+    Task<IReadOnlyList<string>> DiffStatFilesAsync(string range, string workingDirectory, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
 }

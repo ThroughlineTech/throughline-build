@@ -620,6 +620,16 @@ public class ChainPhase
             baseRefForSharedWt = null;
         }
 
+        // Capture the target head SHA once at chain start so ChainCommitRangeHelper can
+        // later compute the range of commits the chain has produced (Brief 08).
+        string? chainStartSha = null;
+        try
+        {
+            if (baseRefForSharedWt is not null)
+                chainStartSha = await _git.RevParseAsync(baseRefForSharedWt, _workingDirectory, ct).ConfigureAwait(false);
+        }
+        catch { /* non-fatal: chainStartSha stays null */ }
+
         if (baseRefForSharedWt is not null && eligible.Count > 0)
         {
             var createResult = await _git.CreateWorktreeAsync(
