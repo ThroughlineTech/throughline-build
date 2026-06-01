@@ -76,7 +76,7 @@ Each brief follows this structure in order:
 
 **Outputs:** Bulleted list of concrete artifacts: new types, modified behaviors, CLI flags, doc sections, tests. Each bullet is specific - names the file or the exact behavior change. Not abstract ("better error handling"). Concrete ("A post-condition assertion in ShipPhase that emits a clear failure if HEAD is detached after ff-merge").
 
-**Acceptance:** Checkboxes. Each is independently verifiable - an operator can confirm each box without running the full suite. Include "AOT publish succeeds" for any brief that adds new types to C# source-gen contexts.
+**Acceptance:** Checkboxes. Each is independently verifiable - an operator can confirm each box without running the full suite. If the project has a release gate that a green local test run does not exercise - a production build, an ahead-of-time/native compile, a type-check, a bundle step, a packaged-import smoke - include a checkbox for it on any brief that could plausibly break it (new serialized types, new dependencies, generated code). See the project-gate convention under Style rules.
 
 **Notes:** Design rationale, constraints the implementer must respect, tradeoffs already decided. Written in full paragraphs. Does not repeat what Outputs already states. Does not say "do X" - says "the reason X was chosen over Y is..." or "this constraint exists because..."
 
@@ -91,7 +91,7 @@ Each brief follows this structure in order:
 - Deps column: `-` for no deps, brief number(s) for intra-plan deps, plan letter for cross-plan deps.
 - Brief slugs: lowercase kebab-case, 3-6 words.
 - Plan letters: A, B, C. Brief numbers: 01, 02, 03 (continuous across plans).
-- "AOT publish succeeds" appears in Acceptance for every brief that registers new types (this is a C# AOT-compiled project).
+- Project release gate: most stacks have a verification step that a passing local test suite does not catch - the build/compile/type-check/bundle/package step that only fails outside the unit run. Name that gate once for the target project, then add a `<gate> succeeds` checkbox to Acceptance for any brief that could break it. The gate is stack-specific, not universal: a C# Native AOT project (such as the latticeflow repo this spec lives in) uses `AOT publish succeeds` for any brief that registers new types in a source-gen JSON context; a TypeScript project might use `tsc --noEmit passes` or `production build succeeds`; a Python project `the packaged entrypoint imports cleanly`. Pick the gate that matches the stack, or omit this checkbox entirely if the project has no gate beyond its tests.
 - The lead paragraph is complete prose, not a sentence fragment.
 - "Why this exists" and "What done looks like" are prose paragraphs, not bullets.
 - Goal sections (plan-level and brief-level) are one paragraph each.
@@ -100,6 +100,8 @@ Each brief follows this structure in order:
 ---
 
 ## Skeleton (annotated)
+
+The example below is one concrete op-doc for a C# project. Treat the stack-specific bits (`.cs` paths, `AOT publish succeeds`, the source-gen JSON constraint) as illustrations of the conventions, not as requirements for your stack - substitute your own paths and release gate.
 
 ```markdown
 # Operation: example-slug
@@ -250,4 +252,4 @@ No bullets. Closes the loop on the lead paragraph's promise.
 - Writing Notes as instructions ("do X") rather than rationale ("X was chosen because Y").
 - Making "What done looks like" a summary of the deliverables list (it is an
   operator-observable narrative).
-- Forgetting "AOT publish succeeds" in Acceptance for any C# brief that registers new types.
+- Forgetting the project's release-gate checkbox (whatever it is for the stack - e.g. `AOT publish succeeds` in a C# Native AOT repo) in Acceptance for any brief that could break it.
