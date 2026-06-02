@@ -89,7 +89,7 @@ public static class BuildConfigLoader
         return null;
     }
 
-    public static BuildConfig Load(string path)
+    public static BuildConfig Load(string path, Action<string>? warnSink = null)
     {
         string content;
         try
@@ -121,6 +121,13 @@ public static class BuildConfigLoader
         var project = ReadProjectSection(root, path);
         var plan = ReadPlanSection(root);
 
+        // Non-fatal unknown-key warning pass: emit one warning per unrecognized key.
+        var warnings = new List<string>();
+        CollectUnknownKeyWarnings(root, warnings);
+        var emit = warnSink ?? (w => Console.Error.WriteLine(w));
+        foreach (var warning in warnings)
+            emit(warning);
+
         return new BuildConfig(ticketing, llm, workers, events, review, ship, work, project, plan);
     }
 
@@ -146,6 +153,225 @@ public static class BuildConfigLoader
             anthropicKey = Environment.GetEnvironmentVariable(config.Llm.AnthropicApiKeyEnv);
 
         return new BuildSecrets(planeToken, string.IsNullOrEmpty(anthropicKey) ? null : anthropicKey);
+    }
+
+    private static readonly HashSet<string> KnownTopLevelSections = new(StringComparer.Ordinal)
+    {
+        "ticketing", "llm", "workers", "events", "review", "ship", "work", "plan", "project"
+    };
+
+    private static readonly HashSet<string> KnownTicketingKeys = new(StringComparer.Ordinal)
+    {
+        "backend", "plane_base_url", "plane_workspace_slug", "plane_project_id",
+        "plane_api_token_env", "plane_project_identifier", "plane_project_name", "plane_api_token"
+    };
+
+    private static readonly HashSet<string> KnownLlmKeys = new(StringComparer.Ordinal)
+    {
+        "default_model", "anthropic_api_key_env", "anthropic_api_key"
+    };
+
+    // Scalar keys recognized directly under [workers] (sub-tables are named agent configs or "phases").
+    private static readonly HashSet<string> KnownWorkersScalarKeys = new(StringComparer.Ordinal)
+    {
+        "default_agent", "timeout_minutes", "max_concurrency"
+    };
+
+    private static readonly HashSet<string> KnownAgentKeys = new(StringComparer.Ordinal)
+    {
+        "executable", "max_output_tokens", "bypass_permissions", "sizes"
+    };
+
+    private static readonly HashSet<string> KnownSizesKeys = new(StringComparer.Ordinal)
+    {
+        "small", "medium", "large"
+    };
+
+    private static readonly HashSet<string> KnownEventsKeys = new(StringComparer.Ordinal)
+    {
+        "log_directory"
+    };
+
+    private static readonly HashSet<string> KnownReviewKeys = new(StringComparer.Ordinal)
+    {
+        "verifier_timeout_minutes", "verifier_allowed_tools", "checks"
+    };
+
+    private static readonly HashSet<string> KnownCheckEntryKeys = new(StringComparer.Ordinal)
+    {
+        "name", "executable", "arguments", "timeout_minutes"
+    };
+
+    private static readonly HashSet<string> KnownShipKeys = new(StringComparer.Ordinal)
+    {
+        "remote", "base_branch", "delete_feature_branch", "regression_checks"
+    };
+
+    private static readonly HashSet<string> KnownWorkKeys = new(StringComparer.Ordinal)
+    {
+        "target_branch"
+    };
+
+    private static readonly HashSet<string> KnownPlanKeys = new(StringComparer.Ordinal)
+    {
+        "mode"
+    };
+
+    private static readonly HashSet<string> KnownProjectKeys = new(StringComparer.Ordinal)
+    {
+        "language", "framework", "package_manager", "build_command", "test_command",
+        "install_command", "dev_command", "plane_project_url", "workflow_tool", "notes_file"
+    };
+
+    private static void CollectUnknownKeyWarnings(TomlTable root, List<string> warnings)
+    {
+        // Top-level sections
+        foreach (var kv in root)
+        {
+            if (!KnownTopLevelSections.Contains(kv.Key))
+                warnings.Add($"warning: unknown config key {kv.Key} - ignored");
+        }
+
+        // [ticketing]
+        if (root.TryGetValue("ticketing", out var ticketingRaw) && ticketingRaw is TomlTable ticketing)
+        {
+            foreach (var kv in ticketing)
+            {
+                if (!KnownTicketingKeys.Contains(kv.Key))
+                    warnings.Add($"warning: unknown config key ticketing.{kv.Key} - ignored");
+            }
+        }
+
+        // [llm]
+        if (root.TryGetValue("llm", out var llmRaw) && llmRaw is TomlTable llm)
+        {
+            foreach (var kv in llm)
+            {
+                if (!KnownLlmKeys.Contains(kv.Key))
+                    warnings.Add($"warning: unknown config key llm.{kv.Key} - ignored");
+            }
+        }
+
+        // [workers]
+        if (root.TryGetValue("workers", out var workersRaw) && workersRaw is TomlTable workers)
+        {
+            foreach (var kv in workers)
+            {
+                if (kv.Value is TomlTable subTable)
+                {
+                    // [workers.phases] already hard-errors on unknown keys; do not double-warn.
+                    if (kv.Key == "phases")
+                        continue;
+
+                    // Agent sub-table: check per-agent keys and sizes sub-table.
+                    foreach (var agentKv in subTable)
+                    {
+                        if (agentKv.Key == "sizes" && agentKv.Value is TomlTable sizesTable)
+                        {
+                            foreach (var sizeKv in sizesTable)
+                            {
+                                if (!KnownSizesKeys.Contains(sizeKv.Key))
+                                    warnings.Add($"warning: unknown config key workers.{kv.Key}.sizes.{sizeKv.Key} - ignored");
+                            }
+                        }
+                        else if (!KnownAgentKeys.Contains(agentKv.Key))
+                        {
+                            warnings.Add($"warning: unknown config key workers.{kv.Key}.{agentKv.Key} - ignored");
+                        }
+                    }
+                }
+                else if (!KnownWorkersScalarKeys.Contains(kv.Key))
+                {
+                    warnings.Add($"warning: unknown config key workers.{kv.Key} - ignored");
+                }
+            }
+        }
+
+        // [events]
+        if (root.TryGetValue("events", out var eventsRaw) && eventsRaw is TomlTable events)
+        {
+            foreach (var kv in events)
+            {
+                if (!KnownEventsKeys.Contains(kv.Key))
+                    warnings.Add($"warning: unknown config key events.{kv.Key} - ignored");
+            }
+        }
+
+        // [review]
+        if (root.TryGetValue("review", out var reviewRaw) && reviewRaw is TomlTable review)
+        {
+            foreach (var kv in review)
+            {
+                if (kv.Key == "checks")
+                    continue;
+                if (!KnownReviewKeys.Contains(kv.Key))
+                    warnings.Add($"warning: unknown config key review.{kv.Key} - ignored");
+            }
+            if (review.TryGetValue("checks", out var checksRaw) && checksRaw is TomlTableArray checksArr)
+            {
+                foreach (var entry in checksArr)
+                {
+                    foreach (var kv in entry)
+                    {
+                        if (!KnownCheckEntryKeys.Contains(kv.Key))
+                            warnings.Add($"warning: unknown config key review.checks.{kv.Key} - ignored");
+                    }
+                }
+            }
+        }
+
+        // [ship]
+        if (root.TryGetValue("ship", out var shipRaw) && shipRaw is TomlTable ship)
+        {
+            foreach (var kv in ship)
+            {
+                if (kv.Key == "regression_checks")
+                    continue;
+                if (!KnownShipKeys.Contains(kv.Key))
+                    warnings.Add($"warning: unknown config key ship.{kv.Key} - ignored");
+            }
+            if (ship.TryGetValue("regression_checks", out var regrChecksRaw) && regrChecksRaw is TomlTableArray regrChecksArr)
+            {
+                foreach (var entry in regrChecksArr)
+                {
+                    foreach (var kv in entry)
+                    {
+                        if (!KnownCheckEntryKeys.Contains(kv.Key))
+                            warnings.Add($"warning: unknown config key ship.regression_checks.{kv.Key} - ignored");
+                    }
+                }
+            }
+        }
+
+        // [work]
+        if (root.TryGetValue("work", out var workRaw) && workRaw is TomlTable work)
+        {
+            foreach (var kv in work)
+            {
+                if (!KnownWorkKeys.Contains(kv.Key))
+                    warnings.Add($"warning: unknown config key work.{kv.Key} - ignored");
+            }
+        }
+
+        // [plan]
+        if (root.TryGetValue("plan", out var planRaw) && planRaw is TomlTable plan)
+        {
+            foreach (var kv in plan)
+            {
+                if (!KnownPlanKeys.Contains(kv.Key))
+                    warnings.Add($"warning: unknown config key plan.{kv.Key} - ignored");
+            }
+        }
+
+        // [project]
+        if (root.TryGetValue("project", out var projectRaw) && projectRaw is TomlTable project)
+        {
+            foreach (var kv in project)
+            {
+                if (!KnownProjectKeys.Contains(kv.Key))
+                    warnings.Add($"warning: unknown config key project.{kv.Key} - ignored");
+            }
+        }
     }
 
     private static TomlTable RequireSection(TomlTable root, string key)

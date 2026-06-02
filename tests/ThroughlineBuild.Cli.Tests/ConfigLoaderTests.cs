@@ -719,6 +719,169 @@ log_directory = ".build/events"
         }
     }
 
+    // --- Unknown-key warning tests (TLB-405) ---
+
+    [Fact]
+    public void Load_StrayKeyInWorkersAgentSubTable_EmitsWarning()
+    {
+        // "bypass_permission" is a misspelling of "bypass_permissions" - it should warn.
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "abc-123"
+plane_api_token_env = "PLANE_TOKEN"
+
+[workers]
+default_agent = "claude-code"
+
+[workers.claude-code]
+executable = "claude"
+bypass_permission = true
+
+[workers.claude-code.sizes]
+small  = "claude-haiku-4-5-20251001"
+medium = "claude-sonnet-4-6"
+large  = "claude-opus-4-7"
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            var config = BuildConfigLoader.Load(path, w => captured.Add(w));
+
+            Assert.NotEmpty(captured);
+            Assert.Contains(captured, w => w.Contains("bypass_permission") && w.Contains("workers.claude-code"));
+            // Config still loads successfully (non-fatal)
+            Assert.Equal("plane", config.Ticketing.BackendName);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_UnknownTopLevelSection_EmitsWarning()
+    {
+        var toml = ValidToml + "\n[plans]\nsome_key = \"value\"";
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            var config = BuildConfigLoader.Load(path, w => captured.Add(w));
+
+            Assert.NotEmpty(captured);
+            Assert.Contains(captured, w => w.Contains("plans"));
+            // Config still loads successfully (non-fatal)
+            Assert.Equal("plane", config.Ticketing.BackendName);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_StrayKeyInSizesSubTable_EmitsWarning()
+    {
+        // "executable" accidentally nested under sizes - should warn with dotted path.
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "abc-123"
+plane_api_token_env = "PLANE_TOKEN"
+
+[workers]
+default_agent = "claude-code"
+
+[workers.claude-code]
+executable = "claude"
+
+[workers.claude-code.sizes]
+small  = "claude-haiku-4-5-20251001"
+medium = "claude-sonnet-4-6"
+large  = "claude-opus-4-7"
+executable = "oops"
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            var config = BuildConfigLoader.Load(path, w => captured.Add(w));
+
+            Assert.NotEmpty(captured);
+            Assert.Contains(captured, w => w.Contains("workers.claude-code.sizes.executable"));
+            Assert.Equal("plane", config.Ticketing.BackendName);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_CleanConfig_EmitsNoWarnings()
+    {
+        var path = WriteToml(ValidToml);
+        try
+        {
+            var captured = new List<string>();
+            BuildConfigLoader.Load(path, w => captured.Add(w));
+
+            Assert.Empty(captured);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_RecognizedOptionalKeys_DoNotWarn()
+    {
+        // All of these are recognized optional keys; none should trigger a warning.
+        var toml = ValidToml + """
+
+
+[workers.phases]
+plan = "claude-code"
+implement = "claude-code"
+
+[work]
+target_branch = "feature/x"
+
+[plan]
+mode = "investigate"
+
+[project]
+language = "csharp"
+plane_project_url = "https://plane.so/proj"
+notes_file = "nonexistent-but-recognized.md"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            BuildConfigLoader.Load(path, w => captured.Add(w));
+
+            Assert.Empty(captured);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     [Fact]
     public void Load_GeminiAgentSubTable_WithGooglePrefixSizes_ParsesRawString()
     {
