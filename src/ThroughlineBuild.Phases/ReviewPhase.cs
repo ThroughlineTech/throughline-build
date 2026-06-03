@@ -149,15 +149,35 @@ public class ReviewPhase : IWorkflowPhase
         var repoState = new RepoState(mainSha, topLevelEntries);
         var implementerBrief = ImplementBriefBuilder.Build(_verifierWorker.Name, ticket, repoState, canonicalBranchName, canonicalWorktreePath, _project);
 
-        // Step 6a: Reconstruct implementer commit SHA from the freshest [implemented_at: <sha>]
-        // marker. Selecting by comment creation time (not list position) is load-bearing: on a
-        // chain re-run the ticket carries implemented_at markers from prior runs too, and picking
-        // a stale one attributes the review to an orphaned commit on a different base (TLB-412).
+        // Step 6a: Determine the implementer commit under review. The freshest [implemented_at:
+        // <sha>] marker proves implement ran and self-reports a SHA - selecting it by comment
+        // creation time (not list position) avoids reading a stale prior-run marker (TLB-412).
+        // But the worktree branch HEAD is ground truth: an implementer that amends or squashes
+        // AFTER posting the marker leaves it pointing at a now-superseded commit, while the
+        // automated checks (Step 7) and the diff (Step 6b) run against HEAD. When the two
+        // diverge, attribute the review to HEAD and surface the drift, so the verifier never
+        // reasons about an orphaned commit that the live checks did not run against (TLB-414).
         var comments = await _ticketing.GetCommentsAsync(ticketId, ct).ConfigureAwait(false);
-        var implementerCommitSha = CommentMarkers.LatestValue(comments, "implemented_at");
-        if (string.IsNullOrEmpty(implementerCommitSha))
+        var markerSha = CommentMarkers.LatestValue(comments, "implemented_at");
+        if (string.IsNullOrEmpty(markerSha))
             return new ReviewResult(false, ticketId, null, null, Array.Empty<string>(),
                 "no implemented_at marker found - ticket reached InReview without an implement marker, ReviewPhase cannot reconstruct implementer state");
+
+        string? headSha = null;
+        try { headSha = await _git.HeadShaAsync(canonicalWorktreePath, ct).ConfigureAwait(false); }
+        catch { /* best-effort: HEAD unavailable, fall back to the marker below */ }
+
+        var implementerCommitSha = markerSha;
+        if (!string.IsNullOrEmpty(headSha) && !string.Equals(headSha, markerSha, StringComparison.Ordinal))
+        {
+            await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+            {
+                ["kind"] = "implemented_at_superseded",
+                ["marker_sha"] = markerSha,
+                ["head_sha"] = headSha!
+            }, ct).ConfigureAwait(false);
+            implementerCommitSha = headSha!;
+        }
 
         // Step 6b: Compute diff and synthesize implementer WorkerResult
         var diff = await _git.DiffAsync(baseRef, canonicalBranchName, workingDirectory, includePatchContent: true, ct).ConfigureAwait(false);

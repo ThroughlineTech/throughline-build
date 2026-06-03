@@ -110,6 +110,36 @@ public class ReviewPhaseTests
     }
 
     [Fact]
+    public async Task RunAsync_MarkerSupersededByWorktreeHead_AttributesToHeadAndEmitsDrift()
+    {
+        // Regression (TLB-414): the implementer amended/squashed after posting [implemented_at],
+        // so the freshest marker points at a now-superseded commit while the worktree HEAD (which
+        // the checks and diff actually ran against) has moved on. Review must attribute to HEAD and
+        // surface the drift, not reason about the orphaned marker commit.
+        const string amendedHead = "abcabcabcabcabcabcabcabcabcabcabcabcabca";
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        ticketing.SeedComment($"<p>[implemented_at: {ImplementedSha}]</p>");
+        var worker = new FakeWorkerAgent();
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, includeWorktreeMatching: true, headSha: amendedHead);
+        var verifier = new FakeVerifier(new Verdict(VerdictKind.Pass, "ok", Array.Empty<string>()));
+        var phase = new ReviewPhase(ticketing, worker, events, MakeBuildOptions(), MakeReviewOptions(),
+            git, verifierOverride: verifier);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        // Attribution follows ground-truth HEAD, not the superseded marker.
+        Assert.Equal(amendedHead, verifier.LastWorkerResult!.Metadata["commit_sha"]);
+        Assert.NotEqual(ImplementedSha, verifier.LastWorkerResult!.Metadata["commit_sha"]);
+        // Drift is surfaced as an event carrying both SHAs.
+        var drift = events.Events.Single(e => e.Kind == EventKind.GateFailure
+            && e.Data.TryGetValue("kind", out var k) && (k?.ToString() == "implemented_at_superseded"));
+        Assert.Equal(ImplementedSha, drift.Data["marker_sha"]);
+        Assert.Equal(amendedHead, drift.Data["head_sha"]);
+    }
+
+    [Fact]
     public async Task RunAsync_ReworkVerdictEmptyChecks_PostsCommentWithoutChecksFailed_TransitionsToInProgress()
     {
         var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
@@ -743,14 +773,19 @@ public class ReviewPhaseTests
         private readonly string _mainSha;
         private readonly bool _includeWorktreeMatching;
         private readonly bool _branchExistsForRecovery;
+        private readonly string _headSha;
 
         public bool CheckoutWorktreeCalled { get; private set; }
 
-        public FakeGitClient(string mainSha, bool includeWorktreeMatching, bool branchExistsForRecovery = false)
+        // headSha defaults to the implementer marker SHA so the worktree HEAD matches the
+        // [implemented_at] marker in the normal case (no drift). Override it to simulate an
+        // implementer that amended/squashed after posting the marker (TLB-414).
+        public FakeGitClient(string mainSha, bool includeWorktreeMatching, bool branchExistsForRecovery = false, string? headSha = null)
         {
             _mainSha = mainSha;
             _includeWorktreeMatching = includeWorktreeMatching;
             _branchExistsForRecovery = branchExistsForRecovery;
+            _headSha = headSha ?? ImplementedSha;
         }
 
         public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
@@ -786,7 +821,7 @@ public class ReviewPhaseTests
             Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
 
         public Task<string> HeadShaAsync(string worktreePath, CancellationToken ct) =>
-            Task.FromResult("deadbeef");
+            Task.FromResult(_headSha);
 
         public Task<GitDiff> DiffAsync(string fromRef, string toRef, string mainWorktreePath, bool includePatchContent, CancellationToken ct) =>
             Task.FromResult(new GitDiff(fromRef, toRef, new[]
