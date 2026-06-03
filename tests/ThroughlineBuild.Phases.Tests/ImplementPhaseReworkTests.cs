@@ -229,8 +229,35 @@ public class ImplementPhaseReworkTests
 
         Assert.False(result.Success);
         Assert.Contains("does not exist", result.FailureReason ?? "");
+        // Recovery was attempted (CheckoutWorktreeAsync) but the branch was unrecoverable.
+        Assert.True(git.CheckoutWorktreeCalled);
         Assert.False(git.CreateWorktreeCalled);
         Assert.Empty(ticketing.Transitions);
+    }
+
+    [Fact]
+    public async Task RunAsync_ReworkRound_MissingWorktree_RecreatesFromSurvivingBranch_Succeeds()
+    {
+        // Models resuming a stopped chain child (TLB-438): the shared worktree was torn down
+        // at chain end, but the ticket branch survives. The rework round must recreate the
+        // worktree from that branch and proceed instead of dead-ending.
+        var tempRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InProgress));
+        var worker = new FakeWorkerAgent(OkWorkerResult());
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha) { CheckoutWorktreeSucceeds = true };
+        var phaseOptions = new ImplementPhaseOptions(MakeReviewFeedback(1));
+        var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git, phaseOptions: phaseOptions);
+
+        var result = await phase.RunAsync("TLB-1", tempRoot, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.True(git.CheckoutWorktreeCalled);
+        Assert.False(git.CreateWorktreeCalled);
+        Assert.Equal(CommitSha, result.CommitSha);
+        Assert.Equal(1, result.ReworkRoundNumber);
+        Assert.Contains(ticketing.Transitions, t => t.state == TicketState.InReview);
     }
 
     private sealed class FakeTicketing : ITicketing
@@ -311,11 +338,24 @@ public class ImplementPhaseReworkTests
         private readonly string _mainSha;
         private readonly string _headSha;
         public bool CreateWorktreeCalled { get; private set; }
+        public bool CheckoutWorktreeCalled { get; private set; }
+        // Default false: a fake with no existing worktree and no recoverable branch.
+        // Set true to simulate the surviving ticket branch being re-checkout-able.
+        public bool CheckoutWorktreeSucceeds { get; set; }
 
         public FakeGitClient(string mainSha, string headSha)
         {
             _mainSha = mainSha;
             _headSha = headSha;
+        }
+
+        public Task<WorktreeCreateResult> CheckoutWorktreeAsync(string worktreePath, string existingBranch, string mainWorktreePath, CancellationToken ct)
+        {
+            CheckoutWorktreeCalled = true;
+            if (!CheckoutWorktreeSucceeds)
+                return Task.FromResult(new WorktreeCreateResult(false, "branch not found", null));
+            Directory.CreateDirectory(worktreePath);
+            return Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
         }
 
         public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>

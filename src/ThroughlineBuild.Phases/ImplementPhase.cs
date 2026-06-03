@@ -195,11 +195,26 @@ public class ImplementPhase : IWorkflowPhase
                 reworkWorktreeFound = true;
             if (!reworkWorktreeFound && isSharedWorktree && Directory.Exists(_phaseOptions.SharedWorktreePath!))
                 reworkWorktreeFound = true;
+            // Recovery (TLB-438): a stopped parent chain tears down the shared worktree at chain
+            // end, but the ticket branch and its commits survive. Rather than dead-ending the
+            // resume, recreate a worktree checked out to the existing branch at the canonical path.
+            // Covers both `build chain <child>` and `build rework <child>`, which share this path.
+            // Only fall through to failure if the branch is gone too or the worktree add fails.
             if (!reworkWorktreeFound)
             {
-                var failureReason = $"rework expected existing worktree at {worktreeNames.WorktreePath} but it does not exist";
-                EarlyExitManifest.Write(_options.DebugCaptureDirectory, Phase.Implement.ToString(), ticketId, failureReason);
-                return new ImplementResult(false, ticketId, null, worktreeNames.BranchName, worktreeNames.WorktreePath, failureReason);
+                var recovery = await _git.CheckoutWorktreeAsync(canonicalWorktreePath, canonicalBranchName, workingDirectory, ct).ConfigureAwait(false);
+                if (recovery.Success)
+                {
+                    if (!string.IsNullOrEmpty(recovery.AbsolutePath))
+                        canonicalWorktreePath = recovery.AbsolutePath;
+                    reworkWorktreeFound = true;
+                }
+                else
+                {
+                    var failureReason = $"rework expected existing worktree at {worktreeNames.WorktreePath} but it does not exist, and could not recreate it from branch {canonicalBranchName}: {recovery.FailureReason}";
+                    EarlyExitManifest.Write(_options.DebugCaptureDirectory, Phase.Implement.ToString(), ticketId, failureReason);
+                    return new ImplementResult(false, ticketId, null, canonicalBranchName, canonicalWorktreePath, failureReason);
+                }
             }
         }
 
