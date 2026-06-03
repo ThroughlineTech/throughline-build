@@ -171,7 +171,7 @@ public class ObsoleteRatifierTests
             var git = new CommitExistsGit();
             var ratifier = new ObsoleteRatifier(worker, MakeWorkerOptions(), dir, git);
 
-            var verdict = await ratifier.RatifyAsync(MakeTicket(), MakeEscalateResult(), CancellationToken.None);
+            var verdict = await ratifier.RatifyAsync(MakeTicket(), MakeEscalateResult(), null, CancellationToken.None);
 
             Assert.Equal(VerdictKind.Pass, verdict.Kind);
             Assert.Equal("prior work satisfies acceptance criteria", verdict.Rationale);
@@ -189,7 +189,7 @@ public class ObsoleteRatifierTests
             var git = new CommitMissingGit();
             var ratifier = new ObsoleteRatifier(worker, MakeWorkerOptions(), dir, git);
 
-            var verdict = await ratifier.RatifyAsync(MakeTicket(), MakeEscalateResult(), CancellationToken.None);
+            var verdict = await ratifier.RatifyAsync(MakeTicket(), MakeEscalateResult(), null, CancellationToken.None);
 
             Assert.Equal(VerdictKind.Fail, verdict.Kind);
             Assert.Contains(CitedCommit, verdict.Rationale);
@@ -207,7 +207,7 @@ public class ObsoleteRatifierTests
             var git = new CommitExistsGit();
             var ratifier = new ObsoleteRatifier(worker, MakeWorkerOptions(), dir, git);
 
-            var verdict = await ratifier.RatifyAsync(MakeTicket(), MakeEscalateResult(), CancellationToken.None);
+            var verdict = await ratifier.RatifyAsync(MakeTicket(), MakeEscalateResult(), null, CancellationToken.None);
 
             Assert.Equal(VerdictKind.Fail, verdict.Kind);
             Assert.Contains(CitedFile, verdict.Rationale);
@@ -224,10 +224,31 @@ public class ObsoleteRatifierTests
             var git = new CommitExistsGit();
             var ratifier = new ObsoleteRatifier(worker, MakeWorkerOptions(), dir, git);
 
-            var verdict = await ratifier.RatifyAsync(MakeTicket(), MakeEscalateResult(), CancellationToken.None);
+            var verdict = await ratifier.RatifyAsync(MakeTicket(), MakeEscalateResult(), null, CancellationToken.None);
 
             Assert.Equal(VerdictKind.Fail, verdict.Kind);
             Assert.Equal("missing acceptance criterion", verdict.Rationale);
+        }
+    }
+
+    [Fact]
+    public async Task Ratified_EvidenceDirectoryOverride_ResolvesFilesThere()
+    {
+        // The ratifier is constructed against an EMPTY dir (cited file absent there), but the
+        // escalation was raised in a separate worktree that DOES contain the file. Passing that
+        // worktree as evidenceDirectory must make Check 2 resolve there - not the construction dir.
+        var (ctorDir, ctorCleanup) = CreateTempDir();
+        var (worktreeDir, worktreeCleanup) = CreateTempDir("src/Foo.cs");
+        using (ctorCleanup)
+        using (worktreeCleanup)
+        {
+            var worker = new StubWorkerAgent(OkVerdictResult("Pass", "prior work satisfies acceptance criteria"));
+            var git = new CommitExistsGit();
+            var ratifier = new ObsoleteRatifier(worker, MakeWorkerOptions(), ctorDir, git);
+
+            var verdict = await ratifier.RatifyAsync(MakeTicket(), MakeEscalateResult(), worktreeDir, CancellationToken.None);
+
+            Assert.Equal(VerdictKind.Pass, verdict.Kind);
         }
     }
 
@@ -241,7 +262,7 @@ public class ObsoleteRatifierTests
             var git = new CommitExistsGit();
             var ratifier = new ObsoleteRatifier(worker, MakeWorkerOptions(), dir, git);
 
-            var verdict = await ratifier.RatifyAsync(MakeTicket(), MakeEscalateResult(), CancellationToken.None);
+            var verdict = await ratifier.RatifyAsync(MakeTicket(), MakeEscalateResult(), null, CancellationToken.None);
 
             Assert.Equal(VerdictKind.Rework, verdict.Kind);
             Assert.Equal("needs revision", verdict.Rationale);

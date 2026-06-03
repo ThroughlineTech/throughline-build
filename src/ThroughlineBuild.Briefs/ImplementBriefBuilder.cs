@@ -28,6 +28,7 @@ public static class ImplementBriefBuilder
             $"\"files_changed\":[\"path/relative/to/worktree\"]}}}}";
 
         var reviewFeedbackSection = BuildReviewFeedbackSection(reviewFeedback);
+        var obsoleteDetectionSection = BuildObsoleteDetectionSection(reviewFeedback);
 
         var vars = new Dictionary<string, string>
         {
@@ -42,7 +43,8 @@ public static class ImplementBriefBuilder
             ["branch"] = branchName,
             ["main_sha"] = repo.MainSha,
             ["worker_result_json"] = workerResultJson,
-            ["review_feedback_section"] = reviewFeedbackSection
+            ["review_feedback_section"] = reviewFeedbackSection,
+            ["obsolete_detection_section"] = obsoleteDetectionSection
         };
 
         var instruction = TemplateLoader.Load(agentName, "implement.md").Substitute(vars);
@@ -108,5 +110,49 @@ public static class ImplementBriefBuilder
             : "(none)";
 
         return $"\n## Rework round {reviewFeedback.ReworkRoundNumber} - reviewer feedback\n\n{reviewFeedback.Rationale}\n\nChecks failed:\n{checksList}";
+    }
+
+    // The obsolete path lets an agent escalate a ticket it finds already delivered by a
+    // prior commit. On the INITIAL round that is a real signal (a sibling/earlier ticket
+    // may have subsumed this one). On a REWORK round it is a trap: the rework agent reuses
+    // the same branch, so the "prior commit that already satisfies the criteria" is its own
+    // earlier-round work. Left enabled, the agent declares the ticket obsolete-subsumed by
+    // its own commit and skips the reviewer's feedback (the TLB-424 chain-stop). So suppress
+    // obsolete detection on rework rounds and redirect the agent to the feedback instead.
+    private static string BuildObsoleteDetectionSection(ReviewFeedback? reviewFeedback)
+    {
+        if (reviewFeedback is not null)
+        {
+            return
+                "## Obsolete detection (suppressed on rework)\n\n" +
+                "This is a rework round. Commits already on this branch are your own prior-round work - " +
+                "do NOT raise an obsolete escalation against them. Apply the reviewer feedback above. " +
+                "If the feedback is genuinely already satisfied by the current tree, re-affirm with " +
+                "`Status=Ok` and report the current HEAD SHA; never emit `Status=Escalate` with reason " +
+                "`obsolete` in a rework round.";
+        }
+
+        return
+            "## Obsolete detection\n\n" +
+            "Before making any changes, check whether the plan's acceptance criteria are already satisfied by a prior commit. If the acceptance criteria's artifacts already exist AND their content meets the acceptance criteria, the ticket is obsolete.\n\n" +
+            "**Detection bar:** \"the file exists AND its content meets the acceptance criteria\" qualifies. \"a file with the same name exists\" does not.\n\n" +
+            "Emit `Status=Escalate` with a populated `metadata.escalation` block. Do not make any changes.\n\n" +
+            "WORKER_RESULT\n" +
+            "{\n" +
+            "  \"status\": \"Escalate\",\n" +
+            "  \"summary\": \"Ticket obsolete: decompose.md already delivered in commit 80ccafa\",\n" +
+            "  \"files_changed\": [],\n" +
+            "  \"failure_reason\": null,\n" +
+            "  \"metadata\": {\n" +
+            "    \"escalation\": {\n" +
+            "      \"reason\": \"obsolete\",\n" +
+            "      \"subsumed_by\": {\n" +
+            "        \"commit\": \"80ccafa\",\n" +
+            "        \"files\": [\"src/ThroughlineBuild.Briefs/Templates/claude-code/decompose.md\"],\n" +
+            "        \"rationale\": \"decompose.md delivered in commit 80ccafa; file meets this brief's acceptance criteria\"\n" +
+            "      }\n" +
+            "    }\n" +
+            "  }\n" +
+            "}";
     }
 }

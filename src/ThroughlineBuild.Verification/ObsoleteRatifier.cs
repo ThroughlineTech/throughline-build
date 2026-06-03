@@ -29,8 +29,15 @@ public sealed class ObsoleteRatifier : IObsoleteRatifier
         _git = git;
     }
 
-    public async Task<Verdict> RatifyAsync(Ticket ticket, WorkerResult escalateResult, CancellationToken ct)
+    public async Task<Verdict> RatifyAsync(Ticket ticket, WorkerResult escalateResult, string? evidenceDirectory, CancellationToken ct)
     {
+        // Resolve evidence against the worktree where the escalation was raised. A chain
+        // rework round runs in the ticket's shared worktree, so its new files are not present
+        // in the main worktree the ratifier was constructed against; checking there would fail
+        // Check 2 spuriously (cited file "not found at HEAD"). Fall back to the construction-time
+        // directory when no override is supplied.
+        var dir = string.IsNullOrEmpty(evidenceDirectory) ? _workingDirectory : evidenceDirectory;
+
         var evidence = ExtractSubsumedByEvidence(escalateResult);
         if (evidence is null)
             return new Verdict(VerdictKind.Fail,
@@ -42,7 +49,7 @@ public sealed class ObsoleteRatifier : IObsoleteRatifier
         {
             try
             {
-                await _git.RevParseAsync($"{evidence.Commit}^{{commit}}", _workingDirectory, ct)
+                await _git.RevParseAsync($"{evidence.Commit}^{{commit}}", dir, ct)
                     .ConfigureAwait(false);
             }
             catch (Exception)
@@ -55,7 +62,7 @@ public sealed class ObsoleteRatifier : IObsoleteRatifier
 
         // Check 2: cited files exist at HEAD
         var missing = evidence.Files
-            .Where(f => !File.Exists(Path.Combine(_workingDirectory, f)))
+            .Where(f => !File.Exists(Path.Combine(dir, f)))
             .ToList();
         if (missing.Count > 0)
             return new Verdict(VerdictKind.Fail,
@@ -64,7 +71,7 @@ public sealed class ObsoleteRatifier : IObsoleteRatifier
 
         // Check 3: model-driven acceptance criteria verification
         var brief = BuildRatificationBrief(ticket, evidence);
-        var workerResult = await _worker.ExecuteAsync(brief, _workingDirectory, _workerOptions, ct)
+        var workerResult = await _worker.ExecuteAsync(brief, dir, _workerOptions, ct)
             .ConfigureAwait(false);
 
         if (workerResult.Status != Status.Ok)

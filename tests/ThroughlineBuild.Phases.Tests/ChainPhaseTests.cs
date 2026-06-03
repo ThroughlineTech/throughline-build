@@ -836,10 +836,12 @@ public class ChainPhaseTests
     {
         private readonly Verdict _verdict;
         public bool WasCalled { get; private set; }
+        public string? LastEvidenceDirectory { get; private set; }
         public FakeObsoleteRatifier(Verdict verdict) { _verdict = verdict; }
-        public Task<Verdict> RatifyAsync(Ticket ticket, WorkerResult escalateResult, CancellationToken ct)
+        public Task<Verdict> RatifyAsync(Ticket ticket, WorkerResult escalateResult, string? evidenceDirectory, CancellationToken ct)
         {
             WasCalled = true;
+            LastEvidenceDirectory = evidenceDirectory;
             return Task.FromResult(_verdict);
         }
     }

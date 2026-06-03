@@ -184,7 +184,9 @@ public class ChainPhase
                     planResult.EscalationWorkerResult is not null &&
                     IsObsoleteEscalation(planResult.EscalationWorkerResult))
                 {
-                    var ratifyVerdict = await RunRatificationAsync(options, steps, planResult.EscalationWorkerResult, ct)
+                    // Plan runs in the main working directory (no worktree exists yet), so its
+                    // obsolete evidence resolves there; null defers to the ratifier's own dir.
+                    var ratifyVerdict = await RunRatificationAsync(options, steps, planResult.EscalationWorkerResult, evidenceDirectory: null, ct)
                         .ConfigureAwait(false);
                     if (ratifyVerdict.Kind == VerdictKind.Pass)
                     {
@@ -372,7 +374,9 @@ public class ChainPhase
                     implResult.EscalationWorkerResult is not null &&
                     IsObsoleteEscalation(implResult.EscalationWorkerResult))
                 {
-                    var ratifyVerdict = await RunRatificationAsync(options, steps, implResult.EscalationWorkerResult, ct)
+                    // Implement (incl. rework) runs in the ticket's worktree, where the cited
+                    // commit and any new files actually live - resolve evidence against it.
+                    var ratifyVerdict = await RunRatificationAsync(options, steps, implResult.EscalationWorkerResult, implResult.WorktreePath, ct)
                         .ConfigureAwait(false);
                     if (ratifyVerdict.Kind == VerdictKind.Pass)
                     {
@@ -669,6 +673,7 @@ public class ChainPhase
         ChainPhaseOptions options,
         List<ChainStep> steps,
         WorkerResult escalateResult,
+        string? evidenceDirectory,
         CancellationToken ct)
     {
         var sessionId = _sessionIdGenerator();
@@ -679,7 +684,7 @@ public class ChainPhase
 
         EmitPhaseStart(options, "ratify", -1, sessionId);
         var sw = Stopwatch.StartNew();
-        var verdict = await ratifier.RatifyAsync(ticket, escalateResult, ct).ConfigureAwait(false);
+        var verdict = await ratifier.RatifyAsync(ticket, escalateResult, evidenceDirectory, ct).ConfigureAwait(false);
         sw.Stop();
 
         var ratifyStep = new ChainStep(

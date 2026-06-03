@@ -30,31 +30,7 @@ The ticket description (raw HTML) contains the planning output from the prior ph
 - Do NOT write outside the worktree
 - Do NOT use git stash or the shared stash stack; the stash stack is repo-global and leaks across worktrees, which can corrupt a later ticket's working tree. If you need a clean state to build, build in place rather than stashing.
 
-## Obsolete detection
-
-Before making any changes, check whether the plan's acceptance criteria are already satisfied by a prior commit. If the acceptance criteria's artifacts already exist AND their content meets the acceptance criteria, the ticket is obsolete.
-
-**Detection bar:** "the file exists AND its content meets the acceptance criteria" qualifies. "a file with the same name exists" does not.
-
-Emit `Status=Escalate` with a populated `metadata.escalation` block. Do not make any changes.
-
-WORKER_RESULT
-{
-  "status": "Escalate",
-  "summary": "Ticket obsolete: decompose.md already delivered in commit 80ccafa",
-  "files_changed": [],
-  "failure_reason": null,
-  "metadata": {
-    "escalation": {
-      "reason": "obsolete",
-      "subsumed_by": {
-        "commit": "80ccafa",
-        "files": ["src/ThroughlineBuild.Briefs/Templates/claude-code/decompose.md"],
-        "rationale": "decompose.md delivered in commit 80ccafa; file meets this brief's acceptance criteria"
-      }
-    }
-  }
-}
+{{obsolete_detection_section}}
 
 ## Required output
 
