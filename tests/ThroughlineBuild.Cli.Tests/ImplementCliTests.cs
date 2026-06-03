@@ -100,6 +100,27 @@ public class ImplementCliTests
         Assert.Contains("build implement <ticket-id>", stdout);
     }
 
+    [Theory]
+    [InlineData("--version")]
+    [InlineData("-V")]
+    public async Task BuildBinary_VersionFlag_PrintsSingleVersionLineAndExitsZero(string flag)
+    {
+        var exe = LocateBuildExecutable();
+        if (exe is null) return;
+
+        var (exitCode, stdout, stderr) = await RunProcess(exe, new[] { flag });
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        var normalized = stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+        Assert.EndsWith("\n", normalized, StringComparison.Ordinal);
+
+        var lines = normalized.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Single(lines);
+        Assert.Equal(BuildVersion.Current, lines[0]);
+    }
+
     [Fact]
     public async Task BuildBinary_ImplementWithoutTicketId_ExitsTwo()
     {

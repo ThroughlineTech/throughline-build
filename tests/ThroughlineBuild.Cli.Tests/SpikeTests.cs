@@ -16,4 +16,10 @@ public class SpikeTests
     {
         Assert.Equal("throughline", "THROUGHLINE".ToLowerInvariant());
     }
+
+    [Fact]
+    public void BuildVersion_is_non_empty()
+    {
+        Assert.False(string.IsNullOrWhiteSpace(BuildVersion.Current));
+    }
 }

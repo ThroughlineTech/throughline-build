@@ -1,5 +1,4 @@
 using System.Net.Http;
-using System.Reflection;
 using ThroughlineBuild.Cli;
 using ThroughlineBuild.Commands;
 using ThroughlineBuild.Contracts;
@@ -23,6 +22,12 @@ return await RunAsync(args);
 static async Task<int> RunAsync(string[] args)
 {
     var helpRegistry = HelpRegistryFactory.Build();
+
+    if (args.Length == 1 && (args[0] == "-V" || args[0] == "--version"))
+    {
+        Console.WriteLine(BuildVersion.Current);
+        return 0;
+    }
 
     if (args.Length == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help")
     {
@@ -241,12 +246,11 @@ static async Task<int> RunAsync(string[] args)
 
     string ResolveLogDir(string raw) => Path.GetFullPath(BuildConfigLoader.ResolveLogDirectory(configPath2, raw, cwd2));
 
-    var buildVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
     var sessionContext = new SessionContext(
         ProjectId: config2.Ticketing.PlaneProjectId,
         ProjectName: string.IsNullOrEmpty(config2.Ticketing.PlaneProjectName) ? null : config2.Ticketing.PlaneProjectName,
         WorkspaceSlug: config2.Ticketing.PlaneWorkspaceSlug,
-        BuildVersion: buildVersion);
+        BuildVersion: BuildVersion.Current);
 
     if (verb == "list")
     {
@@ -1795,4 +1799,3 @@ static string? WireUpConditionalCommands(
 
     return null;
 }
-
