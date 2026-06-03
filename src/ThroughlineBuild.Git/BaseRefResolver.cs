@@ -7,22 +7,57 @@ public static class BaseRefResolver
     // Resolves the base ref used by plan/implement/review (worktree source, diff base,
     // planned_at marker). Prefers origin/<targetBranch>; falls back to the supplied
     // target branch for repos that have no origin remote (e.g. fresh local-only repos).
-    // Returns both the resolved ref name and its SHA so callers can pass the ref name
-    // to downstream git commands (worktree create, diff) and the SHA to brief builders
-    // / drift checks.
+    //
+    // Accumulation rule (TLB-411): when origin/<targetBranch> exists but the LOCAL
+    // <targetBranch> is strictly ahead of it (origin is an ancestor of local, local is not
+    // an ancestor of origin), the local branch is preferred. This is the state a chain that
+    // ships locally (--no-push) is in: each shipped sibling fast-forwards local <targetBranch>
+    // while origin/<targetBranch> stays frozen. Cutting the next ticket from the accumulating
+    // local tip is what lets chain children stack on each other instead of all branching from
+    // the frozen origin and then colliding at ship-time rebase. When local equals origin, is
+    // behind it, or has diverged, origin stays the canonical base (ShipPhase reconciles real
+    // divergence separately via its own ancestry probe).
+    //
+    // Returns both the resolved ref name and its SHA so callers can pass the ref name to
+    // downstream git commands (worktree create, diff) and the SHA to brief builders / drift
+    // checks.
     public static async Task<(string RefName, string Sha)> ResolveAsync(
         IGitClient git, string workingDirectory, string targetBranch, CancellationToken ct)
     {
         var remoteRef = $"origin/{targetBranch}";
+        string remoteSha;
         try
         {
-            var sha = await git.RevParseAsync(remoteRef, workingDirectory, ct).ConfigureAwait(false);
-            return (remoteRef, sha);
+            remoteSha = await git.RevParseAsync(remoteRef, workingDirectory, ct).ConfigureAwait(false);
         }
         catch
         {
-            var sha = await git.RevParseAsync(targetBranch, workingDirectory, ct).ConfigureAwait(false);
-            return (targetBranch, sha);
+            // No origin remote (or origin/<target> never fetched): fall back to the local
+            // target branch. Propagates if the local branch is also absent - the caller
+            // treats that as a hard git failure.
+            var localOnlySha = await git.RevParseAsync(targetBranch, workingDirectory, ct).ConfigureAwait(false);
+            return (targetBranch, localOnlySha);
         }
+
+        // origin/<target> exists. Prefer the local branch only when it is strictly ahead.
+        try
+        {
+            var localSha = await git.RevParseAsync(targetBranch, workingDirectory, ct).ConfigureAwait(false);
+            if (!string.Equals(localSha, remoteSha, StringComparison.Ordinal))
+            {
+                var originIsAncestorOfLocal =
+                    await git.IsAncestorAsync(remoteRef, targetBranch, workingDirectory, ct).ConfigureAwait(false);
+                var localIsAncestorOfOrigin =
+                    await git.IsAncestorAsync(targetBranch, remoteRef, workingDirectory, ct).ConfigureAwait(false);
+                if (originIsAncestorOfLocal && !localIsAncestorOfOrigin)
+                    return (targetBranch, localSha);
+            }
+        }
+        catch
+        {
+            // Local target branch absent or ancestry probe failed - keep origin as the base.
+        }
+
+        return (remoteRef, remoteSha);
     }
 }

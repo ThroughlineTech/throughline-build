@@ -780,15 +780,19 @@ public class ChainPhase
 
                     // Derive the chain's prior-commit pointer before each ticket so the
                     // implement brief lists the files already touched by shipped siblings.
-                    // This is a best-effort computation: any git failure leaves the pointer null,
-                    // which is safe - the brief is identical to the no-pointer baseline.
+                    // Resolve the CURRENT base the same way the child's implement will
+                    // (BaseRefResolver advances to the local target tip as siblings ship
+                    // locally), so the range reflects the accumulated sibling commits rather
+                    // than the frozen origin (TLB-411). Best-effort: any git failure leaves
+                    // the pointer null, which is safe - the brief is identical to the
+                    // no-pointer baseline.
                     ChainCommitRange? childCommitRange = null;
                     if (chainStartSha is not null && baseRefForSharedWt is not null)
                     {
                         try
                         {
-                            var currentTargetSha = await _git.RevParseAsync(
-                                baseRefForSharedWt, _workingDirectory, ct).ConfigureAwait(false);
+                            var (_, currentTargetSha) = await BaseRefResolver.ResolveAsync(
+                                _git, _workingDirectory, _baseOptions.TargetBranch, ct).ConfigureAwait(false);
                             childCommitRange = await ChainCommitRangeHelper.ComputeAsync(
                                 _git, chainStartSha, currentTargetSha, _workingDirectory, ct).ConfigureAwait(false);
                         }

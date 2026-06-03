@@ -105,7 +105,10 @@ public class ImplementPhase : IWorkflowPhase
             return new ImplementResult(false, ticketId, null, null, null, hygieneReason);
         }
 
-        // Step 3: Resolve base ref (origin/main with fallback to local main) and its SHA
+        // Step 3: Resolve base ref and its SHA. BaseRefResolver prefers origin/<target> but
+        // advances to the local <target> tip when it is strictly ahead (the accumulating state
+        // a local-shipping chain leaves behind), so each chain child branches from its shipped
+        // siblings instead of the frozen origin (TLB-411).
         string baseRef;
         string mainSha;
         try
