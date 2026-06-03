@@ -125,22 +125,11 @@ public class ImplementPhase : IWorkflowPhase
         // Step 4: Compute worktree names
         var worktreeNames = PhaseWorktreeLayout.Compute(ticket.Id, ticket.Title, workingDirectory);
 
-        // Step 5: Drift check - scan comments for [planned_at: <sha>]
+        // Step 5: Drift check - compare the freshest [planned_at: <sha>] marker against the base.
+        // Selecting by comment creation time (not list position) keeps the check on the current
+        // run's marker; a chain re-run also carries planned_at markers from prior runs (TLB-412).
         var comments = await _ticketing.GetCommentsAsync(ticketId, ct).ConfigureAwait(false);
-        string? plannedAtSha = null;
-        foreach (var comment in comments)
-        {
-            var markers = MarkerParser.Parse(comment.Body);
-            foreach (var m in markers)
-            {
-                if (m.Name == "planned_at" && !string.IsNullOrEmpty(m.Value))
-                {
-                    plannedAtSha = m.Value;
-                    break;
-                }
-            }
-            if (plannedAtSha is not null) break;
-        }
+        var plannedAtSha = CommentMarkers.LatestValue(comments, "planned_at");
         if (plannedAtSha is not null && plannedAtSha != mainSha)
         {
             await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>

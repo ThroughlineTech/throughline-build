@@ -83,6 +83,33 @@ public class ReviewPhaseTests
     }
 
     [Fact]
+    public async Task RunAsync_MultipleImplementedAtMarkers_ReconstructsFromFreshestByTimestamp()
+    {
+        // Regression (TLB-412): a chain re-run leaves stale implemented_at markers from prior
+        // runs on the ticket. Plane returns comments newest-first, so the old "keep last in list
+        // order" scan reconstructed from the OLDEST (stale, orphaned) commit. Seed the stale
+        // marker LAST in list order but with an older timestamp; the freshest must still win.
+        const string staleSha = "1111111111111111111111111111111111111111";
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var now = DateTimeOffset.UtcNow;
+        ticketing.SeedCommentAt($"<p>[implemented_at: {ImplementedSha}]</p>", now);            // fresh, first in list
+        ticketing.SeedCommentAt($"<p>[implemented_at: {staleSha}]</p>", now.AddDays(-1));       // stale, last in list
+        var worker = new FakeWorkerAgent();
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, includeWorktreeMatching: true);
+        var verifier = new FakeVerifier(new Verdict(VerdictKind.Pass, "ok", Array.Empty<string>()));
+        var phase = new ReviewPhase(ticketing, worker, events, MakeBuildOptions(), MakeReviewOptions(),
+            git, verifierOverride: verifier);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(verifier.LastWorkerResult);
+        Assert.Equal(ImplementedSha, verifier.LastWorkerResult!.Metadata["commit_sha"]);
+        Assert.NotEqual(staleSha, verifier.LastWorkerResult!.Metadata["commit_sha"]);
+    }
+
+    [Fact]
     public async Task RunAsync_ReworkVerdictEmptyChecks_PostsCommentWithoutChecksFailed_TransitionsToInProgress()
     {
         var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
@@ -569,6 +596,9 @@ public class ReviewPhaseTests
         public void SeedComment(string html) =>
             _seededComments.Add(new TicketComment(Guid.NewGuid().ToString(), html, DateTimeOffset.UtcNow));
 
+        public void SeedCommentAt(string html, DateTimeOffset createdAt) =>
+            _seededComments.Add(new TicketComment(Guid.NewGuid().ToString(), html, createdAt));
+
         public void SeedChildren(IReadOnlyList<Ticket> children) => _queryChildren = children.ToList();
 
         public BackendCapabilities Capabilities => new BackendCapabilities(true, true, true, false);
@@ -655,9 +685,13 @@ public class ReviewPhaseTests
     private sealed class FakeVerifier : IVerifier
     {
         private readonly Verdict _verdict;
+        public WorkerResult? LastWorkerResult { get; private set; }
         public FakeVerifier(Verdict verdict) { _verdict = verdict; }
-        public Task<Verdict> VerifyAsync(Brief brief, GitDiff diff, WorkerResult workerResult, CancellationToken ct) =>
-            Task.FromResult(_verdict);
+        public Task<Verdict> VerifyAsync(Brief brief, GitDiff diff, WorkerResult workerResult, CancellationToken ct)
+        {
+            LastWorkerResult = workerResult;
+            return Task.FromResult(_verdict);
+        }
     }
 
     private sealed class CapturingWorkerAgent : IWorkerAgent

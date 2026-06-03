@@ -149,20 +149,12 @@ public class ReviewPhase : IWorkflowPhase
         var repoState = new RepoState(mainSha, topLevelEntries);
         var implementerBrief = ImplementBriefBuilder.Build(_verifierWorker.Name, ticket, repoState, canonicalBranchName, canonicalWorktreePath, _project);
 
-        // Step 6a: Reconstruct implementer commit SHA from [implemented_at: <sha>] marker
+        // Step 6a: Reconstruct implementer commit SHA from the freshest [implemented_at: <sha>]
+        // marker. Selecting by comment creation time (not list position) is load-bearing: on a
+        // chain re-run the ticket carries implemented_at markers from prior runs too, and picking
+        // a stale one attributes the review to an orphaned commit on a different base (TLB-412).
         var comments = await _ticketing.GetCommentsAsync(ticketId, ct).ConfigureAwait(false);
-        string? implementerCommitSha = null;
-        foreach (var comment in comments)
-        {
-            var markers = MarkerParser.Parse(comment.Body);
-            foreach (var m in markers)
-            {
-                if (m.Name == "implemented_at" && !string.IsNullOrEmpty(m.Value))
-                {
-                    implementerCommitSha = m.Value;
-                }
-            }
-        }
+        var implementerCommitSha = CommentMarkers.LatestValue(comments, "implemented_at");
         if (string.IsNullOrEmpty(implementerCommitSha))
             return new ReviewResult(false, ticketId, null, null, Array.Empty<string>(),
                 "no implemented_at marker found - ticket reached InReview without an implement marker, ReviewPhase cannot reconstruct implementer state");
