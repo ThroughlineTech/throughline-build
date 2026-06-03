@@ -58,7 +58,7 @@ Outputs:
 - `notes/gate-integration-inventory.md`, naming the actual file:symbol for each surface below, each with a one-line reuse-or-build-new decision:
   - Existing check machinery: the runner invoked in review (`AutomatedChecksRunner` in `ThroughlineBuild.Verification`, called from `ReviewPhase`), the `CheckSpec` and `CheckResult` models in `Contracts/Verifier/`, and the capability map that already exists - the `[[review.checks]]` table parsed in `Cli/Config.cs` into `IReadOnlyList<CheckSpec>` and surfaced via review options, plus the second instance of the same pattern, `[[ship.regression_checks]]`.
   - The required reuse decision: does the gate relocate the existing review-time check run to the implement->review seam and have review consume the results (one build per ticket), or run a second time (two builds, forbidden by the wall-discipline target)? Default position, to justify or overturn: relocate and reuse.
-  - Every other caller of the check runner. If `AutomatedChecksRunner` is invoked outside the chain (for example by a standalone `build review` command or any single-phase entry), relocating the run into a chain-only gate would strand that caller's checks. The inventory must record where else the runner is called and whether the gate must also cover the standalone path or `ReviewPhase` must keep a fallback when no gate output is present.
+  - Every other caller of the check runner. If `AutomatedChecksRunner` is invoked outside the chain, relocating the run into a chain-only gate would strand that caller's checks. The scope is already known and the inventory must confirm it: `ReviewPhase` is constructed in two places - the standalone `build review` path (`Program.cs:1254`) and the chain factory (`Program.cs:1454`) - and both pass `ReviewOptions(config.Review.Checks, ...)`, so standalone `build review TLB-X` genuinely runs the checks itself and needs the `ReviewPhase` fallback when no gate output is present. The only other caller, `ShipPhase` (`ShipPhase.cs:508,595,833`), runs `ship.regression_checks`, a different configured set in a different phase, and is unaffected - it is out of scope and must not be touched. Record this so Brief 06 does not over-reach into ShipPhase.
   - Claim emission surface: the WORKER_RESULT envelope parser (`WorkerResultParser` in `Workers.Common`) and the fenced-block resolver used for the implement summary payload, plus the implement worker template loaded via the template loader. Returning a `CompletionClaim` requires changing the template to instruct emission and extending the parser to resolve it; record both as Brief 05's true surface.
   - State-transition boundary: `ImplementPhase` transitions InProgress -> InReview at its end (verified at `ImplementPhase.cs:377`); the rework path requires `State == InProgress` (verified at `ImplementPhase.cs:86`); `ReviewPhase` transitions InReview -> InProgress on a rework verdict. Record the required decision: since implement leaves the ticket InReview, a gate hard-fail must flip InReview -> InProgress to enter rework. Specify which option and name the exact call sites it edits: (a) the gate runs on the InReview ticket and owns the InReview -> InProgress flip on hard-fail, or (b) implement stops transitioning and the gate owns InProgress -> InReview on pass.
   - Chain loop and rework feed: the implement->review seam inside `ChainPhase.RunImplementReviewLoopAsync` (between the implement call and the review call), the rework-round cap, where the chain builds `ReviewFeedback` inline from the review verdict, and how the rework brief is assembled. Brief 08's gate-failure feed must construct feedback at this seam, distinguishable from a review-originated one.
@@ -88,17 +88,19 @@ Goal: Confirm the existing `review.checks` capability map covers the abstract ch
 Inputs: The existing `.build/config.toml` `[[review.checks]]` schema and its parser in `Cli/Config.cs`; the Brief 01 inventory's reuse decision.
 
 Outputs:
-- A documented mapping of the abstract check names the gate consumes (build, test, typecheck, lint, format) to the existing `review.checks` entries, plus any minimal config additions the inventory proved necessary (for example a `typecheck` entry not currently declared).
+- A documented mapping of the abstract check names the gate consumes (build, test, typecheck, lint, format) to the existing `review.checks` entries, plus any minimal config additions the inventory proved necessary.
+- A documented gating-vs-advisory classification per abstract check: build, test, and typecheck are gating (their exit code can hard-fail the gate); lint and format are advisory (run by the same runner, exit code recorded and surfaced to review as a smoke signal, never hard-failing). This resolves where lint and format execute - they are runner checks, not diff/grep collector signals, because they are commands - so a TypeScript or Python adopter is not left guessing.
 - The parsed model continues to treat an absent check as not-configured, never a failure.
 
 Acceptance:
 - [ ] The abstract checks the gate runs are expressible in the existing review.checks config without a parallel config block
+- [ ] Each abstract check carries a gating-or-advisory classification, with build/test/typecheck gating and lint/format advisory
 - [ ] A check absent from config is reported as not-configured and never as a failure
 - [ ] Any new abstract check name added is parsed by the existing config path, not a new one
 - [ ] Malformed check configuration is rejected with a clear message at parse time, preserving existing behavior
 - [ ] AOT publish succeeds with no new trim or AOT warnings
 
-Notes: Semantics live in the command, not the orchestrator - already true of `review.checks`. The map is the entire language-agnostic contract and it already ships; this brief mostly documents it and closes any abstract-check gaps the inventory found.
+Notes: Semantics live in the command, not the orchestrator - already true of `review.checks`. The map is the entire language-agnostic contract and it already ships; this brief mostly documents it and closes any abstract-check gaps the inventory found. The dogfood config currently declares only build and test, both `dotnet`. For C# that is correct and the design working as intended: `dotnet build` already is the typecheck, so a separate typecheck check is redundant here and simply stays not-configured. One concrete cost to fix while here: `dotnet test` recompiles unless passed `--no-build`, so the configured pair can compile twice per ticket - the configured test command should be ordered after build and pass `--no-build`, which is the wall-discipline target in action and which Brief 06 enforces at execution time.
 
 OOS:
 - Running any command (brief 03)
@@ -148,7 +150,7 @@ Acceptance:
 - [ ] Collecting signals never returns a gate-failing outcome on its own
 - [ ] AOT publish succeeds with no new trim or AOT warnings
 
-Notes: These are smoke alarms, not gates - the symmetric-cost reasoning in "Why this exists" requires that low-precision checks never burn an expensive rework loop. They inform; they do not block. Lint and format results, if collected, belong here as smoke signals or are auto-fixed, never hard-gated.
+Notes: These are smoke alarms, not gates - the symmetric-cost reasoning in "Why this exists" requires that low-precision checks never burn an expensive rework loop. They inform; they do not block. Smoke signals have two producers that share one shape: this collector (diff facts and grep) and the advisory check results from the runner (lint, format). This brief owns only the diff/grep producer; lint and format run through the runner as advisory checks (Brief 02), not here, because they are commands rather than diff/grep queries.
 
 OOS:
 - Failing the gate on any signal
@@ -219,12 +221,13 @@ Acceptance:
 - [ ] A single-ticket chain behaves as before apart from the added gate and the relocated checks
 - [ ] AOT publish succeeds with no new trim or AOT warnings
 
-Notes: One build per ticket is the wall-discipline target from "Why this exists" - achieved by relocating the existing review-time check run, not adding a second. The structured outcome is consumed by Plan C.
+Notes: One build per ticket is the wall-discipline target from "Why this exists" - achieved by relocating the existing review-time check run, not adding a second. Watch the within-ticket double-compile: the dogfood pair `dotnet build` then `dotnet test` recompiles in the test step unless test is ordered after build and passed `--no-build`. The gate runs the gating checks build-first so the test command can reuse build's artifacts; the ledger's gate-wall term will confirm whether that holds on the first real run. The structured outcome is consumed by Plan C.
 
 OOS:
 - Red/green or any historical-SHA / second-build execution (deferred)
 - Run-mode tier selection beyond running T1 (hook only)
 - Feeding the outcome into the rework brief or the ledger (Plan C)
+- `ShipPhase` and its `ship.regression_checks` run, which are a different configured set in a different phase and are unaffected by the relocation - leave them untouched
 
 #### Brief 07: consumes-provides-preflight
 
