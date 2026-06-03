@@ -853,7 +853,6 @@ public class ChainPhase
             }
         }
 
-        var semaphore = new SemaphoreSlim(1, 1);
         var allChildResults = new List<ChainResult>();
         bool anyStoppedEarly = false;
 
@@ -866,72 +865,69 @@ public class ChainPhase
                 .Select(id => eligible.First(c => string.Equals(c.Id, id, StringComparison.Ordinal)))
                 .ToList();
 
-            var levelTasks = levelTickets.Select(async child =>
+            // Parent chains intentionally dispatch one child at a time. A successful child
+            // ships into the local target before the next child resolves its base, so siblings
+            // stack even when the dependency graph marks them as unordered.
+            foreach (var child in levelTickets)
             {
-                await semaphore.WaitAsync(ct).ConfigureAwait(false);
-                try
-                {
-                    var startStep = new ChainStep(
-                        PhaseName: "chain",
-                        ReworkRoundNumber: -1,
-                        Status: Status.Ok,
-                        FailureReason: null,
-                        Verdict: null,
-                        Duration: TimeSpan.Zero,
-                        PhaseSessionId: _sessionIdGenerator());
-                    options.OnStep?.Invoke(options.TicketId, startStep);
+                var startStep = new ChainStep(
+                    PhaseName: "chain",
+                    ReworkRoundNumber: -1,
+                    Status: Status.Ok,
+                    FailureReason: null,
+                    Verdict: null,
+                    Duration: TimeSpan.Zero,
+                    PhaseSessionId: _sessionIdGenerator());
+                options.OnStep?.Invoke(options.TicketId, startStep);
 
-                    // Derive the chain's prior-commit pointer before each ticket so the
-                    // implement brief lists the files already touched by shipped siblings.
-                    // Resolve the CURRENT base the same way the child's implement will
-                    // (BaseRefResolver advances to the local target tip as siblings ship
-                    // locally), so the range reflects the accumulated sibling commits rather
-                    // than the frozen origin (TLB-411). Best-effort: any git failure leaves
-                    // the pointer null, which is safe - the brief is identical to the
-                    // no-pointer baseline.
-                    ChainCommitRange? childCommitRange = null;
-                    if (chainStartSha is not null && baseRefForSharedWt is not null)
+                // Derive the chain's prior-commit pointer before each ticket so the
+                // implement brief lists the files already touched by shipped siblings.
+                // Resolve the CURRENT base the same way the child's implement will
+                // (BaseRefResolver advances to the local target tip as siblings ship
+                // locally), so the range reflects the accumulated sibling commits rather
+                // than the frozen origin (TLB-411). Best-effort: any git failure leaves
+                // the pointer null, which is safe - the brief is identical to the
+                // no-pointer baseline.
+                ChainCommitRange? childCommitRange = null;
+                if (chainStartSha is not null && baseRefForSharedWt is not null)
+                {
+                    try
                     {
-                        try
-                        {
-                            var (_, currentTargetSha) = await BaseRefResolver.ResolveAsync(
-                                _git, _workingDirectory, _baseOptions.TargetBranch, ct).ConfigureAwait(false);
-                            childCommitRange = await ChainCommitRangeHelper.ComputeAsync(
-                                _git, chainStartSha, currentTargetSha, _workingDirectory, ct).ConfigureAwait(false);
-                        }
-                        catch { /* non-fatal: pointer stays null */ }
+                        var (_, currentTargetSha) = await BaseRefResolver.ResolveAsync(
+                            _git, _workingDirectory, _baseOptions.TargetBranch, ct).ConfigureAwait(false);
+                        childCommitRange = await ChainCommitRangeHelper.ComputeAsync(
+                            _git, chainStartSha, currentTargetSha, _workingDirectory, ct).ConfigureAwait(false);
                     }
-
-                    var childOptions = options with
-                    {
-                        TicketId = child.Id,
-                        SharedWorktreePath = sharedWorktreePath,
-                        ChainCommitRange = childCommitRange
-                    };
-                    var childResult = await RunAsync(childOptions, ct).ConfigureAwait(false);
-
-                    var ok = IsChainSuccess(childResult.Outcome);
-                    var doneStep = new ChainStep(
-                        PhaseName: "chain",
-                        ReworkRoundNumber: -1,
-                        Status: ok ? Status.Ok : Status.Failed,
-                        FailureReason: ok ? null : $"child {child.Id} stopped: {childResult.Outcome}",
-                        Verdict: null,
-                        Duration: childResult.TotalDuration,
-                        PhaseSessionId: _sessionIdGenerator());
-                    options.OnStep?.Invoke(options.TicketId, doneStep);
-
-                    return childResult;
+                    catch { /* non-fatal: pointer stays null */ }
                 }
-                finally
+
+                var childOptions = options with
                 {
-                    semaphore.Release();
-                }
-            }).ToList();
+                    TicketId = child.Id,
+                    SharedWorktreePath = sharedWorktreePath,
+                    ChainCommitRange = childCommitRange
+                };
+                var childResult = await RunAsync(childOptions, ct).ConfigureAwait(false);
 
-            var levelResults = (await Task.WhenAll(levelTasks).ConfigureAwait(false)).ToList();
-            allChildResults.AddRange(levelResults);
-            anyStoppedEarly = levelResults.Any(r => !IsChainSuccess(r.Outcome));
+                var ok = IsChainSuccess(childResult.Outcome);
+                var doneStep = new ChainStep(
+                    PhaseName: "chain",
+                    ReworkRoundNumber: -1,
+                    Status: ok ? Status.Ok : Status.Failed,
+                    FailureReason: ok ? null : $"child {child.Id} stopped: {childResult.Outcome}",
+                    Verdict: null,
+                    Duration: childResult.TotalDuration,
+                    PhaseSessionId: _sessionIdGenerator());
+                options.OnStep?.Invoke(options.TicketId, doneStep);
+
+                allChildResults.Add(childResult);
+
+                if (!ok)
+                {
+                    anyStoppedEarly = true;
+                    break;
+                }
+            }
         }
 
         var childResults = allChildResults;
