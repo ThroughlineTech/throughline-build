@@ -38,14 +38,16 @@ public class ShipPhaseTests
         bool deleteFeatureBranch = true,
         bool noAutoMerge = false,
         string? targetBranch = null,
-        bool noPush = false) => new ShipOptions(
+        bool noPush = false,
+        bool targetBranchOverridden = false) => new ShipOptions(
             RegressionChecks: checks ?? Array.Empty<CheckSpec>(),
             Remote: "origin",
             BaseBranch: "main",
             DeleteFeatureBranch: deleteFeatureBranch,
             NoAutoMerge: noAutoMerge,
             TargetBranch: targetBranch,
-            NoPush: noPush);
+            NoPush: noPush,
+            TargetBranchOverridden: targetBranchOverridden);
 
     private static string MakeWorkingDir() => Directory.GetCurrentDirectory();
 
@@ -85,6 +87,9 @@ public class ShipPhaseTests
         // base_ref_resolved + create_comment + decruft + delete_branch
         Assert.Equal(4, writeEvents.Count);
         Assert.Equal("base_ref_resolved", writeEvents[0].Data["action"].ToString());
+        // Default target (no [work] override) is labelled "default" with the base branch.
+        Assert.Equal("main", writeEvents[0].Data["target_branch"].ToString());
+        Assert.Equal("default", writeEvents[0].Data["source"].ToString());
         Assert.Equal("create_comment", writeEvents[1].Data["action"].ToString());
         Assert.Equal("decruft", writeEvents[2].Data["action"].ToString());
         Assert.Equal("complete", writeEvents[2].Data["halted_at"].ToString());
@@ -98,6 +103,37 @@ public class ShipPhaseTests
         Assert.True(git.DeleteBranchCalls.Count == 1);
         Assert.Equal(BranchName, git.DeleteBranchCalls[0].branch);
         Assert.False(git.DeleteBranchCalls[0].force);
+    }
+
+    [Fact]
+    public async Task RunAsync_TargetBranchOverridden_LabelsSourceAsWorkOverrideAndReportsTarget()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var decrufter = new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git);
+        var progress = new StringWriter();
+        // Override set to the same value as the base branch so the non-default-target
+        // preflight (which requires the worktree to be on that branch) is not exercised;
+        // this isolates the source-labelling behaviour.
+        var shipOptions = MakeShipOptions(targetBranch: "main", targetBranchOverridden: true);
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), shipOptions,
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: decrufter,
+            progressWriter: progress);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+
+        var baseRefEvent = events.Events.First(e =>
+            e.Kind == EventKind.TicketWrite && e.Data.TryGetValue("action", out var a) && a.ToString() == "base_ref_resolved");
+        Assert.Equal("main", baseRefEvent.Data["target_branch"].ToString());
+        Assert.Equal("work_override", baseRefEvent.Data["source"].ToString());
+
+        // Operator-facing progress surfaces the resolved target and its source.
+        Assert.Contains("[ship] target branch: main (from [work])", progress.ToString());
     }
 
     [Fact]

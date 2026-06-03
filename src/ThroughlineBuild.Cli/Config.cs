@@ -66,6 +66,11 @@ public record BuildConfig(
     PlanConfig Plan)
 {
     public string ResolveTargetBranch() => Work.TargetBranch ?? Ship.BaseBranch;
+
+    // True when the merge target comes from an explicit [work].target_branch override
+    // rather than the [ship].base_branch default. Used to label the resolved target's
+    // source in ship/chain progress so a silent fallback to base can never surprise.
+    public bool TargetBranchOverridden => Work.TargetBranch is not null;
 }
 
 public record BuildSecrets(string PlaneApiToken, string? AnthropicApiKey);
@@ -90,7 +95,10 @@ public static class BuildConfigLoader
         return null;
     }
 
-    public static BuildConfig Load(string path, Action<string>? warnSink = null)
+    public static BuildConfig Load(
+        string path,
+        Action<string>? warnSink = null,
+        Func<string, bool>? branchExists = null)
     {
         string content;
         try
@@ -125,6 +133,15 @@ public static class BuildConfigLoader
         // Non-fatal unknown-key warning pass: emit one warning per unrecognized key.
         var warnings = new List<string>();
         CollectUnknownKeyWarnings(root, warnings);
+
+        // Non-fatal target-branch validation: a hand-edited [work].target_branch bypasses
+        // the `build settarget` branch check, so validate it here too. Warns (does not fail)
+        // when the configured branch does not resolve to a local git ref, mirroring the
+        // unknown-key warning channel. Skipped entirely when no validator is supplied
+        // (e.g. unit tests, or commands that do not touch git).
+        if (branchExists is not null && work.TargetBranch is not null && !branchExists(work.TargetBranch))
+            warnings.Add($"warning: [work].target_branch '{work.TargetBranch}' does not resolve to a local branch - ship will block until it exists or you run 'build settarget'");
+
         var emit = warnSink ?? (w => Console.Error.WriteLine(w));
         foreach (var warning in warnings)
             emit(warning);

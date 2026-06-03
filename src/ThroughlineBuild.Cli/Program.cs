@@ -189,7 +189,9 @@ static async Task<int> RunAsync(string[] args)
     BuildConfig config2;
     try
     {
-        config2 = BuildConfigLoader.Load(configPath2);
+        config2 = BuildConfigLoader.Load(
+            configPath2,
+            branchExists: branch => SetTargetCommand.DefaultBranchValidator(cwd2, branch));
     }
     catch (ConfigException ex)
     {
@@ -1272,7 +1274,8 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
             DeleteFeatureBranch: config2.Ship.DeleteFeatureBranch,
             NoAutoMerge: noAutoMerge,
             TargetBranch: config2.ResolveTargetBranch(),
-            NoPush: noPush || !config2.Ship.Push);
+            NoPush: noPush || !config2.Ship.Push,
+            TargetBranchOverridden: config2.TargetBranchOverridden);
         var gitClient = new ProcessGitClient(cwd);
         var checksRunner = new AutomatedChecksRunner();
         var shipProgress = quietMode || summaryJson ? null : Console.Error;
@@ -1428,7 +1431,8 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             DeleteFeatureBranch: config2.Ship.DeleteFeatureBranch,
             NoAutoMerge: noAutoMerge,
             TargetBranch: config2.ResolveTargetBranch(),
-            NoPush: noPush || !config2.Ship.Push);
+            NoPush: noPush || !config2.Ship.Push,
+            TargetBranchOverridden: config2.TargetBranchOverridden);
         var gitClient = new ProcessGitClient(cwd);
         var checksRunner = new AutomatedChecksRunner();
         return new ShipPhase(ticketing, eventSink, buildOpts, shipOptions, gitClient: gitClient, checksRunner: checksRunner);
@@ -1463,7 +1467,8 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             NoAutoMerge: noAutoMerge,
             TargetBranch: config2.ResolveTargetBranch(),
             SkipDecruft: true,
-            NoPush: noPush || !config2.Ship.Push);
+            NoPush: noPush || !config2.Ship.Push,
+            TargetBranchOverridden: config2.TargetBranchOverridden);
         var gitClient = new ProcessGitClient(cwd);
         var checksRunner = new AutomatedChecksRunner();
         return new ShipPhase(ticketing, eventSink, buildOpts, chainShipOptions, gitClient: gitClient, checksRunner: checksRunner);

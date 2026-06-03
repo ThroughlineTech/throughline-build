@@ -14,7 +14,8 @@ public record ShipOptions(
     bool NoAutoMerge = false,
     string? TargetBranch = null,
     bool SkipDecruft = false,
-    bool NoPush = false);
+    bool NoPush = false,
+    bool TargetBranchOverridden = false);
 
 public record ShipResult(
     bool Success,
@@ -244,6 +245,12 @@ public class ShipPhase : IWorkflowPhase
         var baseBranch = _shipOptions.BaseBranch;
         var targetBranch = _shipOptions.TargetBranch ?? baseBranch;
 
+        // Surface the resolved merge target and its source so a silent fallback to the
+        // base branch (missing/unsaved [work].target_branch) can never go unnoticed. The
+        // wording mirrors `build settarget` display mode.
+        var targetSource = _shipOptions.TargetBranchOverridden ? "from [work]" : "default, no [work] override";
+        ReportProgress($"[ship] target branch: {targetBranch} ({targetSource})");
+
         // Step 4 pre-check: when targeting a non-default branch, the main worktree must be on that branch.
         // FastForwardMergeAsync advances whatever is currently checked out; if the worktree is on a
         // different branch the merge lands on the wrong ref and the push sends stale bytes to origin.
@@ -415,7 +422,9 @@ public class ShipPhase : IWorkflowPhase
         {
             ["action"] = "base_ref_resolved",
             ["ref"] = ontoRef,
-            ["reason"] = baseRefReason
+            ["reason"] = baseRefReason,
+            ["target_branch"] = targetBranch,
+            ["source"] = _shipOptions.TargetBranchOverridden ? "work_override" : "default"
         }, ct).ConfigureAwait(false);
 
         // Step 5: Rebase feature branch onto ontoRef

@@ -197,7 +197,13 @@ public static class SetTargetCommand
     // Git branch validation
     // ------------------------------------------------------------------
 
-    private static bool DefaultBranchValidator(string cwd, string branch)
+    /// <summary>
+    /// Returns true when <paramref name="branch"/> resolves to a local git branch
+    /// (refs/heads/BRANCH) in the repo at <paramref name="cwd"/>. Shared with config
+    /// load so a hand-edited [work].target_branch is validated the same way `settarget`
+    /// validates the branch it writes.
+    /// </summary>
+    public static bool DefaultBranchValidator(string cwd, string branch)
     {
         try
         {

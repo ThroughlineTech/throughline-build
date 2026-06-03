@@ -685,6 +685,63 @@ log_directory = ".build/events"
     }
 
     [Fact]
+    public void Load_TargetBranchUnresolvable_EmitsWarning()
+    {
+        var toml = ValidToml + "\n[work]\ntarget_branch = \"dashboard\"";
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            var config = BuildConfigLoader.Load(path, w => captured.Add(w), branchExists: _ => false);
+
+            Assert.Contains(captured, w => w.Contains("target_branch") && w.Contains("dashboard"));
+            // Non-fatal: config still loads and resolves to the configured value.
+            Assert.Equal("dashboard", config.Work.TargetBranch);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_TargetBranchResolvable_NoWarning()
+    {
+        var toml = ValidToml + "\n[work]\ntarget_branch = \"dashboard\"";
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            BuildConfigLoader.Load(path, w => captured.Add(w), branchExists: _ => true);
+
+            Assert.DoesNotContain(captured, w => w.Contains("target_branch"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_TargetBranchSet_NoValidator_SkipsBranchCheck()
+    {
+        // Without a validator (default), no git is consulted and no branch warning fires.
+        var toml = ValidToml + "\n[work]\ntarget_branch = \"dashboard\"";
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            BuildConfigLoader.Load(path, w => captured.Add(w));
+
+            Assert.DoesNotContain(captured, w => w.Contains("target_branch"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Load_WorkSectionAbsent_ResolvesToShipBaseBranch()
     {
         var path = WriteToml(ValidToml);
