@@ -11,7 +11,7 @@ namespace ThroughlineBuild.Phases;
 public record ChainPhaseOptions(
     string TicketId,
     bool Debug,
-    Action<ChainStep>? OnStep = null,
+    Action<string, ChainStep>? OnStep = null,
     bool NoAutoResolve = false,
     string? SharedWorktreePath = null,
     ChainCommitRange? ChainCommitRange = null);
@@ -158,7 +158,7 @@ public class ChainPhase
         if (startPhase == StartPhase.Plan)
         {
             var sessionId = _sessionIdGenerator();
-            var buildOpts = _baseOptions with { SessionId = sessionId };
+            var buildOpts = BuildPhaseOptions(sessionId, options.TicketId);
             var sw = Stopwatch.StartNew();
             var planResult = await _planFactory(buildOpts).RunAsync(options.TicketId, _workingDirectory, ct)
                 .ConfigureAwait(false);
@@ -173,7 +173,7 @@ public class ChainPhase
                 Duration: sw.Elapsed,
                 PhaseSessionId: sessionId);
             steps.Add(planStep);
-            options.OnStep?.Invoke(planStep);
+            options.OnStep?.Invoke(options.TicketId, planStep);
 
             if (!planResult.Success)
             {
@@ -250,7 +250,7 @@ public class ChainPhase
         }
 
         var shipSessionId = _sessionIdGenerator();
-        var shipBuildOpts = _baseOptions with { SessionId = shipSessionId };
+        var shipBuildOpts = BuildPhaseOptions(shipSessionId, options.TicketId);
         var shipSw = Stopwatch.StartNew();
         // When running inside a parent-chain shared worktree, use the chain ship factory (SkipDecruft=true).
         var activeShipFactory = (options.SharedWorktreePath is not null && _chainShipFactory is not null)
@@ -269,7 +269,7 @@ public class ChainPhase
             Duration: shipSw.Elapsed,
             PhaseSessionId: shipSessionId);
         steps.Add(shipStep);
-        options.OnStep?.Invoke(shipStep);
+        options.OnStep?.Invoke(options.TicketId, shipStep);
 
         totalSw.Stop();
         if (!shipResult.Success)
@@ -323,7 +323,7 @@ public class ChainPhase
         while (true)
         {
             var implSessionId = _sessionIdGenerator();
-            var implBuildOpts = _baseOptions with { SessionId = implSessionId };
+            var implBuildOpts = BuildPhaseOptions(implSessionId, options.TicketId);
             // Pass the chain's prior-commit pointer on the first implement round only.
             // Rework rounds (feedback != null) reuse the same worktree with the agent's
             // own edits already in place, so replaying the handoff is redundant.
@@ -343,7 +343,7 @@ public class ChainPhase
                 Duration: implSw.Elapsed,
                 PhaseSessionId: implSessionId);
             steps.Add(implStep);
-            options.OnStep?.Invoke(implStep);
+            options.OnStep?.Invoke(options.TicketId, implStep);
 
             if (!implResult.Success)
             {
@@ -467,7 +467,7 @@ public class ChainPhase
         CancellationToken ct)
     {
         var revSessionId = _sessionIdGenerator();
-        var revBuildOpts = _baseOptions with { SessionId = revSessionId };
+        var revBuildOpts = BuildPhaseOptions(revSessionId, options.TicketId);
         var revSw = Stopwatch.StartNew();
         var revResult = await _reviewFactory(revBuildOpts)
             .RunAsync(options.TicketId, _workingDirectory, ct).ConfigureAwait(false);
@@ -484,7 +484,7 @@ public class ChainPhase
                 Duration: revSw.Elapsed,
                 PhaseSessionId: revSessionId);
             steps.Add(failedRevStep);
-            options.OnStep?.Invoke(failedRevStep);
+            options.OnStep?.Invoke(options.TicketId, failedRevStep);
             return (new ChainResult(options.TicketId, steps, ChainOutcome.StoppedAtReview,
                 TimeSpan.Zero, revResult.FailureReason), null);
         }
@@ -498,7 +498,7 @@ public class ChainPhase
             Duration: revSw.Elapsed,
             PhaseSessionId: revSessionId);
         steps.Add(revStep);
-        options.OnStep?.Invoke(revStep);
+        options.OnStep?.Invoke(options.TicketId, revStep);
 
         return (null, new Verdict(revResult.Verdict!.Value, revResult.VerdictRationale ?? "", revResult.ChecksFailed));
     }
@@ -516,6 +516,17 @@ public class ChainPhase
         if (string.IsNullOrEmpty(rationale))
             return null;
         return rationale.Length <= 200 ? rationale : rationale.Substring(0, 200);
+    }
+
+    private BuildOptions BuildPhaseOptions(string sessionId, string ticketId)
+    {
+        if (_baseOptions.ProgressDigestSink is null)
+            return _baseOptions with { SessionId = sessionId };
+        return _baseOptions with
+        {
+            SessionId = sessionId,
+            ProgressDigestSink = new PrefixedTextWriter($"[{ticketId}] ", _baseOptions.ProgressDigestSink)
+        };
     }
 
     private static bool IsObsoleteEscalation(WorkerResult r)
@@ -588,7 +599,7 @@ public class ChainPhase
             Duration: sw.Elapsed,
             PhaseSessionId: sessionId);
         steps.Add(ratifyStep);
-        options.OnStep?.Invoke(ratifyStep);
+        options.OnStep?.Invoke(options.TicketId, ratifyStep);
 
         return verdict;
     }
@@ -640,7 +651,7 @@ public class ChainPhase
                 Verdict: null,
                 Duration: TimeSpan.Zero,
                 PhaseSessionId: _sessionIdGenerator());
-            options.OnStep?.Invoke(notice);
+            options.OnStep?.Invoke(options.TicketId, notice);
 
             totalSw.Stop();
             return new ChainResult(
@@ -776,7 +787,7 @@ public class ChainPhase
                         Verdict: null,
                         Duration: TimeSpan.Zero,
                         PhaseSessionId: _sessionIdGenerator());
-                    options.OnStep?.Invoke(startStep);
+                    options.OnStep?.Invoke(options.TicketId, startStep);
 
                     // Derive the chain's prior-commit pointer before each ticket so the
                     // implement brief lists the files already touched by shipped siblings.
@@ -816,7 +827,7 @@ public class ChainPhase
                         Verdict: null,
                         Duration: childResult.TotalDuration,
                         PhaseSessionId: _sessionIdGenerator());
-                    options.OnStep?.Invoke(doneStep);
+                    options.OnStep?.Invoke(options.TicketId, doneStep);
 
                     return childResult;
                 }

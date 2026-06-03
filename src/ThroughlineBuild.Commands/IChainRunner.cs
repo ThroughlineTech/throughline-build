@@ -12,7 +12,7 @@ public interface IChainRunner
     Task<ChainResult> RunAsync(
         string ticketId,
         bool debug,
-        Action<ChainStep> onStep,
+        Action<string, ChainStep> onStep,
         CancellationToken ct,
         bool noAutoResolve = false);
 }

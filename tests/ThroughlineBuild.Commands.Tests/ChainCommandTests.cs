@@ -529,7 +529,7 @@ internal sealed class FakeThrowingChainRunner : IChainRunner
 
     public FakeThrowingChainRunner(Exception exception) => _exception = exception;
 
-    public Task<ChainResult> RunAsync(string ticketId, bool debug, Action<ChainStep> onStep, CancellationToken ct, bool noAutoResolve = false)
+    public Task<ChainResult> RunAsync(string ticketId, bool debug, Action<string, ChainStep> onStep, CancellationToken ct, bool noAutoResolve = false)
         => throw _exception;
 }
 
@@ -552,7 +552,7 @@ internal sealed class FakeChainRunner : IChainRunner
     public Task<ChainResult> RunAsync(
         string ticketId,
         bool debug,
-        Action<ChainStep> onStep,
+        Action<string, ChainStep> onStep,
         CancellationToken ct,
         bool noAutoResolve = false)
     {
@@ -561,7 +561,7 @@ internal sealed class FakeChainRunner : IChainRunner
 
         // Call onStep for each step to simulate streaming behavior.
         foreach (var step in Result.Steps)
-            onStep(step);
+            onStep(ticketId, step);
 
         return Task.FromResult(Result);
     }

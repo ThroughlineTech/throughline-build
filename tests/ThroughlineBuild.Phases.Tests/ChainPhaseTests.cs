@@ -1327,6 +1327,53 @@ public class ChainPhaseTests
         Assert.Equal(1, git.RebaseAbortCallCount);
     }
 
+    // -------------------------------------------------------------------------
+    // TLB-403: child step attribution test
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task RunAsync_ParentChain_OnStep_ChildStepsCarryChildId_NotParentId()
+    {
+        // Verify that when OnStep is invoked for a child ticket's phases, the ticket ID
+        // passed to the callback is the child's ID, not the parent's.
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var capturedSteps = new List<(string id, string phase)>();
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
+        var options = new ChainPhaseOptions(
+            TicketId,
+            Debug: false,
+            OnStep: (id, step) => capturedSteps.Add((id, step.PhaseName)));
+
+        var result = await chain.RunAsync(options, CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+
+        // The child phase steps (plan, implement, review, ship) must carry the child's ticket ID.
+        var child1PhaseSteps = capturedSteps.Where(s => s.phase != "chain" && s.id == "TLB-2").ToList();
+        var child2PhaseSteps = capturedSteps.Where(s => s.phase != "chain" && s.id == "TLB-3").ToList();
+
+        // Both children should have had their phases attributed to the correct child ID.
+        Assert.NotEmpty(child1PhaseSteps);
+        Assert.NotEmpty(child2PhaseSteps);
+
+        // No child phase step should carry the parent's ticket ID.
+        var parentPhaseMislabeled = capturedSteps.Where(s => s.phase != "chain" && s.id == TicketId).ToList();
+        Assert.Empty(parentPhaseMislabeled);
+    }
+
     private sealed class FakeGitClientChain : IGitClient
     {
         private readonly bool _shipFails;

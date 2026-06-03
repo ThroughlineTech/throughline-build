@@ -65,7 +65,7 @@ public sealed class ChainCommand : ITicketCommand
             result = await _runner.RunAsync(
                 ticketId,
                 debugMode,
-                step => Console.WriteLine(FormatStepLine(ticketId, step)),
+                (id, step) => Console.WriteLine(FormatStepLine(id, step)),
                 ct,
                 noAutoResolve).ConfigureAwait(false);
         }
