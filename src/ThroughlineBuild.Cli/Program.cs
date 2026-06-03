@@ -22,9 +22,11 @@ return await RunAsync(args);
 
 static async Task<int> RunAsync(string[] args)
 {
-    if (args.Length == 0 || args[0] == "--help" || args[0] == "help")
+    var helpRegistry = HelpRegistryFactory.Build();
+
+    if (args.Length == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help")
     {
-        Console.WriteLine(CliUsage.UsageText);
+        Console.Write(Tier0Renderer.Render(helpRegistry));
         return 0;
     }
 
@@ -75,6 +77,28 @@ static async Task<int> RunAsync(string[] args)
     args = ((List<string>)argsAfterAgentFlags).ToArray();
 
     var verb = args[0];
+
+    // Per-command help: build <verb> [any-position] -h|--help
+    // Short-circuits before argument validation so "build ship --help" works without a ticket ID.
+    {
+        bool hasHelpFlag = false;
+        for (int i = 1; i < args.Length; i++)
+        {
+            if (args[i] == "-h" || args[i] == "--help")
+            {
+                hasHelpFlag = true;
+                break;
+            }
+        }
+        if (hasHelpFlag)
+        {
+            var cmdHelp = helpRegistry.TryGet(verb);
+            Console.Write(cmdHelp != null
+                ? Tier1Renderer.Render(cmdHelp)
+                : Tier0Renderer.Render(helpRegistry));
+            return 0;
+        }
+    }
 
     // Extract ticket IDs for verbs that need them.
     IReadOnlyList<string> ticketIds = Array.Empty<string>();
