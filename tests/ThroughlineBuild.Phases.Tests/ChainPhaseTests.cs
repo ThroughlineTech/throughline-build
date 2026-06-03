@@ -1269,6 +1269,64 @@ public class ChainPhaseTests
         Assert.NotEqual(ChainOutcome.RefusedDirtyTree, result.Outcome);
     }
 
+    // -------------------------------------------------------------------------
+    // TLB-402: main-worktree detached-HEAD regression (chain-348 scenario)
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task RunAsync_ParentChain_Chain348_B02FailsForFirstChild_AbortsAndSecondChildSucceeds()
+    {
+        // Regression for TLB-402: when B02 auto-rebase fails without conflict markers
+        // (e.g., hook rejection), the conditional abort was skipped (HadConflicts=false),
+        // leaving the main worktree's HEAD detached. The second child's ship then operated
+        // on a detached HEAD, causing silent data corruption.
+        // Fix (TLB-402): abort is now unconditional, and child 2 completes successfully.
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        // child1 passes review, then fails at ship (B02 abort); child2 also passes review
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var git = new FakeGitClientChain()
+        {
+            // Make both ancestry checks return false -> diverged path -> B02 triggered
+            TriggerDivergence = true,
+            DivergenceStateResult = DivergenceState.DivergedNoConflict,
+            // Response queue:
+            //   call 1: child1 B02 auto-rebase fails without conflict markers (hook rejection)
+            //   call 2: child2 B02 auto-rebase succeeds
+            //   call 3: child2 feature-branch rebase succeeds
+            RebaseResponses = new Queue<RebaseResult>(new[]
+            {
+                new RebaseResult(false, false, Array.Empty<string>(), "hook-rejected"),
+                new RebaseResult(true, false, Array.Empty<string>(), null),
+                new RebaseResult(true, false, Array.Empty<string>(), null),
+            })
+        };
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, git: git);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        // child1 failed at ship; child2 completed -> ParentStoppedEarly
+        Assert.Equal(ChainOutcome.ParentStoppedEarly, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        var child1Result = result.ChildResults!.First(r => r.TicketId == "TLB-2");
+        var child2Result = result.ChildResults!.First(r => r.TicketId == "TLB-3");
+        Assert.NotEqual(ChainOutcome.Completed, child1Result.Outcome);
+        Assert.Equal(ChainOutcome.Completed, child2Result.Outcome);
+
+        // Abort was called after the non-conflict B02 failure (Fix 1)
+        Assert.Equal(1, git.RebaseAbortCallCount);
+    }
+
     private sealed class FakeGitClientChain : IGitClient
     {
         private readonly bool _shipFails;
@@ -1277,6 +1335,21 @@ public class ChainPhaseTests
         private readonly int _revListCount;
         public List<string> RemovedWorktrees { get; } = new();
         public List<string> DeletedBranches { get; } = new();
+
+        // When non-null, RebaseAsync dequeues one response per call (falls back to
+        // _shipFails-driven default when the queue is empty).
+        public Queue<RebaseResult>? RebaseResponses { get; set; }
+
+        // Tracks how many times RebaseAbortAsync was called.
+        public int RebaseAbortCallCount { get; private set; }
+
+        // When true, IsAncestorAsync returns false for all calls, triggering the diverged
+        // path in ShipPhase (B02 auto-rebase). Defaults to false for backward compatibility.
+        public bool TriggerDivergence { get; set; }
+
+        // Returned by ProbeDivergenceAsync when TriggerDivergence is true.
+        // Default DivergedWithConflict is safe (no B02 attempted without NoAutoMerge flag).
+        public DivergenceState DivergenceStateResult { get; set; } = DivergenceState.DivergedWithConflict;
 
         public FakeGitClientChain(bool shipFails = false, IReadOnlyList<string>? stashEntries = null, int revListCount = 0)
         {
@@ -1325,13 +1398,18 @@ public class ChainPhaseTests
 
         public Task<RebaseResult> RebaseAsync(string ontoRef, string featureWorktreePath, CancellationToken ct)
         {
+            if (RebaseResponses != null && RebaseResponses.Count > 0)
+                return Task.FromResult(RebaseResponses.Dequeue());
             if (_shipFails)
                 return Task.FromResult(new RebaseResult(false, false, Array.Empty<string>(), "rebase failed for test"));
             return Task.FromResult(new RebaseResult(true, false, Array.Empty<string>(), null));
         }
 
-        public Task<GitOpResult> RebaseAbortAsync(string featureWorktreePath, CancellationToken ct) =>
-            Task.FromResult(new GitOpResult(true, null));
+        public Task<GitOpResult> RebaseAbortAsync(string featureWorktreePath, CancellationToken ct)
+        {
+            RebaseAbortCallCount++;
+            return Task.FromResult(new GitOpResult(true, null));
+        }
 
         public Task<GitOpResult> FastForwardMergeAsync(string mergeRef, string mainWorktreePath, CancellationToken ct) =>
             Task.FromResult(new GitOpResult(true, null));
@@ -1349,6 +1427,9 @@ public class ChainPhaseTests
             Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
 
         public Task<bool> IsAncestorAsync(string ancestor, string descendant, string workingDirectory, CancellationToken ct) =>
-            Task.FromResult(true);
+            Task.FromResult(!TriggerDivergence);
+
+        public Task<DivergenceState> ProbeDivergenceAsync(string mainWorktreePath, string baseBranch, string remote, CancellationToken ct) =>
+            Task.FromResult(DivergenceStateResult);
     }
 }

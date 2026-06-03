@@ -1154,6 +1154,106 @@ public class ShipPhaseTests
         Assert.Equal(0, git.RebaseCallCount);
     }
 
+    // -------------------------------------------------------------------------
+    // TLB-402: main-worktree detached-HEAD fix
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task RunAsync_B02Fails_NonConflict_AbortsMainRebase()
+    {
+        // Regression: when B02 auto-rebase fails without conflict markers (e.g., hook
+        // rejection), abort was conditional on HadConflicts and so was skipped, leaving
+        // the main worktree's HEAD detached. Fix: abort unconditionally on B02 failure.
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        // Configure: bases have diverged (neither is ancestor of the other)
+        git.AncestryResponses[("origin/main", "main")] = false;
+        git.AncestryResponses[("main", "origin/main")] = false;
+        // Probe predicts no conflict; rebase fails without conflict markers (e.g., hook rejected)
+        git.DivergenceStateResult = DivergenceState.DivergedNoConflict;
+        git.RebaseResult = new RebaseResult(false, false, Array.Empty<string>(), "hook-rejected");
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ShipFailureStage.Fetch, result.FailedAt);
+
+        // Only the B02 auto-rebase was attempted; feature rebase never reached
+        Assert.Equal(1, git.RebaseCallCount);
+
+        // Abort called even though HadConflicts is false
+        Assert.Equal(1, git.RebaseAbortCallCount);
+    }
+
+    [Fact]
+    public async Task RunAsync_MainWorktreeDetachedHead_DefaultBranch_BlocksAtPreflight()
+    {
+        // Regression: the pre-condition branch check was guarded by
+        // "if (targetBranch != baseBranch)", so a detached HEAD on the main worktree
+        // was invisible when shipping to main (the default). Fix: check is unconditional.
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true)
+        {
+            CurrentBranch = "HEAD" // detached HEAD - git returns literal "HEAD"
+        };
+
+        // targetBranch == baseBranch == "main" (default, no override)
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ShipFailureStage.PreFlight, result.FailedAt);
+        Assert.Equal(0, git.FetchCallCount);
+        Assert.Equal(0, git.PushCallCount);
+
+        Assert.Single(ticketing.Comments);
+        Assert.Contains("ship_blocked", ticketing.Comments[0].html);
+        Assert.Contains("main", ticketing.Comments[0].html); // expected branch present in message
+
+        var gates = events.Events.Where(e => e.Kind == EventKind.GateFailure).ToList();
+        Assert.Single(gates);
+        Assert.Equal("wrong_worktree_branch", gates[0].Data["kind"].ToString());
+        Assert.Equal("main", gates[0].Data["expected"].ToString());
+        Assert.Equal("HEAD", gates[0].Data["actual"].ToString());
+    }
+
+    [Fact]
+    public async Task RunAsync_PostConditionDetectsDetachedHeadAfterMerge()
+    {
+        // Regression safety net: after the ff-merge, HEAD is checked inside the lock.
+        // If something leaves HEAD detached during merge, ship fails with a clear message.
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true)
+        {
+            CurrentBranch = "main",            // pre-condition passes
+            CurrentBranchAfterMerge = "HEAD"   // post-merge state: detached HEAD
+        };
+
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ShipFailureStage.FastForwardMerge, result.FailedAt);
+        Assert.NotNull(result.FailureReason);
+        Assert.Contains("HEAD", result.FailureReason);
+        Assert.Contains("main", result.FailureReason);
+    }
+
     private sealed class FakeTicketing : ITicketing
     {
         private readonly Ticket _ticket;
@@ -1327,9 +1427,16 @@ public class ShipPhaseTests
             return Task.FromResult(RebaseAbortResult);
         }
 
+        // When non-null, CurrentBranch is updated to this value after FastForwardMergeAsync is called.
+        // Lets tests inject a post-merge branch state (e.g., "HEAD" for detached) without affecting
+        // the 50+ existing tests that rely on CurrentBranch staying "main" throughout.
+        public string? CurrentBranchAfterMerge { get; set; }
+
         public Task<GitOpResult> FastForwardMergeAsync(string mergeRef, string mainWorktreePath, CancellationToken ct)
         {
             FastForwardCallCount++;
+            if (CurrentBranchAfterMerge != null)
+                CurrentBranch = CurrentBranchAfterMerge;
             return Task.FromResult(FastForwardResult);
         }
 

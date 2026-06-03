@@ -253,16 +253,17 @@ public class ShipPhase : IWorkflowPhase
         var targetSource = _shipOptions.TargetBranchOverridden ? "from [work]" : "default, no [work] override";
         ReportProgress($"[ship] target branch: {targetBranch} ({targetSource})");
 
-        // Step 4 pre-check: when targeting a non-default branch, the main worktree must be on that branch.
-        // FastForwardMergeAsync advances whatever is currently checked out; if the worktree is on a
-        // different branch the merge lands on the wrong ref and the push sends stale bytes to origin.
-        if (targetBranch != baseBranch)
+        // Step 4 pre-check: the main worktree must be on the target branch before shipping.
+        // FastForwardMergeAsync advances whatever is currently checked out; if the worktree is on
+        // a different branch or is detached the merge lands on the wrong ref and the push sends
+        // stale bytes to origin. The check is unconditional: it applies when targeting main as
+        // well as when targeting a feature branch.
         {
             var currentBranch = await _git.CurrentBranchAsync(workingDirectory, ct).ConfigureAwait(false);
             if (!string.Equals(currentBranch, targetBranch, StringComparison.Ordinal))
             {
                 await _ticketing.CreateCommentAsync(ticketId,
-                    $"<p><strong>ship_blocked:</strong> main worktree is on '{currentBranch}'; must be on '{targetBranch}' before shipping to a non-default target branch</p>", ct).ConfigureAwait(false);
+                    $"<p><strong>ship_blocked:</strong> main worktree is on '{currentBranch}' (or detached); must be on '{targetBranch}' before shipping</p>", ct).ConfigureAwait(false);
                 await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
                 {
                     ["kind"] = "wrong_worktree_branch",
@@ -270,7 +271,7 @@ public class ShipPhase : IWorkflowPhase
                     ["actual"] = currentBranch
                 }, ct).ConfigureAwait(false);
                 return (new ShipResult(false, ticketId, null,
-                    $"main worktree is on '{currentBranch}'; must be on '{targetBranch}' before shipping to a non-default target branch",
+                    $"main worktree is on '{currentBranch}' (or detached); must be on '{targetBranch}' before shipping",
                     ShipFailureStage.PreFlight), worktreeNames, null);
             }
         }
@@ -379,8 +380,10 @@ public class ShipPhase : IWorkflowPhase
                     }
                     else
                     {
-                        if (mainRebaseResult.HadConflicts)
-                            await _git.RebaseAbortAsync(workingDirectory, ct).ConfigureAwait(false);
+                        // Abort unconditionally: any non-success exit from git rebase may
+                        // leave HEAD detached regardless of whether conflict files were staged.
+                        // RebaseAbortAsync handles the "no rebase in progress" case safely.
+                        await _git.RebaseAbortAsync(workingDirectory, ct).ConfigureAwait(false);
                         await EmitAsync(EventKind.TargetAutoRebased, ticketId, new Dictionary<string, object>
                         {
                             ["from_sha"] = fromSha,
@@ -645,13 +648,22 @@ public class ShipPhase : IWorkflowPhase
         // Step 8: Fast-forward merge into local targetBranch (main worktree)
         ReportProgress($"[ship] merging into {targetBranch}...");
         GitOpResult? ffResult = null;
+        string? headAfterMerge = null;
         await MainWorktreeLock.WithLockAsync(workingDirectory, async ct =>
         {
             ffResult = await _git.FastForwardMergeAsync(canonicalBranchName, workingDirectory, ct).ConfigureAwait(false);
+            // Post-condition: verify HEAD is still on the local target branch. Checked
+            // inside the lock so no other ship can change HEAD between merge and check.
+            if (ffResult!.Success)
+                headAfterMerge = await _git.CurrentBranchAsync(workingDirectory, ct).ConfigureAwait(false);
         }, ct).ConfigureAwait(false);
         if (ffResult == null || !ffResult.Success)
             return (new ShipResult(false, ticketId, null,
                 $"fast-forward merge failed: {ffResult?.FailureReason}",
+                ShipFailureStage.FastForwardMerge), worktreeNames, null);
+        if (!string.Equals(headAfterMerge, targetBranch, StringComparison.Ordinal))
+            return (new ShipResult(false, ticketId, null,
+                $"HEAD is on '{headAfterMerge}' after ff-merge; expected '{targetBranch}'",
                 ShipFailureStage.FastForwardMerge), worktreeNames, null);
         ReportGitOutput("merge output", ffResult?.RawOutput);
 
