@@ -161,7 +161,7 @@ public class CodexAgent : IWorkerAgent
         var outcome = WorkerResultParser.TryParse(parseTarget);
         if (outcome.Result != null)
         {
-            return outcome.Result with { Metadata = new Dictionary<string, object>() };
+            return outcome.Result;
         }
 
         if (outcome.DeserializeErrorType != null)

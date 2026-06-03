@@ -19,6 +19,7 @@ public record ChainPhaseOptions(
 public class ChainPhase
 {
     private const int MaxReworkRounds = 2;
+    private static readonly object DebugIndexLock = new();
 
     private readonly ITicketing _ticketing;
     private readonly IEventSink _events;
@@ -158,7 +159,7 @@ public class ChainPhase
         if (startPhase == StartPhase.Plan)
         {
             var sessionId = _sessionIdGenerator();
-            var buildOpts = BuildPhaseOptions(sessionId, options.TicketId);
+            var buildOpts = BuildPhaseOptions(sessionId, options.TicketId, "plan");
             EmitPhaseStart(options, "plan", -1, sessionId);
             var sw = Stopwatch.StartNew();
             var planResult = await _planFactory(buildOpts).RunAsync(options.TicketId, _workingDirectory, ct)
@@ -251,7 +252,7 @@ public class ChainPhase
         }
 
         var shipSessionId = _sessionIdGenerator();
-        var shipBuildOpts = BuildPhaseOptions(shipSessionId, options.TicketId);
+        var shipBuildOpts = BuildPhaseOptions(shipSessionId, options.TicketId, "ship");
         EmitPhaseStart(options, "ship", -1, shipSessionId);
         var shipSw = Stopwatch.StartNew();
         // When running inside a parent-chain shared worktree, use the chain ship factory (SkipDecruft=true).
@@ -341,7 +342,7 @@ public class ChainPhase
         while (true)
         {
             var implSessionId = _sessionIdGenerator();
-            var implBuildOpts = BuildPhaseOptions(implSessionId, options.TicketId);
+            var implBuildOpts = BuildPhaseOptions(implSessionId, options.TicketId, "implement", round);
             // Pass the chain's prior-commit pointer on the first implement round only.
             // Rework rounds (feedback != null) reuse the same worktree with the agent's
             // own edits already in place, so replaying the handoff is redundant.
@@ -402,7 +403,7 @@ public class ChainPhase
                     TimeSpan.Zero, null);
             }
 
-            var reviewResult = await RunOneReviewAsync(options, steps, ct).ConfigureAwait(false);
+            var reviewResult = await RunOneReviewAsync(options, steps, round, ct).ConfigureAwait(false);
 
             if (reviewResult.abort is not null)
                 return reviewResult.abort;
@@ -449,7 +450,7 @@ public class ChainPhase
         Stopwatch totalSw,
         CancellationToken ct)
     {
-        var reviewResult = await RunOneReviewAsync(options, steps, ct).ConfigureAwait(false);
+        var reviewResult = await RunOneReviewAsync(options, steps, round, ct).ConfigureAwait(false);
 
         if (reviewResult.abort is not null)
             return reviewResult.abort;
@@ -483,10 +484,11 @@ public class ChainPhase
     private async Task<(ChainResult? abort, Verdict? verdict)> RunOneReviewAsync(
         ChainPhaseOptions options,
         List<ChainStep> steps,
+        int round,
         CancellationToken ct)
     {
         var revSessionId = _sessionIdGenerator();
-        var revBuildOpts = BuildPhaseOptions(revSessionId, options.TicketId);
+        var revBuildOpts = BuildPhaseOptions(revSessionId, options.TicketId, "review", round);
         EmitPhaseStart(options, "review", -1, revSessionId);
         var revSw = Stopwatch.StartNew();
         var revResult = await _reviewFactory(revBuildOpts)
@@ -538,15 +540,84 @@ public class ChainPhase
         return rationale.Length <= 200 ? rationale : rationale.Substring(0, 200);
     }
 
-    private BuildOptions BuildPhaseOptions(string sessionId, string ticketId)
+    private BuildOptions BuildPhaseOptions(string sessionId, string ticketId, string phaseName, int? round = null)
     {
+        var debugCaptureDirectory = ScopeDebugCaptureDirectory(
+            _baseOptions.DebugCaptureDirectory,
+            ticketId,
+            phaseName,
+            round,
+            sessionId);
+
         if (_baseOptions.ProgressDigestSink is null)
-            return _baseOptions with { SessionId = sessionId };
+        {
+            return _baseOptions with
+            {
+                SessionId = sessionId,
+                DebugCaptureDirectory = debugCaptureDirectory
+            };
+        }
+
         return _baseOptions with
         {
             SessionId = sessionId,
+            DebugCaptureDirectory = debugCaptureDirectory,
             ProgressDigestSink = new PrefixedTextWriter($"[{ticketId}] ", _baseOptions.ProgressDigestSink)
         };
+    }
+
+    private static string? ScopeDebugCaptureDirectory(
+        string? parentDirectory,
+        string ticketId,
+        string phaseName,
+        int? round,
+        string sessionId)
+    {
+        if (parentDirectory is null)
+            return null;
+
+        var attemptSegment = round is null ? SafePathSegment(sessionId) : $"round-{round.Value}";
+        var scopedDirectory = Path.Combine(
+            parentDirectory,
+            SafePathSegment(ticketId),
+            SafePathSegment(phaseName),
+            attemptSegment);
+
+        WriteDebugSessionIndex(parentDirectory, ticketId, phaseName, round, sessionId, scopedDirectory);
+        return scopedDirectory;
+    }
+
+    private static void WriteDebugSessionIndex(
+        string parentDirectory,
+        string ticketId,
+        string phaseName,
+        int? round,
+        string sessionId,
+        string scopedDirectory)
+    {
+        try
+        {
+            Directory.CreateDirectory(parentDirectory);
+            var relativePath = Path.GetRelativePath(parentDirectory, scopedDirectory);
+            var roundLabel = round is null ? "-" : round.Value.ToString();
+            var line = $"{DateTimeOffset.UtcNow:O}\t{ticketId}\t{phaseName}\t{roundLabel}\t{sessionId}\t{relativePath}{Environment.NewLine}";
+            lock (DebugIndexLock)
+            {
+                File.AppendAllText(Path.Combine(parentDirectory, "session-index.txt"), line);
+            }
+        }
+        catch
+        {
+            // Debug capture must never change phase behavior.
+        }
+    }
+
+    private static string SafePathSegment(string value)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var chars = value.Select(ch => invalid.Contains(ch) ? '_' : ch).ToArray();
+        var sanitized = new string(chars).Trim();
+        return sanitized.Length == 0 ? "_" : sanitized;
     }
 
     private static bool IsObsoleteEscalation(WorkerResult r)
@@ -601,7 +672,7 @@ public class ChainPhase
         CancellationToken ct)
     {
         var sessionId = _sessionIdGenerator();
-        var buildOpts = _baseOptions with { SessionId = sessionId };
+        var buildOpts = BuildPhaseOptions(sessionId, options.TicketId, "ratify");
         var ratifier = _ratifierFactory!(buildOpts);
 
         var ticket = await _ticketing.GetAsync(options.TicketId, ct).ConfigureAwait(false);

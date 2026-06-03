@@ -49,7 +49,7 @@ public class CodexAgentTests
         var stdout = """
             {"type":"thread.started","thread_id":"019e8e73-30f0-7ab1-ba36-daedaae11bcf"}
             {"type":"turn.started"}
-            {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Done.\nWORKER_RESULT\n{\n  \"status\": \"Ok\",\n  \"summary\": \"JSONL worked\",\n  \"files_changed\": [\"bar.cs\"],\n  \"failure_reason\": null,\n  \"metadata\": {}\n}"}}
+            {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Done.\nWORKER_RESULT\n{\n  \"status\": \"Ok\",\n  \"summary\": \"JSONL worked\",\n  \"files_changed\": [\"bar.cs\"],\n  \"failure_reason\": null,\n  \"metadata\": {\"commit_sha\":\"abc123\",\"summary_ref\":\"IMPLEMENT_SUMMARY\"}\n}"}}
             {"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":12,"reasoning_output_tokens":3}}
             """;
 
@@ -58,6 +58,9 @@ public class CodexAgentTests
         Assert.Equal(Status.Ok, result.Status);
         Assert.Equal("JSONL worked", result.Summary);
         Assert.Contains("bar.cs", result.FilesChanged);
+        Assert.True(result.Metadata.TryGetValue("commit_sha", out var commitObj));
+        var commit = Assert.IsType<System.Text.Json.JsonElement>(commitObj);
+        Assert.Equal("abc123", commit.GetString());
     }
 
     [Fact]

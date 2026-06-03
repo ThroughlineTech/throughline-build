@@ -85,13 +85,14 @@ public class ChainPhaseTests
         IWorkerAgent? shipWorker = null,
         FakeGitClientChain? git = null,
         Func<BuildOptions, IObsoleteRatifier>? ratifierFactory = null,
-        bool forwardGitToChain = false)
+        bool forwardGitToChain = false,
+        BuildOptions? baseOptions = null)
     {
         _sessionCounter = 0;
         var events = new FakeEventSinkChain();
         git ??= new FakeGitClientChain();
 
-        var baseOpts = MakeBaseOptions();
+        var baseOpts = baseOptions ?? MakeBaseOptions();
 
         Func<BuildOptions, PlanPhase> planFactory = opts =>
             new PlanPhase(ticketing, planWorker, events, opts, git);
@@ -713,9 +714,11 @@ public class ChainPhaseTests
 
         public string Name => "claude-code";
         public IWorkerProgressDigester? Digester => null;
+        public List<WorkerOptions> SeenOptions { get; } = new();
 
         public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
         {
+            SeenOptions.Add(options);
             if (_fail)
                 return Task.FromResult(new WorkerResult(
                     Status.Failed, "failed", Array.Empty<string>(), "worker error",
@@ -1400,6 +1403,47 @@ public class ChainPhaseTests
         // No child phase step should carry the parent's ticket ID.
         var parentPhaseMislabeled = capturedSteps.Where(s => s.phase != "chain" && s.id == TicketId).ToList();
         Assert.Empty(parentPhaseMislabeled);
+    }
+
+    [Fact]
+    public async Task RunAsync_ParentChain_DebugCaptureDirectory_IsScopedPerChildPhaseAttempt()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var captureRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var baseOptions = MakeBaseOptions() with { DebugCaptureDirectory = captureRoot };
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, baseOptions: baseOptions);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, Debug: false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+
+        var implCaptureDirs = implWorker.SeenOptions
+            .Select(o => o.DebugCaptureDirectory)
+            .Where(p => p is not null)
+            .Cast<string>()
+            .ToList();
+
+        Assert.Contains(implCaptureDirs, p => p.EndsWith(Path.Combine("TLB-2", "implement", "round-0"), StringComparison.Ordinal));
+        Assert.Contains(implCaptureDirs, p => p.EndsWith(Path.Combine("TLB-3", "implement", "round-0"), StringComparison.Ordinal));
+        Assert.Equal(implCaptureDirs.Count, implCaptureDirs.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+
+        var indexPath = Path.Combine(captureRoot, "session-index.txt");
+        Assert.True(File.Exists(indexPath));
+        var index = File.ReadAllText(indexPath);
+        Assert.Contains(Path.Combine("TLB-2", "implement", "round-0"), index);
+        Assert.Contains(Path.Combine("TLB-3", "implement", "round-0"), index);
     }
 
     private sealed class FakeGitClientChain : IGitClient
