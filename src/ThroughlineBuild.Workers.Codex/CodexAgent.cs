@@ -140,7 +140,13 @@ public class CodexAgent : IWorkerAgent
 
         // Merge llm_usage metadata regardless of success/failure
         var mergedMeta = new Dictionary<string, object>(result.Metadata);
-        mergedMeta["llm_usage"] = BuildLlmUsageMetadata(usage.InputTokens, usage.OutputTokens, stopwatch.ElapsedMilliseconds, modelArg);
+        mergedMeta["llm_usage"] = BuildLlmUsageMetadata(
+            usage.InputTokens,
+            usage.OutputTokens,
+            stopwatch.ElapsedMilliseconds,
+            modelArg,
+            usage.CachedInputTokens,
+            usage.ReasoningOutputTokens);
         result = result with { Metadata = mergedMeta };
 
         if (options.DebugCaptureDirectory is not null)
@@ -219,10 +225,13 @@ public class CodexAgent : IWorkerAgent
         return sb.ToString();
     }
 
-    internal static (int? InputTokens, int? OutputTokens) TryExtractUsageFromJsonl(string stdout)
+    internal static (int? InputTokens, int? OutputTokens, int? CachedInputTokens, int? ReasoningOutputTokens)
+        TryExtractUsageFromJsonl(string stdout)
     {
         int? inputTokens = null;
         int? outputTokens = null;
+        int? cachedInputTokens = null;
+        int? reasoningOutputTokens = null;
         foreach (var rawLine in stdout.Split('\n'))
         {
             var line = rawLine.Trim();
@@ -245,13 +254,17 @@ public class CodexAgent : IWorkerAgent
                     inputTokens = it.GetInt32();
                 if (usage.TryGetProperty("output_tokens", out var ot) && ot.ValueKind == JsonValueKind.Number)
                     outputTokens = ot.GetInt32();
+                if (usage.TryGetProperty("cached_input_tokens", out var cit) && cit.ValueKind == JsonValueKind.Number)
+                    cachedInputTokens = cit.GetInt32();
+                if (usage.TryGetProperty("reasoning_output_tokens", out var rot) && rot.ValueKind == JsonValueKind.Number)
+                    reasoningOutputTokens = rot.GetInt32();
             }
             catch (JsonException)
             {
                 continue;
             }
         }
-        return (inputTokens, outputTokens);
+        return (inputTokens, outputTokens, cachedInputTokens, reasoningOutputTokens);
     }
 
     internal void ConfigureEnvironment(ProcessStartInfo psi, WorkerOptions options)
@@ -332,7 +345,12 @@ public class CodexAgent : IWorkerAgent
     // cost_usd is always null (Codex emits tokens, not USD).
     // Token counts are populated from usage when available; null otherwise.
     internal static Dictionary<string, object> BuildLlmUsageMetadata(
-        int? inputTokens, int? outputTokens, long wallClockMs, string? model)
+        int? inputTokens,
+        int? outputTokens,
+        long wallClockMs,
+        string? model,
+        int? cachedInputTokens = null,
+        int? reasoningOutputTokens = null)
     {
         var metadata = new Dictionary<string, object>
         {
@@ -341,6 +359,10 @@ public class CodexAgent : IWorkerAgent
             { "wall_clock_ms", wallClockMs },
             { "input_tokens",  (object)(inputTokens ?? 0) },
             { "output_tokens", (object)(outputTokens ?? 0) },
+            { "cache_read_tokens", (object)(cachedInputTokens ?? 0) },
+            { "cache_create_tokens", 0 },
+            { "cached_input_tokens", (object)(cachedInputTokens ?? 0) },
+            { "reasoning_output_tokens", (object)(reasoningOutputTokens ?? 0) },
             { "cost_usd",      (object?)null! },
         };
         return metadata;

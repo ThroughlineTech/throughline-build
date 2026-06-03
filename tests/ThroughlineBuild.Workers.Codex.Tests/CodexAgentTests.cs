@@ -87,6 +87,8 @@ public class CodexAgentTests
 
         Assert.Equal(123, usage.InputTokens);
         Assert.Equal(45, usage.OutputTokens);
+        Assert.Equal(20, usage.CachedInputTokens);
+        Assert.Equal(6, usage.ReasoningOutputTokens);
     }
 
     [Fact]

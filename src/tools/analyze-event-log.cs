@@ -9,7 +9,7 @@
 //     dotnet publish analyze_event_log.cs -c Release
 //
 // Reports per-phase LLM token usage, estimated cost, and timing.
-// Update the pricing table below when Anthropic prices change.
+// Update the pricing table below when vendor prices change.
 
 using System.Text.Json;
 
@@ -27,13 +27,17 @@ if (args.Length == 0 || (args.Length > 0 && (args[0] == "--help" || args[0] == "
     return args.Length == 0 ? 1 : 0;
 }
 
-// USD per million tokens: (prefix, input, output, cache_read, cache_create).
-// cache_create assumes 5-minute cache (1.25x input). 1-hour cache is 2x.
-var pricing = new (string Prefix, decimal In, decimal Out, decimal CR, decimal CC)[]
+// USD per million tokens. Anthropic cache_read/cache_create are separate from
+// input_tokens in the Claude stream. OpenAI cached_input_tokens are a subset of
+// input_tokens, so the estimator subtracts them before applying the full input rate.
+var pricing = new Pricing[]
 {
-    ("claude-opus-4",   15.00m, 75.00m, 1.50m, 18.75m),
-    ("claude-sonnet-4",  3.00m, 15.00m, 0.30m,  3.75m),
-    ("claude-haiku-4",   1.00m,  5.00m, 0.10m,  1.25m),
+    new("claude-opus-4",    15.00m, 75.00m, 1.50m, 18.75m, CachedTokensIncludedInInput: false),
+    new("claude-sonnet-4",   3.00m, 15.00m, 0.30m,  3.75m, CachedTokensIncludedInInput: false),
+    new("claude-haiku-4",    1.00m,  5.00m, 0.10m,  1.25m, CachedTokensIncludedInInput: false),
+    new("gpt-5.4-mini",      0.75m,  4.50m, 0.075m, 0.00m, CachedTokensIncludedInInput: true),
+    new("gpt-5.4",           2.50m, 15.00m, 0.25m,  0.00m, CachedTokensIncludedInInput: true),
+    new("gpt-5.5",           5.00m, 30.00m, 0.50m,  0.00m, CachedTokensIncludedInInput: true),
 };
 
 var phaseNames = new Dictionary<int, string>
@@ -72,6 +76,7 @@ if (fileCount > 1)
     Console.WriteLine($"  output_tokens:       {grand.OutputTokens,14:N0}");
     Console.WriteLine($"  cache_read_tokens:   {grand.CacheReadTokens,14:N0}");
     Console.WriteLine($"  cache_create_tokens: {grand.CacheCreateTokens,14:N0}");
+    Console.WriteLine($"  reasoning_tokens:    {grand.ReasoningOutputTokens,14:N0}");
     Console.WriteLine($"  wall_clock (s):      {grand.WallClockMs / 1000.0,14:F1}");
     var costStr = $"${grand.CostUsd:F4}";
     if (grand.UnknownModelCost) costStr += "*";
@@ -89,7 +94,7 @@ return 0;
 
 static Bucket AnalyzeAndReport(
     string path,
-    (string Prefix, decimal In, decimal Out, decimal CR, decimal CC)[] pricing,
+    Pricing[] pricing,
     Dictionary<int, string> phaseNames)
 {
     var byPhase = new SortedDictionary<int, Bucket>();
@@ -147,6 +152,7 @@ static Bucket AnalyzeAndReport(
             bucket.OutputTokens      += GetLong(data, "output_tokens");
             bucket.CacheReadTokens   += GetLong(data, "cache_read_tokens");
             bucket.CacheCreateTokens += GetLong(data, "cache_create_tokens");
+            bucket.ReasoningOutputTokens += GetLong(data, "reasoning_output_tokens");
             bucket.WallClockMs       += GetLong(data, "wall_clock_ms");
             var model = TryGetString(data, "model", out var m) ? m! : "unknown";
             bucket.Models.Add(model);
@@ -185,8 +191,8 @@ static Bucket AnalyzeAndReport(
 
     Console.WriteLine();
     var header = string.Format(
-        "{0,-10} {1,5} {2,4} {3,8} {4,12} {5,12} {6,12} {7,12} {8,11}  {9}",
-        "Phase", "evts", "LLM", "wall(s)", "input", "output", "cache_r", "cache_c", "cost", "model");
+        "{0,-10} {1,5} {2,4} {3,8} {4,12} {5,12} {6,12} {7,12} {8,12} {9,11}  {10}",
+        "Phase", "evts", "LLM", "wall(s)", "input", "output", "cache_r", "cache_c", "reasoning", "cost", "model");
     Console.WriteLine(header);
     Console.WriteLine(new string('-', header.Length));
 
@@ -201,9 +207,10 @@ static Bucket AnalyzeAndReport(
         if (b.UnknownModelCost) costStr += "*";
 
         Console.WriteLine(string.Format(
-            "{0,-10} {1,5} {2,4} {3,8:F1} {4,12:N0} {5,12:N0} {6,12:N0} {7,12:N0} {8,11}  {9}",
+            "{0,-10} {1,5} {2,4} {3,8:F1} {4,12:N0} {5,12:N0} {6,12:N0} {7,12:N0} {8,12:N0} {9,11}  {10}",
             name, b.Events, b.LlmCalls, b.WallClockMs / 1000.0,
-            b.InputTokens, b.OutputTokens, b.CacheReadTokens, b.CacheCreateTokens, costStr, models));
+            b.InputTokens, b.OutputTokens, b.CacheReadTokens, b.CacheCreateTokens,
+            b.ReasoningOutputTokens, costStr, models));
 
         totals.Add(b);
     }
@@ -212,9 +219,10 @@ static Bucket AnalyzeAndReport(
     var totalCostStr = $"${totals.CostUsd:F4}";
     if (totals.UnknownModelCost) totalCostStr += "*";
     Console.WriteLine(string.Format(
-        "{0,-10} {1,5} {2,4} {3,8:F1} {4,12:N0} {5,12:N0} {6,12:N0} {7,12:N0} {8,11}",
+        "{0,-10} {1,5} {2,4} {3,8:F1} {4,12:N0} {5,12:N0} {6,12:N0} {7,12:N0} {8,12:N0} {9,11}",
         "TOTAL", totals.Events, totals.LlmCalls, totals.WallClockMs / 1000.0,
-        totals.InputTokens, totals.OutputTokens, totals.CacheReadTokens, totals.CacheCreateTokens, totalCostStr));
+        totals.InputTokens, totals.OutputTokens, totals.CacheReadTokens, totals.CacheCreateTokens,
+        totals.ReasoningOutputTokens, totalCostStr));
 
     if (totals.UnknownModelCost)
         Console.WriteLine("\n* cost is partial; one or more LlmCalls used a model not in the pricing table");
@@ -263,15 +271,20 @@ static List<string> ResolveFiles(string[] patterns)
 
 static decimal? ComputeCost(
     JsonElement data, string model,
-    (string Prefix, decimal In, decimal Out, decimal CR, decimal CC)[] pricing)
+    Pricing[] pricing)
 {
     foreach (var p in pricing)
     {
         if (model.StartsWith(p.Prefix, StringComparison.Ordinal))
         {
-            return GetLong(data, "input_tokens")        * p.In / 1_000_000m
-                 + GetLong(data, "output_tokens")       * p.Out / 1_000_000m
-                 + GetLong(data, "cache_read_tokens")   * p.CR / 1_000_000m
+            var input = GetLong(data, "input_tokens");
+            var cacheRead = GetLong(data, "cache_read_tokens");
+            var billableInput = p.CachedTokensIncludedInInput
+                ? Math.Max(0, input - cacheRead)
+                : input;
+            return billableInput * p.In / 1_000_000m
+                 + GetLong(data, "output_tokens") * p.Out / 1_000_000m
+                 + cacheRead * p.CR / 1_000_000m
                  + GetLong(data, "cache_create_tokens") * p.CC / 1_000_000m;
         }
     }
@@ -305,6 +318,14 @@ static bool TryGetString(JsonElement el, string name, out string? val)
     return false;
 }
 
+sealed record Pricing(
+    string Prefix,
+    decimal In,
+    decimal Out,
+    decimal CR,
+    decimal CC,
+    bool CachedTokensIncludedInInput);
+
 sealed class Bucket
 {
     public int Events;
@@ -313,6 +334,7 @@ sealed class Bucket
     public long OutputTokens;
     public long CacheReadTokens;
     public long CacheCreateTokens;
+    public long ReasoningOutputTokens;
     public long WallClockMs;
     public decimal CostUsd;
     public bool UnknownModelCost;
@@ -326,6 +348,7 @@ sealed class Bucket
         OutputTokens      += other.OutputTokens;
         CacheReadTokens   += other.CacheReadTokens;
         CacheCreateTokens += other.CacheCreateTokens;
+        ReasoningOutputTokens += other.ReasoningOutputTokens;
         WallClockMs       += other.WallClockMs;
         CostUsd           += other.CostUsd;
         if (other.UnknownModelCost) UnknownModelCost = true;
