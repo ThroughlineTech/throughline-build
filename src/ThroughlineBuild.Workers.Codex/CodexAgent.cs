@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Workers.Common;
@@ -20,7 +21,7 @@ public class CodexAgent : IWorkerAgent
 
     public async Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
     {
-        // Build args: codex exec [--dangerously-bypass-approvals-and-sandbox] "<brief>"
+        // Build args: codex exec --json [--dangerously-bypass-approvals-and-sandbox] "<brief>"
         // Brief is delivered as the positional prompt argument (not stdin).
         var args = BuildArgs(brief.Instruction, _options, options);
         // modelArg is needed below for llm_usage metadata regardless of whether
@@ -50,6 +51,13 @@ public class CodexAgent : IWorkerAgent
         var stopwatch = Stopwatch.StartNew();
 
         var process = new Process { StartInfo = psi };
+        var progressLock = new object();
+        var lastProgressEmit = DateTimeOffset.UtcNow;
+        var lastActivity = "starting";
+        using var heartbeat = CreateProgressHeartbeat(options, _digester, progressLock,
+            () => lastProgressEmit,
+            t => lastProgressEmit = t,
+            () => lastActivity);
         process.OutputDataReceived += (_, e) =>
         {
             if (e.Data != null)
@@ -62,7 +70,17 @@ public class CodexAgent : IWorkerAgent
                 else if (options.ProgressDigestSink is not null)
                 {
                     var dl = _digester.FormatLine(e.Data);
-                    if (dl != null) options.ProgressDigestSink.WriteLine(dl);
+                    var activity = _digester.FormatActivity(e.Data);
+                    lock (progressLock)
+                    {
+                        if (activity is not null)
+                            lastActivity = activity;
+                        if (dl != null)
+                        {
+                            options.ProgressDigestSink.WriteLine(dl);
+                            lastProgressEmit = DateTimeOffset.UtcNow;
+                        }
+                    }
                 }
             }
         };
@@ -118,10 +136,11 @@ public class CodexAgent : IWorkerAgent
         var stderr = stderrBuilder.ToString();
 
         var result = ParseStdoutForWorkerResult(stdout, process.ExitCode, stderr);
+        var usage = TryExtractUsageFromJsonl(stdout);
 
         // Merge llm_usage metadata regardless of success/failure
         var mergedMeta = new Dictionary<string, object>(result.Metadata);
-        mergedMeta["llm_usage"] = BuildLlmUsageMetadata(null, null, stopwatch.ElapsedMilliseconds, modelArg);
+        mergedMeta["llm_usage"] = BuildLlmUsageMetadata(usage.InputTokens, usage.OutputTokens, stopwatch.ElapsedMilliseconds, modelArg);
         result = result with { Metadata = mergedMeta };
 
         if (options.DebugCaptureDirectory is not null)
@@ -132,11 +151,14 @@ public class CodexAgent : IWorkerAgent
         return result;
     }
 
-    // Scans stdout directly for WORKER_RESULT via the shared parser.
-    // Codex outputs plain text (no JSON envelope), so stdout is passed directly.
+    // Scans stdout for WORKER_RESULT. In --json mode, Codex emits JSONL and the
+    // contract block appears inside item.completed agent_message text; keep the
+    // raw-stdout fallback for older/plain-text captures and error output.
     internal static WorkerResult ParseStdoutForWorkerResult(string stdout, int exitCode, string stderr)
     {
-        var outcome = WorkerResultParser.TryParse(stdout);
+        var text = ExtractAgentMessagesFromJsonl(stdout);
+        var parseTarget = string.IsNullOrWhiteSpace(text) ? stdout : text;
+        var outcome = WorkerResultParser.TryParse(parseTarget);
         if (outcome.Result != null)
         {
             return outcome.Result with { Metadata = new Dictionary<string, object>() };
@@ -160,6 +182,78 @@ public class CodexAgent : IWorkerAgent
             markerReason, new Dictionary<string, object>());
     }
 
+    internal static string ExtractAgentMessagesFromJsonl(string stdout)
+    {
+        var sb = new StringBuilder();
+        foreach (var rawLine in stdout.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0 || line[0] != '{')
+                continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                var root = doc.RootElement;
+                if (!root.TryGetProperty("type", out var typeEl) ||
+                    typeEl.ValueKind != JsonValueKind.String ||
+                    typeEl.GetString() != "item.completed" ||
+                    !root.TryGetProperty("item", out var item) ||
+                    item.ValueKind != JsonValueKind.Object ||
+                    !item.TryGetProperty("type", out var itemTypeEl) ||
+                    itemTypeEl.ValueKind != JsonValueKind.String ||
+                    itemTypeEl.GetString() != "agent_message")
+                {
+                    continue;
+                }
+
+                if (item.TryGetProperty("text", out var textEl) && textEl.ValueKind == JsonValueKind.String)
+                {
+                    sb.AppendLine(textEl.GetString());
+                }
+            }
+            catch (JsonException)
+            {
+                continue;
+            }
+        }
+        return sb.ToString();
+    }
+
+    internal static (int? InputTokens, int? OutputTokens) TryExtractUsageFromJsonl(string stdout)
+    {
+        int? inputTokens = null;
+        int? outputTokens = null;
+        foreach (var rawLine in stdout.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0 || line[0] != '{')
+                continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                var root = doc.RootElement;
+                if (!root.TryGetProperty("type", out var typeEl) ||
+                    typeEl.ValueKind != JsonValueKind.String ||
+                    typeEl.GetString() != "turn.completed" ||
+                    !root.TryGetProperty("usage", out var usage) ||
+                    usage.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                if (usage.TryGetProperty("input_tokens", out var it) && it.ValueKind == JsonValueKind.Number)
+                    inputTokens = it.GetInt32();
+                if (usage.TryGetProperty("output_tokens", out var ot) && ot.ValueKind == JsonValueKind.Number)
+                    outputTokens = ot.GetInt32();
+            }
+            catch (JsonException)
+            {
+                continue;
+            }
+        }
+        return (inputTokens, outputTokens);
+    }
+
     internal void ConfigureEnvironment(ProcessStartInfo psi, WorkerOptions options)
     {
         // Strip API-key env vars to force subscription auth (same pattern as ClaudeCodeAgent).
@@ -179,7 +273,7 @@ public class CodexAgent : IWorkerAgent
     // last as the positional prompt.
     internal static List<string> BuildArgs(string briefInstruction, CodexOptions options, WorkerOptions workerOptions)
     {
-        var args = new List<string> { "exec" };
+        var args = new List<string> { "exec", "--json" };
         if (options.BypassPermissions)
             args.Add("--dangerously-bypass-approvals-and-sandbox");
         foreach (var extra in options.ExtraArgs)
@@ -191,6 +285,34 @@ public class CodexAgent : IWorkerAgent
         args.Add(briefInstruction);
         return args;
     }
+
+    private static Timer? CreateProgressHeartbeat(
+        WorkerOptions options,
+        CodexProgressDigester digester,
+        object progressLock,
+        Func<DateTimeOffset> getLastProgressEmit,
+        Action<DateTimeOffset> setLastProgressEmit,
+        Func<string> getLastActivity)
+    {
+        if (options.ProgressDigestSink is null || options.LiveStdoutSink is not null)
+            return null;
+
+        var sink = options.ProgressDigestSink;
+        var interval = TimeSpan.FromSeconds(15);
+        return new Timer(_ =>
+        {
+            lock (progressLock)
+            {
+                var now = DateTimeOffset.UtcNow;
+                if (now - getLastProgressEmit() < interval)
+                    return;
+                sink.WriteLine($"[{digester.FormatElapsed(now)}] {PadKind("progress")} still running; last: {getLastActivity()}");
+                setLastProgressEmit(now);
+            }
+        }, null, interval, interval);
+    }
+
+    private static string PadKind(string kind) => kind.PadRight(10);
 
     // Strips the "openai:" vendor prefix from a configured model id so the
     // bare id can be passed to `codex --model`. Returns null when the configured

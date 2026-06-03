@@ -44,6 +44,52 @@ public class CodexAgentTests
     }
 
     [Fact]
+    public void ParseStdoutForWorkerResult_JsonlAgentMessage_ReturnsOk()
+    {
+        var stdout = """
+            {"type":"thread.started","thread_id":"019e8e73-30f0-7ab1-ba36-daedaae11bcf"}
+            {"type":"turn.started"}
+            {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Done.\nWORKER_RESULT\n{\n  \"status\": \"Ok\",\n  \"summary\": \"JSONL worked\",\n  \"files_changed\": [\"bar.cs\"],\n  \"failure_reason\": null,\n  \"metadata\": {}\n}"}}
+            {"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":12,"reasoning_output_tokens":3}}
+            """;
+
+        var result = CodexAgent.ParseStdoutForWorkerResult(stdout, 0, "");
+
+        Assert.Equal(Status.Ok, result.Status);
+        Assert.Equal("JSONL worked", result.Summary);
+        Assert.Contains("bar.cs", result.FilesChanged);
+    }
+
+    [Fact]
+    public void ExtractAgentMessagesFromJsonl_ConcatenatesAgentMessageText()
+    {
+        var stdout = """
+            {"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"pwsh -Command rg x","exit_code":0,"status":"completed"}}
+            {"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"first"}}
+            {"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"second"}}
+            """;
+
+        var result = CodexAgent.ExtractAgentMessagesFromJsonl(stdout);
+
+        Assert.Contains("first", result);
+        Assert.Contains("second", result);
+        Assert.DoesNotContain("command_execution", result);
+    }
+
+    [Fact]
+    public void TryExtractUsageFromJsonl_ReadsTurnCompletedUsage()
+    {
+        var stdout = """
+            {"type":"turn.completed","usage":{"input_tokens":123,"cached_input_tokens":20,"output_tokens":45,"reasoning_output_tokens":6}}
+            """;
+
+        var usage = CodexAgent.TryExtractUsageFromJsonl(stdout);
+
+        Assert.Equal(123, usage.InputTokens);
+        Assert.Equal(45, usage.OutputTokens);
+    }
+
+    [Fact]
     public void ParseStdoutForWorkerResult_NoMarker_ReturnsFailed()
     {
         var result = CodexAgent.ParseStdoutForWorkerResult("no marker here", 0, "");
@@ -76,6 +122,17 @@ public class CodexAgentTests
         var args = CodexAgent.BuildArgs("the brief", options, workerOptions);
 
         Assert.Contains("--dangerously-bypass-approvals-and-sandbox", args);
+    }
+
+    [Fact]
+    public void BuildArgs_IncludesJsonFlag()
+    {
+        var options = new CodexOptions();
+        var workerOptions = new WorkerOptions(TimeSpan.FromSeconds(30));
+
+        var args = CodexAgent.BuildArgs("the brief", options, workerOptions);
+
+        Assert.Contains("--json", args);
     }
 
     [Fact]
