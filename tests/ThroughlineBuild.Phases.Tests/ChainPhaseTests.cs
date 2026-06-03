@@ -1133,10 +1133,10 @@ public class ChainPhaseTests
     }
 
     [Fact]
-    public async Task RunAsync_ParentWith2BacklogChildren_OneChildFailsPlan_ParentStoppedEarly_TwoChildResults()
+    public async Task RunAsync_ParentWith2BacklogChildren_OneChildFailsPlan_ParentStoppedEarly_SecondChildNotRun()
     {
-        // Parent ticket has 2 Backlog children; first child fails at plan (StoppedAtPlan),
-        // second child succeeds. anyStoppedEarly should be true -> ParentStoppedEarly.
+        // Parent ticket has 2 Backlog children; first child fails at plan (StoppedAtPlan).
+        // The second sibling must not run from the stale pre-child1 base.
         var parent = MakeTicket(TicketState.Backlog);
         var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
         var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Backlog);
@@ -1144,20 +1144,19 @@ public class ChainPhaseTests
         var ticketing = new ChainFakeTicketing(parent);
         ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
 
-        // Plan worker fails on first call (child1), succeeds on subsequent calls (child2).
+        // Plan worker fails on first call (child1), succeeds on subsequent calls if reached.
         var planWorker = new FailFirstWorkerAgent(OkWorkerResult().Metadata, OkWorkerResult().Blocks);
         var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var verifiers = new Queue<IVerifier>();
-        // Only child2 reaches review
-        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
 
         var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
         var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
 
         Assert.Equal(ChainOutcome.ParentStoppedEarly, result.Outcome);
         Assert.NotNull(result.ChildResults);
-        Assert.Equal(2, result.ChildResults!.Count);
-        Assert.Contains(result.ChildResults, r => r.Outcome != ChainOutcome.Completed);
+        var only = Assert.Single(result.ChildResults!);
+        Assert.Equal("TLB-2", only.TicketId);
+        Assert.NotEqual(ChainOutcome.Completed, only.Outcome);
     }
 
     [Fact]
@@ -1227,7 +1226,7 @@ public class ChainPhaseTests
     }
 
     [Fact]
-    public async Task RunAsync_ParentWithIndependentChildren_BothRunConcurrently_NoDepsRequired()
+    public async Task RunAsync_ParentWithIndependentChildren_BothRunSequentially_NoDepsRequired()
     {
         // Two siblings with no relations: both land in the same level. With width-1 dispatch
         // they run sequentially within that level, but both complete (same outcome as before).
@@ -1305,13 +1304,14 @@ public class ChainPhaseTests
     // -------------------------------------------------------------------------
 
     [Fact]
-    public async Task RunAsync_ParentChain_Chain348_B02FailsForFirstChild_AbortsAndSecondChildSucceeds()
+    public async Task RunAsync_ParentChain_B02FailsForFirstChild_AbortsAndStopsBeforeSecondChild()
     {
         // Regression for TLB-402: when B02 auto-rebase fails without conflict markers
         // (e.g., hook rejection), the conditional abort was skipped (HadConflicts=false),
         // leaving the main worktree's HEAD detached. The second child's ship then operated
         // on a detached HEAD, causing silent data corruption.
-        // Fix (TLB-402): abort is now unconditional, and child 2 completes successfully.
+        // Fix (TLB-402): abort is now unconditional. Parent-chain stacking also means child 2
+        // is not dispatched after child 1 fails to ship.
         var parent = MakeTicket(TicketState.Backlog);
         var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
         var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Backlog);
@@ -1322,8 +1322,7 @@ public class ChainPhaseTests
         var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var verifiers = new Queue<IVerifier>();
-        // child1 passes review, then fails at ship (B02 abort); child2 also passes review
-        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        // child1 passes review, then fails at ship (B02 abort); child2 must not reach review.
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
 
         var git = new FakeGitClientChain()
@@ -1333,26 +1332,21 @@ public class ChainPhaseTests
             DivergenceStateResult = DivergenceState.DivergedNoConflict,
             // Response queue:
             //   call 1: child1 B02 auto-rebase fails without conflict markers (hook rejection)
-            //   call 2: child2 B02 auto-rebase succeeds
-            //   call 3: child2 feature-branch rebase succeeds
             RebaseResponses = new Queue<RebaseResult>(new[]
             {
                 new RebaseResult(false, false, Array.Empty<string>(), "hook-rejected"),
-                new RebaseResult(true, false, Array.Empty<string>(), null),
-                new RebaseResult(true, false, Array.Empty<string>(), null),
             })
         };
 
         var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, git: git);
         var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
 
-        // child1 failed at ship; child2 completed -> ParentStoppedEarly
+        // child1 failed at ship; child2 was never run -> ParentStoppedEarly
         Assert.Equal(ChainOutcome.ParentStoppedEarly, result.Outcome);
         Assert.NotNull(result.ChildResults);
-        var child1Result = result.ChildResults!.First(r => r.TicketId == "TLB-2");
-        var child2Result = result.ChildResults!.First(r => r.TicketId == "TLB-3");
+        var child1Result = Assert.Single(result.ChildResults!);
+        Assert.Equal("TLB-2", child1Result.TicketId);
         Assert.NotEqual(ChainOutcome.Completed, child1Result.Outcome);
-        Assert.Equal(ChainOutcome.Completed, child2Result.Outcome);
 
         // Abort was called after the non-conflict B02 failure (Fix 1)
         Assert.Equal(1, git.RebaseAbortCallCount);
