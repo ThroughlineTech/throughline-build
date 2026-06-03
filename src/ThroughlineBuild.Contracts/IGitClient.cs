@@ -133,6 +133,16 @@ public interface IGitClient
     Task<IReadOnlyList<string>> ListStashEntriesAsync(string workingDirectory, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
 
+    // Creates a detached-HEAD worktree at a specific commit (git worktree add --detach <path> <sha>).
+    // No branch is created; cleanup is a plain worktree remove.
+    // Default returns failure so existing fakes remain unchanged (TLB-401).
+    Task<WorktreeCreateResult> CreateDetachedWorktreeAsync(
+        string worktreePath,
+        string sha,
+        string mainWorktreePath,
+        CancellationToken ct) =>
+        Task.FromResult(new WorktreeCreateResult(false, "not implemented", null));
+
     // Returns the distinct file paths touched by commits in the given range via "git diff --stat".
     // The range should be a two-dot range (e.g. "abc123..def456") covering exactly the chain's prior work.
     // Default returns empty so existing FakeGitClients remain unchanged (TLB-379).

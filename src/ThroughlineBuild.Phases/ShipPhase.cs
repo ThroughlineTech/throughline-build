@@ -15,7 +15,9 @@ public record ShipOptions(
     string? TargetBranch = null,
     bool SkipDecruft = false,
     bool NoPush = false,
-    bool TargetBranchOverridden = false);
+    bool TargetBranchOverridden = false,
+    bool SkipBaseline = false,
+    BaselineCache? BaselineCache = null);
 
 public record ShipResult(
     bool Success,
@@ -484,56 +486,160 @@ public class ShipPhase : IWorkflowPhase
         // Step 7: Regression checks
         if (_shipOptions.RegressionChecks.Count > 0)
             ReportProgress($"[ship] running {_shipOptions.RegressionChecks.Count} regression check(s)...");
-        var checkResults = await _checksRunner.RunAsync(_shipOptions.RegressionChecks, canonicalWorktreePath, ct).ConfigureAwait(false);
-        if (_verbose)
+
+        bool regressionGateHandled = false;
+
+        if (_shipOptions.SkipBaseline)
         {
-            foreach (var r in checkResults)
+            await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
             {
-                var status = r.Passed ? "passed" : "failed";
-                _progress?.WriteLine($"[ship] check {status}: {r.Name} ({r.Elapsed.TotalSeconds:0.0}s)");
-                if (!string.IsNullOrWhiteSpace(r.StdoutTail))
+                ["action"] = "baseline_skipped"
+            }, ct).ConfigureAwait(false);
+        }
+        else if (_shipOptions.BaselineCache is not null)
+        {
+            var baselineFailures = await ComputeBaselineAsync(ticketId, ontoRef, workingDirectory, ct).ConfigureAwait(false);
+            if (baselineFailures is not null)
+            {
+                regressionGateHandled = true;
+                var featureResults = await _checksRunner.RunAsync(_shipOptions.RegressionChecks, canonicalWorktreePath, ct).ConfigureAwait(false);
+                if (_verbose)
                 {
-                    _progress?.WriteLine("--- stdout ---");
-                    _progress?.WriteLine(r.StdoutTail.TrimEnd());
+                    foreach (var r in featureResults)
+                    {
+                        var status = r.Passed ? "passed" : "failed";
+                        _progress?.WriteLine($"[ship] check {status}: {r.Name} ({r.Elapsed.TotalSeconds:0.0}s)");
+                        if (!string.IsNullOrWhiteSpace(r.StdoutTail))
+                        {
+                            _progress?.WriteLine("--- stdout ---");
+                            _progress?.WriteLine(r.StdoutTail.TrimEnd());
+                        }
+                        if (!string.IsNullOrWhiteSpace(r.StderrTail))
+                        {
+                            _progress?.WriteLine("--- stderr ---");
+                            _progress?.WriteLine(r.StderrTail.TrimEnd());
+                        }
+                    }
                 }
-                if (!string.IsNullOrWhiteSpace(r.StderrTail))
+
+                var regressions = featureResults.Where(r => !r.Passed && !baselineFailures.Contains(r.Name)).ToList();
+                var preExisting = featureResults.Where(r => !r.Passed && baselineFailures.Contains(r.Name)).ToList();
+                var fixes = featureResults.Where(r => r.Passed && baselineFailures.Contains(r.Name)).ToList();
+
+                if (preExisting.Count > 0)
                 {
-                    _progress?.WriteLine("--- stderr ---");
-                    _progress?.WriteLine(r.StderrTail.TrimEnd());
+                    var preExistingNames = preExisting.Select(r => r.Name).ToList();
+                    await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
+                    {
+                        ["action"] = "pre_existing_failures_noted",
+                        ["count"] = preExisting.Count,
+                        ["names"] = (IReadOnlyList<string>)preExistingNames
+                    }, ct).ConfigureAwait(false);
+                    ReportProgress($"[ship] pre-existing failures (not blocking): {string.Join(", ", preExistingNames)}");
+                }
+
+                if (fixes.Count > 0)
+                {
+                    var fixNames = fixes.Select(r => r.Name).ToList();
+                    await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
+                    {
+                        ["action"] = "fixes_detected",
+                        ["count"] = fixes.Count,
+                        ["names"] = (IReadOnlyList<string>)fixNames
+                    }, ct).ConfigureAwait(false);
+                    ReportProgress($"[ship] fixed by this branch: {string.Join(", ", fixNames)}");
+                }
+
+                if (regressions.Count > 0)
+                {
+                    var regressionNames = regressions.Select(r => r.Name).ToList();
+                    var preExistingNamesList = preExisting.Select(r => r.Name).ToList();
+                    if (!_verbose)
+                    {
+                        foreach (var failed in regressions)
+                        {
+                            _progress?.WriteLine($"[ship] regression detected: {failed.Name}");
+                            if (!string.IsNullOrWhiteSpace(failed.StdoutTail))
+                            {
+                                _progress?.WriteLine("--- stdout ---");
+                                _progress?.WriteLine(failed.StdoutTail.TrimEnd());
+                            }
+                            if (!string.IsNullOrWhiteSpace(failed.StderrTail))
+                            {
+                                _progress?.WriteLine("--- stderr ---");
+                                _progress?.WriteLine(failed.StderrTail.TrimEnd());
+                            }
+                        }
+                    }
+                    await _ticketing.CreateCommentAsync(ticketId,
+                        $"<p><strong>ship_blocked:</strong> regression checks introduced failures: {string.Join(", ", regressionNames)}</p>", ct).ConfigureAwait(false);
+                    await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+                    {
+                        ["kind"] = "regression_checks",
+                        ["regressions"] = (IReadOnlyList<string>)regressionNames,
+                        ["pre_existing"] = (IReadOnlyList<string>)preExistingNamesList
+                    }, ct).ConfigureAwait(false);
+                    return (new ShipResult(false, ticketId, null,
+                        $"regression checks introduced failures: {string.Join(", ", regressionNames)}", ShipFailureStage.RegressionChecks), worktreeNames, null);
                 }
             }
+            // else: baseline computation failed, fall through to legacy
         }
 
-        var checksFailed = checkResults.Where(r => !r.Passed).ToList();
-        if (checksFailed.Count > 0)
+        if (!regressionGateHandled)
         {
-            var namesList = string.Join(", ", checksFailed.Select(r => r.Name));
-            if (!_verbose)
+            // Legacy regression check: any failing test blocks ship
+            var checkResults = await _checksRunner.RunAsync(_shipOptions.RegressionChecks, canonicalWorktreePath, ct).ConfigureAwait(false);
+            if (_verbose)
             {
-                foreach (var failed in checksFailed)
+                foreach (var r in checkResults)
                 {
-                    _progress?.WriteLine($"[ship] regression check failed: {failed.Name}");
-                    if (!string.IsNullOrWhiteSpace(failed.StdoutTail))
+                    var status = r.Passed ? "passed" : "failed";
+                    _progress?.WriteLine($"[ship] check {status}: {r.Name} ({r.Elapsed.TotalSeconds:0.0}s)");
+                    if (!string.IsNullOrWhiteSpace(r.StdoutTail))
                     {
                         _progress?.WriteLine("--- stdout ---");
-                        _progress?.WriteLine(failed.StdoutTail.TrimEnd());
+                        _progress?.WriteLine(r.StdoutTail.TrimEnd());
                     }
-                    if (!string.IsNullOrWhiteSpace(failed.StderrTail))
+                    if (!string.IsNullOrWhiteSpace(r.StderrTail))
                     {
                         _progress?.WriteLine("--- stderr ---");
-                        _progress?.WriteLine(failed.StderrTail.TrimEnd());
+                        _progress?.WriteLine(r.StderrTail.TrimEnd());
                     }
                 }
             }
-            await _ticketing.CreateCommentAsync(ticketId,
-                $"<p><strong>ship_blocked:</strong> regression checks failed: {namesList}</p>", ct).ConfigureAwait(false);
-            await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+
+            var checksFailed = checkResults.Where(r => !r.Passed).ToList();
+            if (checksFailed.Count > 0)
             {
-                ["kind"] = "regression_checks",
-                ["checks_failed"] = checksFailed.Select(r => r.Name).ToList()
-            }, ct).ConfigureAwait(false);
-            return (new ShipResult(false, ticketId, null,
-                $"regression checks failed: {namesList}", ShipFailureStage.RegressionChecks), worktreeNames, null);
+                var namesList = string.Join(", ", checksFailed.Select(r => r.Name));
+                if (!_verbose)
+                {
+                    foreach (var failed in checksFailed)
+                    {
+                        _progress?.WriteLine($"[ship] regression check failed: {failed.Name}");
+                        if (!string.IsNullOrWhiteSpace(failed.StdoutTail))
+                        {
+                            _progress?.WriteLine("--- stdout ---");
+                            _progress?.WriteLine(failed.StdoutTail.TrimEnd());
+                        }
+                        if (!string.IsNullOrWhiteSpace(failed.StderrTail))
+                        {
+                            _progress?.WriteLine("--- stderr ---");
+                            _progress?.WriteLine(failed.StderrTail.TrimEnd());
+                        }
+                    }
+                }
+                await _ticketing.CreateCommentAsync(ticketId,
+                    $"<p><strong>ship_blocked:</strong> regression checks failed: {namesList}</p>", ct).ConfigureAwait(false);
+                await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+                {
+                    ["kind"] = "regression_checks",
+                    ["checks_failed"] = checksFailed.Select(r => r.Name).ToList()
+                }, ct).ConfigureAwait(false);
+                return (new ShipResult(false, ticketId, null,
+                    $"regression checks failed: {namesList}", ShipFailureStage.RegressionChecks), worktreeNames, null);
+            }
         }
 
         // Step 8: Fast-forward merge into local targetBranch (main worktree)
@@ -687,6 +793,53 @@ public class ShipPhase : IWorkflowPhase
         }, ct).ConfigureAwait(false);
 
         return new ShipResult(true, ticketId, null, null, null);
+    }
+
+    private async Task<IReadOnlySet<string>?> ComputeBaselineAsync(
+        string ticketId,
+        string ontoRef,
+        string workingDirectory,
+        CancellationToken ct)
+    {
+        var ontoSha = await _git.RevParseAsync(ontoRef, workingDirectory, ct).ConfigureAwait(false);
+        var cache = _shipOptions.BaselineCache!;
+        if (cache.TryGet(ontoSha, out var cached))
+            return cached;
+
+        var baselinePath = Path.Combine(workingDirectory, ".worktrees", $"baseline-{ontoSha[..8]}");
+        var createResult = await _git.CreateDetachedWorktreeAsync(baselinePath, ontoSha, workingDirectory, ct).ConfigureAwait(false);
+        if (!createResult.Success)
+        {
+            await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
+            {
+                ["action"] = "baseline_worktree_failed",
+                ["reason"] = createResult.FailureReason ?? "unknown"
+            }, ct).ConfigureAwait(false);
+            return null;
+        }
+
+        var baselineResults = await _checksRunner.RunAsync(_shipOptions.RegressionChecks, baselinePath, ct).ConfigureAwait(false);
+        var failing = baselineResults.Where(r => !r.Passed).Select(r => r.Name).ToHashSet();
+        var failingSet = (IReadOnlySet<string>)failing;
+        cache.Set(ontoSha, failingSet);
+
+        await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
+        {
+            ["action"] = "baseline_computed",
+            ["sha"] = ontoSha,
+            ["failing_count"] = failing.Count
+        }, ct).ConfigureAwait(false);
+
+        try
+        {
+            await _decrufter.DecruftAsync(baselinePath, workingDirectory, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            // fire-and-forget: baseline worktree cleanup failure does not block ship
+        }
+
+        return failingSet;
     }
 
     private async Task EmitAsync(EventKind kind, string ticketId, IReadOnlyDictionary<string, object> data, CancellationToken ct)

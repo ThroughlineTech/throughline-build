@@ -282,6 +282,37 @@ public sealed class ProcessGitClient : IGitClient
         }
     }
 
+    public async Task<WorktreeCreateResult> CreateDetachedWorktreeAsync(string worktreePath, string sha, string mainWorktreePath, CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = mainWorktreePath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("worktree");
+            psi.ArgumentList.Add("add");
+            psi.ArgumentList.Add("--detach");
+            psi.ArgumentList.Add(worktreePath);
+            psi.ArgumentList.Add(sha);
+            using var proc = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start git process");
+            var stderr = await proc.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
+            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+            if (proc.ExitCode != 0)
+                return new WorktreeCreateResult(false, stderr.Trim(), null);
+            return new WorktreeCreateResult(true, null, Path.GetFullPath(worktreePath));
+        }
+        catch (Exception ex)
+        {
+            return new WorktreeCreateResult(false, ex.Message, null);
+        }
+    }
+
     public async Task<IReadOnlyList<string>> ListLocalBranchesAsync(string pattern, string workingDirectory, CancellationToken ct)
     {
         try
