@@ -649,18 +649,18 @@ public class ChainPhase
         // If any eligible child has live children of its own, the tree is deeper than this
         // command handles. Stop and tell the operator to chain the intermediate ticket
         // directly, rather than recursing (which previously ran away into Plane's rate limiter).
-        var deeperTickets = new List<string>();
-        foreach (var child in eligible)
+        var deeperTickets = (await Task.WhenAll(eligible.Select(async child =>
         {
             var grandchildren = await _ticketing
                 .QueryAsync(new TicketQuery(ParentId: child.Uuid), ct).ConfigureAwait(false);
-            var liveGrandchildren = grandchildren
+            var hasLiveGrandchildren = grandchildren
                 .Where(g => g.State != TicketState.Done && g.State != TicketState.Cancelled)
-                .Where(g => !string.Equals(g.Uuid, child.Uuid, StringComparison.Ordinal))
-                .ToList();
-            if (liveGrandchildren.Count > 0)
-                deeperTickets.Add(child.Id);
-        }
+                .Any(g => !string.Equals(g.Uuid, child.Uuid, StringComparison.Ordinal));
+            return hasLiveGrandchildren ? child.Id : null;
+        })).ConfigureAwait(false))
+            .Where(id => id is not null)
+            .Cast<string>()
+            .ToList();
 
         if (deeperTickets.Count > 0)
         {
@@ -934,13 +934,18 @@ public class ChainPhase
         foreach (var ticket in eligible)
             graph.AddNode(ticket.Id);
 
-        foreach (var ticket in eligible)
+        var relationsByTicket = await Task.WhenAll(eligible.Select(async ticket => new
         {
-            var relations = await _ticketing.GetRelationsAsync(ticket.Id, ct).ConfigureAwait(false);
-            foreach (var rel in relations)
+            TicketId = ticket.Id,
+            Relations = await _ticketing.GetRelationsAsync(ticket.Id, ct).ConfigureAwait(false)
+        })).ConfigureAwait(false);
+
+        foreach (var ticketRelations in relationsByTicket)
+        {
+            foreach (var rel in ticketRelations.Relations)
             {
                 if (rel.Kind == "blocked_by" && eligibleIdSet.Contains(rel.TargetId))
-                    graph.AddEdge(rel.TargetId, ticket.Id); // TargetId is the blocker
+                    graph.AddEdge(rel.TargetId, ticketRelations.TicketId); // TargetId is the blocker
             }
         }
 

@@ -57,6 +57,10 @@ public sealed class PlaneTicketingClient : ITicketing
     // not poll for changes made by other processes mid-run - the project is treated as stable
     // for the run's duration, which is the operating assumption that makes the one-shot load safe.
     private readonly ConcurrentDictionary<string, PlaneIssue> _issueByUuid = new();
+    // Per-run relations cache: sibling dependency analysis may ask for the same ticket's relations
+    // multiple times within one chain run. Relations are effectively stable for the run, so cache
+    // them by Plane issue UUID after the first GET and reuse them thereafter.
+    private readonly ConcurrentDictionary<string, IReadOnlyList<Relation>> _relationsByIssueUuid = new();
     private volatile bool _snapshotLoaded;
     private readonly SemaphoreSlim _snapshotLock = new(1, 1);
 
@@ -545,13 +549,17 @@ public sealed class PlaneTicketingClient : ITicketing
             var seq = ParseSequenceId(id);
             var issue = await FindIssueAsync(seq, token).ConfigureAwait(false);
 
+            if (_relationsByIssueUuid.TryGetValue(issue.Id, out var cached))
+                return cached;
+
             var relationList = await GetJsonAsync<PlaneRelationList>(
                 $"{IssuesBase}{issue.Id}/relations/", PlaneJsonContext.Default, token).ConfigureAwait(false);
 
-            return (relationList.Results ?? [])
+            var relations = (relationList.Results ?? [])
                 .Select(r => new Relation(r.RelationType, r.RelatedIssue))
                 .ToList()
                 .AsReadOnly();
+            return _relationsByIssueUuid.GetOrAdd(issue.Id, relations);
         }, ct).ConfigureAwait(false);
     }
 

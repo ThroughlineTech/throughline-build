@@ -619,6 +619,28 @@ public class GetRelationsAsyncTests
 
         Assert.Empty(relations);
     }
+
+    [Fact]
+    public async Task GetRelationsAsync_RepeatedCall_UsesPerRunCache()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson())); // issue snapshot
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.RelationListJson())); // first relations fetch
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        var first = await client.GetRelationsAsync("TLB-24", CancellationToken.None);
+        var second = await client.GetRelationsAsync("TLB-24", CancellationToken.None);
+
+        Assert.Single(first);
+        Assert.Single(second);
+
+        var relationGets = handler.Requests
+            .Where(r => r.Method == HttpMethod.Get
+                && r.RequestUri!.ToString().Contains("/relations/"))
+            .ToList();
+        Assert.Single(relationGets);
+    }
 }
 
 public class TicketSizeResolutionTests
