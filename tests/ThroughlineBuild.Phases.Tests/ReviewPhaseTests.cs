@@ -779,6 +779,51 @@ public class ReviewPhaseTests
             Task.FromResult(0);
         public Task<IReadOnlyList<string>> LogOnelineAsync(string range, int limit, string workingDirectory, CancellationToken ct) =>
             Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
+
+        // Configurable dirty-paths responses for dirty-worktree tests.
+        public Queue<IReadOnlyList<string>> TrackedChangesQueue { get; } = new();
+        public Task<IReadOnlyList<string>> GetTrackedChangesAsync(string workingDirectory, CancellationToken ct)
+        {
+            if (TrackedChangesQueue.Count > 0)
+                return Task.FromResult(TrackedChangesQueue.Dequeue());
+            return Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_DirtyWorktreeAfterVerifier_HardFails()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        ticketing.SeedComment($"<p>[implemented_at: {ImplementedSha}]</p>");
+        var worker = new FakeWorkerAgent();
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, includeWorktreeMatching: true);
+        git.TrackedChangesQueue.Enqueue(new[] { "review-artifact.dll" });
+        var verifier = new FakeVerifier(new Verdict(VerdictKind.Pass, "looks good", Array.Empty<string>()));
+        var phase = new ReviewPhase(ticketing, worker, events, MakeBuildOptions(), MakeReviewOptions(),
+            git, verifierOverride: verifier);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.FailureReason);
+        Assert.Contains("dirty", result.FailureReason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("review-artifact.dll", result.FailureReason);
+
+        // VerifierVerdict still emitted (operator needs to see what verdict was reached)
+        var verdictEvents = events.Events.Where(e => e.Kind == EventKind.VerifierVerdict).ToList();
+        Assert.Single(verdictEvents);
+        Assert.Equal("Pass", verdictEvents[0].Data["kind"].ToString());
+
+        // GateFailure emitted with correct kind and dirty_paths
+        var gateFailures = events.Events.Where(e => e.Kind == EventKind.GateFailure).ToList();
+        Assert.Single(gateFailures);
+        Assert.Equal("dirty_worktree_after_review", gateFailures[0].Data["kind"].ToString());
+        Assert.True(gateFailures[0].Data.ContainsKey("dirty_paths"));
+
+        // No ticket transitions or comments - hard-fail stops before verdict processing
+        Assert.Empty(ticketing.Transitions);
+        Assert.Empty(ticketing.Comments);
     }
 }
 

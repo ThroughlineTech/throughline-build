@@ -306,6 +306,49 @@ public class ImplementPhase : IWorkflowPhase
                 workerResult.FailureReason ?? workerResult.Summary ?? workerResult.Status.ToString(),
                 EscalationWorkerResult: workerResult.Status == Status.Escalate ? workerResult : null);
 
+        // Step 14b: Dirty-worktree check after worker exit - one bounded retry
+        var dirtyPaths = await WorkingTreeHygieneGate.DirtyFilesCheckAsync(_git, canonicalWorktreePath, ct).ConfigureAwait(false);
+        if (dirtyPaths.Count > 0)
+        {
+            await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+            {
+                ["kind"] = "dirty_worktree_first_attempt",
+                ["dirty_paths"] = dirtyPaths
+            }, ct).ConfigureAwait(false);
+
+            var samplePaths = dirtyPaths.Take(5).ToList();
+            var sampleStr = string.Join(", ", samplePaths);
+            var moreNote = dirtyPaths.Count > 5 ? $" (and {dirtyPaths.Count - 5} more)" : "";
+            var retryInstruction = brief.Instruction + $"\n\n[Dirty-worktree note: the previous attempt left {dirtyPaths.Count} uncommitted file(s): {sampleStr}{moreNote}. Commit all changes before returning WORKER_RESULT.]";
+            var retryBrief = brief with { Instruction = retryInstruction };
+
+            var retryWorkerResult = await _worker.ExecuteAsync(retryBrief, canonicalWorktreePath, workerOptions, ct).ConfigureAwait(false);
+
+            var retryVerdictData = new Dictionary<string, object> { ["status"] = retryWorkerResult.Status.ToString() };
+            var retryVerdictReason = retryWorkerResult.FailureReason ?? (retryWorkerResult.Status != Status.Ok ? retryWorkerResult.Summary : null);
+            if (retryVerdictReason is not null) retryVerdictData["failure_reason"] = retryVerdictReason;
+            await EmitAsync(EventKind.VerifierVerdict, ticketId, retryVerdictData, ct).ConfigureAwait(false);
+
+            if (retryWorkerResult.Status != Status.Ok)
+                return new ImplementResult(false, ticketId, null, canonicalBranchName, canonicalWorktreePath,
+                    retryWorkerResult.FailureReason ?? retryWorkerResult.Summary ?? retryWorkerResult.Status.ToString(),
+                    EscalationWorkerResult: retryWorkerResult.Status == Status.Escalate ? retryWorkerResult : null);
+
+            var retryDirtyPaths = await WorkingTreeHygieneGate.DirtyFilesCheckAsync(_git, canonicalWorktreePath, ct).ConfigureAwait(false);
+            if (retryDirtyPaths.Count > 0)
+            {
+                await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+                {
+                    ["kind"] = "dirty_worktree_retry_failed",
+                    ["dirty_paths"] = retryDirtyPaths
+                }, ct).ConfigureAwait(false);
+                return new ImplementResult(false, ticketId, null, canonicalBranchName, canonicalWorktreePath,
+                    FormatDirtyWorktreeReason("Implement", retryDirtyPaths));
+            }
+
+            workerResult = retryWorkerResult;
+        }
+
         // Step 15: Extract commit_sha from metadata
         var metadataCommitSha = TryGetString(workerResult.Metadata, "commit_sha");
         if (string.IsNullOrEmpty(metadataCommitSha))
@@ -399,6 +442,14 @@ public class ImplementPhase : IWorkflowPhase
         _ =>
             $"initial round invoked but {ticketId} is in {state}, not Ready.",
     };
+
+    private static string FormatDirtyWorktreeReason(string phase, IReadOnlyList<string> dirtyPaths, int sampleLimit = 5)
+    {
+        var sample = dirtyPaths.Take(sampleLimit).ToList();
+        var sampleStr = string.Join(", ", sample);
+        var morePart = dirtyPaths.Count > sampleLimit ? $"; ... and {dirtyPaths.Count - sampleLimit} more" : "";
+        return $"{phase}: worktree dirty after worker exit - {dirtyPaths.Count} file(s) uncommitted: {sampleStr}{morePart}";
+    }
 
     private static string? TryGetString(IReadOnlyDictionary<string, object> metadata, string key)
     {

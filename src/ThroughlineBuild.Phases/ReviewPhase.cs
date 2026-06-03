@@ -202,6 +202,27 @@ public class ReviewPhase : IWorkflowPhase
         // Step 10: Run verifier
         var verdict = await verifier.VerifyAsync(implementerBrief, diff, implementerResult, ct).ConfigureAwait(false);
 
+        // Step 10b: Dirty-worktree check after verifier exit - hard-fail, no retry
+        var reviewDirtyPaths = await WorkingTreeHygieneGate.DirtyFilesCheckAsync(_git, canonicalWorktreePath, ct).ConfigureAwait(false);
+        if (reviewDirtyPaths.Count > 0)
+        {
+            // Emit VerifierVerdict first so the operator can see what verdict the verifier produced
+            await EmitAsync(EventKind.VerifierVerdict, ticketId, new Dictionary<string, object>
+            {
+                ["kind"] = verdict.Kind.ToString(),
+                ["checks_failed_count"] = verdict.ChecksFailed.Count,
+                ["rationale"] = verdict.Rationale,
+                ["checks_failed"] = verdict.ChecksFailed
+            }, ct).ConfigureAwait(false);
+            var dirtyReason = FormatDirtyWorktreeReason("Review", reviewDirtyPaths);
+            await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+            {
+                ["kind"] = "dirty_worktree_after_review",
+                ["dirty_paths"] = reviewDirtyPaths
+            }, ct).ConfigureAwait(false);
+            return new ReviewResult(false, ticketId, null, null, Array.Empty<string>(), dirtyReason);
+        }
+
         // Step 11: Emit VerifierVerdict
         await EmitAsync(EventKind.VerifierVerdict, ticketId, new Dictionary<string, object>
         {
@@ -337,6 +358,14 @@ public class ReviewPhase : IWorkflowPhase
         }
 
         return new ReviewResult(true, ticketId, kind, rationale, Array.Empty<string>(), null);
+    }
+
+    private static string FormatDirtyWorktreeReason(string phase, IReadOnlyList<string> dirtyPaths, int sampleLimit = 5)
+    {
+        var sample = dirtyPaths.Take(sampleLimit).ToList();
+        var sampleStr = string.Join(", ", sample);
+        var morePart = dirtyPaths.Count > sampleLimit ? $"; ... and {dirtyPaths.Count - sampleLimit} more" : "";
+        return $"{phase}: worktree dirty after worker exit - {dirtyPaths.Count} file(s) uncommitted: {sampleStr}{morePart}";
     }
 
     private async Task EmitAsync(EventKind kind, string ticketId, IReadOnlyDictionary<string, object> data, CancellationToken ct)

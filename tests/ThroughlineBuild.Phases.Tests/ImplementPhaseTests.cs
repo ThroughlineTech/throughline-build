@@ -552,6 +552,208 @@ public class ImplementPhaseTests
             Task.FromResult(0);
         public Task<IReadOnlyList<string>> LogOnelineAsync(string range, int limit, string workingDirectory, CancellationToken ct) =>
             Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
+
+        // Configurable dirty-paths responses for dirty-worktree tests.
+        // If empty (default), returns the interface default (empty list).
+        public Queue<IReadOnlyList<string>> TrackedChangesQueue { get; } = new();
+        public Task<IReadOnlyList<string>> GetTrackedChangesAsync(string workingDirectory, CancellationToken ct)
+        {
+            if (TrackedChangesQueue.Count > 0)
+                return Task.FromResult(TrackedChangesQueue.Dequeue());
+            return Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+        }
+    }
+
+    // Worker that returns results from a pre-loaded queue - used for dirty-worktree retry tests.
+    private sealed class QueuedFakeWorkerAgent : IWorkerAgent
+    {
+        private readonly Queue<WorkerResult> _results;
+        public string Name => "claude-code";
+        public IWorkerProgressDigester? Digester => null;
+        public QueuedFakeWorkerAgent(IEnumerable<WorkerResult> results)
+        {
+            _results = new Queue<WorkerResult>(results);
+        }
+        public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
+            => Task.FromResult(_results.Dequeue());
+    }
+}
+
+public class ImplementPhaseDirtyWorktreeTests
+{
+    private const string MainSha = "0123456789abcdef0123456789abcdef01234567";
+    private const string CommitSha = "ffffffffffffffffffffffffffffffffffffffff";
+
+    private static Ticket MakeTicket() => new Ticket(
+        Id: "TLB-1", Uuid: "ticket-uuid-1", Title: "Test ticket", Type: "feature", State: TicketState.Ready,
+        Size: Size.S, Risk: Risk.Low, DescriptionHtml: "<p>plan</p>",
+        Relations: Array.Empty<Relation>(), Labels: Array.Empty<string>(), ParentId: null);
+
+    private static BuildOptions MakeOptions() => new BuildOptions(
+        SessionId: "session-1", WorkerName: "claude-code", WorkerTimeout: TimeSpan.FromMinutes(5),
+        WorkerAllowedTools: null);
+
+    private static WorkerResult OkWorkerResult() => new WorkerResult(
+        Status.Ok, "implemented", new[] { "src/Foo.cs" }, null,
+        new Dictionary<string, object> { ["commit_sha"] = CommitSha });
+
+    [Fact]
+    public async Task RunAsync_DirtyWorktreeAfterOk_TriggersRetry_CleanOnRetry_Succeeds()
+    {
+        var ticketing = new FakeTicketing(MakeTicket());
+        // First worker call is Ok; so is the retry
+        var worker = new QueuedFakeWorkerAgent(new[] { OkWorkerResult(), OkWorkerResult() });
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha);
+        // First dirty check: dirty. Second dirty check (after retry): clean.
+        git.TrackedChangesQueue.Enqueue(new[] { "src/Foo.cs" });
+        git.TrackedChangesQueue.Enqueue(Array.Empty<string>());
+        var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(CommitSha, result.CommitSha);
+        Assert.Null(result.FailureReason);
+
+        var gateFailures = events.Events.Where(e => e.Kind == EventKind.GateFailure).ToList();
+        Assert.Single(gateFailures);
+        Assert.Equal("dirty_worktree_first_attempt", gateFailures[0].Data["kind"].ToString());
+        Assert.True(gateFailures[0].Data.ContainsKey("dirty_paths"));
+
+        // Two VerifierVerdict events: initial worker + retry worker
+        var verdictEvents = events.Events.Where(e => e.Kind == EventKind.VerifierVerdict).ToList();
+        Assert.Equal(2, verdictEvents.Count);
+    }
+
+    [Fact]
+    public async Task RunAsync_DirtyWorktreeAfterOk_RetryStillDirty_Fails()
+    {
+        var ticketing = new FakeTicketing(MakeTicket());
+        var worker = new QueuedFakeWorkerAgent(new[] { OkWorkerResult(), OkWorkerResult() });
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha);
+        // Both dirty checks return the same dirty file
+        git.TrackedChangesQueue.Enqueue(new[] { "src/Foo.cs" });
+        git.TrackedChangesQueue.Enqueue(new[] { "src/Foo.cs" });
+        var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.FailureReason);
+        Assert.Contains("dirty", result.FailureReason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("src/Foo.cs", result.FailureReason);
+
+        var gateFailures = events.Events.Where(e => e.Kind == EventKind.GateFailure).ToList();
+        Assert.Equal(2, gateFailures.Count);
+        Assert.Equal("dirty_worktree_first_attempt", gateFailures[0].Data["kind"].ToString());
+        Assert.Equal("dirty_worktree_retry_failed", gateFailures[1].Data["kind"].ToString());
+    }
+
+    private sealed class FakeTicketing : ITicketing
+    {
+        private readonly Ticket _ticket;
+        public List<(string id, TicketState state)> Transitions { get; } = new();
+        public List<(string id, string html)> Comments { get; } = new();
+        public FakeTicketing(Ticket ticket) { _ticket = ticket; }
+        public BackendCapabilities Capabilities => new BackendCapabilities(true, true, true, false);
+        public Task<Ticket> GetAsync(string id, CancellationToken ct) => Task.FromResult(_ticket);
+        public Task<IReadOnlyList<Ticket>> GetBatchAsync(IEnumerable<string> ids, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<Ticket>)new[] { _ticket });
+        public Task TransitionAsync(string id, TicketState newState, CancellationToken ct)
+        {
+            Transitions.Add((id, newState));
+            return Task.CompletedTask;
+        }
+        public Task AppendDescriptionAsync(string id, string html, CancellationToken ct) => Task.CompletedTask;
+        public Task<string> CreateCommentAsync(string id, string html, CancellationToken ct)
+        {
+            Comments.Add((id, html));
+            return Task.FromResult("comment-1");
+        }
+        public Task ApplyLabelsAsync(string id, IEnumerable<string> labels, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<Relation>> GetRelationsAsync(string id, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<Relation>)Array.Empty<Relation>());
+        public Task<RollupResult> RollupParentAsync(string id, CancellationToken ct) =>
+            Task.FromResult(new RollupResult(false, null, null));
+        public Task<IReadOnlyList<TicketComment>> GetCommentsAsync(string id, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<TicketComment>)Array.Empty<TicketComment>());
+        public Task<NewTicketResult> CreateTicketAsync(string title, string? type, string descriptionHtml,
+            IReadOnlyList<string>? initialLabelNames, CancellationToken ct) =>
+            throw new NotImplementedException();
+        public Task SetParentAsync(string childUuid, string parentUuid, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<Ticket>> QueryAsync(TicketQuery query, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<Ticket>>(Array.Empty<Ticket>());
+        public Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct) => Task.CompletedTask;
+        public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) => Task.CompletedTask;
+        public Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct) => Task.CompletedTask;
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+            Task.FromResult(new CreateChildTicketsResult(
+                children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
+                Array.Empty<string>()));
+    }
+
+    private sealed class FakeEventSink : IEventSink
+    {
+        public List<WorkflowEvent> Events { get; } = new();
+        public Task EmitAsync(WorkflowEvent ev, CancellationToken ct) { Events.Add(ev); return Task.CompletedTask; }
+        public Task FlushAsync(CancellationToken ct) => Task.CompletedTask;
+    }
+
+    private sealed class FakeGitClient : IGitClient
+    {
+        private readonly string _mainSha;
+        private readonly string _headSha;
+        public int CreateWorktreeCalls { get; private set; }
+        public Queue<IReadOnlyList<string>> TrackedChangesQueue { get; } = new();
+        public FakeGitClient(string mainSha, string headSha) { _mainSha = mainSha; _headSha = headSha; }
+        public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(_mainSha);
+        public Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<WorktreeInfo>>(Array.Empty<WorktreeInfo>());
+        public Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct) =>
+            Task.FromResult(new WorktreeRemoveResult(true, null));
+        public Task<IReadOnlyList<string>> GetBranchesNotMergedAsync(string pattern, string baseBranch, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
+        public Task<WorktreeCreateResult> CreateWorktreeAsync(string worktreePath, string newBranch, string fromRef, string mainWorktreePath, CancellationToken ct)
+        {
+            CreateWorktreeCalls++;
+            return Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
+        }
+        public Task<string> HeadShaAsync(string worktreePath, CancellationToken ct) => Task.FromResult(_headSha);
+        public Task<GitDiff> DiffAsync(string fromRef, string toRef, string mainWorktreePath, bool includePatchContent, CancellationToken ct) =>
+            Task.FromResult(new GitDiff(fromRef, toRef, Array.Empty<DiffEntry>()));
+        public Task<GitOpResult> FetchAsync(string remote, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+        public Task<RebaseResult> RebaseAsync(string ontoRef, string featureWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new RebaseResult(true, false, Array.Empty<string>(), null));
+        public Task<GitOpResult> RebaseAbortAsync(string featureWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+        public Task<GitOpResult> FastForwardMergeAsync(string mergeRef, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+        public Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+        public Task<int> RevListCountAsync(string range, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(0);
+        public Task<IReadOnlyList<string>> LogOnelineAsync(string range, int limit, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
+        public Task<IReadOnlyList<string>> GetTrackedChangesAsync(string workingDirectory, CancellationToken ct)
+        {
+            if (TrackedChangesQueue.Count > 0)
+                return Task.FromResult(TrackedChangesQueue.Dequeue());
+            return Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+        }
+    }
+
+    private sealed class QueuedFakeWorkerAgent : IWorkerAgent
+    {
+        private readonly Queue<WorkerResult> _results;
+        public string Name => "claude-code";
+        public IWorkerProgressDigester? Digester => null;
+        public QueuedFakeWorkerAgent(IEnumerable<WorkerResult> results) { _results = new Queue<WorkerResult>(results); }
+        public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
+            => Task.FromResult(_results.Dequeue());
     }
 }
 

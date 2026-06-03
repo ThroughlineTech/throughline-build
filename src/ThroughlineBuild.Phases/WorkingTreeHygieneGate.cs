@@ -62,6 +62,18 @@ internal static class WorkingTreeHygieneGate
     }
 
     /// <summary>
+    /// Returns the list of tracked files with uncommitted changes in <paramref name="worktreePath"/>.
+    /// An empty list means the worktree is clean.  Delegates directly to
+    /// <see cref="IGitClient.GetTrackedChangesAsync"/> so the contract is consistent with the
+    /// interface default (returns empty on git failure, never throws).
+    /// </summary>
+    internal static Task<IReadOnlyList<string>> DirtyFilesCheckAsync(
+        IGitClient git,
+        string worktreePath,
+        CancellationToken ct)
+        => git.GetTrackedChangesAsync(worktreePath, ct);
+
+    /// <summary>
     /// Builds a precise pre-flight message for <see cref="ShipPhase"/> that replaces the
     /// generic "N modified tracked files" message.  Returns null when clean.
     ///
