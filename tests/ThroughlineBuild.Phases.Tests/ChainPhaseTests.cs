@@ -146,6 +146,34 @@ public class ChainPhaseTests
     }
 
     [Fact]
+    public async Task RunAsync_HappyPath_EmitsStartMarkerBeforeEachPhaseCompletion()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var emitted = new List<ChainStep>();
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, (_, step) => emitted.Add(step)),
+            CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+        // Each of the four phases emits a START marker before its completion step.
+        foreach (var phase in new[] { "plan", "implement", "review", "ship" })
+        {
+            var startIdx = emitted.FindIndex(s => s.PhaseName == phase && s.IsStart);
+            var doneIdx = emitted.FindIndex(s => s.PhaseName == phase && !s.IsStart);
+            Assert.True(startIdx >= 0, $"missing START marker for {phase}");
+            Assert.True(doneIdx > startIdx, $"START marker for {phase} must precede its completion");
+        }
+        // Start markers are console-only: never added to the returned ChainResult.
+        Assert.DoesNotContain(result.Steps, s => s.IsStart);
+    }
+
+    [Fact]
     public async Task RunAsync_PlanFails_StoppedAtPlan_OneStep()
     {
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));

@@ -120,6 +120,14 @@ public sealed class ChainCommand : ITicketCommand
 
     public static string FormatStepLine(string ticketId, ChainStep step)
     {
+        // Start markers are emitted before a phase runs: no status, verdict, or
+        // duration is meaningful yet, so render a plain START notice.
+        if (step.IsStart)
+        {
+            var startRoundStr = step.ReworkRoundNumber >= 0 ? $" (round {step.ReworkRoundNumber})" : "";
+            return $"[{ticketId}] {step.PhaseName}{startRoundStr}: START";
+        }
+
         var statusStr = step.Status switch
         {
             Status.Ok => "Ok",

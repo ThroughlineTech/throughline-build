@@ -159,6 +159,7 @@ public class ChainPhase
         {
             var sessionId = _sessionIdGenerator();
             var buildOpts = BuildPhaseOptions(sessionId, options.TicketId);
+            EmitPhaseStart(options, "plan", -1, sessionId);
             var sw = Stopwatch.StartNew();
             var planResult = await _planFactory(buildOpts).RunAsync(options.TicketId, _workingDirectory, ct)
                 .ConfigureAwait(false);
@@ -251,6 +252,7 @@ public class ChainPhase
 
         var shipSessionId = _sessionIdGenerator();
         var shipBuildOpts = BuildPhaseOptions(shipSessionId, options.TicketId);
+        EmitPhaseStart(options, "ship", -1, shipSessionId);
         var shipSw = Stopwatch.StartNew();
         // When running inside a parent-chain shared worktree, use the chain ship factory (SkipDecruft=true).
         var activeShipFactory = (options.SharedWorktreePath is not null && _chainShipFactory is not null)
@@ -283,6 +285,22 @@ public class ChainPhase
         var completed = new ChainResult(options.TicketId, steps, ChainOutcome.Completed, totalSw.Elapsed, null);
         await EmitChainEndAsync(completed, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
         return completed;
+    }
+
+    // Emits a pre-run START notice through the OnStep stream so the operator sees a
+    // phase has begun, not just its completion line. Start markers are console-only:
+    // they are never added to the steps list, so the returned ChainResult is unchanged.
+    private static void EmitPhaseStart(ChainPhaseOptions options, string phaseName, int reworkRoundNumber, string sessionId)
+    {
+        options.OnStep?.Invoke(options.TicketId, new ChainStep(
+            PhaseName: phaseName,
+            ReworkRoundNumber: reworkRoundNumber,
+            Status: Status.Ok,
+            FailureReason: null,
+            Verdict: null,
+            Duration: TimeSpan.Zero,
+            PhaseSessionId: sessionId,
+            IsStart: true));
     }
 
     private async Task EmitChainEndAsync(ChainResult result, string chainSessionId, string ticketId, CancellationToken ct)
@@ -329,6 +347,7 @@ public class ChainPhase
             // own edits already in place, so replaying the handoff is redundant.
             var implChainRange = (feedback is null) ? options.ChainCommitRange : null;
             var implPhaseOpts = new ImplementPhaseOptions(feedback, options.SharedWorktreePath, implChainRange);
+            EmitPhaseStart(options, "implement", round, implSessionId);
             var implSw = Stopwatch.StartNew();
             var implResult = await _implementFactory(implBuildOpts, implPhaseOpts)
                 .RunAsync(options.TicketId, _workingDirectory, ct).ConfigureAwait(false);
@@ -468,6 +487,7 @@ public class ChainPhase
     {
         var revSessionId = _sessionIdGenerator();
         var revBuildOpts = BuildPhaseOptions(revSessionId, options.TicketId);
+        EmitPhaseStart(options, "review", -1, revSessionId);
         var revSw = Stopwatch.StartNew();
         var revResult = await _reviewFactory(revBuildOpts)
             .RunAsync(options.TicketId, _workingDirectory, ct).ConfigureAwait(false);
@@ -586,6 +606,7 @@ public class ChainPhase
 
         var ticket = await _ticketing.GetAsync(options.TicketId, ct).ConfigureAwait(false);
 
+        EmitPhaseStart(options, "ratify", -1, sessionId);
         var sw = Stopwatch.StartNew();
         var verdict = await ratifier.RatifyAsync(ticket, escalateResult, ct).ConfigureAwait(false);
         sw.Stop();

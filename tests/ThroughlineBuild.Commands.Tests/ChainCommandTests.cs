@@ -166,6 +166,24 @@ public class ChainCommandTests
         Assert.Contains("round 1", line);
     }
 
+    [Fact]
+    public void FormatStepLine_start_marker_renders_START_without_status_or_duration()
+    {
+        var step = new ChainStep("plan", -1, Status.Ok, null, null, TimeSpan.Zero, null, IsStart: true);
+        var line = ChainCommand.FormatStepLine("TLB-1", step);
+        Assert.Equal("[TLB-1] plan: START", line);
+        Assert.DoesNotContain("Ok", line);
+        Assert.DoesNotContain("0s", line);
+    }
+
+    [Fact]
+    public void FormatStepLine_start_marker_includes_rework_round_number()
+    {
+        var step = new ChainStep("implement", 2, Status.Ok, null, null, TimeSpan.Zero, null, IsStart: true);
+        var line = ChainCommand.FormatStepLine("TLB-1", step);
+        Assert.Equal("[TLB-1] implement (round 2): START", line);
+    }
+
     // --- outcome: RefusedInitialState ---
 
     [Fact]
