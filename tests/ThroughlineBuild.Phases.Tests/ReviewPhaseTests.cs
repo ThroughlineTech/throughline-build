@@ -11,7 +11,7 @@ public class ReviewPhaseTests
     private const string ImplementedSha = "ffffffffffffffffffffffffffffffffffffffff";
     private const string TicketId = "TLB-1";
     private const string TicketTitle = "Test ticket";
-    private const string BranchName = "ticket/tlb-1-test-ticket";
+    private const string BranchName = "ticket/tlb-1";
 
     private static Ticket MakeTicket(TicketState state) => new Ticket(
         Id: TicketId,
@@ -788,7 +788,7 @@ public class ReviewPhaseDebugCaptureTests
     private const string ImplementedSha = "ffffffffffffffffffffffffffffffffffffffff";
     private const string TicketId = "TLB-1";
     private const string TicketTitle = "Test ticket";
-    private const string BranchName = "ticket/tlb-1-test-ticket";
+    private const string BranchName = "ticket/tlb-1";
 
     private static Ticket MakeTicket() => new Ticket(
         Id: TicketId, Uuid: "ticket-uuid-1", Title: TicketTitle, Type: "feature", State: TicketState.InReview,

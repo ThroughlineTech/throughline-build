@@ -11,7 +11,7 @@ public class ShipPhaseTests
 {
     private const string TicketId = "TLB-1";
     private const string TicketTitle = "Test ticket";
-    private const string BranchName = "ticket/tlb-1-test-ticket";
+    private const string BranchName = "ticket/tlb-1";
     private const string MergedSha = "0123456789abcdef0123456789abcdef01234567";
 
     private static Ticket MakeTicket(TicketState state) => new Ticket(

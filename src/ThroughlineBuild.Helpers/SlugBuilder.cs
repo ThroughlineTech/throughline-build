@@ -7,6 +7,14 @@ public static class SlugBuilder
     private static readonly Regex NonAlphanumericPattern = new(@"[^a-z0-9-]", RegexOptions.Compiled);
     private static readonly Regex ConsecutiveHyphensPattern = new(@"-+", RegexOptions.Compiled);
 
+    /// <summary>
+    /// Builds the slug used for branch and worktree names. This is just the sanitized,
+    /// lowercased ticket id (no title) - keeping worktree directory paths short so deep
+    /// repo trees stay under the Windows MAX_PATH limit. Equivalent to BuildBranchSlug
+    /// with an empty title.
+    /// </summary>
+    public static string BuildTicketSlug(string ticketId) => BuildBranchSlug(ticketId, "");
+
     public static string BuildBranchSlug(string ticketId, string title)
     {
         // Step 1: Lowercase both inputs

@@ -80,7 +80,7 @@ public class ReviewPhase : IWorkflowPhase
         bool worktreeFound = false;
         string canonicalWorktreePath = worktreeNames.WorktreePath;
         string canonicalBranchName = worktreeNames.BranchName;
-        var ticketBranchPrefix = $"ticket/{ticket.Id.ToLowerInvariant()}-";
+        var ticketBranchName = worktreeNames.BranchName;
         foreach (var w in worktrees)
         {
             if (w.Branch == worktreeNames.BranchName)
@@ -99,7 +99,7 @@ public class ReviewPhase : IWorkflowPhase
                 worktreeFound = true;
                 break;
             }
-            if (w.Branch.StartsWith(ticketBranchPrefix, StringComparison.OrdinalIgnoreCase))
+            if (PhaseWorktreeLayout.IsTicketBranch(w.Branch, ticketBranchName))
             {
                 canonicalWorktreePath = w.Path;
                 canonicalBranchName = w.Branch;

@@ -64,7 +64,7 @@ public sealed class DeferCommand : ITicketCommand
         }
 
         // (c) warn on unmerged branches matching the ticket pattern (fail-soft)
-        var pattern = $"ticket/{ctx.TicketId.ToLowerInvariant()}-*";
+        var pattern = PhaseWorktreeLayout.BranchName(ctx.TicketId);
         var unmerged = await _git.GetBranchesNotMergedAsync(pattern, "origin/main", ct).ConfigureAwait(false);
         if (unmerged.Count > 0)
         {

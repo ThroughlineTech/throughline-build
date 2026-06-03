@@ -113,7 +113,7 @@ public class ImplementPhaseEndToEndTests
         // Comment still has the implemented_at marker
         Assert.Contains("implemented_at", html);
         // No extra HTML (no summary)
-        Assert.Equal($"<p>[implemented_at: {CommitSha}] (branch ticket/tlb-1-test-ticket)</p>", html);
+        Assert.Equal($"<p>[implemented_at: {CommitSha}] (branch ticket/tlb-1)</p>", html);
     }
 
     [Fact]
@@ -140,7 +140,7 @@ public class ImplementPhaseEndToEndTests
         Assert.Single(ticketing.Comments);
         var html = ticketing.Comments[0].html;
         Assert.Contains("implemented_at", html);
-        Assert.Equal($"<p>[implemented_at: {CommitSha}] (branch ticket/tlb-1-test-ticket)</p>", html);
+        Assert.Equal($"<p>[implemented_at: {CommitSha}] (branch ticket/tlb-1)</p>", html);
     }
 
     private sealed class FakeTicketing : ITicketing

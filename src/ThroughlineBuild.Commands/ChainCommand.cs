@@ -375,7 +375,7 @@ public sealed class ChainCommand : ITicketCommand
     private static string GetStoppedAtImplementTriage(string ticketId, ChainResult result)
     {
         var layout = GetWorktreeLayoutBestEffort(ticketId);
-        var worktreePath = layout?.WorktreePath ?? $".worktrees/ticket-{ticketId}-...";
+        var worktreePath = layout?.WorktreePath ?? $".worktrees/ticket-{ticketId}";
 
         return $"Operator triage: Implementation failed before reaching review. Worktree may need cleanup. Options:\n- Inspect the worktree at {worktreePath} and resolve manually, then 'build ship {ticketId}'.\n- Transition ticket to Cancelled if abandoning.\n- Replan via 'build plan {ticketId}' followed by a new ticket with refined acceptance criteria.";
     }
@@ -388,7 +388,7 @@ public sealed class ChainCommand : ITicketCommand
     private static string GetReworkCapExceededTriage(string ticketId, ChainResult result)
     {
         var layout = GetWorktreeLayoutBestEffort(ticketId);
-        var worktreePath = layout?.WorktreePath ?? $".worktrees/ticket-{ticketId}-...";
+        var worktreePath = layout?.WorktreePath ?? $".worktrees/ticket-{ticketId}";
 
         var output = new StringBuilder();
         output.AppendLine($"Checks failed:");

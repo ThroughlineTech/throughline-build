@@ -50,7 +50,7 @@ public class ImplementPhaseTests
 
         Assert.True(result.Success);
         Assert.Equal(CommitSha, result.CommitSha);
-        Assert.Equal("ticket/tlb-1-test-ticket", result.BranchName);
+        Assert.Equal("ticket/tlb-1", result.BranchName);
         Assert.NotNull(result.WorktreePath);
         Assert.Null(result.FailureReason);
 
@@ -61,7 +61,7 @@ public class ImplementPhaseTests
         Assert.Single(ticketing.Comments);
         Assert.Contains("implemented_at", ticketing.Comments[0].html);
         Assert.Contains(CommitSha, ticketing.Comments[0].html);
-        Assert.Contains("ticket/tlb-1-test-ticket", ticketing.Comments[0].html);
+        Assert.Contains("ticket/tlb-1", ticketing.Comments[0].html);
 
         Assert.Equal(1, git.CreateWorktreeCalls);
 
@@ -248,7 +248,7 @@ public class ImplementPhaseTests
         var html = ticketing.Comments[0].html;
         Assert.Contains("implemented_at", html);
         // No extra HTML beyond the single <p> tag
-        Assert.Equal($"<p>[implemented_at: {CommitSha}] (branch ticket/tlb-1-test-ticket)</p>", html);
+        Assert.Equal($"<p>[implemented_at: {CommitSha}] (branch ticket/tlb-1)</p>", html);
     }
 
     [Fact]
@@ -289,7 +289,7 @@ public class ImplementPhaseTests
         Assert.Null(result.FailureReason);
         Assert.Equal(3, result.Outputs.Count);
         Assert.Equal(CommitSha, result.Outputs["commit_sha"]);
-        Assert.Equal("ticket/tlb-1-test-ticket", result.Outputs["branch"]);
+        Assert.Equal("ticket/tlb-1", result.Outputs["branch"]);
         Assert.NotNull(result.Outputs["worktree_path"]);
     }
 

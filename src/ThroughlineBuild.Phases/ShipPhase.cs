@@ -121,7 +121,7 @@ public class ShipPhase : IWorkflowPhase
         // Default to the computed path/branch; overwritten below with the canonical values from git.
         string canonicalWorktreePath = worktreeNames.WorktreePath;
         string canonicalBranchName = worktreeNames.BranchName;
-        var ticketBranchPrefix = $"ticket/{ticket.Id.ToLowerInvariant()}-";
+        var ticketBranchName = worktreeNames.BranchName;
         foreach (var w in worktrees)
         {
             if (w.Branch == worktreeNames.BranchName)
@@ -140,7 +140,7 @@ public class ShipPhase : IWorkflowPhase
                 worktreeFound = true;
                 break;
             }
-            if (w.Branch.StartsWith(ticketBranchPrefix, StringComparison.OrdinalIgnoreCase))
+            if (PhaseWorktreeLayout.IsTicketBranch(w.Branch, ticketBranchName))
             {
                 canonicalWorktreePath = w.Path;
                 canonicalBranchName = w.Branch;
@@ -148,13 +148,14 @@ public class ShipPhase : IWorkflowPhase
                 break;
             }
         }
-        // Fallback: find a local branch matching the prefix and create a worktree for it.
+        // Fallback: find the local ticket branch and create a worktree for it.
         // Handles the case where the feature branch exists locally but is not checked out anywhere.
         if (!worktreeFound && !Directory.Exists(worktreeNames.WorktreePath))
         {
             var localBranches = await _git.ListLocalBranchesAsync(
-                ticketBranchPrefix + "*", workingDirectory, ct).ConfigureAwait(false);
-            var matchingLocalBranch = localBranches.FirstOrDefault();
+                ticketBranchName, workingDirectory, ct).ConfigureAwait(false);
+            var matchingLocalBranch = localBranches.FirstOrDefault(
+                b => PhaseWorktreeLayout.IsTicketBranch(b, ticketBranchName));
             if (matchingLocalBranch is not null)
             {
                 ReportProgress($"[ship] creating worktree for {matchingLocalBranch}...");
@@ -199,7 +200,7 @@ public class ShipPhase : IWorkflowPhase
         // Step 3b: Pre-flight dirty check - both feature and main worktrees must be clean
         // First run the precise hygiene gate to surface conflict and stash state with attribution.
         var hygieneDetail = await WorkingTreeHygieneGate.ShipPreflightAsync(
-            _git, canonicalWorktreePath, workingDirectory, ticketBranchPrefix, ct).ConfigureAwait(false);
+            _git, canonicalWorktreePath, workingDirectory, ticketBranchName, ct).ConfigureAwait(false);
         if (hygieneDetail is not null)
         {
             var hygieneMessage = $"working tree is not clean: {hygieneDetail}";

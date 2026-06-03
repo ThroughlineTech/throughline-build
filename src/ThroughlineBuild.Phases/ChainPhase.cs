@@ -85,9 +85,9 @@ public class ChainPhase
         // instead of burning a plan round and failing opaquely inside implement.
         if (options.SharedWorktreePath is null)
         {
-            var preflightPrefix = $"ticket/{ticket.Id.ToLowerInvariant()}-";
+            var preflightBranch = PhaseWorktreeLayout.BranchName(ticket.Id);
             var preflightFailure = await WorkingTreeHygieneGate
-                .CheckAsync(_git, _workingDirectory, preflightPrefix, ct).ConfigureAwait(false);
+                .CheckAsync(_git, _workingDirectory, preflightBranch, ct).ConfigureAwait(false);
             if (preflightFailure is not null)
             {
                 await _events.EmitAsync(new WorkflowEvent(

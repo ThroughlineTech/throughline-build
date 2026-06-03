@@ -91,8 +91,8 @@ public class ImplementPhase : IWorkflowPhase
         }
 
         // Step 2b: Hygiene gate - refuse to proceed on a conflicted or stash-polluted tree
-        var ticketBranchPrefix = $"ticket/{ticket.Id.ToLowerInvariant()}-";
-        var hygieneFailure = await WorkingTreeHygieneGate.CheckAsync(_git, workingDirectory, ticketBranchPrefix, ct).ConfigureAwait(false);
+        var ticketBranchName = PhaseWorktreeLayout.BranchName(ticket.Id);
+        var hygieneFailure = await WorkingTreeHygieneGate.CheckAsync(_git, workingDirectory, ticketBranchName, ct).ConfigureAwait(false);
         if (hygieneFailure is not null)
         {
             var hygieneReason = $"working tree is not clean: {hygieneFailure}";
@@ -188,7 +188,7 @@ public class ImplementPhase : IWorkflowPhase
                     reworkWorktreeFound = true;
                     break;
                 }
-                if (w.Branch.StartsWith(ticketBranchPrefix, StringComparison.OrdinalIgnoreCase))
+                if (PhaseWorktreeLayout.IsTicketBranch(w.Branch, ticketBranchName))
                 {
                     canonicalWorktreePath = w.Path;
                     canonicalBranchName = w.Branch;

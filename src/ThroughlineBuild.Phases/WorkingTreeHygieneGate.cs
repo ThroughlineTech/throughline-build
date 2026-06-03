@@ -1,4 +1,5 @@
 using ThroughlineBuild.Contracts;
+using ThroughlineBuild.Helpers;
 
 namespace ThroughlineBuild.Phases;
 
@@ -12,7 +13,7 @@ internal static class WorkingTreeHygieneGate
     /// <summary>
     /// Checks the working tree at <paramref name="worktreePath"/> for:
     /// - unmerged / conflicted paths (UU, AA, DD, AU, UA, UD, DU codes)
-    /// - dangling stash entries unrelated to <paramref name="ticketBranchPrefix"/>
+    /// - dangling stash entries unrelated to <paramref name="ticketBranchName"/>
     ///
     /// Returns null when the tree is clean and the gate passes.
     /// Returns a non-null stop message when the gate should block.
@@ -23,7 +24,7 @@ internal static class WorkingTreeHygieneGate
     internal static async Task<string?> CheckAsync(
         IGitClient git,
         string worktreePath,
-        string ticketBranchPrefix,
+        string ticketBranchName,
         CancellationToken ct)
     {
         var parts = new List<string>();
@@ -41,11 +42,11 @@ internal static class WorkingTreeHygieneGate
         var unrelatedStashes = new List<string>();
         foreach (var entry in stashEntries)
         {
-            // An entry is "related" when it mentions the current ticket branch prefix.
+            // An entry is "related" when it mentions the current ticket branch.
             // git stash list lines look like:
-            //   stash@{0}: On ticket/tlb-1-my-slug: some message
+            //   stash@{0}: On ticket/tlb-1: some message
             //   stash@{1}: WIP on main: abc1234 commit message
-            if (!entry.Contains(ticketBranchPrefix, StringComparison.OrdinalIgnoreCase))
+            if (!PhaseWorktreeLayout.MentionsBranch(entry, ticketBranchName))
                 unrelatedStashes.Add(entry);
         }
         if (unrelatedStashes.Count > 0)
@@ -71,7 +72,7 @@ internal static class WorkingTreeHygieneGate
         IGitClient git,
         string featureWorktreePath,
         string mainWorktreePath,
-        string ticketBranchPrefix,
+        string ticketBranchName,
         CancellationToken ct)
     {
         var parts = new List<string>();
@@ -97,7 +98,7 @@ internal static class WorkingTreeHygieneGate
         var unrelatedStashes = new List<string>();
         foreach (var entry in stashEntries)
         {
-            if (!entry.Contains(ticketBranchPrefix, StringComparison.OrdinalIgnoreCase))
+            if (!PhaseWorktreeLayout.MentionsBranch(entry, ticketBranchName))
                 unrelatedStashes.Add(entry);
         }
         if (unrelatedStashes.Count > 0)
