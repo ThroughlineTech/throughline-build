@@ -47,13 +47,23 @@ public class CodexModelAuthUsageTests
     [Fact]
     public void BuildLlmUsageMetadata_HasCorrectVendorAndNullCost()
     {
-        var meta = CodexAgent.BuildLlmUsageMetadata(100, 200, 5000, "gpt-5.4");
+        var meta = CodexAgent.BuildLlmUsageMetadata(
+            inputTokens: 100,
+            outputTokens: 200,
+            wallClockMs: 5000,
+            model: "gpt-5.4",
+            cachedInputTokens: 25,
+            reasoningOutputTokens: 10);
 
         Assert.Equal("openai", meta["vendor"]);
         Assert.Equal("gpt-5.4", meta["model"]);
         Assert.Null(meta["cost_usd"]);
         Assert.Equal(100, meta["input_tokens"]);
         Assert.Equal(200, meta["output_tokens"]);
+        Assert.Equal(25, meta["cache_read_tokens"]);
+        Assert.Equal(0, meta["cache_create_tokens"]);
+        Assert.Equal(25, meta["cached_input_tokens"]);
+        Assert.Equal(10, meta["reasoning_output_tokens"]);
         Assert.Equal(5000L, meta["wall_clock_ms"]);
     }
 
