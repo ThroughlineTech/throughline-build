@@ -9,10 +9,10 @@ namespace ThroughlineBuild.Workers.Codex.Tests;
 public class CodexModelAuthUsageTests
 {
     [Theory]
-    [InlineData("o4-mini", "o4-mini")]
-    [InlineData("openai:o4-mini", "o4-mini")]
-    [InlineData("openai:o3", "o3")]
-    [InlineData("OPENAI:o3", "o3")]
+    [InlineData("gpt-5.4-mini", "gpt-5.4-mini")]
+    [InlineData("openai:gpt-5.4-mini", "gpt-5.4-mini")]
+    [InlineData("openai:gpt-5.3-codex", "gpt-5.3-codex")]
+    [InlineData("OPENAI:gpt-5.5", "gpt-5.5")]
     public void NormalizeModel_StripsPrefix(string input, string expected)
     {
         Assert.Equal(expected, CodexAgent.NormalizeModel(input));
@@ -47,10 +47,10 @@ public class CodexModelAuthUsageTests
     [Fact]
     public void BuildLlmUsageMetadata_HasCorrectVendorAndNullCost()
     {
-        var meta = CodexAgent.BuildLlmUsageMetadata(100, 200, 5000, "o4-mini");
+        var meta = CodexAgent.BuildLlmUsageMetadata(100, 200, 5000, "gpt-5.3-codex");
 
         Assert.Equal("openai", meta["vendor"]);
-        Assert.Equal("o4-mini", meta["model"]);
+        Assert.Equal("gpt-5.3-codex", meta["model"]);
         Assert.Null(meta["cost_usd"]);
         Assert.Equal(100, meta["input_tokens"]);
         Assert.Equal(200, meta["output_tokens"]);
@@ -67,9 +67,11 @@ public class CodexModelAuthUsageTests
     }
 
     [Fact]
-    public void CodexOptions_DefaultSizes_LargeIsO3()
+    public void CodexOptions_DefaultSizes_MapToCurrentOpenAiTiers()
     {
         var opts = new CodexOptions();
-        Assert.Equal("o3", opts.Sizes[WorkerSize.Large]);
+        Assert.Equal("gpt-5.4-mini", opts.Sizes[WorkerSize.Small]);
+        Assert.Equal("gpt-5.3-codex", opts.Sizes[WorkerSize.Medium]);
+        Assert.Equal("gpt-5.5", opts.Sizes[WorkerSize.Large]);
     }
 }

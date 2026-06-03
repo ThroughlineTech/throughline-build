@@ -41,9 +41,9 @@ large  = "claude-opus-4-7"
 
 # [workers.codex.sizes]
 # # openai: prefix is optional; CodexAgent strips it automatically.
-# small  = "o4-mini"
-# medium = "o4-mini"
-# large  = "o3"
+# small  = "gpt-5.4-mini"
+# medium = "gpt-5.3-codex"
+# large  = "gpt-5.5"
 
 # [workers.gemini]
 # executable = "gemini"
