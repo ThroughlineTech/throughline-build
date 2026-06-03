@@ -41,7 +41,8 @@ public record ShipConfig(
     string Remote,
     string BaseBranch,
     bool DeleteFeatureBranch,
-    IReadOnlyList<CheckSpec> RegressionChecks);
+    IReadOnlyList<CheckSpec> RegressionChecks,
+    bool Push = true);
 
 public record WorkConfig(string? TargetBranch);
 
@@ -204,7 +205,7 @@ public static class BuildConfigLoader
 
     private static readonly HashSet<string> KnownShipKeys = new(StringComparer.Ordinal)
     {
-        "remote", "base_branch", "delete_feature_branch", "regression_checks"
+        "remote", "base_branch", "delete_feature_branch", "regression_checks", "push"
     };
 
     private static readonly HashSet<string> KnownWorkKeys = new(StringComparer.Ordinal)
@@ -585,7 +586,8 @@ public static class BuildConfigLoader
                 Remote: "origin",
                 BaseBranch: "main",
                 DeleteFeatureBranch: true,
-                RegressionChecks: Array.Empty<CheckSpec>());
+                RegressionChecks: Array.Empty<CheckSpec>(),
+                Push: true);
         }
 
         var remote = OptionalString(t, "remote", "origin");
@@ -593,6 +595,9 @@ public static class BuildConfigLoader
         var deleteFeatureBranch = true;
         if (t.TryGetValue("delete_feature_branch", out var dfbVal) && dfbVal is bool dfb)
             deleteFeatureBranch = dfb;
+        var push = true;
+        if (t.TryGetValue("push", out var pushVal) && pushVal is bool p)
+            push = p;
 
         var checks = new List<CheckSpec>();
         if (t.TryGetValue("regression_checks", out var checksVal) && checksVal is TomlTableArray checksArr)
@@ -615,7 +620,8 @@ public static class BuildConfigLoader
             Remote: remote,
             BaseBranch: baseBranch,
             DeleteFeatureBranch: deleteFeatureBranch,
-            RegressionChecks: checks.AsReadOnly());
+            RegressionChecks: checks.AsReadOnly(),
+            Push: push);
     }
 
     private static WorkConfig ReadWorkSection(TomlTable root)

@@ -13,7 +13,8 @@ public record ShipOptions(
     bool DeleteFeatureBranch = true,
     bool NoAutoMerge = false,
     string? TargetBranch = null,
-    bool SkipDecruft = false);
+    bool SkipDecruft = false,
+    bool NoPush = false);
 
 public record ShipResult(
     bool Success,
@@ -265,20 +266,23 @@ public class ShipPhase : IWorkflowPhase
             }
         }
 
-        var remoteExists = await _git.RemoteExistsAsync(remote, workingDirectory, ct).ConfigureAwait(false);
+        var remoteConfigured = await _git.RemoteExistsAsync(remote, workingDirectory, ct).ConfigureAwait(false);
+        // Local-only mode: when push is disabled (--no-push / [ship] push=false) we never
+        // touch the remote even if one is configured - no fetch, no reconcile, no push.
+        var useRemote = remoteConfigured && !_shipOptions.NoPush;
         string ontoRef;
         string baseRefReason;
-        if (!remoteExists)
+        if (!useRemote)
         {
-            // No remote configured - skip fetch and rebase onto local base branch
+            // No remote (or push disabled) - skip fetch and rebase onto local base branch
             await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
             {
                 ["action"] = "fetch_skipped",
-                ["reason"] = "no_remote",
+                ["reason"] = remoteConfigured ? "push_disabled" : "no_remote",
                 ["remote"] = remote
             }, ct).ConfigureAwait(false);
             ontoRef = targetBranch;
-            baseRefReason = "no_remote";
+            baseRefReason = remoteConfigured ? "push_disabled" : "no_remote";
         }
         else
         {
@@ -293,6 +297,19 @@ public class ShipPhase : IWorkflowPhase
                     $"git fetch failed: {fetchResult?.FailureReason}",
                     ShipFailureStage.Fetch), worktreeNames, null);
             ReportGitOutput("fetch output", fetchResult.RawOutput);
+
+            // If the remote target branch has never been pushed there is nothing to
+            // reconcile: rebase onto the local target and let the push (Step 8a) create
+            // the branch. Without this, the ancestry checks below both fail on the
+            // nonexistent <remote>/<target> ref and ship misreports a divergence (TLB-409).
+            var remoteBranchExists = await _git.RemoteBranchExistsAsync(remote, targetBranch, workingDirectory, ct).ConfigureAwait(false);
+            if (!remoteBranchExists)
+            {
+                ontoRef = targetBranch;
+                baseRefReason = "remote_branch_absent";
+            }
+            else
+            {
 
             // Step 4a: Determine rebase base by ancestry check
             var localRef = targetBranch;
@@ -389,6 +406,7 @@ public class ShipPhase : IWorkflowPhase
                         $"local {localRef} and {remoteRef} have diverged; manual resolution required",
                         ShipFailureStage.Fetch), worktreeNames, null);
                 }
+            }
             }
         }
 
@@ -522,8 +540,9 @@ public class ShipPhase : IWorkflowPhase
                 ShipFailureStage.FastForwardMerge), worktreeNames, null);
         ReportGitOutput("merge output", ffResult?.RawOutput);
 
-        // Step 8a: Push to remote (skipped when no remote is configured)
-        if (remoteExists)
+        // Step 8a: Push to remote (skipped when no remote is configured or push is disabled).
+        // A first-time push here creates the target branch when it did not exist on the remote.
+        if (useRemote)
         {
             ReportProgress($"[ship] pushing to {remote}/{targetBranch}...");
             var pushResult = await _git.PushAsync(remote, targetBranch, workingDirectory, ct).ConfigureAwait(false);

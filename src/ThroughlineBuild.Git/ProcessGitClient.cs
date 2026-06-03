@@ -932,6 +932,36 @@ public sealed class ProcessGitClient : IGitClient
         }
     }
 
+    public async Task<bool> RemoteBranchExistsAsync(string remote, string branch, string workingDirectory, CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = workingDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("rev-parse");
+            psi.ArgumentList.Add("--verify");
+            psi.ArgumentList.Add("--quiet");
+            psi.ArgumentList.Add($"refs/remotes/{remote}/{branch}");
+
+            using var proc = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start git process");
+            // Drain stdout (rev-parse --verify prints the resolved sha) to avoid a pipe deadlock.
+            _ = await proc.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+            return proc.ExitCode == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public async Task<int> RevListCountAsync(string range, string workingDirectory, CancellationToken ct)
     {
         try

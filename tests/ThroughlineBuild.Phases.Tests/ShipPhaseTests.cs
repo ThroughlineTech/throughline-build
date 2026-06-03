@@ -37,13 +37,15 @@ public class ShipPhaseTests
         IReadOnlyList<CheckSpec>? checks = null,
         bool deleteFeatureBranch = true,
         bool noAutoMerge = false,
-        string? targetBranch = null) => new ShipOptions(
+        string? targetBranch = null,
+        bool noPush = false) => new ShipOptions(
             RegressionChecks: checks ?? Array.Empty<CheckSpec>(),
             Remote: "origin",
             BaseBranch: "main",
             DeleteFeatureBranch: deleteFeatureBranch,
             NoAutoMerge: noAutoMerge,
-            TargetBranch: targetBranch);
+            TargetBranch: targetBranch,
+            NoPush: noPush);
 
     private static string MakeWorkingDir() => Directory.GetCurrentDirectory();
 
@@ -701,6 +703,85 @@ public class ShipPhaseTests
     }
 
     [Fact]
+    public async Task RunAsync_RemoteBranchAbsent_RebasesOntoLocalTargetAndShips()
+    {
+        // Remote is configured but the target branch was never pushed: origin/main does
+        // not exist, so the ancestry checks below would both fail. Ship must treat this as
+        // "nothing to reconcile", not a divergence (TLB-409).
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true)
+        {
+            RemoteExistsResult = true,
+            RemoteBranchExistsResult = false,
+        };
+        // Ancestry against the nonexistent ref resolves to neither-ancestor (the real git
+        // failure mode), which previously misclassified as diverged.
+        git.AncestryResponses[("origin/main", "main")] = false;
+        git.AncestryResponses[("main", "origin/main")] = false;
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Null(result.FailedAt);
+
+        // No divergence gate failure.
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.GateFailure);
+
+        // base_ref resolved onto the local target with the remote_branch_absent reason.
+        var baseRefResolved = events.Events
+            .Where(e => e.Kind == EventKind.TicketWrite)
+            .FirstOrDefault(w => w.Data.TryGetValue("action", out var a) && a.ToString() == "base_ref_resolved");
+        Assert.NotNull(baseRefResolved);
+        Assert.Equal("remote_branch_absent", baseRefResolved.Data["reason"].ToString());
+
+        // Feature rebase targets the local branch; the first-time push creates the remote branch.
+        Assert.Equal("main", git.RebaseOntoRefs.Single());
+        Assert.Equal(1, git.PushCallCount);
+
+        // Ship completes: Done transition.
+        var stateTransitions = events.Events.Where(e => e.Kind == EventKind.StateTransition).ToList();
+        Assert.Contains(stateTransitions, t => t.Data["to"].ToString() == "Done");
+    }
+
+    [Fact]
+    public async Task RunAsync_NoPush_SkipsFetchAndPushAndShipsLocally()
+    {
+        // Remote is configured, but --no-push / [ship] push=false keeps ship fully local.
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true) { RemoteExistsResult = true };
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(), MakeShipOptions(noPush: true),
+            git, checksRunner: new FakeChecksRunner(Array.Empty<CheckResult>()),
+            markerScanner: EmptyScanner(),
+            decrufter: new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Null(result.FailedAt);
+
+        // No remote interaction: no fetch, no push.
+        Assert.Equal(0, git.FetchCallCount);
+        Assert.Equal(0, git.PushCallCount);
+
+        // Rebased onto the local target with the push_disabled reason.
+        var baseRefResolved = events.Events
+            .Where(e => e.Kind == EventKind.TicketWrite)
+            .FirstOrDefault(w => w.Data.TryGetValue("action", out var a) && a.ToString() == "base_ref_resolved");
+        Assert.NotNull(baseRefResolved);
+        Assert.Equal("push_disabled", baseRefResolved.Data["reason"].ToString());
+        Assert.Equal("main", git.RebaseOntoRefs.Single());
+
+        var stateTransitions = events.Events.Where(e => e.Kind == EventKind.StateTransition).ToList();
+        Assert.Contains(stateTransitions, t => t.Data["to"].ToString() == "Done");
+    }
+
+    [Fact]
     public async Task RunAsync_DivergedNoConflict_AutoRebasesMainAndContinuesShip()
     {
         var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
@@ -1117,6 +1198,7 @@ public class ShipPhaseTests
         public GitOpResult FastForwardResult { get; set; } = new GitOpResult(true, null);
         public GitOpResult DeleteBranchResult { get; set; } = new GitOpResult(true, null);
         public bool RemoteExistsResult { get; set; } = true;
+        public bool RemoteBranchExistsResult { get; set; } = true;
         public Dictionary<string, IReadOnlyList<string>> TrackedChangesByPath { get; } = new(StringComparer.OrdinalIgnoreCase);
         public Dictionary<(string ancestor, string descendant), bool> AncestryResponses { get; } = new();
         public DivergenceState DivergenceStateResult { get; set; } = DivergenceState.DivergedWithConflict;
@@ -1138,6 +1220,9 @@ public class ShipPhaseTests
 
         public Task<bool> RemoteExistsAsync(string remote, string workingDirectory, CancellationToken ct) =>
             Task.FromResult(RemoteExistsResult);
+
+        public Task<bool> RemoteBranchExistsAsync(string remote, string branch, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(RemoteBranchExistsResult);
 
         public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
             Task.FromResult(MergedSha);

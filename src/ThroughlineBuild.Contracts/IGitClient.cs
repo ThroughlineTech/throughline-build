@@ -66,6 +66,15 @@ public interface IGitClient
     Task<bool> RemoteExistsAsync(string remote, string workingDirectory, CancellationToken ct) =>
         Task.FromResult(true);
 
+    // Returns true if the remote-tracking branch <remote>/<branch> exists locally
+    // (i.e. the target branch has been fetched/pushed at least once). Distinguishes
+    // "branch never pushed" from "branch diverged" so ShipPhase does not misclassify
+    // an unpushed target as a divergence (TLB-409).
+    // Default returns true so existing FakeGitClients keep their reconcile path.
+    // Never throws - treat any error as false.
+    Task<bool> RemoteBranchExistsAsync(string remote, string branch, string workingDirectory, CancellationToken ct) =>
+        Task.FromResult(true);
+
     // Returns the list of tracked files with uncommitted changes in workingDirectory.
     // Runs "git status --porcelain" and returns lines that are not untracked (i.e. not "??").
     // Default returns empty so existing FakeGitClients remain unchanged (TLB-131).

@@ -87,8 +87,8 @@ public class ShipCliTests
     [Fact]
     public void UsageText_DocumentsNoPushConvention()
     {
-        // The ship verb help line must document the local-only / no-push convention.
-        Assert.Contains("no push", CliUsage.UsageText);
+        // The ship verb help line must document the local-only / no-push convention (TLB-409).
+        Assert.Contains("--no-push", CliUsage.UsageText);
     }
 
     [Fact]

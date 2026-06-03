@@ -37,6 +37,7 @@ static async Task<int> RunAsync(string[] args)
     bool errorLocation = false;
     bool noAutoResolve = false;
     bool noAutoMerge = false;
+    bool noPush = false;
     bool continuePastFailure = false;
     bool fromBrief = false;
     var filteredArgs = new List<string>(args.Length);
@@ -54,6 +55,8 @@ static async Task<int> RunAsync(string[] args)
             noAutoResolve = true;
         else if (a == "--no-auto-merge")
             noAutoMerge = true;
+        else if (a == "--no-push")
+            noPush = true;
         else if (a == "--continue-past-failure")
             continuePastFailure = true;
         else if (a == "--from-brief")
@@ -833,7 +836,7 @@ static async Task<int> RunAsync(string[] args)
             verb, ticketId, args, cwd, ticketing, workerFactory, config2,
             ResolveLogDir(config2.Events.LogDirectory), sessionContext,
             debugMode, quietMode, summaryJson, errorLocation, noAutoMerge,
-            noAutoResolve, continuePastFailure, fromBrief, EffectiveAgentFor);
+            noAutoResolve, continuePastFailure, fromBrief, noPush, EffectiveAgentFor);
         dispatchExitCode = iterCode;
         if (iterAction == 2) return iterCode;
         if (iterAction == 1) break;
@@ -1039,6 +1042,7 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
     bool noAutoResolve,
     bool continuePastFailure,
     bool fromBrief,
+    bool noPush,
     Func<string, string> effectiveAgentFor)
 {
     var sessionId = Guid.NewGuid().ToString("N");
@@ -1267,7 +1271,8 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
             BaseBranch: config2.Ship.BaseBranch,
             DeleteFeatureBranch: config2.Ship.DeleteFeatureBranch,
             NoAutoMerge: noAutoMerge,
-            TargetBranch: config2.ResolveTargetBranch());
+            TargetBranch: config2.ResolveTargetBranch(),
+            NoPush: noPush || !config2.Ship.Push);
         var gitClient = new ProcessGitClient(cwd);
         var checksRunner = new AutomatedChecksRunner();
         var shipProgress = quietMode || summaryJson ? null : Console.Error;
@@ -1357,7 +1362,7 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
         var (chainCode, chainDirect) = await RunChainVerbAsync(
             ticketId, args, cwd, ticketing, eventSink, buildOptions, config2,
             workerFactory, debugMode, debugCaptureDir, enableDigest,
-            noAutoMerge, noAutoResolve, continuePastFailure, fromBrief, effectiveAgentFor);
+            noAutoMerge, noAutoResolve, continuePastFailure, fromBrief, noPush, effectiveAgentFor);
         // chainDirect=true means return from RunAsync; false means set dispatchExitCode + break
         return (chainCode, chainDirect ? 2 : 1);
     }
@@ -1383,6 +1388,7 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
     bool noAutoResolve,
     bool continuePastFailure,
     bool fromBrief,
+    bool noPush,
     Func<string, string> effectiveAgentFor)
 {
     // Collect additional positional ticket IDs beyond args[1] (args[0] is the verb).
@@ -1421,7 +1427,8 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             BaseBranch: config2.Ship.BaseBranch,
             DeleteFeatureBranch: config2.Ship.DeleteFeatureBranch,
             NoAutoMerge: noAutoMerge,
-            TargetBranch: config2.ResolveTargetBranch());
+            TargetBranch: config2.ResolveTargetBranch(),
+            NoPush: noPush || !config2.Ship.Push);
         var gitClient = new ProcessGitClient(cwd);
         var checksRunner = new AutomatedChecksRunner();
         return new ShipPhase(ticketing, eventSink, buildOpts, shipOptions, gitClient: gitClient, checksRunner: checksRunner);
@@ -1455,7 +1462,8 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             DeleteFeatureBranch: config2.Ship.DeleteFeatureBranch,
             NoAutoMerge: noAutoMerge,
             TargetBranch: config2.ResolveTargetBranch(),
-            SkipDecruft: true);
+            SkipDecruft: true,
+            NoPush: noPush || !config2.Ship.Push);
         var gitClient = new ProcessGitClient(cwd);
         var checksRunner = new AutomatedChecksRunner();
         return new ShipPhase(ticketing, eventSink, buildOpts, chainShipOptions, gitClient: gitClient, checksRunner: checksRunner);
