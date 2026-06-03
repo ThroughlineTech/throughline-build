@@ -141,6 +141,40 @@ On every later run, update `PROMPT.md` in place: refresh the verbatim prompt
 if it changed, update the document set list, and append a row to the refresh
 history table.
 
+### Nested AGENTS.md breadcrumbs (required deliverable)
+
+Maintain thin, pointer-style `AGENTS.md` files at the load-bearing directories
+so agents orient without grepping. These are breadcrumbs, NOT a second copy of
+the doc set: keep each at roughly 20 lines or fewer, containing (a) the
+directory's one job, (b) the non-obvious gotchas a `grep` would not quickly
+reveal, and (c) relative links into this doc set (primarily `01-inventory.md`)
+for the full picture. Do not restate per-project prose that the inventory
+already owns - a breadcrumb that drifts is worse than none.
+
+Alongside each `AGENTS.md`, write a sibling `CLAUDE.md` whose body is only a
+one-line pointer plus an `@AGENTS.md` import line, so Claude Code - which
+auto-loads nested `CLAUDE.md`, not nested `AGENTS.md` - picks up the same
+breadcrumb. Codex and other agents read `AGENTS.md` directly.
+
+Current breadcrumb locations (add or prune as the tree changes):
+
+```
+src/                                      - dependency order, AOT discipline, index pointer
+src/ThroughlineBuild.Cli/                 - verb-dispatch maze, arg pre-passes, adding a verb
+src/ThroughlineBuild.Contracts/           - interfaces only, no-I/O rule
+src/ThroughlineBuild.Workers.Common/      - WORKER_RESULT envelope + fenced-block protocol
+src/ThroughlineBuild.Workers.ClaudeCode/  - vendor-worker template, adding a vendor
+src/ThroughlineBuild.Briefs/Templates/    - per-agent templates, LF/snapshot trap
+src/ThroughlineBuild.Plane/               - sole ITicketing, snapshot cache, throttle
+src/ThroughlineBuild.Phases/              - phases + multi-ticket orchestration
+tests/                                    - AOT-switch discipline, shared doubles, snapshots
+```
+
+On every refresh, re-verify each breadcrumb against HEAD and correct drift the
+same way the numbered docs are refreshed; record the pass in the refresh
+history. The root `AGENTS.md` (ticket workflow, written by `/ticket-install`)
+and the root `CLAUDE.md` are out of scope - do not overwrite them.
+
 ### Voice
 
 Professional. No marketing prose, no "we" voice, no emoji. Plain technical
@@ -171,10 +205,22 @@ prose, `file:line` references throughout.
 | `11-llm-architecture.md` | The two LLM layers - the wired four-vendor worker layer (`IWorkerAgent`) and the built-but-unwired model-client layer (`ILlmClient` / `IModelClient`) - vendor-specific code map, what it takes to add a new provider. Added 2026-05-28 by request to support multi-provider planning; rewritten 2026-05-30 once the multi-provider worker set actually landed. |
 | `PROMPT.md` | This file. |
 
+### Nested breadcrumb files (outside this directory)
+
+Thin pointer files maintained as a required deliverable (see "Nested AGENTS.md
+breadcrumbs" in the prompt). Each directory below carries an `AGENTS.md` plus a
+sibling `CLAUDE.md` (`@AGENTS.md` import shim): `src/`,
+`src/ThroughlineBuild.Cli/`, `src/ThroughlineBuild.Contracts/`,
+`src/ThroughlineBuild.Workers.Common/`, `src/ThroughlineBuild.Workers.ClaudeCode/`,
+`src/ThroughlineBuild.Briefs/Templates/`, `src/ThroughlineBuild.Plane/`,
+`src/ThroughlineBuild.Phases/`, `tests/`. They point back into this set and are
+re-verified against HEAD on each refresh.
+
 Set evolution:
 - 2026-05-28 - initial publication (12 documents: 00-index, 01-10, PROMPT.md).
 - 2026-05-28 - added `11-llm-architecture.md` after operator request for a multi-provider planning document. No existing docs were modified except this `PROMPT.md` and `00-index.md` to link the new entry.
 - 2026-05-30 - full code-true refresh against HEAD `68d6fa2` (the baseline `164e733` was ~150 commits behind). No documents added or removed; the same 13-file set was rewritten in place. The multi-provider planning anticipated by `11` shipped at the worker layer in the interim, so `11` flipped from "Codex/Gemini Aspirational" to "four agents Functional and wired", and the new Aspirational item became the unwired `IModelClient` layer.
+- 2026-06-02 - added the "Nested AGENTS.md breadcrumbs" deliverable to the verbatim prompt and created the first set of breadcrumb files (9 `AGENTS.md` + 9 `CLAUDE.md` shims listed above). This is the first change to the verbatim PROMPT body since publication: a new required-deliverable subsection was appended; no existing prompt rules were reworded or removed. No numbered docs were added or rewritten.
 - 2026-06-01 - code-true refresh against HEAD `e8d9a95` (52 commits past `68d6fa2`). No documents added or removed; the same 13-file set was updated in place. Major deltas absorbed: the new `settarget` verb and `[work].target_branch` config; target-branch-aware ship (configurable merge destination, preflight wrong-branch guard, `MainAutoRebased` -> `TargetAutoRebased`, progress/`--debug` stderr output); the op-27 fenced-block payload protocol (parser pre-pass + `FencedBlockResolver` + new AOT `MarkdownRenderer`, migrating plan/implement/review/draft bodies out of JSON-string metadata); the TLB-366 per-run Plane issue snapshot cache with `next_page_results` pagination and write-through updates (throttle re-confirmed at 40/min); the AOT ILC OOM mitigation; TLB-329 sibling-`blocked_by` dependency-ordered parent-chain levels with the `--max-parallel` override; and state-aware implement guidance.
 
 ---
@@ -236,4 +282,5 @@ Set evolution:
 | 2026-05-28 | `164e733` on `main` | First publication. 12 documents created (00-index, 01-10, PROMPT.md). Doc set built from `Program.cs`, the 14 `ThroughlineBuild.*` projects, `tests/`, `docs/throughline-build-architecture.md`, `.build/config.toml.example`, `.claude/plane-config.md`, `.claude/ticket-config.md`, `.github/workflows/build.yml`, `build.sh`, `.gitignore`, `.gitattributes`. |
 | 2026-05-28 | `164e733` on `main` | Added [11-llm-architecture.md](11-llm-architecture.md) at operator request: a dedicated map of LLM interfaces (`ILlmClient`, `IWorkerAgent`), vendor-specific code locations, and the architectural choices required to add a second provider. Updated `00-index.md` and this `PROMPT.md` to reference the new doc. No other docs touched. |
 | 2026-05-30 | `68d6fa2` on `main` | Full code-true refresh; baseline `164e733` was ~150 commits behind. All 13 files rewritten in place against HEAD source (no docs added/removed). Major code deltas absorbed: project count 14 -> 19 (`ModelClient`, `Workers.Common`, `Workers.Codex`, `Workers.Gemini`, `Workers.Copilot`); four wired worker agents replacing the claude-only worker (`WorkerAgentFactory`, per-agent config/sizes/templates, `WorkerSize`); `ClaudeCodeReviewer` -> `WorkerAgentReviewer`; `WorkerResultParser` relocated to `Workers.Common`; new verbs `decompose`/`init`/`list`; multi-ticket and tree-aware chain (`ParallelDispatcher`, `TopologicalSorter`, `AncestorSkipFilter`, parent recursion, all-children-Done ship gate, cascade close/defer); obsolete-claim ratification (`ObsoleteRatifier`, `TicketSubsumed`); divergence probe + auto-rebase + push-after-FF (`DivergenceState`, `MainAutoRebased`, `MainWorktreeLock`); Plane surface extensions (`QueryAsync`/`TransitionLifecycleAsync`/`UpdateDescriptionAsync`/`CreateChildTicketsAsync`, issue-type name->UUID, `RequestThrottle` 60/min, `?next_path=` deep-link); `EventKind` 9 -> 13, `Phase` 9 -> 10; `ANTHROPIC_API_KEY` hard gate removed (lazy `LlmClientFactory`); `IModelClient`/`AnthropicModelClient` SSE streaming built and tested but unwired. The verbatim prompt above was unchanged from the prior run. |
+| 2026-06-02 | `80b07a3` on `main` | Breadcrumb pass (no numbered-doc rewrite). Added the "Nested AGENTS.md breadcrumbs" required-deliverable subsection to the verbatim prompt and created the first breadcrumb set: 9 `AGENTS.md` files (`src/`, `Cli`, `Contracts`, `Workers.Common`, `Workers.ClaudeCode`, `Briefs/Templates`, `Plane`, `Phases`, `tests/`) each with a sibling `CLAUDE.md` `@AGENTS.md` import shim so Claude Code loads them. First change to the verbatim PROMPT body since publication; the change is additive (new subsection only). Root `AGENTS.md`/`CLAUDE.md` left untouched (ticket-workflow files). |
 | 2026-06-01 | `e8d9a95` on `main` | Code-true refresh; 52 commits past `68d6fa2`. All 13 files updated in place (no docs added/removed). Major code deltas absorbed: new `settarget` verb (`SetTargetCommand`, dispatched pre-config-load) + `[work].target_branch` config + `BuildConfig.ResolveTargetBranch()`; target-branch-aware ship (`ShipOptions.TargetBranch`, target-aware `BaseRefResolver`, preflight `wrong_worktree_branch` guard, `MainAutoRebased` -> `TargetAutoRebased` rename at ordinal 10, FF-merge+push to the configured target, `--debug`/progress stderr output, worktree create-from-local-branch fallback); op-27 fenced-block payload protocol (TLB-333..342: `WorkerResultParser` fenced pre-pass + `FencedBlockResolver`, new AOT `MarkdownRenderer` in `Workers.Common`, `WorkerResult.Blocks`, plan/implement/review/draft bodies migrated to `PLAN_BODY`/`IMPLEMENT_SUMMARY`/`REVIEW_CRITIQUE`/`DRAFT_BODY` blocks via `*_ref` metadata); TLB-366 per-run Plane issue snapshot cache (`_seqToUuid`/`_issueByUuid`, single-flight load, write-through `AddOrUpdate`, `next_page_results` pagination, loud truncation warning at `MaxListPages=50`, `KeyNotFoundException` catch in the chain batch path) - throttle re-confirmed at 40/min; AOT ILC OOM mitigation (`IlcOptimizationPreference=Size`, `IlcMaxParallelism=1`, `RunAsync` split); TLB-329 sibling-`blocked_by` dependency-ordered parent-chain levels + `--max-parallel`/`ForceParallel` override; state-aware implement guidance on non-Ready tickets; embedded-but-unsurfaced user-guide template (TLB-320). `EventKind` stays at 13 (rename only), `Phase` stays at 10. Verbatim prompt unchanged. Note: `PlaneTicketingClient.cs` cites in `03`/`05` shifted ~+300 lines; snapshot/pagination references re-verified, some untouched prose cites left at prior neighborhood. |
