@@ -207,6 +207,53 @@ public class ReviewPhaseTests
     }
 
     [Fact]
+    public async Task RunAsync_WorktreeMissingButBranchExists_ReconstructsWorktreeAndReviews()
+    {
+        // A parent chain removes its shared worktree at chain end, leaving an InReview child with a
+        // branch but no worktree. Re-running review must reconstruct the worktree from the branch
+        // instead of dead-ending at "feature worktree not found".
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        ticketing.SeedComment($"<p>[implemented_at: {ImplementedSha}]</p>");
+        var worker = new FakeWorkerAgent();
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, includeWorktreeMatching: false, branchExistsForRecovery: true);
+        var verifier = new FakeVerifier(new Verdict(VerdictKind.Pass, "looks good", Array.Empty<string>()));
+        var phase = new ReviewPhase(ticketing, worker, events, MakeBuildOptions(), MakeReviewOptions(),
+            git, verifierOverride: verifier);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(VerdictKind.Pass, result.Verdict);
+        Assert.Null(result.FailureReason);
+        Assert.True(git.CheckoutWorktreeCalled, "review should reconstruct the missing worktree from the branch");
+        Assert.Single(ticketing.Comments);
+        Assert.Contains("pass", ticketing.Comments[0].html);
+    }
+
+    [Fact]
+    public async Task RunAsync_WorktreeMissingAndBranchMissing_ReturnsFailureNoSideEffects()
+    {
+        // No branch to reconstruct from -> still a clean failure (no checkout attempt).
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        ticketing.SeedComment($"<p>[implemented_at: {ImplementedSha}]</p>");
+        var worker = new FakeWorkerAgent();
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, includeWorktreeMatching: false, branchExistsForRecovery: false);
+        var verifier = new FakeVerifier(new Verdict(VerdictKind.Pass, "ok", Array.Empty<string>()));
+        var phase = new ReviewPhase(ticketing, worker, events, MakeBuildOptions(), MakeReviewOptions(),
+            git, verifierOverride: verifier);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("feature worktree not found", result.FailureReason ?? "");
+        Assert.False(git.CheckoutWorktreeCalled);
+        Assert.Empty(ticketing.Transitions);
+        Assert.Empty(ticketing.Comments);
+    }
+
+    [Fact]
     public async Task RunAsync_NoImplementedAtMarker_ReturnsFailureNoSideEffects()
     {
         var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
@@ -661,11 +708,15 @@ public class ReviewPhaseTests
     {
         private readonly string _mainSha;
         private readonly bool _includeWorktreeMatching;
+        private readonly bool _branchExistsForRecovery;
 
-        public FakeGitClient(string mainSha, bool includeWorktreeMatching)
+        public bool CheckoutWorktreeCalled { get; private set; }
+
+        public FakeGitClient(string mainSha, bool includeWorktreeMatching, bool branchExistsForRecovery = false)
         {
             _mainSha = mainSha;
             _includeWorktreeMatching = includeWorktreeMatching;
+            _branchExistsForRecovery = branchExistsForRecovery;
         }
 
         public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
@@ -679,6 +730,16 @@ public class ReviewPhaseTests
             {
                 new WorktreeInfo("/some/worktree/path", BranchName, "deadbeef", false, false)
             });
+        }
+
+        public Task<IReadOnlyList<string>> ListLocalBranchesAsync(string pattern, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>(
+                _branchExistsForRecovery ? new[] { BranchName } : Array.Empty<string>());
+
+        public Task<WorktreeCreateResult> CheckoutWorktreeAsync(string worktreePath, string existingBranch, string mainWorktreePath, CancellationToken ct)
+        {
+            CheckoutWorktreeCalled = true;
+            return Task.FromResult(new WorktreeCreateResult(true, null, "/some/worktree/path"));
         }
 
         public Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct) =>

@@ -665,6 +665,10 @@ public class ChainPhase
         // its own branch inside this worktree; ship skips decruft so the worktree stays alive
         // until all children are done. The worktree is removed once here at chain end.
         var sharedWorktreeNames = PhaseWorktreeLayout.Compute(parentTicket.Id, parentTicket.Title, _workingDirectory);
+        // Placeholder branch the shared worktree is created on. Children immediately switch the
+        // worktree to their own ticket/<slug> branches, so this branch never receives commits -
+        // it is pure scaffolding and is deleted at chain end (see cleanup below).
+        var sharedChainBranch = $"chain/{sharedWorktreeNames.Slug}";
         string? sharedWorktreePath = null;
         string? baseRefForSharedWt = null;
         try
@@ -692,12 +696,31 @@ public class ChainPhase
         {
             var createResult = await _git.CreateWorktreeAsync(
                 sharedWorktreeNames.WorktreePath,
-                // Initial branch name in the shared worktree - first child will immediately
-                // create its own branch and switch, so this is just a placeholder.
-                $"chain/{sharedWorktreeNames.Slug}",
+                sharedChainBranch,
                 baseRefForSharedWt,
                 _workingDirectory,
                 ct).ConfigureAwait(false);
+
+            // Self-heal a leftover placeholder branch from a prior chain run that removed its
+            // shared worktree but never deleted the branch. Because chain/<slug> is only ever
+            // scaffolding (children switch to their own branches immediately), a pre-existing one
+            // is safe to delete and recreate. Without this, the stale branch makes creation collide
+            // and forces every re-run into the degraded per-ticket fallback indefinitely.
+            if (!createResult.Success)
+            {
+                var existing = await _git.ListLocalBranchesAsync(sharedChainBranch, _workingDirectory, ct).ConfigureAwait(false);
+                if (existing.Any(b => string.Equals(b, sharedChainBranch, StringComparison.Ordinal)))
+                {
+                    await _git.DeleteBranchAsync(sharedChainBranch, force: true, _workingDirectory, ct).ConfigureAwait(false);
+                    createResult = await _git.CreateWorktreeAsync(
+                        sharedWorktreeNames.WorktreePath,
+                        sharedChainBranch,
+                        baseRefForSharedWt,
+                        _workingDirectory,
+                        ct).ConfigureAwait(false);
+                }
+            }
+
             if (createResult.Success)
             {
                 sharedWorktreePath = sharedWorktreeNames.WorktreePath;
@@ -813,6 +836,10 @@ public class ChainPhase
             {
                 var decrufter = new WorktreeDecrufter(_git);
                 await decrufter.DecruftAsync(sharedWorktreePath, _workingDirectory, ct).ConfigureAwait(false);
+                // The decrufter removes the worktree directory but never deletes branches. Delete the
+                // chain/<slug> placeholder here so it does not leak and collide with the next run's
+                // shared-worktree creation. force:true because it is unmerged scaffolding by design.
+                await _git.DeleteBranchAsync(sharedChainBranch, force: true, _workingDirectory, ct).ConfigureAwait(false);
             }
             catch { /* non-fatal: ticket transitions are already committed */ }
         }

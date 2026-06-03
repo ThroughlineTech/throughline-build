@@ -452,6 +452,65 @@ public class SequentialChainTests
     }
 
     // ==========================================================================
+    // Test 4: the shared chain/<slug> placeholder branch is cleaned up and self-healed
+    // ==========================================================================
+
+    [Fact]
+    public async Task ParentChain_DeletesPlaceholderChainBranch_AtChainEnd()
+    {
+        // The shared worktree is created on a chain/<slug> placeholder branch. The decrufter removes
+        // the worktree directory but never branches, so the chain must delete the placeholder itself
+        // at chain end - otherwise it leaks and collides with the next run's shared-worktree creation.
+        var parent = MakeParent();
+        var child1 = MakeChild(Child1Id, Child1Uuid, TicketState.Backlog);
+
+        var ticketing = new SeqFakeTicketing(parent);
+        ticketing.SeedChildren(ParentUuid, new[] { child1 });
+
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new SeqPassVerifier());
+
+        var git = new SeqFakeGitClient();
+        var chain = BuildChain(ticketing, verifiers, git);
+
+        var result = await chain.RunAsync(new ChainPhaseOptions(ParentId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        var chainBranch = "chain/" + PhaseWorktreeLayout.Compute(ParentId, ParentTitle, Path.GetTempPath()).Slug;
+        Assert.Contains(chainBranch, git.DeletedBranches);
+    }
+
+    [Fact]
+    public async Task ParentChain_SelfHealsLeftoverChainBranch_UsesSharedWorktreeNotFallback()
+    {
+        // A prior interrupted chain left a chain/<slug> branch behind. The shared-worktree creation
+        // collides on it; the chain must delete the stale placeholder and retry so it still runs on
+        // the shared worktree (CreateBranchAsync path) instead of degrading to per-ticket fallback.
+        var parent = MakeParent();
+        var child1 = MakeChild(Child1Id, Child1Uuid, TicketState.Backlog);
+
+        var ticketing = new SeqFakeTicketing(parent);
+        ticketing.SeedChildren(ParentUuid, new[] { child1 });
+
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new SeqPassVerifier());
+
+        var git = new SeqFakeGitClient(leftoverChainBranch: true);
+        var chain = BuildChain(ticketing, verifiers, git);
+
+        var result = await chain.RunAsync(new ChainPhaseOptions(ParentId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        Assert.All(result.ChildResults!, r => Assert.Equal(ChainOutcome.Completed, r.Outcome));
+        // Proof the shared worktree was used (not fallback): the child created its branch inside the
+        // shared worktree via CreateBranchAsync rather than cutting its own worktree.
+        Assert.True(git.CreateBranchCallCount >= 1, "child should create its branch inside the shared worktree");
+        var chainBranch = "chain/" + PhaseWorktreeLayout.Compute(ParentId, ParentTitle, Path.GetTempPath()).Slug;
+        Assert.Contains(chainBranch, git.DeletedBranches);
+    }
+
+    // ==========================================================================
     // Fakes
     // ==========================================================================
 
@@ -627,15 +686,20 @@ public class SequentialChainTests
     private sealed class SeqFakeGitClient : IGitClient
     {
         private readonly List<WorktreeInfo> _worktrees = new();
+        private readonly HashSet<string> _existingBranches = new(StringComparer.Ordinal);
+        private readonly bool _leftoverChainBranch;
 
-        public SeqFakeGitClient()
+        public SeqFakeGitClient(bool leftoverChainBranch = false)
         {
+            _leftoverChainBranch = leftoverChainBranch;
             // Seed the main worktree entry so ShipPhase can locate the feature worktree.
             _worktrees.Add(new WorktreeInfo("/fake/main", "main", MainSha, true, false));
         }
 
         public int CreateWorktreeCallCount { get; private set; }
         public int RemoveWorktreeCallCount { get; private set; }
+        public int CreateBranchCallCount { get; private set; }
+        public List<string> DeletedBranches { get; } = new();
 
         public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
             Task.FromResult(MainSha);
@@ -656,10 +720,24 @@ public class SequentialChainTests
         public Task<WorktreeCreateResult> CreateWorktreeAsync(string worktreePath, string newBranch, string fromRef, string mainWorktreePath, CancellationToken ct)
         {
             CreateWorktreeCallCount++;
+            // Simulate a leftover chain/<slug> placeholder branch from a prior interrupted run: the
+            // first attempt to create the shared worktree collides, exactly like the real git error.
+            // Once the self-heal deletes the branch, the retry succeeds.
+            if (_leftoverChainBranch && newBranch.StartsWith("chain/", StringComparison.Ordinal)
+                && !DeletedBranches.Contains(newBranch))
+            {
+                _existingBranches.Add(newBranch);
+                return Task.FromResult(new WorktreeCreateResult(false,
+                    $"fatal: a branch named '{newBranch}' already exists", null));
+            }
             Directory.CreateDirectory(worktreePath);
             _worktrees.Add(new WorktreeInfo(worktreePath, newBranch, CommitSha, false, false));
             return Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
         }
+
+        public Task<IReadOnlyList<string>> ListLocalBranchesAsync(string pattern, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>(
+                _existingBranches.Contains(pattern) ? new[] { pattern } : Array.Empty<string>());
 
         public Task<string> HeadShaAsync(string worktreePath, CancellationToken ct) =>
             Task.FromResult(CommitSha);
@@ -679,8 +757,12 @@ public class SequentialChainTests
         public Task<GitOpResult> FastForwardMergeAsync(string mergeRef, string mainWorktreePath, CancellationToken ct) =>
             Task.FromResult(new GitOpResult(true, null));
 
-        public Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct) =>
-            Task.FromResult(new GitOpResult(true, null));
+        public Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct)
+        {
+            DeletedBranches.Add(branch);
+            _existingBranches.Remove(branch);
+            return Task.FromResult(new GitOpResult(true, null));
+        }
 
         public Task<int> RevListCountAsync(string range, string workingDirectory, CancellationToken ct) =>
             Task.FromResult(0);
@@ -695,6 +777,7 @@ public class SequentialChainTests
         // when SharedWorktreePath is set. Update the tracked branch name on the shared worktree entry.
         public Task<GitOpResult> CreateBranchAsync(string branch, string fromRef, string worktreePath, CancellationToken ct)
         {
+            CreateBranchCallCount++;
             // Update the branch on the existing shared-worktree entry so ShipPhase can find it.
             for (int i = 0; i < _worktrees.Count; i++)
             {

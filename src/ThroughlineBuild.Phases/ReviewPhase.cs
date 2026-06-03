@@ -108,6 +108,26 @@ public class ReviewPhase : IWorkflowPhase
             }
         }
         if (!worktreeFound)
+        {
+            // Recovery: the ticket is InReview and its branch may still exist, but the worktree was
+            // torn down - e.g. a parent chain removed its shared worktree at chain end, or a prior
+            // run was interrupted. Recreate a worktree checked out on the ticket branch so review can
+            // run, instead of dead-ending at "worktree not found" with no way to resume.
+            var branches = await _git.ListLocalBranchesAsync(canonicalBranchName, workingDirectory, ct).ConfigureAwait(false);
+            if (branches.Any(b => string.Equals(b, canonicalBranchName, StringComparison.Ordinal)))
+            {
+                var recovered = await _git.CheckoutWorktreeAsync(canonicalWorktreePath, canonicalBranchName, workingDirectory, ct).ConfigureAwait(false);
+                if (recovered.Success)
+                {
+                    canonicalWorktreePath = recovered.AbsolutePath ?? canonicalWorktreePath;
+                    worktreeFound = true;
+                    Console.Error.WriteLine(
+                        $"[{ticket.Id}] review: feature worktree was missing; reconstructed from branch " +
+                        $"{canonicalBranchName} at {canonicalWorktreePath}");
+                }
+            }
+        }
+        if (!worktreeFound)
             return new ReviewResult(false, ticketId, null, null, Array.Empty<string>(),
                 $"feature worktree not found at {worktreeNames.WorktreePath}");
 
