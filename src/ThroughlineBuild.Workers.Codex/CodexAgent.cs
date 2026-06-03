@@ -20,7 +20,7 @@ public class CodexAgent : IWorkerAgent
 
     public async Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
     {
-        // Build args: codex exec [--full-auto] "<brief>"
+        // Build args: codex exec [--dangerously-bypass-approvals-and-sandbox] "<brief>"
         // Brief is delivered as the positional prompt argument (not stdin).
         var args = BuildArgs(brief.Instruction, _options, options);
         // modelArg is needed below for llm_usage metadata regardless of whether
@@ -172,16 +172,16 @@ public class CodexAgent : IWorkerAgent
 
     // Builds the argv passed to the codex CLI.
     //
-    // --full-auto puts codex into its unattended-execution mode (no permission
-    // gate). Emitted only when options.BypassPermissions is true. ExtraArgs
-    // is appended before the resolved model so explicit user flags can
-    // override default ordering, and brief.Instruction is appended last as
-    // the positional prompt.
+    // --dangerously-bypass-approvals-and-sandbox puts codex into unattended,
+    // unsandboxed execution. Emitted only when options.BypassPermissions is
+    // true. ExtraArgs is appended before the resolved model so explicit user
+    // flags can override default ordering, and brief.Instruction is appended
+    // last as the positional prompt.
     internal static List<string> BuildArgs(string briefInstruction, CodexOptions options, WorkerOptions workerOptions)
     {
         var args = new List<string> { "exec" };
         if (options.BypassPermissions)
-            args.Add("--full-auto");
+            args.Add("--dangerously-bypass-approvals-and-sandbox");
         foreach (var extra in options.ExtraArgs)
             args.Add(extra);
         options.Sizes.TryGetValue(workerOptions.Size, out var resolvedModelRaw);

@@ -38,11 +38,12 @@ large  = "claude-opus-4-7"
 # [workers.codex]
 # executable = "codex"
 # # max_output_tokens is not currently used but accepted for future use.
+# # bypass_permissions = true  # default true; disables Codex approvals and sandboxing.
 
 # [workers.codex.sizes]
 # # openai: prefix is optional; CodexAgent strips it automatically.
 # small  = "gpt-5.4-mini"
-# medium = "gpt-5.3-codex"
+# medium = "gpt-5.5"
 # large  = "gpt-5.5"
 
 # [workers.gemini]

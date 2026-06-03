@@ -8,9 +8,9 @@ For runtime state details see [05-state-and-persistence.md](05-state-and-persist
 
 ## Toolchain prerequisites
 
-The repository is a `.NET 8` solution with native AOT publication.
+The repository is a `.NET 10` solution with native AOT publication (all 19 csproj target `net10.0` since commit `97e6a87`).
 
-- **`.NET 8 SDK`** - required for `dotnet build`, `dotnet test`, `dotnet publish`. Verified in CI via `actions/setup-dotnet@v4` with `dotnet-version: '8.x'` ([.github/workflows/build.yml:27-29](../../.github/workflows/build.yml#L27-L29)).
+- **`.NET 10 SDK`** - required for `dotnet build`, `dotnet test`, `dotnet publish`. Verified in CI via `actions/setup-dotnet@v4` with `dotnet-version: '10.x'` ([.github/workflows/build.yml:27-29](../../.github/workflows/build.yml#L27-L29)).
 - **A native toolchain** for AOT publication on the target RID: MSVC on Windows, Xcode CLT on macOS, gcc/clang + system libc on Linux. This is implicit in `dotnet publish -r <rid>` and is not enforced by the scripts.
 - **`git`** - assumed available on `PATH`. `ProcessGitClient` shells out to `git` without checking it exists; a failed process start becomes `InvalidOperationException` ([src/ThroughlineBuild.Git/ProcessGitClient.cs:25-26](../../src/ThroughlineBuild.Git/ProcessGitClient.cs#L25-L26)).
 - **One or more worker CLIs** - the orchestrator dispatches phase work to whichever agent is configured. The bundled agents are `claude` (Claude Code), `codex`, `gemini`, and `copilot`. The README lists install commands for all four ([README.md:28-41](../../README.md#L28-L41)). Which CLI must be present depends entirely on `[workers]` config; see "Worker CLIs" below.
@@ -35,7 +35,7 @@ Per [README.md:11](../../README.md#L11). Produces managed assemblies under each 
 dotnet test
 ```
 
-Per [README.md:1-2](../../README.md#L1-L2). Discovers and runs the xUnit test projects under `tests/`. Tests target `net8.0` without `PublishAot=true`, so they do not exercise AOT-sensitive code paths under their default runner (see [architecture Section 11](../throughline-build-architecture.md); `WorkerResultParserAotRegressionTests` is the reference example for tests that opt in to the AOT switch).
+Per [README.md:1-2](../../README.md#L1-L2). Discovers and runs the xUnit test projects under `tests/`. Tests target `net10.0` without `PublishAot=true`, so they do not exercise AOT-sensitive code paths under their default runner (see [architecture Section 11](../throughline-build-architecture.md); `WorkerResultParserAotRegressionTests` is the reference example for tests that opt in to the AOT switch).
 
 ### Native AOT publish of `build`
 
@@ -43,11 +43,13 @@ Per [README.md:1-2](../../README.md#L1-L2). Discovers and runs the xUnit test pr
 dotnet publish src/ThroughlineBuild.Cli -r win-x64 -c Release
 ```
 
-Per [README.md:4-9](../../README.md#L4-L9). Produces `src/ThroughlineBuild.Cli/bin/Release/net8.0/<rid>/publish/build.exe` (the `.exe` extension is dropped on non-Windows RIDs because of `<AssemblyName>build</AssemblyName>` in [src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj:8](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L8) combined with `<PublishAot>true</PublishAot>`).
+Per [README.md:4-9](../../README.md#L4-L9). Produces `src/ThroughlineBuild.Cli/bin/Release/net10.0/<rid>/publish/build.exe` (the `.exe` extension is dropped on non-Windows RIDs because of `<AssemblyName>build</AssemblyName>` in [src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj:8](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L8) combined with `<PublishAot>true</PublishAot>`).
 
 Cross-platform RIDs are noted in the README: `osx-arm64`, `linux-x64`.
 
 **AOT code-gen memory mitigation.** The Cli csproj sets `<IlcOptimizationPreference>Size</IlcOptimizationPreference>` and `<IlcMaxParallelism>1</IlcMaxParallelism>` ([src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj:11-12](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L11-L12)) to keep the ILC/LLVM backend from OOM-ing during publish (the crash surfaced as ILC exit `-1073740791`). Single-threaded code-gen trades publish wall-time for a bounded memory footprint. The same fix split the oversized `RunAsync` in `Program.cs` into `RunTicketVerbBodyAsync` / `RunChainVerbAsync` so no single method blew up the code generator (commit `dd7d781`).
+
+**Host-coupling caveat: [Directory.Build.props](../../Directory.Build.props) hardcodes one machine's MSVC/WinSDK link paths.** The root `Directory.Build.props` sets `IlcUseEnvironmentalTools=true` and points `CppLinker`/`CppLibCreator` plus `AdditionalNativeLibraryDirectories` at absolute paths (`...\VC\Tools\MSVC\14.44.35207`, `...\Windows Kits\10\Lib\10.0.26100.0`) to skip `vswhere.exe` discovery that fails in the author's environment ([Directory.Build.props:13-24](../../Directory.Build.props#L13-L24)). These paths only take effect during a native-AOT Windows publish (`-r win-x64 -c Release`); managed builds and tests are unaffected. On any other Windows machine these exact tool versions will likely differ, so a `win-x64` native publish there may fail to link until the paths are edited.
 
 ### Three-binary bundle via `build.sh` - Functional
 
@@ -56,17 +58,17 @@ Cross-platform RIDs are noted in the README: `osx-arm64`, `linux-x64`.
 RID=osx-arm64 ./build.sh   # cross-target
 ```
 
-[build.sh](../../build.sh) selects the RID from `uname -s`/`uname -m` (`linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64`, otherwise `win-x64`), creating `bin/` and publishing three AOT binaries into it ([build.sh:5-22](../../build.sh#L5-L22)):
+[build.sh](../../build.sh) selects the RID from `uname -s`/`uname -m` (`linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64`, otherwise `win-x64`), creating `bin/` and publishing three AOT binaries into it ([build.sh:6-30](../../build.sh#L6-L30)):
 
-- `build` from `src/ThroughlineBuild.Cli`, copied to `bin/build$EXT` ([build.sh:24-26](../../build.sh#L24-L26)).
-- `token-audit` from the single-file source `src/tools/token-audit.cs`, copied from `src/tools/artifacts/token-audit/` to `bin/token-audit$EXT` ([build.sh:28-30](../../build.sh#L28-L30)).
-- `analyze-event-log` from `src/tools/analyze-event-log.cs`, copied from `src/tools/artifacts/analyze-event-log/` to `bin/analyze-event-log$EXT` ([build.sh:32-34](../../build.sh#L32-L34)).
+- `build` from `src/ThroughlineBuild.Cli`, copied from `src/ThroughlineBuild.Cli/bin/Release/net10.0/$RID/publish/` to `bin/build$EXT` ([build.sh:20-22](../../build.sh#L20-L22)).
+- `token-audit` from the single-file source `src/tools/token-audit.cs`, copied from `src/tools/artifacts/token-audit/` to `bin/token-audit$EXT` ([build.sh:24-26](../../build.sh#L24-L26)).
+- `analyze-event-log` from `src/tools/analyze-event-log.cs`, copied from `src/tools/artifacts/analyze-event-log/` to `bin/analyze-event-log$EXT` ([build.sh:28-30](../../build.sh#L28-L30)).
 
 `EXT` is `.exe` only when `RID` starts with `win-` ([build.sh:15-16](../../build.sh#L15-L16)). The two tools are project-less C# sources that `dotnet publish` compiles individually; their artifacts land under `src/tools/artifacts/` (gitignored, [.gitignore:16](../../.gitignore#L16)).
 
 ### CI build matrix
 
-[.github/workflows/build.yml](../../.github/workflows/build.yml) builds `ThroughlineBuild.Cli` only across `{macos-latest (osx-arm64), windows-latest (win-x64), ubuntu-latest (linux-x64)}` on push/PR to `main` ([.github/workflows/build.yml:11-23](../../.github/workflows/build.yml#L11-L23)). Each leg runs `dotnet restore`, `dotnet test --no-restore`, then `dotnet publish ... --no-restore`, and uploads the per-RID `build`/`build.exe` artifact via `actions/upload-artifact@v4` ([.github/workflows/build.yml:30-36](../../.github/workflows/build.yml#L30-L36)). No release tagging, no deploy step. CI does not build the `token-audit`/`analyze-event-log` tools.
+[.github/workflows/build.yml](../../.github/workflows/build.yml) builds `ThroughlineBuild.Cli` only across `{macos-latest (osx-arm64), windows-latest (win-x64), ubuntu-latest (linux-x64)}` on push/PR to `main` ([.github/workflows/build.yml:11-23](../../.github/workflows/build.yml#L11-L23)). Each leg runs `dotnet restore`, `dotnet test --no-restore`, then `dotnet publish ... --no-restore`, and uploads the per-RID `build`/`build.exe` artifact (from `.../net10.0/<rid>/publish/`) via `actions/upload-artifact@v4` ([.github/workflows/build.yml:30-36](../../.github/workflows/build.yml#L30-L36)). No release tagging, no deploy step. CI does not build the `token-audit`/`analyze-event-log` tools.
 
 ### Loose ends
 
@@ -92,8 +94,8 @@ Verb dispatch lives in [src/ThroughlineBuild.Cli/Program.cs](../../src/Throughli
 
 1. Strips bare bool flags `--debug`, `--quiet`, `--summary-json`, `--error-location`, `--no-auto-resolve`, `--no-auto-merge`, `--continue-past-failure` from `args` ([src/ThroughlineBuild.Cli/Program.cs:31-61](../../src/ThroughlineBuild.Cli/Program.cs#L31-L61)).
 2. Extracts the agent-selection flags `--agent` / `--agent-plan` / `--agent-implement` / `--agent-review` ([src/ThroughlineBuild.Cli/Program.cs:63-66](../../src/ThroughlineBuild.Cli/Program.cs#L63-L66)).
-3. For `init`, bootstraps the config file and exits before any config load ([src/ThroughlineBuild.Cli/Program.cs:128-144](../../src/ThroughlineBuild.Cli/Program.cs#L128-L144)) - see "The `build init` verb" below. `settarget` likewise dispatches here, before config load, since it edits `.build/config.toml` ([src/ThroughlineBuild.Cli/Program.cs:149-158](../../src/ThroughlineBuild.Cli/Program.cs#L149-L158)); see [01-inventory.md](01-inventory.md) and [04-configuration.md](04-configuration.md).
-4. Resolves the main worktree root via [src/ThroughlineBuild.Helpers/MainWorktreeResolver.cs](../../src/ThroughlineBuild.Helpers/MainWorktreeResolver.cs) so that being invoked from inside a feature worktree still locates `.build/config.toml` and the project root ([src/ThroughlineBuild.Cli/Program.cs:146-149](../../src/ThroughlineBuild.Cli/Program.cs#L146-L149)).
+3. For `init`, bootstraps the config file and exits before any config load ([src/ThroughlineBuild.Cli/Program.cs:138-153](../../src/ThroughlineBuild.Cli/Program.cs#L138-L153)) - see "The `build init` verb" below. `settarget` likewise dispatches here, before config load, since it edits `.build/config.toml` ([src/ThroughlineBuild.Cli/Program.cs:157-164](../../src/ThroughlineBuild.Cli/Program.cs#L157-L164)); see [01-inventory.md](01-inventory.md) and [04-configuration.md](04-configuration.md). `user-guide` is a third pre-config verb, dispatched the same way ([src/ThroughlineBuild.Cli/Program.cs:167-172](../../src/ThroughlineBuild.Cli/Program.cs#L167-L172)) - see "The `build user-guide` verb" below.
+4. Resolves the main worktree root via [src/ThroughlineBuild.Helpers/MainWorktreeResolver.cs](../../src/ThroughlineBuild.Helpers/MainWorktreeResolver.cs) so that being invoked from inside a feature worktree still locates `.build/config.toml` and the project root ([src/ThroughlineBuild.Cli/Program.cs:174-175](../../src/ThroughlineBuild.Cli/Program.cs#L174-L175)).
 5. Walks up from cwd to find `.build/config.toml` ([src/ThroughlineBuild.Cli/Config.cs:64-75](../../src/ThroughlineBuild.Cli/Config.cs#L64-L75)); missing file exits 2.
 6. Loads the TOML via `Tomlyn` and resolves secrets from config or environment ([src/ThroughlineBuild.Cli/Program.cs:164-186](../../src/ThroughlineBuild.Cli/Program.cs#L164-L186)).
 7. Constructs per-verb dependencies (HttpClient, PlaneTicketingClient, a `WorkerAgentFactory` over all referenced agents, JsonlEventSink wrapping a RecordingEventSink) and dispatches.
@@ -132,31 +134,51 @@ Any agent name that is not `gemini`/`codex`/`copilot` falls through to `ClaudeCo
 
 ### The `build init` verb - Functional
 
-`build init` scaffolds `.build/config.toml` from an embedded template. It is the one verb that runs before config load, because it produces the config ([src/ThroughlineBuild.Cli/Program.cs:128-144](../../src/ThroughlineBuild.Cli/Program.cs#L128-L144)).
+`build init` scaffolds `.build/config.toml` from an embedded template. It is a pre-config verb that runs before config load, because it produces the config ([src/ThroughlineBuild.Cli/Program.cs:138-153](../../src/ThroughlineBuild.Cli/Program.cs#L138-L153)).
 
 ```
-build init                              # write .build/config.toml under cwd
+build init                              # interactive: prompts for Plane base URL / workspace / project ID / token
 build init --force                      # overwrite an existing file
 build init --print-template             # print the template to stdout, write nothing
 build init --plane-url URL --workspace SLUG --project-id UUID --token TOKEN
 build init --token-env PLANE_API_TOKEN  # write an env-var indirection line instead of an inline token
 ```
 
-`InitCommand.Execute` loads the template, applies any flag substitutions, and writes the file ([src/ThroughlineBuild.Cli/InitCommand.cs:24-59](../../src/ThroughlineBuild.Cli/InitCommand.cs#L24-L59)):
+`InitCommand.Execute` loads the template, optionally prompts for any missing required values, applies flag substitutions, and writes the file ([src/ThroughlineBuild.Cli/InitCommand.cs:24-64](../../src/ThroughlineBuild.Cli/InitCommand.cs#L24-L64)):
 
+- **Interactive prompting (TLB-370).** When stdin is a TTY (`!console.IsInputRedirected`), `init` prompts on the console for any of the four required values not already supplied by a flag - Plane base URL, workspace slug, project ID, and API token (the token prompt allows a blank "fill in later") ([src/ThroughlineBuild.Cli/InitCommand.cs:37-38](../../src/ThroughlineBuild.Cli/InitCommand.cs#L37-L38), [src/ThroughlineBuild.Cli/InitCommand.cs:66-100](../../src/ThroughlineBuild.Cli/InitCommand.cs#L66-L100)). Each typed answer is trimmed and ignored if empty, leaving the placeholder in place. When stdin is redirected (piped/CI), no prompts fire and the verb is fully non-interactive. Flag values always win: prompting only fills the still-`null` slots, then `ApplyFlags` substitutes ([src/ThroughlineBuild.Cli/InitCommand.cs:105-142](../../src/ThroughlineBuild.Cli/InitCommand.cs#L105-L142)).
 - The template is an embedded resource `ThroughlineBuild.Commands.Templates.config.toml.template` loaded by `ConfigTemplateLoader.Load()` - no disk-relative lookup, preserving the single-binary AOT contract ([src/ThroughlineBuild.Commands/ConfigTemplateLoader.cs:20-36](../../src/ThroughlineBuild.Commands/ConfigTemplateLoader.cs#L20-L36)). The source file is [src/ThroughlineBuild.Commands/Templates/config.toml.template](../../src/ThroughlineBuild.Commands/Templates/config.toml.template), embedded via the csproj `<EmbeddedResource>` entry ([src/ThroughlineBuild.Commands/ThroughlineBuild.Commands.csproj:11](../../src/ThroughlineBuild.Commands/ThroughlineBuild.Commands.csproj#L11)).
-- Flag substitution replaces the `REQUIRED_PLANE_BASE_URL`, `REQUIRED_PLANE_WORKSPACE_SLUG`, `REQUIRED_PLANE_PROJECT_ID`, and `REQUIRED_PLANE_API_TOKEN` placeholders. `--token-env` rewrites the whole `plane_api_token = "..."` line into `plane_api_token_env = "VALUE"` and takes precedence over `--token` ([src/ThroughlineBuild.Cli/InitCommand.cs:64-101](../../src/ThroughlineBuild.Cli/InitCommand.cs#L64-L101)).
-- With `--print-template`, content is written to stdout and no file is created ([src/ThroughlineBuild.Cli/InitCommand.cs:38-42](../../src/ThroughlineBuild.Cli/InitCommand.cs#L38-L42)).
-- Without `--force`, an existing `.build/config.toml` causes `Error: <path> already exists. Use --force to overwrite.` and exit 1 ([src/ThroughlineBuild.Cli/InitCommand.cs:46-50](../../src/ThroughlineBuild.Cli/InitCommand.cs#L46-L50)).
-- On success it creates `.build/` if needed, writes the file UTF-8, and prints `Created <path>` plus a reminder to fill in the REQUIRED fields ([src/ThroughlineBuild.Cli/InitCommand.cs:52-58](../../src/ThroughlineBuild.Cli/InitCommand.cs#L52-L58)).
+- Flag substitution replaces the `REQUIRED_PLANE_BASE_URL`, `REQUIRED_PLANE_WORKSPACE_SLUG`, `REQUIRED_PLANE_PROJECT_ID`, and `REQUIRED_PLANE_API_TOKEN` placeholders. `--token-env` rewrites the whole `plane_api_token = "..."` line into `plane_api_token_env = "VALUE"` and takes precedence over `--token` ([src/ThroughlineBuild.Cli/InitCommand.cs:105-142](../../src/ThroughlineBuild.Cli/InitCommand.cs#L105-L142)).
+- With `--print-template`, content is written to stdout and no file is created ([src/ThroughlineBuild.Cli/InitCommand.cs:42-46](../../src/ThroughlineBuild.Cli/InitCommand.cs#L42-L46)).
+- Without `--force`, an existing `.build/config.toml` causes `Error: <path> already exists. Use --force to overwrite.` and exit 1 ([src/ThroughlineBuild.Cli/InitCommand.cs:50-54](../../src/ThroughlineBuild.Cli/InitCommand.cs#L50-L54)).
+- On success it creates `.build/` if needed, writes the file UTF-8, prints `Created <path>` plus a reminder to fill in the REQUIRED fields, and points the operator at `build user-guide` for the setup walkthrough ([src/ThroughlineBuild.Cli/InitCommand.cs:56-63](../../src/ThroughlineBuild.Cli/InitCommand.cs#L56-L63)).
 
-The placeholders left in the file are non-empty strings, so the file loads but every `REQUIRED_*` value is meaningless until edited; the operator must still fill them in. See [04-configuration.md](04-configuration.md) for the resulting sections key-by-key.
+Any placeholders left in the file are non-empty strings, so the file loads but every un-filled `REQUIRED_*` value is meaningless until edited; the operator must still supply them (interactively, via flags, or by editing). See [04-configuration.md](04-configuration.md) for the resulting sections key-by-key.
 
 ### Loose ends
 
 - **`build init` does not validate** the substituted values against Plane - it only writes the file. There is no `build config check` verb.
 - **`init` writes only the config**; it does not provision worker CLIs, register MCP tools, or validate credentials. The architecture posited a richer `build install` (Section 9, Appendix item 6); `init` is the narrower, implemented form.
-- The README still documents `build new --print-template` for ticket bodies separately from `build init --print-template` ([README.md:13-26](../../README.md#L13-L26)); the two `--print-template` flags belong to different verbs and emit different content.
+- The README still documents `build new --print-template` for ticket bodies separately from `build init --print-template` ([README.md:13-26](../../README.md#L13-L26)); the `--print-template` flag now belongs to three verbs (`new`, `init`, `user-guide`) and emits different content for each.
+
+---
+
+## The `build user-guide` verb - Functional
+
+`build user-guide` (TLB-322) writes the embedded operator setup guide to `docs/throughline_build_userguide.md`. Like `init` and `settarget`, it is a pre-config verb that runs without a `.build/config.toml` present ([src/ThroughlineBuild.Cli/Program.cs:167-172](../../src/ThroughlineBuild.Cli/Program.cs#L167-L172)). `build init` now points new operators here, making it the second step of the getting-started flow (run `build init`, then `build user-guide`, then read the generated guide).
+
+```
+build user-guide                 # write docs/throughline_build_userguide.md under cwd
+build user-guide --force         # overwrite an existing guide file
+build user-guide --print-template  # print the guide to stdout, write nothing
+```
+
+`UserGuideCommand.Execute` loads the embedded guide and writes it ([src/ThroughlineBuild.Cli/UserGuideCommand.cs:19-43](../../src/ThroughlineBuild.Cli/UserGuideCommand.cs#L19-L43)):
+
+- The guide content is an embedded resource loaded by `UserGuideLoader.Load()` - no disk lookup, preserving the single-binary AOT contract ([src/ThroughlineBuild.Commands/UserGuideLoader.cs](../../src/ThroughlineBuild.Commands/UserGuideLoader.cs)).
+- With `--print-template`, content goes to stdout and no file is created ([src/ThroughlineBuild.Cli/UserGuideCommand.cs:23-27](../../src/ThroughlineBuild.Cli/UserGuideCommand.cs#L23-L27)).
+- Without `--force`, an existing `docs/throughline_build_userguide.md` causes `Error: <path> already exists. Use --force to overwrite.` and exit 2 ([src/ThroughlineBuild.Cli/UserGuideCommand.cs:32-36](../../src/ThroughlineBuild.Cli/UserGuideCommand.cs#L32-L36)).
+- On success it creates `docs/` if needed, writes UTF-8, and prints the absolute path of the written file ([src/ThroughlineBuild.Cli/UserGuideCommand.cs:38-42](../../src/ThroughlineBuild.Cli/UserGuideCommand.cs#L38-L42)).
 
 ---
 
@@ -203,7 +225,7 @@ The binary itself writes no state outside the repo. No global config, no per-use
 
 Repeated as a single list for operators:
 
-1. `.NET 8 SDK` to build; nothing at runtime (single-file AOT).
+1. `.NET 10 SDK` to build; nothing at runtime (single-file AOT).
 2. `git`.
 3. At least the worker CLI named by `[workers] default_agent` (and any agent named in `[workers.phases]`): one or more of `claude`, `codex`, `gemini`, `copilot`.
 4. Network to the configured Plane base URL and, only for `close`/`defer`/`reopen`, to `api.anthropic.com`.

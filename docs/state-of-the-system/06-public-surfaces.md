@@ -13,17 +13,18 @@ The whole user-facing API of this repository.
 ```
 build <verb> [args] [--debug | --quiet] [--summary-json] [--error-location]
 
-  plan <id> [id ...]      [--agent <name>]
+  plan <id> [id ...]      [--agent <name>] [--from-brief]
   implement <id> [id ...] [--agent <name>]
   review <id> [id ...]    [--agent <name>]
-  ship <id> [id ...]      [--no-auto-merge]
-  chain <id> [id ...]     [--agent <name>] [--agent-plan <name>] [--agent-implement <name>] [--agent-review <name>] [--no-auto-resolve] [--no-auto-merge] [--continue-past-failure]
+  ship <id> [id ...]      [--no-auto-merge] [--no-push] [--skip-baseline]
+  chain <id> [id ...]     [--agent <name>] [--agent-plan <name>] [--agent-implement <name>] [--agent-review <name>] [--from-brief] [--no-auto-resolve] [--no-auto-merge] [--continue-past-failure]
   rework <id> [--feedback "..."]
   decompose <id> [--agent <name>]
   new <body-path | text | -> [--title "..."] [--type "..."] [--label "..."]* [--review]
   new --print-template
   scaffold <op-doc-path> [--validate-only] [--dry-run] [--accept-warnings]
   init [--force] [--print-template] [--plane-url URL] [--workspace SLUG] [--project-id UUID] [--token TOKEN | --token-env VAR]
+  user-guide [--force] [--print-template]
   settarget [<branch> | --unset]
   list [--state <name>] [--parent <id>] [--type <name>]
   amend <id> [--size S|M|L] [--note "..."] [--description <path|->] [--ac <path|->]
@@ -32,6 +33,14 @@ build <verb> [args] [--debug | --quiet] [--summary-json] [--error-location]
   reopen <id> [reason]
   --help
 ```
+
+There are **17 dispatchable verbs** (plus `--help`): `plan`, `implement`, `review`, `ship`, `chain`, `rework`, `decompose`, `new`, `scaffold`, `init`, `user-guide`, `settarget`, `list`, `amend`, `close`, `defer`, `reopen`. Dispatch is an `if (verb == ...)` chain in [Program.cs](../../src/ThroughlineBuild.Cli/Program.cs), not a switch/registry. Three verbs run *before* config load because they edit or bootstrap config / write docs: `init` ([Program.cs:138-153](../../src/ThroughlineBuild.Cli/Program.cs#L138-L153)), `settarget` ([Program.cs:157-164](../../src/ThroughlineBuild.Cli/Program.cs#L157-L164)), `user-guide` ([Program.cs:167-172](../../src/ThroughlineBuild.Cli/Program.cs#L167-L172)).
+
+- **`user-guide`** (TLB-322) writes the embedded operator guide to `docs/throughline_build_userguide.md`; `--force` overwrites (exit 2 if the file exists without `--force`), `--print-template` dumps to stdout. Runs with no config.
+- **`init` interactive prompting** (TLB-370): when stdin is a TTY, `init` prompts for any `REQUIRED_` config values (Plane base URL / workspace / project ID / API token) not supplied as flags; flag values win over prompts. Non-interactive (redirected stdin) keeps the old template-with-placeholders behavior.
+- **`--from-brief`** (the promote flag, plan + chain only, [Program.cs:63-64](../../src/ThroughlineBuild.Cli/Program.cs#L63-L64)) skips the worker investigation and promotes a Backlog ticket to Ready in place, using the existing ticket description as the plan. Equivalent to `[plan] mode = "promote"`; the flag wins when both are set.
+- **`--no-push`** (ship, [Program.cs:59-60](../../src/ThroughlineBuild.Cli/Program.cs#L59-L60)) makes ship a fully local fast-forward merge with no remote push. It folds into `ShipOptions.NoPush = noPush || !config.Ship.Push` ([Program.cs:1282](../../src/ThroughlineBuild.Cli/Program.cs#L1282)), so `[ship] push = false` has the same effect.
+- **`--skip-baseline`** (ship, [Program.cs:65-66](../../src/ThroughlineBuild.Cli/Program.cs#L65-L66)) sets `ShipOptions.SkipBaseline`, which bypasses the baseline-aware regression-check comparison (TLB-401) and falls back to the legacy gate where any failing check blocks.
 
 Full usage text: [src/ThroughlineBuild.Cli/CliUsage.cs](../../src/ThroughlineBuild.Cli/CliUsage.cs). All verbs are dispatched from [src/ThroughlineBuild.Cli/Program.cs](../../src/ThroughlineBuild.Cli/Program.cs).
 
@@ -43,11 +52,11 @@ These are not just convenience flags - downstream tooling (CI, the operator's ot
 
 | Contract | Where | Status |
 |---|---|---|
-| **Exit codes** are deterministic. Global: 0 ok, 1 phase/command failure, 2 config/unknown verb, 3 missing secret, 4 phase infra failure (review verifier crash, ship worktree missing, git unavailable). Per-verb overrides for `chain`, `rework`, `scaffold` are spelled out in [CliUsage.cs:74-101](../../src/ThroughlineBuild.Cli/CliUsage.cs#L74-L101). The actual chain `ChainOutcome -> exit code` switch is at [Program.cs:1359-1374](../../src/ThroughlineBuild.Cli/Program.cs#L1359-L1374). | Program.cs throughout | Functional |
+| **Exit codes** are deterministic. Global: 0 ok, 1 phase/command failure, 2 config/unknown verb, 3 missing secret, 4 phase infra failure (review verifier crash, ship worktree missing, git unavailable). `settarget` folds into the global scheme (0 ok / 2 branch-not-found). Per-verb overrides for `chain`, `rework`, `scaffold` are spelled out in [CliUsage.cs:90-117](../../src/ThroughlineBuild.Cli/CliUsage.cs#L90-L117). The actual chain `ChainOutcome -> exit code` switch is at [Program.cs:1657-1672](../../src/ThroughlineBuild.Cli/Program.cs#L1657-L1672). | Program.cs throughout | Functional |
 | **`--summary-json`** emits a structured JSON object on stdout (in addition to stderr noise) - the schema is the `PhaseSummary` records ([src/ThroughlineBuild.Helpers/PhaseSummary.cs](../../src/ThroughlineBuild.Helpers/PhaseSummary.cs)) rendered by `PhaseSummaryRenderer.RenderJson` ([src/ThroughlineBuild.Helpers/PhaseSummaryRenderer.cs](../../src/ThroughlineBuild.Helpers/PhaseSummaryRenderer.cs)). | per phase | Functional |
 | **Default summary text block** is stable per-phase (contract spelled out in [CliUsage.cs:67-72](../../src/ThroughlineBuild.Cli/CliUsage.cs#L67-L72)). Operators redirect it (`build plan TLB-N 2>/dev/null > summary.txt`). | per phase | Functional |
 | **`--debug`** captures worker stdio to `.build/sessions/<stem>/` with a stable layout: `worker-stdin.txt`, `worker-stdout.txt`, `worker-stderr.txt`, `envelope-result.txt` (or `parse-error.txt` on failure), `worker-result.json`. Non-Claude agents that deliver the brief via args write a placeholder `worker-stdin.txt` and a `worker-result-summary.txt` instead of `envelope-result.txt`; see the per-agent `WriteDebugCapture` methods. `--debug` is a no-op for `ship` (no worker subprocess). | per phase | Functional |
-| **Progress digest** (default behavior, `[m:ss] kind <payload>`) auto-suppresses when stderr is redirected unless `BUILD_PROGRESS=1`. The per-line format is produced by each agent's `IWorkerProgressDigester` (null for Copilot, which has no digest). | [Program.cs:839-851](../../src/ThroughlineBuild.Cli/Program.cs#L839-L851) | Functional |
+| **Progress digest** (default behavior, `[m:ss] kind <payload>`) auto-suppresses when stderr is redirected unless `BUILD_PROGRESS=1`. The per-line format is produced by each agent's `IWorkerProgressDigester` (null for Copilot, which has no digest). Under a multi-ticket `chain`, each ticket's progress lines are additionally prefixed `[{ticketId}] ` (TLB-403) via `PrefixedTextWriter` wrapping the digest sink ([ChainPhase.cs:541-550](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L541-L550)), so interleaved per-ticket output stays attributable. | [Program.cs:839-851](../../src/ThroughlineBuild.Cli/Program.cs#L839-L851) | Functional |
 | **Plane comment markers** `[planned_at: <sha>]`, `[implemented_at: <sha>]`, `[decomposed_at: <sha>]`, `[shipped_at: <sha>]`, `<strong>wontfix:</strong>`, `<strong>deferred:</strong>`, `<strong>reopened:</strong>` are load-bearing - downstream phases parse them. See the marker subsection below. | per phase | Functional |
 
 ### Exit codes (full enumeration)
@@ -62,25 +71,25 @@ The global mapping (any verb that does not override it):
 | 3 | Missing secret (env var not set) |
 | 4 | Phase infrastructure failure (review verifier crash, ship worktree missing, git unavailable) |
 
-`chain` overrides these with a `ChainOutcome`-keyed switch ([Program.cs:1359-1374](../../src/ThroughlineBuild.Cli/Program.cs#L1359-L1374), enum at [src/ThroughlineBuild.Contracts/Models/ChainOutcome.cs:3-17](../../src/ThroughlineBuild.Contracts/Models/ChainOutcome.cs#L3-L17)):
+`chain` overrides these with a `ChainOutcome`-keyed switch ([Program.cs:1657-1672](../../src/ThroughlineBuild.Cli/Program.cs#L1657-L1672), enum at [src/ThroughlineBuild.Contracts/Models/ChainOutcome.cs:3-17](../../src/ThroughlineBuild.Contracts/Models/ChainOutcome.cs#L3-L17)):
 
 | Code | ChainOutcome |
 |---|---|
 | 0 | `Completed`, `RatifiedObsolete`, `ParentCompleted` |
-| 2 | `RefusedInitialState`, `ParentHasGrandchildren` |
+| 2 | `RefusedInitialState`, `RefusedDirtyTree`, `ParentHasGrandchildren` |
 | 3 | `StoppedAtPlan`, `ParentStoppedEarly`, `Skipped` |
 | 4 | `StoppedAtImplement` |
 | 5 | `StoppedAtReview` |
 | 6 | `ReworkCapExceeded` |
 | 7 | `StoppedAtShip` |
 
-`Skipped` (TLB-313) is the outcome for a ticket whose ancestor failed when `--continue-past-failure` is not set; in the multi-ticket aggregate path a `Skipped` result still counts as "all good" for the overall exit code ([Program.cs:1338-1343](../../src/ThroughlineBuild.Cli/Program.cs#L1338-L1343)). `rework` overrides codes 2/4 and `scaffold` overrides codes 2/3 - see [CliUsage.cs:91-101](../../src/ThroughlineBuild.Cli/CliUsage.cs#L91-L101).
+`RefusedDirtyTree` (chain preflight hygiene gate refusal) maps to 2 alongside `RefusedInitialState`. `Skipped` (TLB-313) is the outcome for a ticket whose ancestor failed when `--continue-past-failure` is not set; in the multi-ticket aggregate path a `Skipped` result still counts as "all good" for the overall exit code ([Program.cs:1636-1641](../../src/ThroughlineBuild.Cli/Program.cs#L1636-L1641)). `rework` overrides codes 2/4 and `scaffold` overrides codes 2/3 - see [CliUsage.cs:107-117](../../src/ThroughlineBuild.Cli/CliUsage.cs#L107-L117).
 
 ### Conventions the CLI follows
 
 - Always reads `.build/config.toml` from the nearest ancestor directory.
 - Always resolves the main worktree root before phase dispatch, so `build` invoked from inside a feature worktree still operates on the right paths.
-- `ship` pushes the merge target to the configured remote after a fast-forward merge (no other verb pushes); see [05-state-and-persistence.md](05-state-and-persistence.md).
+- `ship` pushes the merge target to the configured remote after a fast-forward merge (no other verb pushes), *unless* `--no-push` (or `[ship] push = false`) is set, in which case the merge stays fully local and no push happens; see [05-state-and-persistence.md](05-state-and-persistence.md).
 - Never amends or force-resets anything (no `git push --force`, `git reset --hard`, or interactive rebase anywhere).
 - Single-shot, no daemon, no shared state between invocations.
 
@@ -230,6 +239,8 @@ Each line is a serialized `EventLineDto` ([src/ThroughlineBuild.EventLog/EventLi
 | 12 | `DispatchEnd` |
 
 `DispatchStart` / `DispatchEnd` (11/12) frame parallel multi-ticket chain dispatch. `Data` is an arbitrary `IReadOnlyDictionary<string, object>` whose contents are per-`Kind` and not statically typed. The format is documented in [docs/event-log-format.md](../event-log-format.md).
+
+`GateFailure` (ordinal 4) is the workhorse refusal event: it carries a `kind` discriminator in its `Data` identifying which gate refused. The discriminator set has grown with the op-29 hygiene-gate and worktree-attribution work and now includes (non-exhaustive) `hygiene_gate` (pre-implement), `hygiene_gate_preflight` (chain outermost preflight), `pre_flight_hygiene` (pre-ship), `wrong_worktree_branch` (ship onto wrong/detached branch), `dirty_worktree_after_review` (post-review cleanliness hard-fail), `implemented_at_superseded` (review marker behind worktree HEAD), and `shared_worktree_unavailable` (chain shared-worktree fallback). The ordinal stays 4; tooling that buckets by `Kind` is unaffected, but anything that *reads* the discriminator must tolerate new `kind` values being added.
 
 ### `ThroughlineBuild.Helpers`
 

@@ -1,6 +1,6 @@
 # tests/ - xUnit test suites
 
-One test project mirrors each `src/` library (19 projects, all net8.0,
+One test project mirrors each `src/` library (19 projects, all net10.0,
 ~1200 `[Fact]`/`[Theory]` across ~230 files). Run all: `dotnet test`.
 
 AOT discipline: test projects do NOT inherit `PublishAot=true` from the Cli

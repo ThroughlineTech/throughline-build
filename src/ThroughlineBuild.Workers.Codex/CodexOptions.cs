@@ -11,11 +11,11 @@ public class CodexOptions
         new Dictionary<WorkerSize, string>
         {
             { WorkerSize.Small,  "gpt-5.4-mini" },
-            { WorkerSize.Medium, "gpt-5.3-codex" },
+            { WorkerSize.Medium, "gpt-5.4" },
             { WorkerSize.Large,  "gpt-5.5" },
         };
-    // When true (default), pass --full-auto to the codex CLI so the headless
-    // run does not block on the interactive approval gate. Set false from
-    // config to opt back into the gate.
+    // When true (default), pass the codex full-bypass flag so the headless run
+    // does not block on the interactive approval gate or Windows sandbox.
+    // Set false from config to opt back into the gate.
     public bool BypassPermissions { get; init; } = true;
 }

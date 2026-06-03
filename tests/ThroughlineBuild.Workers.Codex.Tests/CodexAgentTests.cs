@@ -68,14 +68,14 @@ public class CodexAgentTests
     }
 
     [Fact]
-    public void BuildArgs_BypassPermissionsTrue_IncludesFullAuto()
+    public void BuildArgs_BypassPermissionsTrue_IncludesFullBypassFlag()
     {
         var options = new CodexOptions { BypassPermissions = true };
         var workerOptions = new WorkerOptions(TimeSpan.FromSeconds(30));
 
         var args = CodexAgent.BuildArgs("the brief", options, workerOptions);
 
-        Assert.Contains("--full-auto", args);
+        Assert.Contains("--dangerously-bypass-approvals-and-sandbox", args);
     }
 
     [Fact]
@@ -86,6 +86,6 @@ public class CodexAgentTests
 
         var args = CodexAgent.BuildArgs("the brief", options, workerOptions);
 
-        Assert.DoesNotContain("--full-auto", args);
+        Assert.DoesNotContain("--dangerously-bypass-approvals-and-sandbox", args);
     }
 }
