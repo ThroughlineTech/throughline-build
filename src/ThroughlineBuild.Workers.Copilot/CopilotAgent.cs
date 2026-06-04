@@ -46,6 +46,7 @@ public class CopilotAgent : IWorkerAgent
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        ProcessStreamEncoding.ApplyUtf8(psi);
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);
         ConfigureEnvironment(psi, options);
