@@ -18,7 +18,8 @@ public record PlaneIssue(
 public record PlaneState(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("name")] string Name,
-    [property: JsonPropertyName("group")] string Group
+    [property: JsonPropertyName("group")] string Group,
+    [property: JsonPropertyName("sequence")] double? Sequence = null
 );
 
 public record PlaneStateList(
@@ -144,6 +145,18 @@ public record CreateRelationRequest(
     [property: JsonPropertyName("issues")] List<string> Issues
 );
 
+public record CreateStateRequest(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("group")] string Group,
+    [property: JsonPropertyName("color")] string Color,
+    [property: JsonPropertyName("sequence")] double Sequence
+);
+
+public record CreateLabelRequest(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("color")] string Color
+);
+
 [JsonSerializable(typeof(PlaneIssue))]
 [JsonSerializable(typeof(PlaneIssueList))]
 [JsonSerializable(typeof(PlaneState))]
@@ -170,6 +183,8 @@ public record CreateRelationRequest(
 [JsonSerializable(typeof(SetParentRequest))]
 [JsonSerializable(typeof(UpdateDescriptionRequest))]
 [JsonSerializable(typeof(CreateRelationRequest))]
+[JsonSerializable(typeof(CreateStateRequest))]
+[JsonSerializable(typeof(CreateLabelRequest))]
 [JsonSerializable(typeof(List<PlaneState>))]
 [JsonSerializable(typeof(List<PlaneLabel>))]
 [JsonSerializable(typeof(List<PlaneRelationItem>))]

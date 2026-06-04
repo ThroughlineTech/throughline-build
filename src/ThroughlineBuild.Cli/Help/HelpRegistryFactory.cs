@@ -45,6 +45,7 @@ public static class HelpRegistryFactory
         // Configure
         r.Register(Init());
         r.Register(SetTarget());
+        r.Register(Setup());
         r.Register(UserGuide());
         r.Register(Scaffold());
 
@@ -355,6 +356,19 @@ public static class HelpRegistryFactory
             new("--unset", "Remove the target_branch override from config", false),
         ],
         ExitCodes: [s_exit0, s_exit2],
+        Examples:  []
+    );
+
+    private static CommandHelp Setup() => new(
+        Name:    "setup",
+        Group:   CommandGroup.Configure,
+        Summary: "Provision the Plane project to meet workflow criteria (states + labels)",
+        Usage:   "setup [--check]",
+        Options:
+        [
+            new("--check", "Verify only: report missing states/labels and exit 1 if any are absent; create nothing", false),
+        ],
+        ExitCodes: [s_exit0, s_exit1, s_exit2, s_exit3],
         Examples:  []
     );
 

@@ -31,6 +31,7 @@ public class HelpRegistryFactoryTests
     [InlineData("reopen")]
     [InlineData("init")]
     [InlineData("settarget")]
+    [InlineData("setup")]
     [InlineData("user-guide")]
     [InlineData("scaffold")]
     public void TryGet_ReturnsEntryForAllKnownCommands(string verb)
@@ -78,6 +79,7 @@ public class HelpRegistryFactoryTests
     [Theory]
     [InlineData("init")]
     [InlineData("settarget")]
+    [InlineData("setup")]
     [InlineData("user-guide")]
     [InlineData("scaffold")]
     public void ConfigureCommands_HaveCorrectGroup(string verb)
@@ -105,6 +107,7 @@ public class HelpRegistryFactoryTests
     [InlineData("reopen")]
     [InlineData("init")]
     [InlineData("settarget")]
+    [InlineData("setup")]
     [InlineData("user-guide")]
     [InlineData("scaffold")]
     public void AllCommands_HaveNonEmptySummaryAndUsage(string verb)

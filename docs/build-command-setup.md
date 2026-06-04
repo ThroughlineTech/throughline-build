@@ -134,6 +134,28 @@ and follow the browser flow. You only need to do this once per machine.
 
 ---
 
+## Step 3c - Provision the Plane project (`build setup`)
+
+`build init` writes your config but does **not** touch the Plane project. The workflow assumes the project carries a specific set of states and labels; the `build` binary resolves them by name at runtime and **hard-fails** when a required label is missing (`Label 'risk:low' not found in Plane project`) and warns when a required state is missing. A brand-new Plane project has neither, so run `setup` once after `init`:
+
+```bash
+dotnet run --project src/ThroughlineBuild.Cli -- setup
+```
+
+This creates any missing states (Backlog, Planning, Ready, In Progress, In Review, Done, Cancelled) and labels (`risk:low|medium|high`, `size:s|m|l`, `plan-ticket`, `stub`, `delegated`). It is **idempotent** - a project that already meets criteria is left untouched, and re-running prints `Plane project meets criteria: ...`.
+
+To verify without mutating anything (e.g. in CI), use `--check`:
+
+```bash
+dotnet run --project src/ThroughlineBuild.Cli -- setup --check
+```
+
+`--check` exits `0` when the project meets criteria and `1` (listing the gaps on stderr) when it does not, creating nothing.
+
+The end-to-end path on a fresh project is: `build init` (enter config) -> `build setup` -> `build new "..."` -> `build chain <id>`.
+
+---
+
 ## Step 4 - Run a plan
 
 The plan phase sends a structured brief to a Claude Code worker, which investigates the codebase and writes an investigation + implementation plan back into the ticket description on Plane, applying `risk:*` and `size:*` labels and transitioning the ticket to Ready.
