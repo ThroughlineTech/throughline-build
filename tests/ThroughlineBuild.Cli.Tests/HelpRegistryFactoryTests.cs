@@ -12,7 +12,7 @@ public class HelpRegistryFactoryTests
     private static readonly HelpRegistry Registry = HelpRegistryFactory.Build();
 
     // ------------------------------------------------------------------
-    // All 17 known commands must be registered.
+    // All 18 known commands must be registered.
     // ------------------------------------------------------------------
 
     [Theory]
@@ -33,6 +33,7 @@ public class HelpRegistryFactoryTests
     [InlineData("settarget")]
     [InlineData("setup")]
     [InlineData("user-guide")]
+    [InlineData("op-doc")]
     [InlineData("scaffold")]
     public void TryGet_ReturnsEntryForAllKnownCommands(string verb)
     {
@@ -81,6 +82,7 @@ public class HelpRegistryFactoryTests
     [InlineData("settarget")]
     [InlineData("setup")]
     [InlineData("user-guide")]
+    [InlineData("op-doc")]
     [InlineData("scaffold")]
     public void ConfigureCommands_HaveCorrectGroup(string verb)
     {
@@ -109,6 +111,7 @@ public class HelpRegistryFactoryTests
     [InlineData("settarget")]
     [InlineData("setup")]
     [InlineData("user-guide")]
+    [InlineData("op-doc")]
     [InlineData("scaffold")]
     public void AllCommands_HaveNonEmptySummaryAndUsage(string verb)
     {
@@ -203,6 +206,17 @@ public class HelpRegistryFactoryTests
         var help = Registry.TryGet("scaffold")!;
         Assert.Contains(help.Options, o => o.Flag == "--validate-only" && !o.IsGlobal);
         Assert.Contains(help.Options, o => o.Flag == "--dry-run"       && !o.IsGlobal);
+    }
+
+    [Fact]
+    public void OpDoc_HelpDocumentsSpecSubcommand()
+    {
+        var output = Tier1Renderer.Render(Registry.TryGet("op-doc")!);
+
+        Assert.Contains("op-doc spec", output);
+        Assert.Contains("--print", output);
+        Assert.Contains("--write", output);
+        Assert.Contains("--force", output);
     }
 
     [Fact]
@@ -302,6 +316,7 @@ public class HelpRegistryFactoryTests
     [InlineData("init")]
     [InlineData("settarget")]
     [InlineData("user-guide")]
+    [InlineData("op-doc")]
     [InlineData("scaffold")]
     public void Tier1Renderer_CanRenderEveryCommand(string verb)
     {
