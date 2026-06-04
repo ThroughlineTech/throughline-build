@@ -23,6 +23,8 @@ public static class ScaffoldExitCategory
 /// </summary>
 public sealed class ScaffoldCommand : ITicketCommand
 {
+    private const string OpDocSpecHint = "See 'build op-doc spec' for the authoring rules.";
+
     private readonly ScaffoldPhase _phase;
 
     public ScaffoldCommand(ScaffoldPhase phase)
@@ -90,6 +92,7 @@ public sealed class ScaffoldCommand : ITicketCommand
             var sb = new System.Text.StringBuilder();
             sb.AppendLine(StripTag(warnResult.Message));
             sb.AppendLine("Re-run with --accept-warnings to proceed past warnings.");
+            sb.AppendLine(OpDocSpecHint);
             return new CommandResult(false, $"{ScaffoldExitCategory.ValidationError}\n{sb.ToString().TrimEnd()}");
         }
 
@@ -126,6 +129,7 @@ public sealed class ScaffoldCommand : ITicketCommand
             {
                 sb.AppendLine("  [PARSE] could not parse op-doc: document structure is invalid.");
             }
+            AppendOpDocSpecHint(sb);
             return new CommandResult(false, $"{ScaffoldExitCategory.ValidationError}\n{sb.ToString().TrimEnd()}");
         }
 
@@ -154,6 +158,11 @@ public sealed class ScaffoldCommand : ITicketCommand
         if (!hasErrors && !hasWarnings)
         {
             sb.AppendLine("OK: no errors or warnings.");
+        }
+
+        if (hasErrors)
+        {
+            AppendOpDocSpecHint(sb);
         }
 
         bool success = !hasErrors;
@@ -273,5 +282,10 @@ public sealed class ScaffoldCommand : ITicketCommand
         var nl = message.IndexOf('\n');
         if (nl < 0) return message;
         return message.Substring(nl + 1);
+    }
+
+    private static void AppendOpDocSpecHint(System.Text.StringBuilder sb)
+    {
+        sb.AppendLine(OpDocSpecHint);
     }
 }

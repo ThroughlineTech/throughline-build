@@ -292,6 +292,7 @@ OOS:
         var ctxBlocked = MakeCtx(path);
         var blockedResult = await cmd.ExecuteAsync(ctxBlocked, CancellationToken.None);
         Assert.False(blockedResult.Success);
+        Assert.Contains("See 'build op-doc spec' for the authoring rules.", blockedResult.Message);
         Assert.Equal(0, ticketing.CreateCalls);
 
         // With --accept-warnings, it should proceed and create tickets.
@@ -323,6 +324,7 @@ OOS:
         // Exit tag should be ValidationError (EXIT:2)
         Assert.NotNull(result.Message);
         Assert.StartsWith(ScaffoldExitCategory.ValidationError, result.Message);
+        Assert.Contains("See 'build op-doc spec' for the authoring rules.", result.Message);
     }
 
     // ---- Test 5: successful scaffold prints expected output ----
