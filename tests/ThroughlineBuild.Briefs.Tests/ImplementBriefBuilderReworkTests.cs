@@ -114,6 +114,80 @@ public class ImplementBriefBuilderReworkTests
     }
 
     [Fact]
+    public void Build_WithReworkContext_IncludesPriorSummaryAndTouchedFiles()
+    {
+        var feedback = new ReviewFeedback(
+            Rationale: "Fix the missed tests.",
+            ChecksFailed: new[] { "tests" },
+            ReworkRoundNumber: 1);
+        var reworkContext = new ReworkBriefContext(
+            ImplementSummary: "Added the parser and CLI wiring.",
+            TouchedFiles: new[] { "src/Parser.cs", "tests/ParserTests.cs" });
+
+        var brief = ImplementBriefBuilder.Build(
+            "claude-code",
+            MinimalTicket(),
+            MinimalRepo(),
+            Branch,
+            Worktree,
+            reviewFeedback: feedback,
+            reworkContext: reworkContext);
+
+        Assert.Contains("## Prior implement context", brief.Instruction);
+        Assert.Contains("Added the parser and CLI wiring.", brief.Instruction);
+        Assert.Contains("- src/Parser.cs", brief.Instruction);
+        Assert.Contains("- tests/ParserTests.cs", brief.Instruction);
+        Assert.Equal(new[] { "src/Parser.cs", "tests/ParserTests.cs" }, brief.RelevantFiles);
+    }
+
+    [Fact]
+    public void Build_WithReworkContext_BoundsPriorSummary()
+    {
+        var feedback = new ReviewFeedback(
+            Rationale: "Fix the missed tests.",
+            ChecksFailed: new[] { "tests" },
+            ReworkRoundNumber: 1);
+        var longSummary = new string('x', 2100);
+        var reworkContext = new ReworkBriefContext(
+            ImplementSummary: longSummary,
+            TouchedFiles: new[] { "src/Parser.cs" });
+
+        var brief = ImplementBriefBuilder.Build(
+            "claude-code",
+            MinimalTicket(),
+            MinimalRepo(),
+            Branch,
+            Worktree,
+            reviewFeedback: feedback,
+            reworkContext: reworkContext);
+
+        Assert.DoesNotContain(longSummary, brief.Instruction);
+        Assert.Contains("[truncated: 100 more chars]", brief.Instruction);
+    }
+
+    [Fact]
+    public void Build_InitialRound_IgnoresReworkContextWithoutFeedback()
+    {
+        var reworkContext = new ReworkBriefContext(
+            ImplementSummary: "Should not appear.",
+            TouchedFiles: new[] { "src/ShouldNotAppear.cs" });
+
+        var brief = ImplementBriefBuilder.Build(
+            "claude-code",
+            MinimalTicket(),
+            MinimalRepo(),
+            Branch,
+            Worktree,
+            reviewFeedback: null,
+            reworkContext: reworkContext);
+
+        Assert.DoesNotContain("Prior implement context", brief.Instruction);
+        Assert.DoesNotContain("Should not appear.", brief.Instruction);
+        Assert.DoesNotContain("src/ShouldNotAppear.cs", brief.Instruction);
+        Assert.Empty(brief.RelevantFiles);
+    }
+
+    [Fact]
     public void Build_SnapshotOriginal_StillPassesWithNullFeedback()
     {
         var expected = SnapshotLoader.Load("implement-original.txt");

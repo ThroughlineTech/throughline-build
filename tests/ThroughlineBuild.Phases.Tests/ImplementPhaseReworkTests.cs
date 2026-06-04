@@ -198,6 +198,70 @@ public class ImplementPhaseReworkTests
     }
 
     [Fact]
+    public async Task RunAsync_ReworkRound_BriefIncludesPriorSummaryAndTouchedFiles()
+    {
+        var workingDir = CreateTempWorkingDirWithWorktree();
+        var implementedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InProgress));
+        ticketing.ExistingComments.Add(new TicketComment(
+            "comment-implemented",
+            $"<p>[implemented_at: {CommitSha}] (branch ticket/tlb-1-test-ticket)</p><p>Implemented parser changes.</p><ul><li>Added regression tests.</li></ul>",
+            implementedAt));
+        var worker = new FakeWorkerAgent(OkWorkerResult());
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha)
+        {
+            DiffEntries = new[]
+            {
+                new DiffEntry("src/Parser.cs", DiffKind.Modified, null, 3, 1, "@@ patch should not be included"),
+                new DiffEntry("tests/ParserTests.cs", DiffKind.Added, null, 12, 0, "@@ patch should not be included")
+            }
+        };
+        var phaseOptions = new ImplementPhaseOptions(MakeReviewFeedback(1));
+        var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git, phaseOptions: phaseOptions);
+
+        var result = await phase.RunAsync("TLB-1", workingDir, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(worker.LastBrief);
+        Assert.Contains("## Prior implement context", worker.LastBrief!.Instruction);
+        Assert.Contains("Implemented parser changes.", worker.LastBrief.Instruction);
+        Assert.Contains("Added regression tests.", worker.LastBrief.Instruction);
+        Assert.Contains("- src/Parser.cs", worker.LastBrief.Instruction);
+        Assert.Contains("- tests/ParserTests.cs", worker.LastBrief.Instruction);
+        Assert.DoesNotContain("@@ patch should not be included", worker.LastBrief.Instruction);
+        Assert.Equal(new[] { "src/Parser.cs", "tests/ParserTests.cs" }, worker.LastBrief.RelevantFiles);
+        Assert.True(git.DiffCalled);
+        Assert.False(git.LastDiffIncludedPatchContent);
+    }
+
+    [Fact]
+    public async Task RunAsync_InitialRound_BriefDoesNotIncludePriorImplementContext()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.Ready));
+        ticketing.ExistingComments.Add(new TicketComment(
+            "comment-implemented",
+            $"<p>[implemented_at: {CommitSha}]</p><p>Should stay off initial brief.</p>",
+            DateTimeOffset.UtcNow));
+        var worker = new FakeWorkerAgent(OkWorkerResult());
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha)
+        {
+            DiffEntries = new[] { new DiffEntry("src/Initial.cs", DiffKind.Modified, null, 1, 1, null) }
+        };
+        var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(worker.LastBrief);
+        Assert.DoesNotContain("Prior implement context", worker.LastBrief!.Instruction);
+        Assert.DoesNotContain("Should stay off initial brief.", worker.LastBrief.Instruction);
+        Assert.Empty(worker.LastBrief.RelevantFiles);
+        Assert.False(git.DiffCalled);
+    }
+
+    [Fact]
     public async Task RunAsync_ReworkRound_NeverCallsCreateWorktree()
     {
         var workingDir = CreateTempWorkingDirWithWorktree();
@@ -265,6 +329,7 @@ public class ImplementPhaseReworkTests
         private readonly Ticket _ticket;
         public List<(string id, TicketState state)> Transitions { get; } = new();
         public List<(string id, string html)> Comments { get; } = new();
+        public List<TicketComment> ExistingComments { get; } = new();
 
         public FakeTicketing(Ticket ticket) { _ticket = ticket; }
 
@@ -289,7 +354,7 @@ public class ImplementPhaseReworkTests
         public Task<RollupResult> RollupParentAsync(string id, CancellationToken ct) =>
             Task.FromResult(new RollupResult(false, null, null));
         public Task<IReadOnlyList<TicketComment>> GetCommentsAsync(string id, CancellationToken ct) =>
-            Task.FromResult((IReadOnlyList<TicketComment>)Array.Empty<TicketComment>());
+            Task.FromResult((IReadOnlyList<TicketComment>)ExistingComments);
         public Task<NewTicketResult> CreateTicketAsync(
             string title, string? type, string descriptionHtml,
             IReadOnlyList<string>? initialLabelNames, CancellationToken ct) =>
@@ -323,8 +388,12 @@ public class ImplementPhaseReworkTests
         public FakeWorkerAgent(WorkerResult result) { _result = result; }
         public string Name => "claude-code";
         public IWorkerProgressDigester? Digester => null;
-        public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct) =>
-            Task.FromResult(_result);
+        public Brief? LastBrief { get; private set; }
+        public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
+        {
+            LastBrief = brief;
+            return Task.FromResult(_result);
+        }
     }
 
     private sealed class FakeEventSink : IEventSink
@@ -339,6 +408,9 @@ public class ImplementPhaseReworkTests
         private readonly string _headSha;
         public bool CreateWorktreeCalled { get; private set; }
         public bool CheckoutWorktreeCalled { get; private set; }
+        public bool DiffCalled { get; private set; }
+        public bool LastDiffIncludedPatchContent { get; private set; }
+        public IReadOnlyList<DiffEntry> DiffEntries { get; set; } = Array.Empty<DiffEntry>();
         // Default false: a fake with no existing worktree and no recoverable branch.
         // Set true to simulate the surviving ticket branch being re-checkout-able.
         public bool CheckoutWorktreeSucceeds { get; set; }
@@ -373,8 +445,12 @@ public class ImplementPhaseReworkTests
         }
         public Task<string> HeadShaAsync(string worktreePath, CancellationToken ct) =>
             Task.FromResult(_headSha);
-        public Task<GitDiff> DiffAsync(string fromRef, string toRef, string mainWorktreePath, bool includePatchContent, CancellationToken ct) =>
-            Task.FromResult(new GitDiff(fromRef, toRef, Array.Empty<DiffEntry>()));
+        public Task<GitDiff> DiffAsync(string fromRef, string toRef, string mainWorktreePath, bool includePatchContent, CancellationToken ct)
+        {
+            DiffCalled = true;
+            LastDiffIncludedPatchContent = includePatchContent;
+            return Task.FromResult(new GitDiff(fromRef, toRef, DiffEntries));
+        }
         public Task<GitOpResult> FetchAsync(string remote, string mainWorktreePath, CancellationToken ct) =>
             Task.FromResult(new GitOpResult(true, null));
         public Task<RebaseResult> RebaseAsync(string ontoRef, string featureWorktreePath, CancellationToken ct) =>

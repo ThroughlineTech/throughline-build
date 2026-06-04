@@ -1,3 +1,5 @@
+using System.Net;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using ThroughlineBuild.Briefs;
 using ThroughlineBuild.Contracts;
@@ -25,6 +27,11 @@ public record ImplementResult(
 
 public class ImplementPhase : IWorkflowPhase
 {
+    private static readonly Regex ImplementedAtParagraphPattern = new(
+        @"<p>\s*\[implemented_at:[\s\S]*?</p>",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex HtmlTagPattern = new(@"<[^>]+>", RegexOptions.Compiled);
+
     // Compile-time gate for the chain-handoff pointer feature (Plan C, Brief 10).
     // When false, the implement brief is identical to the pre-Plan-C baseline: no
     // touched-files in RelevantFiles and no chain_pointer in Context. The derivation
@@ -223,7 +230,10 @@ public class ImplementPhase : IWorkflowPhase
         // so the brief is byte-identical to the pre-Plan-C baseline. The derivation in
         // ChainPhase still ran (it is cheap and harmless); we simply discard the result here.
         var effectiveChainRange = HandoffPointerEnabled ? _phaseOptions.ChainCommitRange : null;
-        var brief = ImplementBriefBuilder.Build(_worker.Name, ticket, repoState, canonicalBranchName, canonicalWorktreePath, _project, _phaseOptions.ReviewFeedback, effectiveChainRange);
+        var reworkContext = isRework
+            ? await BuildReworkBriefContextAsync(comments, baseRef, canonicalBranchName, workingDirectory, ct).ConfigureAwait(false)
+            : null;
+        var brief = ImplementBriefBuilder.Build(_worker.Name, ticket, repoState, canonicalBranchName, canonicalWorktreePath, _project, _phaseOptions.ReviewFeedback, effectiveChainRange, reworkContext);
 
         // Step 9: Set up the working directory for the ticket.
         // - Shared-worktree (initial): create the ticket branch inside the pre-existing worktree.
@@ -424,6 +434,62 @@ public class ImplementPhase : IWorkflowPhase
             ticketId,
             Phase.Implement,
             data), ct).ConfigureAwait(false);
+    }
+
+    private async Task<ReworkBriefContext> BuildReworkBriefContextAsync(
+        IReadOnlyList<TicketComment> comments,
+        string baseRef,
+        string branchName,
+        string workingDirectory,
+        CancellationToken ct)
+    {
+        var summary = LatestImplementedSummary(comments);
+        IReadOnlyList<string> touchedFiles = Array.Empty<string>();
+
+        try
+        {
+            var diff = await _git.DiffAsync(
+                baseRef,
+                branchName,
+                workingDirectory,
+                includePatchContent: false,
+                ct).ConfigureAwait(false);
+            touchedFiles = diff.Entries.Select(e => e.Path).ToList();
+        }
+        catch
+        {
+            // Rework enrichment is a token-economy hint. If git cannot provide it,
+            // keep the cold-boot behavior instead of failing the phase.
+        }
+
+        return new ReworkBriefContext(summary, touchedFiles);
+    }
+
+    private static string? LatestImplementedSummary(IReadOnlyList<TicketComment> comments)
+    {
+        TicketComment? latest = null;
+        foreach (var comment in comments)
+        {
+            if (MarkerParser.Parse(comment.Body).Any(m => m.Name == "implemented_at") &&
+                (latest is null || comment.CreatedAt >= latest.CreatedAt))
+            {
+                latest = comment;
+            }
+        }
+
+        if (latest is null)
+            return null;
+
+        var withoutMarker = ImplementedAtParagraphPattern.Replace(latest.Body, "");
+        var plain = HtmlTagPattern.Replace(withoutMarker, "\n");
+        plain = WebUtility.HtmlDecode(plain);
+        var lines = plain
+            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0);
+
+        var summary = string.Join("\n", lines).Trim();
+        return summary.Length == 0 ? null : summary;
     }
 
 

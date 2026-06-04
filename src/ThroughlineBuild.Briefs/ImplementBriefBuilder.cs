@@ -3,8 +3,14 @@ using ThroughlineBuild.Helpers;
 
 namespace ThroughlineBuild.Briefs;
 
+public sealed record ReworkBriefContext(
+    string? ImplementSummary,
+    IReadOnlyList<string> TouchedFiles);
+
 public static class ImplementBriefBuilder
 {
+    private const int MaxReworkSummaryChars = 2000;
+
     public static Brief Build(
         string agentName,
         Ticket ticket,
@@ -13,7 +19,8 @@ public static class ImplementBriefBuilder
         string worktreePath,
         ProjectContext? project = null,
         ReviewFeedback? reviewFeedback = null,
-        ChainCommitRange? chainCommitRange = null)
+        ChainCommitRange? chainCommitRange = null,
+        ReworkBriefContext? reworkContext = null)
     {
         var proj = project ?? ProjectContext.Empty;
 
@@ -27,7 +34,7 @@ public static class ImplementBriefBuilder
             $"\"metadata\":{{\"commit_sha\":\"<HEAD SHA of feature branch after all commits>\"," +
             $"\"files_changed\":[\"path/relative/to/worktree\"]}}}}";
 
-        var reviewFeedbackSection = BuildReviewFeedbackSection(reviewFeedback);
+        var reviewFeedbackSection = BuildReviewFeedbackSection(reviewFeedback, reworkContext);
         var obsoleteDetectionSection = BuildObsoleteDetectionSection(reviewFeedback);
 
         var vars = new Dictionary<string, string>
@@ -49,25 +56,22 @@ public static class ImplementBriefBuilder
 
         var instruction = TemplateLoader.Load(agentName, "implement.md").Substitute(vars);
 
-        // Fold chain-handoff touched-files into RelevantFiles (deduped).
-        // When the range is empty (first ticket) or null, RelevantFiles stays empty.
+        // Fold pointer-only file hints into RelevantFiles (deduped).
+        // Initial non-chain runs keep this empty; rework runs use prior touched files.
         IReadOnlyList<string> relevantFiles = Array.Empty<string>();
         string chainPointer = "";
+        var relevantFileCandidates = new List<string>();
         if (chainCommitRange is not null && !chainCommitRange.IsEmpty)
         {
-            // Deduplicate while preserving first-encounter order.
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            var files = new List<string>();
-            foreach (var f in chainCommitRange.TouchedFiles)
-            {
-                if (seen.Add(f))
-                    files.Add(f);
-            }
-            relevantFiles = files.AsReadOnly();
+            relevantFileCandidates.AddRange(chainCommitRange.TouchedFiles);
 
             // Single bounded pointer line for Context: "chain prior commits: <start>..<end> (<N> commit(s))"
             chainPointer = $"chain prior commits: {chainCommitRange.StartSha}..{chainCommitRange.EndSha} ({chainCommitRange.CommitCount} commit(s))";
         }
+        if (reviewFeedback is not null && reworkContext is not null)
+            relevantFileCandidates.AddRange(reworkContext.TouchedFiles);
+        if (relevantFileCandidates.Count > 0)
+            relevantFiles = Deduplicate(relevantFileCandidates);
 
         var context = new Dictionary<string, string>
         {
@@ -100,7 +104,7 @@ public static class ImplementBriefBuilder
             context);
     }
 
-    private static string BuildReviewFeedbackSection(ReviewFeedback? reviewFeedback)
+    private static string BuildReviewFeedbackSection(ReviewFeedback? reviewFeedback, ReworkBriefContext? reworkContext)
     {
         if (reviewFeedback is null)
             return "";
@@ -109,7 +113,46 @@ public static class ImplementBriefBuilder
             ? string.Join("\n", reviewFeedback.ChecksFailed.Select(c => $"- {c}"))
             : "(none)";
 
-        return $"\n## Rework round {reviewFeedback.ReworkRoundNumber} - reviewer feedback\n\n{reviewFeedback.Rationale}\n\nChecks failed:\n{checksList}";
+        var priorContextSection = BuildPriorImplementContextSection(reworkContext);
+
+        return $"\n## Rework round {reviewFeedback.ReworkRoundNumber} - reviewer feedback\n\n{reviewFeedback.Rationale}\n\nChecks failed:\n{checksList}{priorContextSection}";
+    }
+
+    private static string BuildPriorImplementContextSection(ReworkBriefContext? reworkContext)
+    {
+        if (reworkContext is null)
+            return "";
+
+        var summary = string.IsNullOrWhiteSpace(reworkContext.ImplementSummary)
+            ? "(not available)"
+            : Bound(reworkContext.ImplementSummary.Trim(), MaxReworkSummaryChars);
+
+        var files = Deduplicate(reworkContext.TouchedFiles);
+        var filesList = files.Count > 0
+            ? string.Join("\n", files.Select(f => $"- {f}"))
+            : "(none found)";
+
+        return $"\n\n## Prior implement context\n\nImplementer summary:\n{summary}\n\nTouched files from prior implement commit:\n{filesList}";
+    }
+
+    private static IReadOnlyList<string> Deduplicate(IEnumerable<string> files)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var result = new List<string>();
+        foreach (var file in files)
+        {
+            if (!string.IsNullOrWhiteSpace(file) && seen.Add(file))
+                result.Add(file);
+        }
+        return result.AsReadOnly();
+    }
+
+    private static string Bound(string value, int maxChars)
+    {
+        if (value.Length <= maxChars)
+            return value;
+
+        return value[..maxChars] + $"... [truncated: {value.Length - maxChars} more chars]";
     }
 
     // The obsolete path lets an agent escalate a ticket it finds already delivered by a
