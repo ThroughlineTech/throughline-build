@@ -331,6 +331,39 @@ public class ChainCommandTests
         Assert.Contains("rework cap exceeded", output);
         Assert.Contains("Operator triage", output);
         Assert.Contains("Checks failed:", output);
+        Assert.Contains("- test suite red", output);
+        Assert.Contains("- missing acceptance item", output);
+    }
+
+    [Fact]
+    public async Task ReworkCapExceeded_with_no_checks_keeps_review_rationale()
+    {
+        var (cmd, runner, _) = BuildCommand();
+        var rationale = "Finding 1: The implementation does not update the version command output.";
+        runner.Result = new ChainResult(
+            TicketId: "TLB-1",
+            Steps: new[]
+            {
+                new ChainStep("implement", 0, Status.Ok, null, null, TimeSpan.FromSeconds(10), null),
+                new ChainStep("review",   -1, Status.Ok, null, VerdictKind.Rework, TimeSpan.FromSeconds(5), null),
+                new ChainStep("implement", 1, Status.Ok, null, null, TimeSpan.FromSeconds(10), null),
+                new ChainStep("review",   -1, Status.Ok, null, VerdictKind.Rework, TimeSpan.FromSeconds(5), null),
+                new ChainStep("implement", 2, Status.Ok, null, null, TimeSpan.FromSeconds(10), null),
+                new ChainStep("review",   -1, Status.Ok, null, VerdictKind.Rework, TimeSpan.FromSeconds(5), null),
+            },
+            Outcome: ChainOutcome.ReworkCapExceeded,
+            TotalDuration: TimeSpan.FromSeconds(45),
+            FinalRationale: rationale);
+
+        var (result, output) = await RunCapturingStdout(cmd, MakeCtx());
+
+        Assert.False(result.Success);
+        Assert.Contains("Latest review rationale:", output);
+        Assert.Contains(rationale, output);
+        Assert.Contains("Checks failed:", output);
+        Assert.Contains("(none reported)", output);
+        Assert.DoesNotContain("Checks failed:\r\n-\r\n", output);
+        Assert.DoesNotContain("Checks failed:\n-\n", output);
     }
 
     // --- outcome: StoppedAtShip ---

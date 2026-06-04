@@ -397,27 +397,21 @@ public sealed class ChainCommand : ITicketCommand
     {
         var layout = GetWorktreeLayoutBestEffort(ticketId);
         var worktreePath = layout?.WorktreePath ?? $".worktrees/ticket-{ticketId}";
+        var (rationale, checksFailed) = SplitRationaleAndChecks(result.FinalRationale);
 
         var output = new StringBuilder();
+        output.AppendLine("Latest review rationale:");
+        output.AppendLine(string.IsNullOrWhiteSpace(rationale) ? "(none reported)" : rationale);
+        output.AppendLine();
         output.AppendLine($"Checks failed:");
-        if (result.FinalRationale != null && result.FinalRationale.Contains("Checks failed:"))
+        if (checksFailed.Count > 0)
         {
-            // Extract checks-failed block if present in rationale.
-            var lines = result.FinalRationale.Split('\n');
-            var inChecksBlock = false;
-            foreach (var line in lines)
-            {
-                if (line.Contains("Checks failed:"))
-                    inChecksBlock = true;
-                else if (inChecksBlock && !string.IsNullOrEmpty(line) && !line.StartsWith("-"))
-                    break;
-                else if (inChecksBlock)
-                    output.AppendLine(line);
-            }
+            foreach (var check in checksFailed)
+                output.AppendLine(check);
         }
         else
         {
-            output.AppendLine("-");
+            output.AppendLine("(none reported)");
         }
 
         output.AppendLine();
@@ -427,6 +421,44 @@ public sealed class ChainCommand : ITicketCommand
         output.AppendLine($"- Replan via 'build close {ticketId} <reason>' followed by a new ticket with refined acceptance criteria.");
 
         return output.ToString().TrimEnd();
+    }
+
+    private static (string Rationale, IReadOnlyList<string> ChecksFailed) SplitRationaleAndChecks(string? finalRationale)
+    {
+        if (string.IsNullOrWhiteSpace(finalRationale))
+            return ("", Array.Empty<string>());
+
+        var rationaleLines = new List<string>();
+        var checks = new List<string>();
+        var inChecksBlock = false;
+
+        foreach (var rawLine in finalRationale.Replace("\r\n", "\n").Split('\n'))
+        {
+            var line = rawLine.TrimEnd();
+            if (!inChecksBlock && line.Contains("Checks failed:", StringComparison.OrdinalIgnoreCase))
+            {
+                inChecksBlock = true;
+                continue;
+            }
+
+            if (inChecksBlock)
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                    continue;
+                if (!line.TrimStart().StartsWith("-", StringComparison.Ordinal))
+                {
+                    rationaleLines.Add(line);
+                    inChecksBlock = false;
+                    continue;
+                }
+                checks.Add(line.Trim());
+                continue;
+            }
+
+            rationaleLines.Add(line);
+        }
+
+        return (string.Join(Environment.NewLine, rationaleLines).Trim(), checks);
     }
 
     private static string GetParentHasGrandchildrenTriage(ChainResult result)
