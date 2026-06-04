@@ -102,4 +102,48 @@ public class AnalyzeEventLogIntegrationTests
                 File.Delete(tempFile);
         }
     }
+
+    [Fact]
+    public async Task EventSuppliedCostAndVerifierRework_AreUsedInChainSummary()
+    {
+        var solutionRoot = GetSolutionRoot();
+        var toolPath = Path.Combine(solutionRoot, "src", "tools", "analyze-event-log.cs");
+
+        var tempFile = Path.Combine(Path.GetTempPath(), $"analyze-test-{Guid.NewGuid():N}.jsonl");
+        try
+        {
+            var lines = new[]
+            {
+                """{"SessionId":"test-session","Timestamp":"2026-06-03T00:00:00+00:00","Kind":1,"TicketId":"TLB-419","Phase":1,"Data":{"model":"unpriced-model","vendor":"anthropic","input_tokens":1000000,"output_tokens":1000000,"cache_read_tokens":1000000,"cache_create_tokens":1000000,"wall_clock_ms":1000,"cost_usd":11.7001}}""",
+                """{"SessionId":"test-session","Timestamp":"2026-06-03T00:00:01+00:00","Kind":3,"TicketId":"TLB-419","Phase":2,"Data":{"kind":"Rework","rationale":"needs one fix"}}""",
+                """{"SessionId":"test-session","Timestamp":"2026-06-03T00:00:02+00:00","Kind":7,"TicketId":"TLB-419","Phase":4,"Data":{"outcome":"Pass","phases_run":4,"rework_rounds":0,"total_duration_ms":5000}}"""
+            };
+            await File.WriteAllLinesAsync(tempFile, lines);
+
+            var psi = new ProcessStartInfo("dotnet");
+            psi.ArgumentList.Add("run");
+            psi.ArgumentList.Add(toolPath);
+            psi.ArgumentList.Add(tempFile);
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
+            psi.UseShellExecute = false;
+
+            using var proc = Process.Start(psi)!;
+            var output = await proc.StandardOutput.ReadToEndAsync();
+            var error = await proc.StandardError.ReadToEndAsync();
+            await proc.WaitForExitAsync();
+
+            Assert.Equal(0, proc.ExitCode);
+            Assert.Contains("Rework rounds:  1", output);
+            Assert.Contains("TLB-419: 1", output);
+            Assert.Contains("$11.7001", output);
+            Assert.DoesNotContain("cost is partial", output);
+            Assert.True(string.IsNullOrWhiteSpace(error), error);
+        }
+        finally
+        {
+            if (File.Exists(tempFile))
+                File.Delete(tempFile);
+        }
+    }
 }

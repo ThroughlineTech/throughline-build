@@ -9,7 +9,7 @@
 //     dotnet publish analyze_event_log.cs -c Release
 //
 // Reports per-phase LLM token usage, estimated cost, and timing.
-// Update the pricing table below when vendor prices change.
+// Event-supplied cost_usd is authoritative; the pricing table is a fallback.
 
 using System.Text.Json;
 
@@ -103,6 +103,7 @@ static Bucket AnalyzeAndReport(
     JsonElement chainEndData = default;
     bool sawChainEnd = false;
     var subsumedEvents = new List<(string ticketId, string commit)>();
+    var reworkByTicket = new SortedDictionary<string, long>(StringComparer.Ordinal);
 
     foreach (var raw in File.ReadLines(path))
     {
@@ -136,6 +137,18 @@ static Bucket AnalyzeAndReport(
             TryGetString(data, "subsumed_by_commit", out var subCommit);
             subsumedEvents.Add((subTicketId ?? ticketId ?? "n/a", subCommit ?? ""));
         }
+        else if (kind == 3) // VerifierVerdict
+        {
+            var data = root.GetProperty("Data");
+            if (TryGetString(data, "kind", out var verdictKind)
+                && string.Equals(verdictKind, "Rework", StringComparison.Ordinal))
+            {
+                var verdictTicketId = root.GetProperty("TicketId").GetString() ?? "n/a";
+                reworkByTicket[verdictTicketId] = reworkByTicket.TryGetValue(verdictTicketId, out var count)
+                    ? count + 1
+                    : 1;
+            }
+        }
 
         if (!byPhase.TryGetValue(phase, out var bucket))
         {
@@ -156,9 +169,16 @@ static Bucket AnalyzeAndReport(
             bucket.WallClockMs       += GetLong(data, "wall_clock_ms");
             var model = TryGetString(data, "model", out var m) ? m! : "unknown";
             bucket.Models.Add(model);
-            var cost = ComputeCost(data, model, pricing);
-            if (cost is null) bucket.UnknownModelCost = true;
-            else bucket.CostUsd += cost.Value;
+            if (TryGetDecimal(data, "cost_usd", out var eventCost))
+            {
+                bucket.CostUsd += eventCost;
+            }
+            else
+            {
+                var cost = ComputeCost(data, model, pricing);
+                if (cost is null) bucket.UnknownModelCost = true;
+                else bucket.CostUsd += cost.Value;
+            }
         }
     }
 
@@ -175,11 +195,13 @@ static Bucket AnalyzeAndReport(
     {
         var outcome = TryGetString(chainEndData, "outcome", out var o) ? o : "n/a";
         var phasesRun = TryGetLong(chainEndData, "phases_run", out var pr) ? pr.ToString() : "n/a";
-        var rework = TryGetLong(chainEndData, "rework_rounds", out var rr) ? rr.ToString() : "n/a";
+        var rework = reworkByTicket.Values.Sum();
         var totalMs = TryGetLong(chainEndData, "total_duration_ms", out var td) ? td : 0;
         Console.WriteLine($"Chain outcome:  {outcome}");
         Console.WriteLine($"Phases run:     {phasesRun}");
         Console.WriteLine($"Rework rounds:  {rework}");
+        foreach (var (tid, count) in reworkByTicket)
+            Console.WriteLine($"  {tid}: {count}");
         Console.WriteLine($"Chain duration: {totalMs / 1000.0:F1}s ({totalMs / 60000.0:F2}m)");
         if (subsumedEvents.Count > 0)
         {
@@ -301,6 +323,17 @@ static bool TryGetLong(JsonElement el, string name, out long val)
     if (el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number)
     {
         val = v.GetInt64();
+        return true;
+    }
+    val = 0;
+    return false;
+}
+
+static bool TryGetDecimal(JsonElement el, string name, out decimal val)
+{
+    if (el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number)
+    {
+        val = v.GetDecimal();
         return true;
     }
     val = 0;
