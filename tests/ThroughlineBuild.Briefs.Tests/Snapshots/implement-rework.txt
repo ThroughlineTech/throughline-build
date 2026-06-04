@@ -37,6 +37,14 @@ The ticket description (raw HTML) contains the planning output from the prior ph
 - Do NOT write outside the worktree
 - Do NOT use git stash or the shared stash stack; the stash stack is repo-global and leaks across worktrees, which can corrupt a later ticket's working tree. If you need a clean state to build, build in place rather than stashing.
 
+## Golden and snapshot tests
+
+For golden/snapshot tests, use record-then-justify. Write the production code first, then run the code or test harness and capture its actual output as the golden fixture. If the project has a record/update flag or fixture-regeneration command, use that convention; if it does not, capture the real output verbatim and write that captured output to the fixture. Do NOT hand-author the expected string and iterate until it matches.
+
+Record mode is cheaper than an iterate-until-match loop, but it is also more dangerous: it can silently enshrine wrong output as the expected fixture. The justification step is mandatory and is the point of the process. After recording the fixture, justify the captured output against the ticket's acceptance criteria or spec: explain what the golden represents and why this exact output is correct. Do not justify it by saying the test passes, and do not rubber-stamp it as "looks right". If you cannot justify the captured output against the spec, stop and fix the production code before committing the fixture.
+
+Include a short golden-justification note in `IMPLEMENT_SUMMARY` for every golden/snapshot fixture you record or update. Tie the note to the spec or acceptance criteria so review has something concrete to check beyond the captured blob.
+
 ## Obsolete detection (suppressed on rework)
 
 This is a rework round. Commits already on this branch are your own prior-round work - do NOT raise an obsolete escalation against them. Apply the reviewer feedback above. If the feedback is genuinely already satisfied by the current tree, re-affirm with `Status=Ok` and report the current HEAD SHA; never emit `Status=Escalate` with reason `obsolete` in a rework round.
