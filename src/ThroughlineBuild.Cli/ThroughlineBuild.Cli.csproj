@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>14</LangVersion>
     <AssemblyName>build</AssemblyName>
+    <VersionPrefix>0.1.0</VersionPrefix>
     <PublishAot>true</PublishAot>
     <InvariantGlobalization>true</InvariantGlobalization>
     <IlcOptimizationPreference>Size</IlcOptimizationPreference>
@@ -45,13 +46,24 @@
     <PackageReference Include="Tomlyn" Version="0.16.0" />
   </ItemGroup>
   <Target Name="GenerateBuildVersionSource" BeforeTargets="CoreCompile">
+    <!--
+      Emit "{VersionPrefix}+{shortSha}" (e.g. 0.1.0+09172e5) as a compile-time const.
+      We compose the line ourselves rather than baking $(InformationalVersion) because the
+      SDK appends the *full* 40-char SourceRevisionId; a 7-char short sha is what we want.
+      When SourceRevisionId is empty (non-git / shallow build) the const degrades to just
+      the version with no dangling '+'. Staying a const keeps the AOT publish reflection-free.
+    -->
+    <PropertyGroup>
+      <_ShortSha Condition="'$(SourceRevisionId)' != ''">+$(SourceRevisionId.Substring(0, 7))</_ShortSha>
+      <_VersionLine>$(VersionPrefix)$(_ShortSha)</_VersionLine>
+    </PropertyGroup>
     <MakeDir Directories="$([System.IO.Path]::GetDirectoryName('$(GeneratedBuildVersionFile)'))" />
     <ItemGroup>
       <BuildVersionSourceLine Include="namespace ThroughlineBuild.Cli" />
       <BuildVersionSourceLine Include="{" />
       <BuildVersionSourceLine Include="    public static partial class BuildVersion" />
       <BuildVersionSourceLine Include="    {" />
-      <BuildVersionSourceLine Include="        public const string Current = @&quot;$(InformationalVersion)&quot;%3B" />
+      <BuildVersionSourceLine Include="        public const string Current = @&quot;$(_VersionLine)&quot;%3B" />
       <BuildVersionSourceLine Include="    }" />
       <BuildVersionSourceLine Include="}" />
     </ItemGroup>
