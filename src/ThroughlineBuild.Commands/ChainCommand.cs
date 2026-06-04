@@ -139,6 +139,15 @@ public sealed class ChainCommand : ITicketCommand
         var roundStr = step.ReworkRoundNumber >= 0 ? $" (round {step.ReworkRoundNumber})" : "";
         var durationStr = FormatDuration(step.Duration);
 
+        if (string.Equals(step.PhaseName, "ratify", StringComparison.OrdinalIgnoreCase) &&
+            step.Verdict.HasValue)
+        {
+            var ratifyStr = step.Verdict == VerdictKind.Pass
+                ? "Obsolete verified"
+                : step.Verdict.ToString();
+            return $"[{ticketId}] {step.PhaseName}: {ratifyStr} ({durationStr})";
+        }
+
         // If step has a verdict (from review phase), format with verdict instead of status.
         if (step.Verdict.HasValue)
         {
@@ -158,7 +167,7 @@ public sealed class ChainCommand : ITicketCommand
                 $"[{ticketId}] chain complete ({durationStr})",
 
             ChainOutcome.RatifiedObsolete =>
-                $"[{ticketId}] Subsumed by {result.SubsumedBy?.Commit ?? "(unknown)"} - continuing ({durationStr})",
+                $"[{ticketId}] chain complete: marked Done in Plane; obsolete, subsumed by {result.SubsumedBy?.Commit ?? "(unknown)"} ({durationStr})",
 
             ChainOutcome.RefusedInitialState =>
                 $"[{ticketId}] chain stopped: initial state does not allow chain execution",

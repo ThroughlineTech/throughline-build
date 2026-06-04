@@ -159,6 +159,15 @@ public class ChainCommandTests
     }
 
     [Fact]
+    public void FormatStepLine_ratify_pass_shows_obsolete_verified()
+    {
+        var step = new ChainStep("ratify", -1, Status.Ok, null, VerdictKind.Pass, TimeSpan.FromSeconds(8), null);
+        var line = ChainCommand.FormatStepLine("TLB-1", step);
+        Assert.Equal("[TLB-1] ratify: Obsolete verified (8s)", line);
+        Assert.DoesNotContain("Pass", line);
+    }
+
+    [Fact]
     public void FormatStepLine_rework_round_includes_round_number()
     {
         var step = new ChainStep("implement", 1, Status.Ok, null, null, TimeSpan.FromSeconds(4), null);
@@ -501,7 +510,7 @@ public class ChainCommandTests
         var (result, output) = await RunCapturingStdout(cmd, MakeCtx());
 
         Assert.True(result.Success);
-        Assert.Contains("Subsumed by abc123", output);
+        Assert.Contains("chain complete: marked Done in Plane; obsolete, subsumed by abc123", output);
         Assert.DoesNotContain("Failed", output);
     }
 
