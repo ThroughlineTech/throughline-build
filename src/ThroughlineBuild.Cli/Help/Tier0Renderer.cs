@@ -24,8 +24,8 @@ public static class Tier0Renderer
         "Emit phase completion summary as JSON",
     ];
 
-    private const string Footer =
-        "Run 'build help <topic>' for reference documentation on any topic.";
+    public const string TopicFooter =
+        "Run 'build help <topic>' for reference documentation. Available topics: config, exit-codes.";
 
     private static string GroupLabel(CommandGroup group) => group switch
     {
@@ -98,7 +98,7 @@ public static class Tier0Renderer
         }
 
         sb.Append('\n');
-        sb.Append(Footer);
+        sb.Append(TopicFooter);
         sb.Append('\n');
 
         return sb.ToString();

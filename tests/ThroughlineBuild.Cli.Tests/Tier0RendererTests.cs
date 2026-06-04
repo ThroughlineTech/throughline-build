@@ -82,7 +82,7 @@ public class Tier0RendererTests
         "  --debug         Stream worker output and capture session artifacts\n" +
         "  --quiet         Suppress the progress digest\n" +
         "  --summary-json  Emit phase completion summary as JSON\n\n" +
-        "Run 'build help <topic>' for reference documentation on any topic.\n";
+        "Run 'build help <topic>' for reference documentation. Available topics: config, exit-codes.\n";
 
     // ------------------------------------------------------------------
     // Tests

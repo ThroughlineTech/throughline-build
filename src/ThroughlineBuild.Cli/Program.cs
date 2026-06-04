@@ -22,6 +22,7 @@ return await RunAsync(args);
 static async Task<int> RunAsync(string[] args)
 {
     var helpRegistry = HelpRegistryFactory.Build();
+    var helpTopicRegistry = HelpTopicRegistry.Build();
 
     if (args.Length == 1 && (args[0] == "-V" || args[0] == "--version"))
     {
@@ -29,10 +30,29 @@ static async Task<int> RunAsync(string[] args)
         return 0;
     }
 
-    if (args.Length == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help")
+    if (args.Length == 0 || args[0] == "-h" || args[0] == "--help")
     {
         Console.Write(Tier0Renderer.Render(helpRegistry));
         return 0;
+    }
+
+    if (args[0] == "help")
+    {
+        if (args.Length == 1)
+        {
+            Console.Write(Tier0Renderer.Render(helpRegistry));
+            return 0;
+        }
+
+        if (args.Length == 2 && helpTopicRegistry.TryGet(args[1]) is { } topic)
+        {
+            Console.Write(HelpTopicRenderer.Render(topic));
+            return 0;
+        }
+
+        var topicName = args.Length >= 2 ? args[1] : string.Empty;
+        Console.Error.Write(HelpTopicRenderer.RenderUnknownTopic(topicName, helpTopicRegistry.TopicNames));
+        return 2;
     }
 
     // Pre-pass: strip --debug, --quiet, --summary-json, and --error-location from args before any positional parser sees them.
