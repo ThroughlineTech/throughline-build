@@ -56,6 +56,25 @@ public class CopilotAgentTests
     }
 
     [Fact]
+    public void ParseStdoutForWorkerResult_PreservesFencedBlocks()
+    {
+        var stdout = """
+            <<<REVIEW_CRITIQUE_START
+            apply the feedback
+            <<<REVIEW_CRITIQUE_END
+
+            WORKER_RESULT
+            {"status":"Ok","summary":"review complete","files_changed":[],"failure_reason":null,"metadata":{"verdict":"Rework","rationale_ref":"REVIEW_CRITIQUE","checks_failed":[]}}
+            """;
+
+        var result = CopilotAgent.ParseStdoutForWorkerResult(stdout, 0, "");
+
+        Assert.NotNull(result.Blocks);
+        Assert.True(result.Blocks.ContainsKey("REVIEW_CRITIQUE"));
+        Assert.Equal("apply the feedback", result.Blocks["REVIEW_CRITIQUE"]);
+    }
+
+    [Fact]
     public void ParseStdoutForWorkerResult_NoMarker_ReturnsFailed()
     {
         var result = CopilotAgent.ParseStdoutForWorkerResult("no marker here", 0, "");
@@ -101,7 +120,7 @@ public class CopilotAgentTests
     }
 
     [Fact]
-    public void ParseStdoutForWorkerResult_ValidResult_HasEmptyMetadata()
+    public void ParseStdoutForWorkerResult_ValidResult_PreservesMetadata()
     {
         var stdout = """
             WORKER_RESULT
@@ -110,14 +129,15 @@ public class CopilotAgentTests
               "summary": "Done",
               "files_changed": [],
               "failure_reason": null,
-              "metadata": {}
+              "metadata": {"commit_sha":"abc123"}
             }
             """;
 
         var result = CopilotAgent.ParseStdoutForWorkerResult(stdout, 0, "");
 
-        // ParseStdoutForWorkerResult resets metadata to empty dict
-        Assert.Empty(result.Metadata);
+        Assert.True(result.Metadata.TryGetValue("commit_sha", out var commitObj));
+        var commit = Assert.IsType<System.Text.Json.JsonElement>(commitObj);
+        Assert.Equal("abc123", commit.GetString());
     }
 
     [Fact]

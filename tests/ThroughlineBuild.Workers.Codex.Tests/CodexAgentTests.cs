@@ -64,6 +64,20 @@ public class CodexAgentTests
     }
 
     [Fact]
+    public void ParseStdoutForWorkerResult_JsonlAgentMessage_PreservesFencedBlocks()
+    {
+        var stdout = """
+            {"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"<<<REVIEW_CRITIQUE_START\napply the feedback\n<<<REVIEW_CRITIQUE_END\n\nWORKER_RESULT\n{\"status\":\"Ok\",\"summary\":\"review complete\",\"files_changed\":[],\"failure_reason\":null,\"metadata\":{\"verdict\":\"Rework\",\"rationale_ref\":\"REVIEW_CRITIQUE\",\"checks_failed\":[]}}"}}
+            """;
+
+        var result = CodexAgent.ParseStdoutForWorkerResult(stdout, 0, "");
+
+        Assert.NotNull(result.Blocks);
+        Assert.True(result.Blocks.ContainsKey("REVIEW_CRITIQUE"));
+        Assert.Equal("apply the feedback", result.Blocks["REVIEW_CRITIQUE"]);
+    }
+
+    [Fact]
     public void ExtractAgentMessagesFromJsonl_ConcatenatesAgentMessageText()
     {
         var stdout = """

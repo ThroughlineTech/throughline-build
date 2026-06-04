@@ -176,7 +176,7 @@ public class GeminiAgent : IWorkerAgent
             var inner = WorkerResultParser.TryParse(envelope.Response);
             if (inner.Result != null)
             {
-                return inner.Result with { Metadata = new Dictionary<string, object>() };
+                return inner.Result with { Blocks = inner.Blocks };
             }
             if (inner.DeserializeErrorType != null)
             {
@@ -196,7 +196,7 @@ public class GeminiAgent : IWorkerAgent
             var outcome = WorkerResultParser.TryParse(stdout);
             if (outcome.Result != null)
             {
-                return outcome.Result with { Metadata = new Dictionary<string, object>() };
+                return outcome.Result with { Blocks = outcome.Blocks };
             }
             if (outcome.DeserializeErrorType != null)
             {

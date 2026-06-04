@@ -106,9 +106,18 @@ public sealed class CodexProgressDigester : IWorkerProgressDigester
     private static string? FormatThreadStarted(JsonElement el, string offset)
     {
         var threadId = TryGetString(el, "thread_id") ?? "";
-        var shortId = threadId.Length > 8 ? threadId[..8] : threadId;
+        var shortId = ShortThreadId(threadId);
         var payload = string.IsNullOrEmpty(shortId) ? "started" : $"started {shortId}";
         return $"[{offset}] {PadKind("session")} {Truncate(payload)}";
+    }
+
+    private static string ShortThreadId(string threadId)
+    {
+        if (threadId.Length <= 8)
+            return threadId;
+        if (threadId.Length >= 13)
+            return $"{threadId[..8]}...{threadId[^4..]}";
+        return threadId[..8];
     }
 
     private static string? FormatItem(JsonElement el, string offset, bool started)

@@ -18,6 +18,7 @@ public class CodexProgressDigesterTests
         Assert.NotNull(result);
         Assert.Contains("session", result);
         Assert.Contains("019e8e73", result);
+        Assert.Contains("1bcf", result);
     }
 
     [Fact]

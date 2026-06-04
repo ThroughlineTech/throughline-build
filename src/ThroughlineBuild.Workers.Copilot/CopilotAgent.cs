@@ -141,7 +141,7 @@ public class CopilotAgent : IWorkerAgent
         var outcome = WorkerResultParser.TryParse(stdout);
         if (outcome.Result != null)
         {
-            return outcome.Result with { Metadata = new Dictionary<string, object>() };
+            return outcome.Result with { Blocks = outcome.Blocks };
         }
 
         if (outcome.DeserializeErrorType != null)

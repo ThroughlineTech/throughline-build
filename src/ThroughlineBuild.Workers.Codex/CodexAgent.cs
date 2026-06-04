@@ -168,7 +168,7 @@ public class CodexAgent : IWorkerAgent
         var outcome = WorkerResultParser.TryParse(parseTarget);
         if (outcome.Result != null)
         {
-            return outcome.Result;
+            return outcome.Result with { Blocks = outcome.Blocks };
         }
 
         if (outcome.DeserializeErrorType != null)
