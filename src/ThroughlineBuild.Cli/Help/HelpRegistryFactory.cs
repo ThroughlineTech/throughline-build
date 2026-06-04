@@ -7,17 +7,6 @@ namespace ThroughlineBuild.Cli;
 public static class HelpRegistryFactory
 {
     // ------------------------------------------------------------------
-    // Shared global-option descriptors (IsGlobal = true; suppressed by tier-1 renderer).
-    // ------------------------------------------------------------------
-
-    private static readonly OptionDescription s_debug =
-        new("--debug", "Stream worker output and capture session artifacts", true);
-    private static readonly OptionDescription s_quiet =
-        new("--quiet", "Suppress the progress digest", true);
-    private static readonly OptionDescription s_summaryJson =
-        new("--summary-json", "Emit phase completion summary as JSON", true);
-
-    // ------------------------------------------------------------------
     // Shared exit-code entries used across multiple commands.
     // ------------------------------------------------------------------
 
@@ -74,13 +63,17 @@ public static class HelpRegistryFactory
         Options:
         [
             new("--agent <name>", "Worker agent override (must match a [workers.<name>] key in config)", false),
-            new("--from-brief",   "Promote the ticket in place; skip the worker investigation",          false),
-            s_debug,
-            s_quiet,
-            s_summaryJson,
+            new("--from-brief",   "Promote the ticket in place; equivalent to [plan] mode = \"promote\" in config.toml", false),
+            new("--debug",        "Stream worker output and capture session artifacts", false),
+            new("--quiet",        "Suppress the progress digest", false),
+            new("--summary-json", "Emit phase completion summary as JSON", false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2, s_exit3, s_exit4],
-        Examples:  []
+        Examples:
+        [
+            new("plan TLB-123", "Run the planning worker for one ticket"),
+            new("plan TLB-123 --from-brief", "Promote an already-authored brief without worker investigation"),
+        ]
     );
 
     private static CommandHelp Implement() => new(
@@ -91,12 +84,16 @@ public static class HelpRegistryFactory
         Options:
         [
             new("--agent <name>", "Worker agent override", false),
-            s_debug,
-            s_quiet,
-            s_summaryJson,
+            new("--debug",        "Stream worker output and capture session artifacts", false),
+            new("--quiet",        "Suppress the progress digest", false),
+            new("--summary-json", "Emit phase completion summary as JSON", false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2, s_exit3, s_exit4],
-        Examples:  []
+        Examples:
+        [
+            new("implement TLB-123", "Run implementation for one ticket"),
+            new("implement TLB-123 --agent codex", "Override the implementation worker agent"),
+        ]
     );
 
     private static CommandHelp Review() => new(
@@ -107,12 +104,16 @@ public static class HelpRegistryFactory
         Options:
         [
             new("--agent <name>", "Worker agent override", false),
-            s_debug,
-            s_quiet,
-            s_summaryJson,
+            new("--debug",        "Stream worker output and capture session artifacts", false),
+            new("--quiet",        "Suppress the progress digest", false),
+            new("--summary-json", "Emit phase completion summary as JSON", false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2, s_exit3, s_exit4],
-        Examples:  []
+        Examples:
+        [
+            new("review TLB-123", "Run review for one ticket"),
+            new("review TLB-123 --summary-json", "Emit the review completion summary as JSON"),
+        ]
     );
 
     private static CommandHelp Ship() => new(
@@ -122,33 +123,43 @@ public static class HelpRegistryFactory
         Usage:   "ship <ticket-id> [ticket-id ...] [--no-auto-merge] [--no-push] [--debug] [--summary-json]",
         Options:
         [
-            new("--no-auto-merge", "Skip the automatic fast-forward merge after rebasing",                    false),
-            new("--no-push",       "Keep ship fully local; skip pushing the target branch to the remote",     false),
-            s_debug,
-            s_summaryJson,
+            new("--no-auto-merge", "Skip the automatic fast-forward merge after rebasing", false),
+            new("--no-push",       "Keep ship fully local; skip pushing the target branch to the remote", false),
+            new("--debug",         "Accepted for consistency; no-op because ship has no worker subprocess", false),
+            new("--summary-json",  "Emit ship completion summary as JSON", false),
         ],
-        ExitCodes: [s_exit0, s_exit1, s_exit2, s_exit3, s_exit4],
-        Examples:  []
+        ExitCodes:
+        [
+            new(0, "Shipped successfully, or only decruft cleanup failed after merge"),
+            new(1, "Ship gate blocked at rebase, conflict scan, or regression checks"),
+            new(2, "Config error or bad arguments"),
+            new(3, "Missing secret (env var not set)"),
+            new(4, "Ship infrastructure failure, including state check, fetch, or fast-forward merge"),
+        ],
+        Examples:
+        [
+            new("ship TLB-123", "Ship one reviewed ticket"),
+            new("ship TLB-123 --no-push", "Merge locally without pushing the target branch"),
+        ]
     );
 
     private static CommandHelp Chain() => new(
         Name:    "chain",
         Group:   CommandGroup.Pipeline,
         Summary: "Run the full chain for one or more tickets",
-        Usage:   "chain <ticket-id> [ticket-id ...] [--agent <name>] [--from-brief] [--sequential] [--no-auto-resolve] [--no-auto-merge] [--continue-past-failure] [--debug] [--summary-json]",
+        Usage:   "chain <ticket-id> [ticket-id ...] [--agent <name>] [--agent-plan <name>] [--agent-implement <name>] [--agent-review <name>] [--from-brief] [--no-auto-resolve] [--no-auto-merge] [--continue-past-failure] [--debug] [--summary-json]",
         Options:
         [
-            new("--agent <name>",           "Worker agent override for all phases",                               false),
-            new("--agent-plan <name>",      "Worker agent override for the plan phase only",                     false),
-            new("--agent-implement <name>", "Worker agent override for the implement phase only",                 false),
-            new("--agent-review <name>",    "Worker agent override for the review phase only",                   false),
-            new("--from-brief",             "Promote tickets in place; skip the worker investigation",           false),
-            new("--sequential",             "Process tickets one at a time instead of concurrently",             false),
-            new("--no-auto-resolve",        "Do not auto-resolve parent chains before dispatching",              false),
-            new("--no-auto-merge",          "Skip the automatic fast-forward merge during ship",                 false),
-            new("--continue-past-failure",  "Run descendants of a failed ticket instead of stopping",           false),
-            s_debug,
-            s_summaryJson,
+            new("--agent <name>",           "Worker agent override for all phases; per-phase flags beat --agent, which beats config", false),
+            new("--agent-plan <name>",      "Worker agent override for the plan phase only", false),
+            new("--agent-implement <name>", "Worker agent override for the implement phase only", false),
+            new("--agent-review <name>",    "Worker agent override for the review phase only", false),
+            new("--from-brief",             "Promote tickets in place; equivalent to [plan] mode = \"promote\" in config.toml", false),
+            new("--no-auto-resolve",        "Do not auto-resolve parent chains before dispatching", false),
+            new("--no-auto-merge",          "Skip the automatic fast-forward merge during ship", false),
+            new("--continue-past-failure",  "Run descendants of a failed ticket instead of skipping them", false),
+            new("--debug",                  "Stream worker output and capture session artifacts", false),
+            new("--summary-json",           "Emit phase completion summaries as JSON", false),
         ],
         ExitCodes:
         [
@@ -162,8 +173,9 @@ public static class HelpRegistryFactory
         ],
         Examples:
         [
-            new("chain TLB-123",                "Run the chain for a single ticket"),
-            new("chain TLB-123 TLB-124 --ship", "Chain two tickets and ship each when done"),
+            new("chain TLB-123", "Run the chain for a single ticket"),
+            new("chain TLB-123 TLB-124", "Run tickets in dependency order; descendants of failed ancestors are skipped"),
+            new("chain TLB-123 --agent codex --agent-review claude-code", "Use a default agent with a review-phase override"),
         ]
     );
 
@@ -175,7 +187,7 @@ public static class HelpRegistryFactory
         Options:
         [
             new("--feedback \"...\"", "Supply reviewer feedback on the command line (overrides event-log lookup)", false),
-            s_debug,
+            new("--debug", "Stream worker output and capture session artifacts", false),
         ],
         ExitCodes:
         [
@@ -184,7 +196,11 @@ public static class HelpRegistryFactory
             new(3, "No Rework verdict found in event log; use --feedback to override"),
             new(4, "Implement phase failed during rework"),
         ],
-        Examples:  []
+        Examples:
+        [
+            new("rework TLB-123", "Rework using the latest Rework verdict from the event log"),
+            new("rework TLB-123 --feedback \"Address reviewer notes\"", "Provide feedback explicitly"),
+        ]
     );
 
     private static CommandHelp Decompose() => new(
@@ -195,9 +211,9 @@ public static class HelpRegistryFactory
         Options:
         [
             new("--agent <name>", "Worker agent override", false),
-            s_debug,
-            s_quiet,
-            s_summaryJson,
+            new("--debug",        "Stream worker output and capture session artifacts", false),
+            new("--quiet",        "Suppress the progress digest", false),
+            new("--summary-json", "Emit phase completion summary as JSON", false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2, s_exit3, s_exit4],
         Examples:  []
@@ -352,7 +368,7 @@ public static class HelpRegistryFactory
             new("--validate-only",    "Parse and validate the op-doc without creating any tickets",          false),
             new("--dry-run",          "Show what would be created without making Plane API calls",           false),
             new("--accept-warnings",  "Proceed even when the op-doc has non-fatal warnings",                 false),
-            s_debug,
+            new("--debug",            "Stream diagnostic output",                                            false),
         ],
         ExitCodes:
         [

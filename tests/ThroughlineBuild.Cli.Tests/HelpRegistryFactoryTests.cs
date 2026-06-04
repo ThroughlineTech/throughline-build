@@ -122,7 +122,8 @@ public class HelpRegistryFactoryTests
     public void Plan_HasFromBriefOption()
     {
         var help = Registry.TryGet("plan")!;
-        Assert.Contains(help.Options, o => o.Flag == "--from-brief" && !o.IsGlobal);
+        var option = Assert.Single(help.Options, o => o.Flag == "--from-brief" && !o.IsGlobal);
+        Assert.Contains("[plan] mode = \"promote\"", option.Description);
     }
 
     [Fact]
@@ -134,20 +135,28 @@ public class HelpRegistryFactoryTests
     }
 
     [Fact]
-    public void Chain_HasSequentialAndContinuePastFailureOptions()
+    public void Chain_HasContinuePastFailureOption()
     {
         var help = Registry.TryGet("chain")!;
-        Assert.Contains(help.Options, o => o.Flag == "--sequential"             && !o.IsGlobal);
         Assert.Contains(help.Options, o => o.Flag == "--continue-past-failure"  && !o.IsGlobal);
+        Assert.DoesNotContain(help.Options, o => o.Flag == "--sequential");
     }
 
     [Fact]
     public void Chain_HasPerPhaseAgentOptions()
     {
         var help = Registry.TryGet("chain")!;
+        Assert.Contains(help.Options, o => o.Flag == "--agent <name>" && o.Description.Contains("per-phase flags beat --agent", StringComparison.Ordinal));
         Assert.Contains(help.Options, o => o.Flag == "--agent-plan <name>"      && !o.IsGlobal);
         Assert.Contains(help.Options, o => o.Flag == "--agent-implement <name>" && !o.IsGlobal);
         Assert.Contains(help.Options, o => o.Flag == "--agent-review <name>"    && !o.IsGlobal);
+    }
+
+    [Fact]
+    public void Chain_DocumentsDependencyOrderedDispatch()
+    {
+        var help = Registry.TryGet("chain")!;
+        Assert.Contains(help.Examples, e => e.Annotation != null && e.Annotation.Contains("dependency order", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -164,6 +173,25 @@ public class HelpRegistryFactoryTests
     {
         var help = Registry.TryGet("rework")!;
         Assert.Contains(help.Options, o => o.Flag.StartsWith("--feedback") && !o.IsGlobal);
+    }
+
+    [Fact]
+    public void Ship_DebugOptionDocumentsNoOp()
+    {
+        var help = Registry.TryGet("ship")!;
+        Assert.Contains(help.Options, o => o.Flag == "--debug" && o.Description.Contains("no-op", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("chain")]
+    [InlineData("plan")]
+    [InlineData("implement")]
+    [InlineData("review")]
+    [InlineData("ship")]
+    [InlineData("rework")]
+    public void PipelineVerbs_HaveExamples(string verb)
+    {
+        Assert.NotEmpty(Registry.TryGet(verb)!.Examples);
     }
 
     [Fact]
