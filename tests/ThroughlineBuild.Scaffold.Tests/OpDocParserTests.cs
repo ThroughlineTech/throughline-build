@@ -5,19 +5,24 @@ namespace ThroughlineBuild.Scaffold.Tests;
 
 public class OpDocParserTests
 {
-    private static string FixturePath =>
-        Path.Combine(AppContext.BaseDirectory, "Fixtures", "example-op-doc.md");
+    static OpDocParserTests()
+    {
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+    }
 
     // Helper: run parser on inline lines (avoids file system dependency for most tests)
     private static ParseResult Parse(string content) =>
         OpDocParser.ParseLines(content.Split('\n'));
+
+    private static ParseResult ParseFixture() =>
+        Parse(OpDocDocsLoader.LoadExample());
 
     // ---- Happy path ----
 
     [Fact]
     public void Fixture_ParsesWithoutErrors()
     {
-        var result = OpDocParser.Parse(FixturePath);
+        var result = ParseFixture();
         Assert.NotNull(result);
         Assert.Empty(result.Errors);
         Assert.NotNull(result.Parsed);
@@ -26,21 +31,21 @@ public class OpDocParserTests
     [Fact]
     public void Fixture_OperationSlugIsExample()
     {
-        var result = OpDocParser.Parse(FixturePath);
-        Assert.Equal("example", result.Parsed!.OperationSlug);
+        var result = ParseFixture();
+        Assert.Equal("cli-build-version-embedding", result.Parsed!.OperationSlug);
     }
 
     [Fact]
     public void Fixture_HasTwoPlans()
     {
-        var result = OpDocParser.Parse(FixturePath);
+        var result = ParseFixture();
         Assert.Equal(2, result.Parsed!.Plans.Count);
     }
 
     [Fact]
     public void Fixture_PlanAHasThreeBriefs()
     {
-        var result = OpDocParser.Parse(FixturePath);
+        var result = ParseFixture();
         var planA = result.Parsed!.Plans.First(p => p.Id == "A");
         Assert.Equal(3, planA.Briefs.Count);
     }
@@ -48,7 +53,7 @@ public class OpDocParserTests
     [Fact]
     public void Fixture_PlanBHasTwoBriefs()
     {
-        var result = OpDocParser.Parse(FixturePath);
+        var result = ParseFixture();
         var planB = result.Parsed!.Plans.First(p => p.Id == "B");
         Assert.Equal(2, planB.Briefs.Count);
     }
@@ -56,14 +61,14 @@ public class OpDocParserTests
     [Fact]
     public void Fixture_DispatchOrderHasTwoEntries()
     {
-        var result = OpDocParser.Parse(FixturePath);
+        var result = ParseFixture();
         Assert.Equal(2, result.Parsed!.DispatchOrder.Count);
     }
 
     [Fact]
     public void Fixture_PlanBDependsOnA()
     {
-        var result = OpDocParser.Parse(FixturePath);
+        var result = ParseFixture();
         var entryB = result.Parsed!.DispatchOrder.First(e => e.PlanId == "B");
         Assert.Equal("A", entryB.DependsOn);
     }
@@ -71,7 +76,7 @@ public class OpDocParserTests
     [Fact]
     public void Fixture_PlanADependsOnNull()
     {
-        var result = OpDocParser.Parse(FixturePath);
+        var result = ParseFixture();
         var entryA = result.Parsed!.DispatchOrder.First(e => e.PlanId == "A");
         Assert.Null(entryA.DependsOn);
     }
@@ -79,7 +84,7 @@ public class OpDocParserTests
     [Fact]
     public void Fixture_PlanABrief01HasOutOfScope()
     {
-        var result = OpDocParser.Parse(FixturePath);
+        var result = ParseFixture();
         var planA = result.Parsed!.Plans.First(p => p.Id == "A");
         var brief01 = planA.Briefs.First(b => b.Number == 1);
         Assert.NotEmpty(brief01.OutOfScope);
@@ -88,7 +93,7 @@ public class OpDocParserTests
     [Fact]
     public void Fixture_BriefsHaveAcceptanceCriteria()
     {
-        var result = OpDocParser.Parse(FixturePath);
+        var result = ParseFixture();
         foreach (var plan in result.Parsed!.Plans)
         {
             foreach (var brief in plan.Briefs)
@@ -101,14 +106,14 @@ public class OpDocParserTests
     [Fact]
     public void Fixture_WhatDoneLooksLikeIsPopulated()
     {
-        var result = OpDocParser.Parse(FixturePath);
+        var result = ParseFixture();
         Assert.NotEmpty(result.Parsed!.WhatDoneLooksLike);
     }
 
     [Fact]
     public void Fixture_WhyIsPopulated()
     {
-        var result = OpDocParser.Parse(FixturePath);
+        var result = ParseFixture();
         Assert.NotEmpty(result.Parsed!.Why);
     }
 
@@ -364,7 +369,7 @@ public class OpDocParserTests
     [Fact]
     public void TwoPlansWithMultipleBriefs_AllPopulated()
     {
-        var result = OpDocParser.Parse(FixturePath);
+        var result = ParseFixture();
         Assert.NotNull(result.Parsed);
         int totalBriefs = result.Parsed!.Plans.Sum(p => p.Briefs.Count);
         Assert.Equal(5, totalBriefs);

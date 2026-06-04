@@ -270,8 +270,8 @@ public class OpDocTypesTests
             why: "Testing JSON serialization",
             whatDoneLooksLike: "JSON round-trip successful");
 
-        var json = JsonSerializer.Serialize(original);
-        var deserialized = JsonSerializer.Deserialize<OpDoc>(json);
+        var json = JsonSerializer.Serialize(original, ScaffoldJsonContext.Default.OpDoc);
+        var deserialized = JsonSerializer.Deserialize(json, ScaffoldJsonContext.Default.OpDoc);
 
         Assert.NotNull(deserialized);
         Assert.Equal(original.OperationSlug, deserialized.OperationSlug);

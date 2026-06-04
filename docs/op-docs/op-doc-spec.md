@@ -101,6 +101,9 @@ Each brief follows this structure in order:
 
 ## Skeleton (annotated)
 
+The canonical complete example ships beside this spec as `op-doc-example.md`. The skeleton
+below is an annotated shape reference, not a second source of truth.
+
 The example below is one concrete op-doc for a C# project. Treat the stack-specific bits (`.cs` paths, `AOT publish succeeds`, the source-gen JSON constraint) as illustrations of the conventions, not as requirements for your stack - substitute your own paths and release gate.
 
 ```markdown
