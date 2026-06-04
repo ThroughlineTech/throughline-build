@@ -762,7 +762,7 @@ static async Task<int> RunAsync(string[] args)
     if (verb != "plan" && verb != "implement" && verb != "review" && verb != "ship" && verb != "chain" && verb != "rework" && verb != "decompose")
     {
         Console.Error.WriteLine($"Unknown subcommand: {verb}");
-        Console.Error.WriteLine(CliUsage.UsageText);
+        Console.Error.WriteLine("See 'build --help'.");
         return 2;
     }
 
