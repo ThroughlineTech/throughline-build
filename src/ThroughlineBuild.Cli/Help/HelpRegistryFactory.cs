@@ -228,20 +228,28 @@ public static class HelpRegistryFactory
         Group:   CommandGroup.WorkItems,
         Summary: "Create a new ticket",
         Usage:
-            "new <body-path> [--title \"...\"] [--type \"...\"] [--label \"...\"]*\n" +
-            "new <text>      [--title \"...\"] [--type \"...\"] [--label \"...\"]*\n" +
-            "new -           [--title \"...\"] [--type \"...\"] [--label \"...\"]*\n" +
+            "new <body-path> [--title \"...\"] [--type \"...\"] [--label \"...\"]* [--debug]\n" +
+            "new <text>      [--title \"...\"] [--type \"...\"] [--label \"...\"]* [--review] [--debug|--quiet]\n" +
+            "new -           [--title \"...\"] [--type \"...\"] [--label \"...\"]* [--review] [--debug|--quiet]\n" +
             "new --print-template",
         Options:
         [
-            new("--title \"...\"",  "Override the ticket title",                                     false),
-            new("--type \"...\"",   "Set the work item type",                                        false),
-            new("--label \"...\"",  "Add a label (may be repeated)",                                 false),
-            new("--review",         "Open an interactive review loop before filing (draft mode)",    false),
-            new("--print-template", "Print the body template to stdout",                             false),
+            new("--title \"...\"",  "Override the ticket title",                                              false),
+            new("--type \"...\"",   "Set the work item type",                                                 false),
+            new("--label \"...\"",  "Add a label (may be repeated)",                                          false),
+            new("--review",         "Draft mode only: open an interactive review loop before filing",         false),
+            new("--debug",          "Draft/file mode: stream worker output when drafting and capture artifacts", false),
+            new("--quiet",          "Draft mode only: suppress the worker progress digest",                   false),
+            new("--print-template", "Print the body template to stdout; ignores other input forms",           false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2],
-        Examples:  []
+        Examples:
+        [
+            new("new body.md", "If body.md exists, file it as the ticket body"),
+            new("new \"fix the onboarding typo\"", "If the first argument is not an existing file, draft from text"),
+            new("new - --review", "Read draft input from stdin, then review before filing"),
+            new("new --print-template", "Print the file-mode body template and exit"),
+        ]
     );
 
     private static CommandHelp List() => new(
@@ -263,7 +271,7 @@ public static class HelpRegistryFactory
         Name:    "amend",
         Group:   CommandGroup.WorkItems,
         Summary: "Amend an existing ticket",
-        Usage:   "amend <ticket-id> [--size S|M|L] [--note \"...\"] [--description <path|->] [--ac <path|->]",
+        Usage:   "amend <ticket-id> (--size S|M|L | --note \"...\" | --description <path|-> | --ac <path|->) [...]",
         Options:
         [
             new("--size S|M|L",         "Update the size label",                               false),
@@ -279,8 +287,11 @@ public static class HelpRegistryFactory
         Name:    "close",
         Group:   CommandGroup.WorkItems,
         Summary: "Close a ticket",
-        Usage:   "close <ticket-id> <reason>",
-        Options:  [],
+        Usage:   "close <ticket-id> <reason> [--no-cascade]",
+        Options:
+        [
+            new("--no-cascade", "Do not close non-terminal child tickets", false),
+        ],
         ExitCodes: [s_exit0, s_exit1, s_exit2],
         Examples:  []
     );
@@ -289,8 +300,11 @@ public static class HelpRegistryFactory
         Name:    "defer",
         Group:   CommandGroup.WorkItems,
         Summary: "Defer a ticket",
-        Usage:   "defer <ticket-id> <reason>",
-        Options:  [],
+        Usage:   "defer <ticket-id> <reason> [--no-cascade]",
+        Options:
+        [
+            new("--no-cascade", "Do not defer non-terminal child tickets", false),
+        ],
         ExitCodes: [s_exit0, s_exit1, s_exit2],
         Examples:  []
     );

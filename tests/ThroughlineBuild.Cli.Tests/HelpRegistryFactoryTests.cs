@@ -202,6 +202,68 @@ public class HelpRegistryFactoryTests
         Assert.Contains(help.Options, o => o.Flag == "--dry-run"       && !o.IsGlobal);
     }
 
+    [Fact]
+    public void New_HelpDocumentsInputDisambiguationAndDraftFlags()
+    {
+        var output = Tier1Renderer.Render(Registry.TryGet("new")!);
+
+        Assert.Contains("build new <body-path>", output);
+        Assert.Contains("build new <text>", output);
+        Assert.Contains("build new -", output);
+        Assert.Contains("build new --print-template", output);
+        Assert.Contains("If body.md exists, file it as the ticket body", output);
+        Assert.Contains("not an existing file, draft from text", output);
+        Assert.Contains("--review", output);
+        Assert.Contains("--debug", output);
+        Assert.Contains("--quiet", output);
+        Assert.Contains("Print the file-mode body template and exit", output);
+    }
+
+    [Fact]
+    public void Scaffold_HelpDocumentsExitOverridesAndValidationModes()
+    {
+        var output = Tier1Renderer.Render(Registry.TryGet("scaffold")!);
+
+        Assert.Contains("--validate-only", output);
+        Assert.Contains("--dry-run", output);
+        Assert.Contains("--accept-warnings", output);
+        Assert.Contains("0  All plans and briefs created successfully", output);
+        Assert.Contains("3  Partial creation", output);
+    }
+
+    [Fact]
+    public void List_HelpDocumentsFilterOptions()
+    {
+        var output = Tier1Renderer.Render(Registry.TryGet("list")!);
+
+        Assert.Contains("--state <name>", output);
+        Assert.Contains("--parent <id>", output);
+        Assert.Contains("--type <name>", output);
+    }
+
+    [Theory]
+    [InlineData("amend", "amend <ticket-id>")]
+    [InlineData("close", "close <ticket-id> <reason>")]
+    [InlineData("defer", "defer <ticket-id> <reason>")]
+    [InlineData("reopen", "reopen <ticket-id> [reason]")]
+    public void MutationVerbs_HelpShowsRequiredArguments(string verb, string expectedUsage)
+    {
+        var output = Tier1Renderer.Render(Registry.TryGet(verb)!);
+
+        Assert.Contains(expectedUsage, output);
+    }
+
+    [Fact]
+    public void WorkItemVerbOptions_DoNotLeakAcrossHelpBlocks()
+    {
+        Assert.DoesNotContain("--validate-only", Tier1Renderer.Render(Registry.TryGet("new")!));
+        Assert.DoesNotContain("--review", Tier1Renderer.Render(Registry.TryGet("list")!));
+        Assert.DoesNotContain("--label", Tier1Renderer.Render(Registry.TryGet("scaffold")!));
+        Assert.DoesNotContain("--no-cascade", Tier1Renderer.Render(Registry.TryGet("reopen")!));
+        Assert.Contains("--no-cascade", Tier1Renderer.Render(Registry.TryGet("close")!));
+        Assert.Contains("--no-cascade", Tier1Renderer.Render(Registry.TryGet("defer")!));
+    }
+
     // ------------------------------------------------------------------
     // Tier0Renderer can render the factory registry without throwing.
     // ------------------------------------------------------------------
