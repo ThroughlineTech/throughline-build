@@ -117,75 +117,7 @@ Component inventory after op-doc 5 lands. New op-docs will reuse most of these a
 
 ## 7. The op-doc format
 
-Dan uses a specific op-doc format. Conform to it strictly. The format:
-
-```
-# Operation: <slug>
-
-<framing paragraph: one or two sentences stating what this op-doc accomplishes>
-
-## Why this exists
-
-<paragraph(s) explaining the motivation, anchored to concrete evidence (cost numbers, state reports, prior op-doc references)>
-
-## Dispatch order
-
-| Plan | Name | Depends on | Effort |
-| ---- | ---- | ---------- | ------ |
-| A    | ...  | -          | S/M/L  |
-| B    | ...  | A          | S/M/L  |
-
-## Plan A: <Name>
-
-### Goal
-
-<paragraph stating what Plan A produces and the brief sequence>
-
-### Briefs
-
-| # | Slug | Intent | Deps | Files |
-|---|------|--------|------|-------|
-| 01 | ... | ... | - | ... |
-| 02 | ... | ... | 01 | ... |
-
-### Briefs - detail
-
-#### Brief 01: <slug>
-
-Goal: <one paragraph>
-
-Inputs: <bullets>
-
-Outputs: <bullets>
-
-Acceptance:
-- [ ] WHAT must be true (NOT how to verify)
-- [ ] ...
-
-Notes: <prose; conventions, caveats>
-
-OOS:
-- Do not <explicit boundaries>
-- ...
-
-## Plan B: <Name>
-(if more than one plan)
-
-## What done looks like
-
-<narrative description of the end state; what a user observes; what gates are met>
-```
-
-Rules that get repeatedly violated and must be enforced:
-
-- **NO Verification blocks.** Claude Code adds them automatically. Do not author them.
-- **NO Risks or Future sections.** Op-docs are scoped work; risk lives in the architecture doc; future work is its own op-doc.
-- **Dispatch order "Depends on" uses plan IDs only**, never brief IDs. If brief 01 of Plan B depends on brief 03 of Plan A, write Plan B's dependency as `A` and put the precise brief-level sequencing in Plan B's `### Goal`.
-- **Acceptance criteria are WHAT not HOW.** "All records compile under .NET 8" is WHAT; "Run `dotnet build` and verify zero warnings" is HOW. Use checkboxes for things to be true at completion, not steps to perform.
-- **OOS sections are first-class.** They are the primary contamination prevention mechanism. Be explicit and exhaustive about what NOT to do.
-- **Single hyphens, not em dashes.** Pure stylistic preference; respect it.
-- **No flattery or marketing language.** "This is the right approach" is fine; "this elegant solution" is not.
-- **Brief size target: 50-500 LOC of change per brief.** Smaller is fine; larger means split it.
+Dan uses a specific op-doc format. Conform to it strictly, but do not use this briefing as the rules source. Run `build op-doc spec` and follow that baked-in spec; if any older briefing, historical op-doc, or slash-command text disagrees with the command output, the command output wins.
 
 ---
 
@@ -325,7 +257,7 @@ Recipe:
 3. **Read the latest event log reference doc** (`docs/event-log-file-format.md`) to confirm current event semantics.
 4. **Identify components.** Which existing libraries get reused? Which new ones are added? Map each to a brief.
 5. **Sequence the briefs.** Foundation first (new interfaces, new helpers), then concrete implementations, then phase composition, then CLI subcommand wiring, then integration tests.
-6. **Compose using Dan's op-doc format** (section 7 above). Strict adherence.
+6. **Compose using `build op-doc spec` as the op-doc format source.** Strict adherence.
 7. **OOS sections are mandatory.** Include `do not read claude-config source`, `do not preserve patterns from prior systems`, plus phase-specific forbiddens.
 8. **End with "What done looks like."** Concrete narrative of the end-state user experience.
 
