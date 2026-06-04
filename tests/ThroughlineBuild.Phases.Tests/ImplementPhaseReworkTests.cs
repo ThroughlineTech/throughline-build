@@ -205,7 +205,7 @@ public class ImplementPhaseReworkTests
         var ticketing = new FakeTicketing(MakeTicket(TicketState.InProgress));
         ticketing.ExistingComments.Add(new TicketComment(
             "comment-implemented",
-            $"<p>[implemented_at: {CommitSha}] (branch ticket/tlb-1-test-ticket)</p><p>Implemented parser changes.</p><ul><li>Added regression tests.</li></ul>",
+            $"<p class=\"editor-paragraph-block\" data-id=\"marker\">[implemented_at: {CommitSha}] (branch ticket/tlb-1-test-ticket)</p><p>Implemented parser changes.</p><ul><li>Added regression tests.</li></ul>",
             implementedAt));
         var worker = new FakeWorkerAgent(OkWorkerResult());
         var events = new FakeEventSink();
@@ -227,6 +227,7 @@ public class ImplementPhaseReworkTests
         Assert.Contains("## Prior implement context", worker.LastBrief!.Instruction);
         Assert.Contains("Implemented parser changes.", worker.LastBrief.Instruction);
         Assert.Contains("Added regression tests.", worker.LastBrief.Instruction);
+        Assert.DoesNotContain("implemented_at", worker.LastBrief.Instruction);
         Assert.Contains("- src/Parser.cs", worker.LastBrief.Instruction);
         Assert.Contains("- tests/ParserTests.cs", worker.LastBrief.Instruction);
         Assert.DoesNotContain("@@ patch should not be included", worker.LastBrief.Instruction);

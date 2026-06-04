@@ -28,7 +28,7 @@ public record ImplementResult(
 public class ImplementPhase : IWorkflowPhase
 {
     private static readonly Regex ImplementedAtParagraphPattern = new(
-        @"<p>\s*\[implemented_at:[\s\S]*?</p>",
+        @"<p\b[^>]*>\s*\[implemented_at:[\s\S]*?</p>",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex HtmlTagPattern = new(@"<[^>]+>", RegexOptions.Compiled);
 
