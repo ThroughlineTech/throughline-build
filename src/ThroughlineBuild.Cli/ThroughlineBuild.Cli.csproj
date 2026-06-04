@@ -18,7 +18,11 @@
       assembly-level rollup so the AOT publish stays warning-clean.
     -->
     <NoWarn>$(NoWarn);IL2104</NoWarn>
+    <GeneratedBuildVersionFile>$(BaseIntermediateOutputPath)$(Configuration)\$(TargetFramework)\Generated\BuildVersion.g.cs</GeneratedBuildVersionFile>
   </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(GeneratedBuildVersionFile)" />
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ThroughlineBuild.Contracts\ThroughlineBuild.Contracts.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.Briefs\ThroughlineBuild.Briefs.csproj" />
@@ -40,4 +44,20 @@
   <ItemGroup>
     <PackageReference Include="Tomlyn" Version="0.16.0" />
   </ItemGroup>
+  <Target Name="GenerateBuildVersionSource" BeforeTargets="CoreCompile">
+    <MakeDir Directories="$([System.IO.Path]::GetDirectoryName('$(GeneratedBuildVersionFile)'))" />
+    <ItemGroup>
+      <BuildVersionSourceLine Include="namespace ThroughlineBuild.Cli" />
+      <BuildVersionSourceLine Include="{" />
+      <BuildVersionSourceLine Include="    public static partial class BuildVersion" />
+      <BuildVersionSourceLine Include="    {" />
+      <BuildVersionSourceLine Include="        public const string Current = @&quot;$(InformationalVersion)&quot;%3B" />
+      <BuildVersionSourceLine Include="    }" />
+      <BuildVersionSourceLine Include="}" />
+    </ItemGroup>
+    <WriteLinesToFile
+      File="$(GeneratedBuildVersionFile)"
+      Overwrite="true"
+      Lines="@(BuildVersionSourceLine)" />
+  </Target>
 </Project>

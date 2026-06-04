@@ -1,3 +1,4 @@
+using System.Reflection;
 using Xunit;
 
 namespace ThroughlineBuild.Cli.Tests;
@@ -21,5 +22,15 @@ public class SpikeTests
     public void BuildVersion_is_non_empty()
     {
         Assert.False(string.IsNullOrWhiteSpace(BuildVersion.Current));
+    }
+
+    [Fact]
+    public void BuildVersion_matches_build_informational_version()
+    {
+        var informationalVersion = typeof(BuildVersion).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion;
+
+        Assert.Equal(BuildVersion.Current, informationalVersion);
     }
 }
