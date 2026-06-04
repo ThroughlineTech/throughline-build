@@ -106,7 +106,9 @@ public class ShipPhaseTests
 
         Assert.True(git.DeleteBranchCalls.Count == 1);
         Assert.Equal(BranchName, git.DeleteBranchCalls[0].branch);
-        Assert.False(git.DeleteBranchCalls[0].force);
+        // force:true (-D), not -d: the branch was just fast-forward-merged into the local target,
+        // so -d's upstream-merge check (which leaks the branch when origin lags) is inappropriate.
+        Assert.True(git.DeleteBranchCalls[0].force);
     }
 
     [Fact]

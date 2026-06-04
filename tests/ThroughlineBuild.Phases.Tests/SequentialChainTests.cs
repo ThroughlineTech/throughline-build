@@ -510,6 +510,38 @@ public class SequentialChainTests
         Assert.Contains(chainBranch, git.DeletedBranches);
     }
 
+    [Fact]
+    public async Task ParentChain_DeletesShippedChildBranches_AtChainEnd()
+    {
+        // Each child cuts its ticket/<id> branch inside the shared chain worktree, so the per-child
+        // ship cannot delete it (git refuses to delete a branch checked out in a worktree). The chain
+        // must delete the shipped children's branches itself at chain end, after the shared worktree
+        // is torn down - otherwise every child branch leaks (the bug behind the worktree/branch pileup).
+        var parent = MakeParent();
+        var child1 = MakeChild(Child1Id, Child1Uuid, TicketState.Backlog);
+        var child2 = MakeChild(Child2Id, Child2Uuid, TicketState.Backlog);
+
+        var ticketing = new SeqFakeTicketing(parent);
+        ticketing.SeedChildren(ParentUuid, new[] { child1, child2 });
+
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new SeqPassVerifier());
+        verifiers.Enqueue(new SeqPassVerifier());
+
+        var git = new SeqFakeGitClient();
+        var chain = BuildChain(ticketing, verifiers, git);
+
+        var result = await chain.RunAsync(new ChainPhaseOptions(ParentId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        Assert.All(result.ChildResults!, r => Assert.Equal(ChainOutcome.Completed, r.Outcome));
+
+        // Both children's ticket branches are deleted at chain end.
+        Assert.Contains(PhaseWorktreeLayout.BranchName(Child1Id), git.DeletedBranches);
+        Assert.Contains(PhaseWorktreeLayout.BranchName(Child2Id), git.DeletedBranches);
+    }
+
     // ==========================================================================
     // Fakes
     // ==========================================================================

@@ -1525,7 +1525,12 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             RegressionChecks: config2.Ship.RegressionChecks,
             Remote: config2.Ship.Remote,
             BaseBranch: config2.Ship.BaseBranch,
-            DeleteFeatureBranch: config2.Ship.DeleteFeatureBranch,
+            // Never delete the feature branch from inside the per-child ship: the branch is still
+            // checked out in the shared chain worktree at ship time, so `git branch -d/-D` always
+            // fails with "used by worktree". ChainPhase deletes child branches at chain end, after
+            // the shared worktree is torn down. (Decruft is likewise skipped here for the same
+            // shared-worktree reason.)
+            DeleteFeatureBranch: false,
             NoAutoMerge: noAutoMerge,
             TargetBranch: config2.ResolveTargetBranch(),
             SkipDecruft: true,

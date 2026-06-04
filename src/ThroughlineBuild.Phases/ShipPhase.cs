@@ -729,9 +729,15 @@ public class ShipPhase : IWorkflowPhase
         }
 
         // Step 13: Optionally delete feature branch. Failure does not unwind Done.
+        // Force-delete (-D), not -d: Step 8 already fast-forward-merged this branch into the
+        // local target, so it is provably merged. `git branch -d` instead checks the branch's
+        // configured upstream (origin/<target>), and when that ref lags local target - push
+        // disabled, or origin behind - it refuses with "not fully merged to origin/main, even
+        // though merged to HEAD" and the merged branch leaks. The local merge is the ship's
+        // source of truth here, so -D is correct.
         if (_shipOptions.DeleteFeatureBranch)
         {
-            var deleteResult = await _git.DeleteBranchAsync(canonicalBranchName, force: false, workingDirectory, ct).ConfigureAwait(false);
+            var deleteResult = await _git.DeleteBranchAsync(canonicalBranchName, force: true, workingDirectory, ct).ConfigureAwait(false);
             var deleteData = new Dictionary<string, object>
             {
                 ["action"] = "delete_branch",

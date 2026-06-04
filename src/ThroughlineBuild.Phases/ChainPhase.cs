@@ -948,6 +948,20 @@ public class ChainPhase
                 // chain/<slug> placeholder here so it does not leak and collide with the next run's
                 // shared-worktree creation. force:true because it is unmerged scaffolding by design.
                 await _git.DeleteBranchAsync(sharedChainBranch, force: true, _workingDirectory, ct).ConfigureAwait(false);
+
+                // Delete each shipped child's ticket/<id> branch. Per-child ship leaves these in
+                // place (the branch was checked out in the now-removed shared worktree, so it could
+                // not be deleted in-flight). Only successfully-shipped children have a branch to drop;
+                // RatifiedObsolete/stopped children either never cut one or carry unmerged work, so
+                // they are skipped. force:true because the branch is merged into the local target by
+                // the child's own ship - the same reason ShipPhase force-deletes (see Step 13).
+                foreach (var childResult in allChildResults)
+                {
+                    if (childResult.Outcome != ChainOutcome.Completed)
+                        continue;
+                    var childBranch = PhaseWorktreeLayout.BranchName(childResult.TicketId);
+                    await _git.DeleteBranchAsync(childBranch, force: true, _workingDirectory, ct).ConfigureAwait(false);
+                }
             }
             catch { /* non-fatal: ticket transitions are already committed */ }
         }
