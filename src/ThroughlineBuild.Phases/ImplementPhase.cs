@@ -456,6 +456,10 @@ public class ImplementPhase : IWorkflowPhase
                 ct).ConfigureAwait(false);
             touchedFiles = diff.Entries.Select(e => e.Path).ToList();
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch
         {
             // Rework enrichment is a token-economy hint. If git cannot provide it,
