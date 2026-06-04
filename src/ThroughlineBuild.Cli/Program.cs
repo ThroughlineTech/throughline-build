@@ -220,6 +220,39 @@ static async Task<int> RunAsync(string[] args)
         return UserGuideCommand.Execute(rawCwd, force, printTemplate, SystemConsole.Instance);
     }
 
+    // 'build op-doc spec' exposes the embedded op-doc authoring spec; runs without config.
+    if (verb == "op-doc")
+    {
+        if (args.Length < 2 || args[1] != "spec")
+        {
+            Console.Error.WriteLine("Error: subcommand is required");
+            Console.Error.WriteLine("Usage: build op-doc spec [--print] [--write] [--force]");
+            return 2;
+        }
+
+        var recognized = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "op-doc",
+            "spec",
+            "--print",
+            "--write",
+            "--force",
+        };
+        foreach (var arg in args)
+        {
+            if (!recognized.Contains(arg))
+            {
+                Console.Error.WriteLine($"Error: unknown argument: {arg}");
+                Console.Error.WriteLine("Usage: build op-doc spec [--print] [--write] [--force]");
+                return 2;
+            }
+        }
+
+        var write = filteredArgs.Contains("--write");
+        var force = filteredArgs.Contains("--force");
+        return OpDocSpecCommand.Execute(rawCwd, write, force, SystemConsole.Instance);
+    }
+
     var resolverGit = new ProcessGitClient(rawCwd);
     var resolvedCwd = await MainWorktreeResolver.ResolveAsync(resolverGit, rawCwd, CancellationToken.None);
 

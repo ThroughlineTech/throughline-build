@@ -9,4 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="..\ThroughlineBuild.Contracts\ThroughlineBuild.Contracts.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Templates\*.md" />
+  </ItemGroup>
 </Project>

@@ -46,6 +46,7 @@ public static class HelpRegistryFactory
         r.Register(Init());
         r.Register(SetTarget());
         r.Register(UserGuide());
+        r.Register(OpDoc());
         r.Register(Scaffold());
 
         return r;
@@ -370,6 +371,25 @@ public static class HelpRegistryFactory
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2],
         Examples:  []
+    );
+
+    private static CommandHelp OpDoc() => new(
+        Name:    "op-doc",
+        Group:   CommandGroup.Configure,
+        Summary: "Print or write op-doc authoring assets",
+        Usage:   "op-doc spec [--print] [--write] [--force]",
+        Options:
+        [
+            new("--print", "Print the embedded op-doc spec to stdout (default)", false),
+            new("--write", "Write the embedded op-doc spec to docs/op-docs/op-doc-spec.md", false),
+            new("--force", "Overwrite an existing generated spec file when used with --write", false),
+        ],
+        ExitCodes: [s_exit0, s_exit2],
+        Examples:
+        [
+            new("op-doc spec", "Print the authoring spec"),
+            new("op-doc spec --write --force", "Regenerate docs/op-docs/op-doc-spec.md"),
+        ]
     );
 
     private static CommandHelp Scaffold() => new(
