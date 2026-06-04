@@ -66,20 +66,6 @@ Flags:
                    at compile time (works in AOT); for exceptions it reads ex.StackTrace (requires
                    debug build or embedded PDB for line numbers).
 
-Progress digest (default behavior for plan/implement/review):
-  Without --debug or --quiet, the orchestrator prints a one-line digest per worker stream event to stderr
-  (e.g. tool_use Read foo.cs, tool_use Bash git status, result ok 23888 out / 317k cache-read).
-  Each line carries a [m:ss] offset from worker start. Default-on to a TTY stderr; auto-suppressed when
-  stderr is redirected (2>err.log or piped) to keep CI/script logs clean. Set BUILD_PROGRESS=1 to force
-  digest on even when stderr is redirected.
-
-Summary contract:
-  Each phase (plan / implement / review / ship) prints a deterministic completion summary block
-  to stdout on both success and failure paths. The block is generated without any LLM call from
-  the in-memory event stream, the phase result, Plane queries, and local git. Redirection works
-  cleanly: `build plan TLB-N 2>/dev/null > summary.txt`. The --quiet flag (when introduced) will
-  suppress the summary too.
-
 Config keys (in .build/config.toml):
   [plan]
   mode = "investigate"  (default) Spawn a worker to produce the plan from the ticket description.

@@ -30,6 +30,8 @@ public sealed class HelpTopicRegistry
     public static HelpTopicRegistry Build() => new HelpTopicRegistry(
     [
         new HelpTopic("config", HelpTopicContent.Config),
+        new HelpTopic("digest", HelpTopicContent.Digest),
         new HelpTopic("exit-codes", HelpTopicContent.ExitCodes),
+        new HelpTopic("summary", HelpTopicContent.Summary),
     ]);
 }

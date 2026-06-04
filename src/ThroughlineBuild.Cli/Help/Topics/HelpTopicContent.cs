@@ -66,4 +66,45 @@ Validation:
   Any value other than "investigate" or "promote" is a config error and exits 2.
   Unknown keys under [plan] are ignored with a warning.
 """;
+
+    public const string Digest = """
+build help digest
+
+Progress digest:
+  Without --debug or --quiet, worker-backed commands print a one-line digest per worker stream event to stderr.
+  Digest lines summarize activity such as tool_use Read foo.cs, tool_use Bash git status, and terminal result statistics.
+  Each line carries a [m:ss] offset from worker start.
+
+Default behavior:
+  The digest is default-on when stderr is a TTY.
+  The digest is auto-suppressed when stderr is redirected or piped, such as 2>err.log, to keep CI and script logs clean.
+  --quiet suppresses the digest.
+  --debug replaces the digest with raw worker stdout/stderr streaming and captured session artifacts.
+
+BUILD_PROGRESS override:
+  Set BUILD_PROGRESS=1 to force digest output even when stderr is redirected.
+  The override does not beat --quiet or --debug.
+""";
+
+    public const string Summary = """
+build help summary
+
+Summary contract:
+  Phase commands print a deterministic completion summary to stdout on both success and failure paths.
+  The summary is generated without an LLM call from the in-memory event stream, the phase result, Plane queries, and local git.
+  Human-readable summaries are stable enough for redirection and grep workflows, such as build plan TLB-N 2>/dev/null > summary.txt.
+
+Covered phase summaries:
+  plan
+  implement
+  review
+  ship
+  decompose
+
+--summary-json behavior:
+  --summary-json emits the same phase completion summary as a JSON object on stdout instead of the human-readable text block.
+  JSON output is intended for jq and downstream tooling.
+  JSON serialization uses source-generated metadata so the path remains trim- and AOT-safe.
+  On chain, --summary-json applies to each emitted phase summary.
+""";
 }

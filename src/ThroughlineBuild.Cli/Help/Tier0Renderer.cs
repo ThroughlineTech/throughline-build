@@ -25,7 +25,7 @@ public static class Tier0Renderer
     ];
 
     public const string TopicFooter =
-        "Run 'build help <topic>' for reference documentation. Available topics: config, exit-codes.";
+        "Run 'build help <topic>' for reference documentation. Available topics: config, digest, exit-codes, summary.";
 
     private static string GroupLabel(CommandGroup group) => group switch
     {

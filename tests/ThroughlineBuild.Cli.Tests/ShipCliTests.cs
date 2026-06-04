@@ -20,11 +20,9 @@ public class ShipCliTests
     }
 
     [Fact]
-    public void UsageText_MentionsSummaryJsonFlagAndContract()
+    public void UsageText_MentionsSummaryJsonFlag()
     {
-        // TLB-123
         Assert.Contains("--summary-json", CliUsage.UsageText);
-        Assert.Contains("Summary contract:", CliUsage.UsageText);
     }
 
     [Fact]

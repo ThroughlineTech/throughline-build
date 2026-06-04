@@ -10,6 +10,8 @@ public class HelpTopicTests
     [Theory]
     [InlineData("exit-codes")]
     [InlineData("config")]
+    [InlineData("digest")]
+    [InlineData("summary")]
     public void Registry_ReturnsKnownTopics(string name)
     {
         var topic = Registry.TryGet(name);
@@ -47,14 +49,40 @@ public class HelpTopicTests
     }
 
     [Fact]
+    public void DigestTopic_ContainsProgressDigestBehaviorAndBuildProgressOverride()
+    {
+        var output = HelpTopicRenderer.Render(Registry.TryGet("digest")!);
+
+        Assert.Contains("Progress digest:", output);
+        Assert.Contains("one-line digest per worker stream event", output);
+        Assert.Contains("stderr is redirected", output);
+        Assert.Contains("BUILD_PROGRESS=1", output);
+        Assert.Contains("does not beat --quiet or --debug", output);
+    }
+
+    [Fact]
+    public void SummaryTopic_ContainsSummaryContractAndJsonOutputBehavior()
+    {
+        var output = HelpTopicRenderer.Render(Registry.TryGet("summary")!);
+
+        Assert.Contains("Summary contract:", output);
+        Assert.Contains("deterministic completion summary", output);
+        Assert.Contains("--summary-json emits", output);
+        Assert.Contains("JSON object on stdout", output);
+        Assert.Contains("trim- and AOT-safe", output);
+    }
+
+    [Fact]
     public void UnknownTopicOutput_ListsValidTopics()
     {
-        var output = HelpTopicRenderer.RenderUnknownTopic("digest", Registry.TopicNames);
+        var output = HelpTopicRenderer.RenderUnknownTopic("missing", Registry.TopicNames);
 
-        Assert.Contains("Unknown help topic: digest", output);
+        Assert.Contains("Unknown help topic: missing", output);
         Assert.Contains("Valid topics:", output);
         Assert.Contains("  config", output);
+        Assert.Contains("  digest", output);
         Assert.Contains("  exit-codes", output);
+        Assert.Contains("  summary", output);
     }
 
     [Fact]
@@ -62,5 +90,16 @@ public class HelpTopicTests
     {
         foreach (var name in Registry.TopicNames)
             Assert.Contains(name, Tier0Renderer.TopicFooter);
+    }
+
+    [Fact]
+    public void Tier0Help_DoesNotInlineDigestOrSummaryReferenceBodies()
+    {
+        var output = Tier0Renderer.Render(HelpRegistryFactory.Build());
+
+        Assert.DoesNotContain("BUILD_PROGRESS=1", output);
+        Assert.DoesNotContain("Summary contract:", output);
+        Assert.DoesNotContain("one-line digest per worker stream event", output);
+        Assert.DoesNotContain("JSON object on stdout", output);
     }
 }

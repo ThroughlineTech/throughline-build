@@ -38,20 +38,15 @@ public class ImplementCliTests
     [Fact]
     public void UsageText_DocumentsQuietFlag()
     {
-        // --quiet must appear in both the verb usage and the Flags block, and the
-        // digest behavior must be documented (BUILD_PROGRESS env var, TTY rule).
+        // --quiet must appear in both the verb usage and the Flags block.
         Assert.Contains("--quiet", CliUsage.UsageText);
         Assert.Contains("--debug|--quiet", CliUsage.UsageText);
-        Assert.Contains("Progress digest", CliUsage.UsageText);
-        Assert.Contains("BUILD_PROGRESS", CliUsage.UsageText);
     }
 
     [Fact]
-    public void UsageText_MentionsSummaryJsonFlagAndContract()
+    public void UsageText_MentionsSummaryJsonFlag()
     {
-        // TLB-123: --summary-json flag and the summary-contract paragraph must be documented.
         Assert.Contains("--summary-json", CliUsage.UsageText);
-        Assert.Contains("Summary contract:", CliUsage.UsageText);
     }
 
     [Fact]
