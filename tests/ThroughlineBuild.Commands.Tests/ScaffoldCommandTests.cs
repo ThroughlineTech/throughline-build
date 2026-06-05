@@ -399,6 +399,33 @@ OOS:
         Assert.DoesNotContain("Scaffold complete", result.Message);
     }
 
+    [Fact]
+    public void FullNonBackendFailure_DoesNotUseBackendUnavailableExitCategory()
+    {
+        var path = WriteOpDoc(ValidOpDoc);
+        var result = new ScaffoldResult(
+            PlansCreated: 0,
+            BriefsCreated: 0,
+            CreatedTicketIds: Array.Empty<string>(),
+            Failures: new[] { new ScaffoldFailure("semantic_check", "semantic scaffold failure") },
+            WasAbortedByParseErrors: false,
+            WasAbortedByValidationErrors: false,
+            WasBlockedByWarnings: false,
+            WasDryRun: false,
+            OpTicketId: null);
+
+        var method = typeof(ScaffoldCommand).GetMethod(
+            "BuildCreateOutput",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+
+        Assert.NotNull(method);
+        var commandResult = Assert.IsType<CommandResult>(method!.Invoke(null, new object[] { path, result }));
+
+        Assert.False(commandResult.Success);
+        Assert.StartsWith(ScaffoldExitCategory.ValidationError, commandResult.Message);
+        Assert.DoesNotContain(ScaffoldExitCategory.BackendUnavailable, commandResult.Message);
+    }
+
     // ---- Helper ----
 
     private static TicketCommandContext MakeCtx(

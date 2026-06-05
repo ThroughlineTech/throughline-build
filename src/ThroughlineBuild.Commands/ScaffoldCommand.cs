@@ -262,6 +262,8 @@ public sealed class ScaffoldCommand : ITicketCommand
 
         bool isPartial = result.Failures.Count > 0 && (result.PlansCreated > 0 || result.BriefsCreated > 0);
         bool isFullFailure = result.Failures.Count > 0 && result.PlansCreated == 0 && result.BriefsCreated == 0;
+        bool isBackendUnavailableFullFailure = isFullFailure
+            && result.Failures.All(IsBackendUnavailableFailure);
 
         if (!isPartial && !isFullFailure)
         {
@@ -274,11 +276,22 @@ public sealed class ScaffoldCommand : ITicketCommand
 
         string tag = isPartial
             ? ScaffoldExitCategory.PartialCreation
-            : isFullFailure
+            : isBackendUnavailableFullFailure
                 ? ScaffoldExitCategory.BackendUnavailable
-                : ScaffoldExitCategory.Clean;
+                : isFullFailure
+                    ? ScaffoldExitCategory.ValidationError
+                    : ScaffoldExitCategory.Clean;
         bool success = !isPartial && !isFullFailure;
         return new CommandResult(success, $"{tag}\n{sb.ToString().TrimEnd()}");
+    }
+
+    private static bool IsBackendUnavailableFailure(ScaffoldFailure failure)
+    {
+        var stage = failure.Stage;
+        return string.Equals(stage, "connectivity_check", StringComparison.OrdinalIgnoreCase)
+            || stage.EndsWith("_create", StringComparison.OrdinalIgnoreCase)
+            || stage.EndsWith("_parent_link", StringComparison.OrdinalIgnoreCase)
+            || stage.EndsWith("_dependency_link", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string StripTag(string? message)
