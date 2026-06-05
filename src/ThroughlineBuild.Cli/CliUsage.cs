@@ -23,6 +23,7 @@ Usage:
   build init [--force] [--print-template] [--plane-url URL] [--workspace SLUG] [--project-id UUID] [--token TOKEN | --token-env VAR]   Write .build/config.toml from the built-in template; --force overwrites an existing file; --print-template prints to stdout; flag values replace the corresponding REQUIRED_ placeholders; when stdin is a TTY, prompts for any REQUIRED_ values not supplied as flags
   build user-guide [--force] [--print-template]   Write the operator user guide to docs/throughline_build_userguide.md; --force overwrites an existing file; --print-template prints to stdout
   build op-doc spec [--print] [--write] [--force] Print the embedded op-doc authoring spec to stdout by default; --write materializes docs/op-docs/op-doc-spec.md; --force overwrites an existing generated copy
+  build op-doc new <slug> [--write]               Generate a minimal valid op-doc skeleton for <slug>; prints to stdout by default; --write writes docs/op-docs/op-<slug>.md
   build settarget <branch>     Validate <branch> exists as a local git ref and write target_branch = "<branch>" under [work] in .build/config.toml; exits 2 if branch not found locally (run git checkout -b <branch> first)
   build settarget --unset      Remove target_branch from [work] in .build/config.toml; noop if key is already absent
   build settarget              Print the current resolved target_branch value: shows [work] override if set, or base_branch default from [ship] if not

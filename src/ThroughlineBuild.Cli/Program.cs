@@ -103,6 +103,19 @@ static async Task<int> RunAsync(string[] args)
 
     var verb = args[0];
 
+    if (verb == "op-doc" && args.Length >= 2 && args[1] == "new")
+    {
+        bool hasHelpFlag = args.Skip(2).Any(a => a == "-h" || a == "--help");
+        if (hasHelpFlag)
+        {
+            Console.WriteLine("Usage: build op-doc new <slug> [--write]");
+            Console.WriteLine();
+            Console.WriteLine("Generate a minimal valid op-doc skeleton. Without --write, writes to stdout.");
+            Console.WriteLine("--write  Write to docs/op-docs/op-<slug>.md instead of stdout.");
+            return 0;
+        }
+    }
+
     // Per-command help: build <verb> [any-position] -h|--help
     // Short-circuits before argument validation so "build ship --help" works without a ticket ID.
     {
@@ -220,37 +233,93 @@ static async Task<int> RunAsync(string[] args)
         return UserGuideCommand.Execute(rawCwd, force, printTemplate, SystemConsole.Instance);
     }
 
-    // 'build op-doc spec' exposes the embedded op-doc authoring spec; runs without config.
+    // 'build op-doc <spec|new>' runs without config: 'spec' prints or writes the embedded
+    // authoring spec; 'new' emits a minimal valid op-doc skeleton for the given slug.
     if (verb == "op-doc")
     {
-        if (args.Length < 2 || args[1] != "spec")
+        var opDocSub = args.Length >= 2 ? args[1] : null;
+
+        if (opDocSub == "spec")
         {
-            Console.Error.WriteLine("Error: subcommand is required");
-            Console.Error.WriteLine("Usage: build op-doc spec [--print] [--write] [--force]");
-            return 2;
+            var recognized = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "op-doc",
+                "spec",
+                "--print",
+                "--write",
+                "--force",
+            };
+            foreach (var arg in args)
+            {
+                if (!recognized.Contains(arg))
+                {
+                    Console.Error.WriteLine($"Error: unknown argument: {arg}");
+                    Console.Error.WriteLine("Usage: build op-doc spec [--print] [--write] [--force]");
+                    return 2;
+                }
+            }
+
+            var write = filteredArgs.Contains("--write");
+            var force = filteredArgs.Contains("--force");
+            return OpDocSpecCommand.Execute(rawCwd, write, force, SystemConsole.Instance);
         }
 
-        var recognized = new HashSet<string>(StringComparer.Ordinal)
+        if (opDocSub == "new")
         {
-            "op-doc",
-            "spec",
-            "--print",
-            "--write",
-            "--force",
-        };
-        foreach (var arg in args)
-        {
-            if (!recognized.Contains(arg))
+            if (args.Length < 3 || string.IsNullOrWhiteSpace(args[2]) || args[2].StartsWith("--", StringComparison.Ordinal))
             {
-                Console.Error.WriteLine($"Error: unknown argument: {arg}");
-                Console.Error.WriteLine("Usage: build op-doc spec [--print] [--write] [--force]");
+                Console.Error.WriteLine("Error: slug is required");
+                Console.Error.WriteLine("Usage: build op-doc new <slug> [--write]");
                 return 2;
             }
+
+            var opDocSlug = args[2];
+            if (!OpDocSkeletonGenerator.IsValidSlug(opDocSlug))
+            {
+                Console.Error.WriteLine("Error: slug must be kebab-case: lowercase letters and digits separated by single hyphens, starting with a letter.");
+                return 2;
+            }
+
+            bool write = false;
+            for (int i = 3; i < args.Length; i++)
+            {
+                if (args[i] == "--write")
+                {
+                    write = true;
+                }
+                else
+                {
+                    Console.Error.WriteLine($"Error: unknown option for build op-doc new: {args[i]}");
+                    Console.Error.WriteLine("Usage: build op-doc new <slug> [--write]");
+                    return 2;
+                }
+            }
+
+            var skeleton = OpDocSkeletonGenerator.Render(opDocSlug);
+            if (!write)
+            {
+                Console.Write(skeleton);
+                return 0;
+            }
+
+            var opDocDirectory = Path.Combine(rawCwd, "docs", "op-docs");
+            var opDocPath = Path.Combine(opDocDirectory, $"op-{opDocSlug}.md");
+            if (File.Exists(opDocPath))
+            {
+                Console.Error.WriteLine($"Error: op-doc already exists: {Path.GetRelativePath(rawCwd, opDocPath)}");
+                return 2;
+            }
+
+            Directory.CreateDirectory(opDocDirectory);
+            File.WriteAllText(opDocPath, skeleton);
+            Console.WriteLine(Path.GetRelativePath(rawCwd, opDocPath));
+            return 0;
         }
 
-        var write = filteredArgs.Contains("--write");
-        var force = filteredArgs.Contains("--force");
-        return OpDocSpecCommand.Execute(rawCwd, write, force, SystemConsole.Instance);
+        Console.Error.WriteLine("Error: op-doc subcommand is required");
+        Console.Error.WriteLine("Usage: build op-doc spec [--print] [--write] [--force]");
+        Console.Error.WriteLine("       build op-doc new <slug> [--write]");
+        return 2;
     }
 
     var resolverGit = new ProcessGitClient(rawCwd);

@@ -376,7 +376,7 @@ public static class HelpRegistryFactory
     private static CommandHelp OpDoc() => new(
         Name:    "op-doc",
         Group:   CommandGroup.Configure,
-        Summary: "Print or write op-doc authoring assets",
+        Summary: "Print/write the op-doc spec, or generate a new op-doc skeleton",
         Usage:   "op-doc spec [--print] [--write] [--force]",
         Options:
         [
@@ -389,6 +389,8 @@ public static class HelpRegistryFactory
         [
             new("op-doc spec", "Print the authoring spec"),
             new("op-doc spec --write --force", "Regenerate docs/op-docs/op-doc-spec.md"),
+            new("op-doc new my-feature", "Print a minimal valid op-doc skeleton"),
+            new("op-doc new my-feature --write", "Write docs/op-docs/op-my-feature.md"),
         ]
     );
 
