@@ -462,6 +462,29 @@ OOS:
     }
 
     [Fact]
+    public async Task ConnectivityFailure_AbortsBeforeAnyCreate()
+    {
+        var path = WriteOpDoc(ValidOpDoc);
+        var ticketing = new ConnectivityFailingTicketing("not authorized");
+        var events = new FakeEventSink();
+        var phase = new ScaffoldPhase(ticketing, events, "session-1");
+
+        var result = await phase.RunAsync(
+            new ScaffoldOptions(path, DryRun: false, AcceptWarnings: true),
+            CancellationToken.None);
+
+        Assert.False(result.WasDryRun);
+        Assert.Equal(0, result.PlansCreated);
+        Assert.Equal(0, result.BriefsCreated);
+        Assert.Empty(result.CreatedTicketIds);
+        var failure = Assert.Single(result.Failures);
+        Assert.Equal("connectivity_check", failure.Stage);
+        Assert.Contains("not authorized", failure.Detail);
+        Assert.Equal(0, ticketing.CreateCalls);
+        Assert.Empty(events.Events);
+    }
+
+    [Fact]
     public async Task BriefCreateFailure_ContinuesToNextBrief_RecordsFailure()
     {
         var path = WriteOpDoc(ValidOpDoc);
@@ -603,6 +626,48 @@ OOS:
             Task.FromResult(new CreateChildTicketsResult(
                 children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
                 Array.Empty<string>()));
+    }
+
+    private sealed class ConnectivityFailingTicketing : ITicketing, ITicketingConnectivity
+    {
+        private readonly string _message;
+
+        public ConnectivityFailingTicketing(string message)
+        {
+            _message = message;
+        }
+
+        public int CreateCalls { get; private set; }
+
+        public BackendCapabilities Capabilities => new(true, true, true, false);
+
+        public Task<TicketingConnectivityResult> TestConnectivityAsync(CancellationToken ct) =>
+            Task.FromResult(new TicketingConnectivityResult(false, _message));
+
+        public Task<Ticket> GetAsync(string id, CancellationToken ct) => throw new NotImplementedException();
+        public Task<IReadOnlyList<Ticket>> GetBatchAsync(IEnumerable<string> ids, CancellationToken ct) => throw new NotImplementedException();
+        public Task TransitionAsync(string id, TicketState newState, CancellationToken ct) => Task.CompletedTask;
+        public Task AppendDescriptionAsync(string id, string html, CancellationToken ct) => Task.CompletedTask;
+        public Task<string> CreateCommentAsync(string id, string html, CancellationToken ct) => Task.FromResult("comment-1");
+        public Task ApplyLabelsAsync(string id, IEnumerable<string> labels, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<Relation>> GetRelationsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<Relation>>(Array.Empty<Relation>());
+        public Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct) => Task.CompletedTask;
+        public Task<RollupResult> RollupParentAsync(string id, CancellationToken ct) => Task.FromResult(new RollupResult(false, null, null));
+        public Task<IReadOnlyList<TicketComment>> GetCommentsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<TicketComment>>(Array.Empty<TicketComment>());
+
+        public Task<NewTicketResult> CreateTicketAsync(string title, string? type, string descriptionHtml, IReadOnlyList<string>? initialLabelNames, CancellationToken ct)
+        {
+            CreateCalls++;
+            return Task.FromResult(new NewTicketResult("TLB-1", "uuid-1", DateTime.UtcNow));
+        }
+
+        public Task SetParentAsync(string childUuid, string parentUuid, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<Ticket>> QueryAsync(TicketQuery query, CancellationToken ct) => Task.FromResult<IReadOnlyList<Ticket>>(Array.Empty<Ticket>());
+        public Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct) => Task.CompletedTask;
+        public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) => Task.CompletedTask;
+
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+            Task.FromResult(new CreateChildTicketsResult(Array.Empty<CreatedChild>(), Array.Empty<string>()));
     }
 
     private sealed class FakeEventSink : IEventSink

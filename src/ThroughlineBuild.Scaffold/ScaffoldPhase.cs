@@ -113,7 +113,26 @@ public sealed class ScaffoldPhase
                 OpTicketId: null);
         }
 
-        // --- Step 5: create tickets ---
+        // --- Step 5: project/API connectivity check ---
+        if (_ticketing is ITicketingConnectivity connectivity)
+        {
+            var connectivityResult = await connectivity.TestConnectivityAsync(ct).ConfigureAwait(false);
+            if (!connectivityResult.Success)
+            {
+                return new ScaffoldResult(
+                    PlansCreated: 0,
+                    BriefsCreated: 0,
+                    CreatedTicketIds: Array.Empty<string>(),
+                    Failures: new[] { new ScaffoldFailure("connectivity_check", connectivityResult.Message) },
+                    WasAbortedByParseErrors: false,
+                    WasAbortedByValidationErrors: false,
+                    WasBlockedByWarnings: false,
+                    WasDryRun: false,
+                    OpTicketId: null);
+            }
+        }
+
+        // --- Step 6: create tickets ---
         int plansCreated = 0;
         int briefsCreated = 0;
         var createdIds = new List<string>();
@@ -127,7 +146,7 @@ public sealed class ScaffoldPhase
         // briefKeyToTicketId: "{PlanId}:{BriefNumber}" -> human-readable ticket ID
         var briefKeyToTicketId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-        // 5a: create operation ticket
+        // 6a: create operation ticket
         string opStage = "op_create";
         try
         {
@@ -163,7 +182,7 @@ public sealed class ScaffoldPhase
             if (plan == null)
                 continue;
 
-            // 5a: create plan-ticket
+            // 6b: create plan-ticket
             string planTicketId = string.Empty;
             string planTicketUuid = string.Empty;
             string planStage = $"plan_{plan.Id}_create";
@@ -222,7 +241,7 @@ public sealed class ScaffoldPhase
                 }
             }
 
-            // 5b: create brief-tickets
+            // 6c: create brief-tickets
             foreach (var brief in plan.Briefs)
             {
                 string briefTitle = brief.Slug;
@@ -284,7 +303,7 @@ public sealed class ScaffoldPhase
             }
         }
 
-        // --- Step 6: create blocked_by dependency relations ---
+        // --- Step 7: create blocked_by dependency relations ---
         var dependencyEdges = new List<DependencyEdge>();
 
         // Plan-level dependencies (Dispatch order Depends-on column)

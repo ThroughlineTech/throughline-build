@@ -382,6 +382,23 @@ OOS:
         Assert.Contains("Created brief: TLB-104 \"alpha-two\" (parent: TLB-102)", msg);
     }
 
+    [Fact]
+    public async Task FullBackendFailure_UsesBackendUnavailableExitCategory()
+    {
+        var path = WriteOpDoc(ValidOpDoc);
+        var ticketing = new ThrowingCreateTicketing();
+        var events = new ScaffoldFakeEventSink();
+        var phase = new ScaffoldPhase(ticketing, events, "test-session");
+        var cmd = new ScaffoldCommand(phase);
+
+        var result = await cmd.ExecuteAsync(MakeCtx(path, acceptWarnings: true), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.StartsWith(ScaffoldExitCategory.BackendUnavailable, result.Message);
+        Assert.Contains("Failures:", result.Message);
+        Assert.DoesNotContain("Scaffold complete", result.Message);
+    }
+
     // ---- Helper ----
 
     private static TicketCommandContext MakeCtx(
@@ -475,6 +492,31 @@ OOS:
             Task.FromResult(new CreateChildTicketsResult(
                 children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
                 Array.Empty<string>()));
+    }
+
+    private sealed class ThrowingCreateTicketing : ITicketing
+    {
+        public BackendCapabilities Capabilities => new BackendCapabilities(true, true, true, false);
+
+        public Task<Ticket> GetAsync(string id, CancellationToken ct) => throw new NotImplementedException();
+        public Task<IReadOnlyList<Ticket>> GetBatchAsync(IEnumerable<string> ids, CancellationToken ct) => throw new NotImplementedException();
+        public Task TransitionAsync(string id, TicketState newState, CancellationToken ct) => throw new NotImplementedException();
+        public Task AppendDescriptionAsync(string id, string html, CancellationToken ct) => Task.CompletedTask;
+        public Task<string> CreateCommentAsync(string id, string html, CancellationToken ct) => Task.FromResult("comment-1");
+        public Task ApplyLabelsAsync(string id, IEnumerable<string> labels, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<Relation>> GetRelationsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<Relation>>(Array.Empty<Relation>());
+        public Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct) => Task.CompletedTask;
+        public Task<RollupResult> RollupParentAsync(string id, CancellationToken ct) => Task.FromResult(new RollupResult(false, null, null));
+        public Task<IReadOnlyList<TicketComment>> GetCommentsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<TicketComment>>(Array.Empty<TicketComment>());
+        public Task<NewTicketResult> CreateTicketAsync(string title, string? type, string descriptionHtml, IReadOnlyList<string>? initialLabelNames, CancellationToken ct) =>
+            throw new InvalidOperationException("backend unavailable");
+        public Task SetParentAsync(string childUuid, string parentUuid, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<Ticket>> QueryAsync(TicketQuery query, CancellationToken ct) => Task.FromResult<IReadOnlyList<Ticket>>(Array.Empty<Ticket>());
+        public Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct) => Task.CompletedTask;
+        public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) => Task.CompletedTask;
+
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+            Task.FromResult(new CreateChildTicketsResult(Array.Empty<CreatedChild>(), Array.Empty<string>()));
     }
 
     private sealed class ScaffoldFakeEventSink : IEventSink

@@ -220,3 +220,40 @@ public class CreateTicketAsyncTests
         Assert.Equal(HttpMethod.Post, handler.Requests[0].Method);
     }
 }
+
+public class PlaneConnectivityTests
+{
+    [Fact]
+    public async Task TestConnectivityAsync_ReadsLabelsAndStates()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var result = await client.TestConnectivityAsync(CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Contains("OK", result.Message);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.All(handler.Requests, req => Assert.Equal(HttpMethod.Get, req.Method));
+        Assert.Contains("/labels/", handler.Requests[0].RequestUri!.AbsolutePath);
+        Assert.Contains("/states/", handler.Requests[1].RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task TestConnectivityAsync_ForbiddenReportsAuthorizationFailure()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.ErrorJson(403, """{"detail":"You do not have permission to perform this action."}"""));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var result = await client.TestConnectivityAsync(CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("not authorized", result.Message);
+        Assert.Contains("403", result.Message);
+        Assert.Single(handler.Requests);
+        Assert.Equal(HttpMethod.Get, handler.Requests[0].Method);
+    }
+}

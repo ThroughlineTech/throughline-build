@@ -120,6 +120,18 @@ public interface ITicketing
 }
 
 /// <summary>
+/// Optional project-level connectivity/readiness probe for ticketing backends.
+/// Callers use this before write-heavy flows so configuration or authorization
+/// failures are reported once, before any partial creation is attempted.
+/// </summary>
+public interface ITicketingConnectivity
+{
+    Task<TicketingConnectivityResult> TestConnectivityAsync(CancellationToken ct);
+}
+
+public record TicketingConnectivityResult(bool Success, string Message);
+
+/// <summary>
 /// Specification for a single child ticket to be created.
 /// </summary>
 public record ChildTicketSpec(string Title, string DescriptionHtml, IReadOnlyList<string> LabelNames);

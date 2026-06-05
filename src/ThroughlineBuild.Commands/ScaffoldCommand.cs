@@ -13,6 +13,7 @@ public static class ScaffoldExitCategory
     public const string Clean = "EXIT:0";
     public const string ValidationError = "EXIT:2";
     public const string PartialCreation = "EXIT:3";
+    public const string BackendUnavailable = "EXIT:4";
 }
 
 /// <summary>
@@ -271,7 +272,11 @@ public sealed class ScaffoldCommand : ITicketCommand
             sb.AppendLine($"Scaffold partial: {result.PlansCreated} plan(s), {result.BriefsCreated} brief(s) created with {result.Failures.Count} failure(s).");
         }
 
-        string tag = isPartial ? ScaffoldExitCategory.PartialCreation : ScaffoldExitCategory.Clean;
+        string tag = isPartial
+            ? ScaffoldExitCategory.PartialCreation
+            : isFullFailure
+                ? ScaffoldExitCategory.BackendUnavailable
+                : ScaffoldExitCategory.Clean;
         bool success = !isPartial && !isFullFailure;
         return new CommandResult(success, $"{tag}\n{sb.ToString().TrimEnd()}");
     }

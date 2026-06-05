@@ -904,6 +904,7 @@ static async Task<int> RunAsync(string[] args)
                 ScaffoldExitCategory.Clean => 0,
                 ScaffoldExitCategory.ValidationError => 2,
                 ScaffoldExitCategory.PartialCreation => 3,
+                ScaffoldExitCategory.BackendUnavailable => 4,
                 _ => scaffoldResult.Success ? 0 : 1
             };
         }

@@ -15,7 +15,7 @@ namespace ThroughlineBuild.Plane;
 /// <summary>
 /// ITicketing implementation backed by the Plane REST API.
 /// </summary>
-public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner
+public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, ITicketingConnectivity
 {
     private readonly HttpClient _http;
     private readonly PlaneClientOptions _options;
@@ -120,6 +120,34 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner
         TypedLabels: true,
         RichHtmlComments: true,
         Attachments: true);
+
+    public async Task<TicketingConnectivityResult> TestConnectivityAsync(CancellationToken ct)
+    {
+        try
+        {
+            await GetJsonAsync<PlaneLabelList>(LabelsBase, PlaneJsonContext.Default, ct).ConfigureAwait(false);
+            await GetJsonAsync<PlaneStateList>(StatesBase, PlaneJsonContext.Default, ct).ConfigureAwait(false);
+            return new TicketingConnectivityResult(true, "Plane project connectivity OK.");
+        }
+        catch (PlaneApiException ex) when (ex.Status is 401 or 403)
+        {
+            return new TicketingConnectivityResult(
+                false,
+                $"Plane project connectivity failed: API token is not authorized for workspace '{_options.WorkspaceSlug}' project '{_options.ProjectId}' ({ex.Message}).");
+        }
+        catch (PlaneApiException ex)
+        {
+            return new TicketingConnectivityResult(
+                false,
+                $"Plane project connectivity failed for workspace '{_options.WorkspaceSlug}' project '{_options.ProjectId}' ({ex.Message}).");
+        }
+        catch (Exception ex)
+        {
+            return new TicketingConnectivityResult(
+                false,
+                $"Plane project connectivity failed for workspace '{_options.WorkspaceSlug}' project '{_options.ProjectId}': {ex.Message}");
+        }
+    }
 
     // ------------------------------------------------------------------ helpers
 
