@@ -67,6 +67,7 @@ internal sealed class BatchTicketResultDto
 [JsonSerializable(typeof(BatchWorkerResultDto))]
 [JsonSerializable(typeof(BatchTicketResultDto))]
 [JsonSerializable(typeof(BatchTicketResult))]
+[JsonSerializable(typeof(BatchWorkerResult))]
 [JsonSerializable(typeof(Dictionary<string, JsonElement>))]
 internal partial class WorkersCommonJsonContext : JsonSerializerContext { }
 
@@ -286,9 +287,9 @@ internal static class WorkerResultParser
                     continue;
 
                 IReadOnlyList<string> files = dto.FilesChanged ?? new List<string>();
-                IReadOnlyDictionary<string, object> meta = dto.Metadata is not null
-                    ? dto.Metadata.ToDictionary(kvp => kvp.Key, kvp => (object)kvp.Value)
-                    : new Dictionary<string, object>();
+                IReadOnlyDictionary<string, JsonElement> meta = dto.Metadata is not null
+                    ? dto.Metadata
+                    : new Dictionary<string, JsonElement>();
                 var result = new BatchWorkerResult(
                     dto.Status.Value,
                     dto.Summary,

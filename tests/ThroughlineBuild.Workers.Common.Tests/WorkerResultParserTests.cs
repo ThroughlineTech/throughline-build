@@ -130,6 +130,78 @@ public class BatchWorkerResultParserTests
     }
 
     [Fact]
+    public void SourceGenContext_BatchWorkerResult_RoundTripsWithReflectionDisabled()
+    {
+        Assert.False(JsonSerializer.IsReflectionEnabledByDefault);
+        using var metadataDocument = JsonDocument.Parse("{\"commit_sha\":\"stack-tip\",\"ticket_count\":2}");
+        var metadata = new Dictionary<string, JsonElement>
+        {
+            ["commit_sha"] = metadataDocument.RootElement.GetProperty("commit_sha").Clone(),
+            ["ticket_count"] = metadataDocument.RootElement.GetProperty("ticket_count").Clone(),
+        };
+        var result = new BatchWorkerResult(
+            Status: Status.Ok,
+            Summary: "batch complete",
+            FilesChanged: new[] { "src/Batch.cs" },
+            FailureReason: null,
+            Metadata: metadata,
+            Tickets: new[]
+            {
+                new BatchTicketResult(
+                    TicketId: "TLB-443",
+                    CommitSha: "sha-443",
+                    StackPosition: 1,
+                    FilesChanged: new[] { "src/A.cs" },
+                    SummaryRef: "SUMMARY_TLB_443"),
+                new BatchTicketResult(
+                    TicketId: "TLB-444",
+                    CommitSha: "sha-444",
+                    StackPosition: 2,
+                    FilesChanged: new[] { "src/B.cs" },
+                    SummaryRef: "SUMMARY_TLB_444"),
+            },
+            Blocks: new Dictionary<string, string>
+            {
+                ["SUMMARY_TLB_443"] = "Implemented contract.",
+                ["SUMMARY_TLB_444"] = "Implemented producer.",
+            });
+
+        var json = JsonSerializer.Serialize(result, WorkersCommonJsonContext.Default.BatchWorkerResult);
+        var roundTrip = JsonSerializer.Deserialize(json, WorkersCommonJsonContext.Default.BatchWorkerResult);
+
+        Assert.NotNull(roundTrip);
+        Assert.Equal(Status.Ok, roundTrip.Status);
+        Assert.Equal("batch complete", roundTrip.Summary);
+        Assert.Single(roundTrip.FilesChanged, "src/Batch.cs");
+        Assert.Null(roundTrip.FailureReason);
+        Assert.Equal("stack-tip", roundTrip.Metadata["commit_sha"].GetString());
+        Assert.Equal(2, roundTrip.Metadata["ticket_count"].GetInt32());
+        Assert.Collection(
+            roundTrip.Tickets,
+            first =>
+            {
+                Assert.Equal("TLB-443", first.TicketId);
+                Assert.Equal("sha-443", first.CommitSha);
+                Assert.Equal(1, first.StackPosition);
+            },
+            second =>
+            {
+                Assert.Equal("TLB-444", second.TicketId);
+                Assert.Equal("sha-444", second.CommitSha);
+                Assert.Equal(2, second.StackPosition);
+            });
+        Assert.NotNull(roundTrip.Blocks);
+        Assert.Equal("Implemented contract.", roundTrip.Blocks["SUMMARY_TLB_443"]);
+        Assert.Contains("\"status\"", json);
+        Assert.Contains("\"files_changed\"", json);
+        Assert.Contains("\"failure_reason\"", json);
+        Assert.Contains("\"metadata\"", json);
+        Assert.Contains("\"tickets\"", json);
+        Assert.DoesNotContain("\"FilesChanged\"", json);
+        Assert.DoesNotContain("\"FailureReason\"", json);
+    }
+
+    [Fact]
     public void TryParseBatch_WellFormedPayload_ReturnsTicketsInDeclaredOrder()
     {
         var stdout =
