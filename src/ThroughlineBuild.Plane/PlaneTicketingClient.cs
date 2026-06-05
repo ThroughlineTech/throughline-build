@@ -127,13 +127,14 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
         {
             await GetJsonAsync<PlaneLabelList>(LabelsBase, PlaneJsonContext.Default, ct).ConfigureAwait(false);
             await GetJsonAsync<PlaneStateList>(StatesBase, PlaneJsonContext.Default, ct).ConfigureAwait(false);
-            return new TicketingConnectivityResult(true, "Plane project connectivity OK.");
+            await ProbeIssueCreatePermissionAsync(ct).ConfigureAwait(false);
+            return new TicketingConnectivityResult(true, "Plane project connectivity and issue create permission OK.");
         }
         catch (PlaneApiException ex) when (ex.Status is 401 or 403)
         {
             return new TicketingConnectivityResult(
                 false,
-                $"Plane project connectivity failed: API token is not authorized for workspace '{_options.WorkspaceSlug}' project '{_options.ProjectId}' ({ex.Message}).");
+                $"Plane project connectivity failed: API token is not authorized to create issues in workspace '{_options.WorkspaceSlug}' project '{_options.ProjectId}' ({ex.Message}).");
         }
         catch (PlaneApiException ex)
         {
@@ -147,6 +148,33 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
                 false,
                 $"Plane project connectivity failed for workspace '{_options.WorkspaceSlug}' project '{_options.ProjectId}': {ex.Message}");
         }
+    }
+
+    private async Task ProbeIssueCreatePermissionAsync(CancellationToken ct)
+    {
+        // This deliberately invalid POST reaches the same create route scaffold uses,
+        // but cannot create an issue because the required name field has the wrong type.
+        // Plane should run authorization before request validation: 400/422 means the
+        // token got as far as create validation, while 401/403 means it cannot create.
+        const string probeJson = """
+        {"name":{"throughline_build_probe":true},"description_html":"<p>Throughline Build create-permission probe.</p>","label_ids":[]}
+        """;
+
+        using var content = new StringContent(probeJson, System.Text.Encoding.UTF8, "application/json");
+        await _throttle.AcquireAsync(ct).ConfigureAwait(false);
+        var response = await _http.PostAsync(IssuesBase, content, ct).ConfigureAwait(false);
+        var responseBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+
+        if ((int)response.StatusCode is 400 or 422)
+            return;
+
+        if (!response.IsSuccessStatusCode)
+            throw new PlaneApiException((int)response.StatusCode, responseBody, ParseRetryAfter(response));
+
+        throw new PlaneApiException(
+            (int)response.StatusCode,
+            "Plane create-permission probe unexpectedly succeeded; refusing to treat readiness as verified because the probe may have created an issue.",
+            ParseRetryAfter(response));
     }
 
     // ------------------------------------------------------------------ helpers

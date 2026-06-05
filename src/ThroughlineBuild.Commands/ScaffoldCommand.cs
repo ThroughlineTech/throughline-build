@@ -289,9 +289,25 @@ public sealed class ScaffoldCommand : ITicketCommand
     {
         var stage = failure.Stage;
         return string.Equals(stage, "connectivity_check", StringComparison.OrdinalIgnoreCase)
-            || stage.EndsWith("_create", StringComparison.OrdinalIgnoreCase)
+            || IsTicketCreateStage(stage)
             || stage.EndsWith("_parent_link", StringComparison.OrdinalIgnoreCase)
-            || stage.EndsWith("_dependency_link", StringComparison.OrdinalIgnoreCase);
+            || IsDependencyRelationStage(stage);
+    }
+
+    private static bool IsTicketCreateStage(string stage)
+    {
+        return string.Equals(stage, "op_create", StringComparison.OrdinalIgnoreCase)
+            || (stage.StartsWith("plan_", StringComparison.OrdinalIgnoreCase)
+                && stage.EndsWith("_create", StringComparison.OrdinalIgnoreCase))
+            || (stage.StartsWith("brief_", StringComparison.OrdinalIgnoreCase)
+                && stage.EndsWith("_create", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsDependencyRelationStage(string stage)
+    {
+        return (stage.StartsWith("plan_", StringComparison.OrdinalIgnoreCase)
+                || stage.StartsWith("brief_", StringComparison.OrdinalIgnoreCase))
+            && stage.Contains("_blocked_by_", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string StripTag(string? message)
