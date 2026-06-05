@@ -8,13 +8,16 @@ using ThroughlineBuild.Helpers;
 
 namespace ThroughlineBuild.Phases;
 
+public record ChainBatchImplementGroup(IReadOnlyList<string> TicketIds);
+
 public record ChainPhaseOptions(
     string TicketId,
     bool Debug,
     Action<string, ChainStep>? OnStep = null,
     bool NoAutoResolve = false,
     string? SharedWorktreePath = null,
-    ChainCommitRange? ChainCommitRange = null);
+    ChainCommitRange? ChainCommitRange = null,
+    ChainBatchImplementGroup? BatchImplementGroup = null);
 
 public class ChainPhase
 {

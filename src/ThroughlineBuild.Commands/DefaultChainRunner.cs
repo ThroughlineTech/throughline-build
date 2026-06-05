@@ -22,9 +22,15 @@ public sealed class DefaultChainRunner : IChainRunner
         bool debug,
         Action<string, ChainStep> onStep,
         CancellationToken ct,
-        bool noAutoResolve = false)
+        bool noAutoResolve = false,
+        ChainBatchImplementGroup? batchImplementGroup = null)
     {
-        var options = new ChainPhaseOptions(ticketId, debug, onStep, noAutoResolve);
+        var options = new ChainPhaseOptions(
+            ticketId,
+            debug,
+            onStep,
+            noAutoResolve,
+            BatchImplementGroup: batchImplementGroup);
         return _chainPhase.RunAsync(options, ct);
     }
 }

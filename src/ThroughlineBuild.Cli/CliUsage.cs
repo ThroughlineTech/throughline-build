@@ -10,7 +10,7 @@ Usage:
   build implement <ticket-id> [ticket-id ...] [--agent <name>] [--debug|--quiet] [--summary-json]  Run the implement phase for a ticket (multiple tickets dispatch sequentially, stops at first failure)
   build review <ticket-id> [ticket-id ...] [--agent <name>] [--debug|--quiet] [--summary-json]  Run the review phase for a ticket (multiple tickets dispatch sequentially, stops at first failure)
   build ship <ticket-id> [ticket-id ...] [--debug] [--summary-json] [--no-auto-merge] [--no-push]    Ship a reviewed ticket; local fast-forward merge, then pushes the target branch when a remote is configured; --no-push (or [ship] push=false) keeps it fully local; multiple tickets dispatch sequentially, stops at first failure; --debug accepted but is a no-op (ship has no worker subprocess)
-  build chain <ticket-id> [ticket-id ...] [--agent <name>] [--agent-plan <name>] [--agent-implement <name>] [--agent-review <name>] [--from-brief] [--debug] [--no-auto-resolve] [--no-auto-merge] [--continue-past-failure]  Run the full chain for one or more tickets; multi-ticket dispatch is level-synchronous (dependency-ordered, concurrency bounded by workers.max_concurrency); streams per-phase output to stdout. --continue-past-failure: by default, descendants of a failed ancestor are skipped; use this flag to run them anyway.
+  build chain <ticket-id> [ticket-id ...] [--batch-implement <ticket-id,...>] [--agent <name>] [--agent-plan <name>] [--agent-implement <name>] [--agent-review <name>] [--from-brief] [--debug] [--no-auto-resolve] [--no-auto-merge] [--continue-past-failure]  Run the full chain for one or more tickets; multi-ticket dispatch is level-synchronous (dependency-ordered, concurrency bounded by workers.max_concurrency); streams per-phase output to stdout. --batch-implement passes an ordered direct-child sibling group to the chain conductor. --continue-past-failure: by default, descendants of a failed ancestor are skipped; use this flag to run them anyway.
   build new <body-path> [--title "..."] [--type "..."] [--label "..."]* [--review] [--debug]  Create a new ticket from a body file (file mode: arg must be an existing file)
   build new <text> [--title "..."] [--type "..."] [--label "..."]* [--review] [--debug]       Create a new ticket from free-form text (draft mode: arg is not an existing file)
   build new - [--title "..."] [--type "..."] [--label "..."]* [--review] [--debug]            Read operator text from stdin, then create a new ticket (draft mode)
@@ -64,6 +64,9 @@ Flags:
                    Equivalent to setting [plan] mode = "promote" in config.toml. When both the flag
                    and the config key are set, the flag wins. Use for op-doc-scaffolded tickets whose
                    plan is already authored in the ticket description.
+  --batch-implement <ticket-id,...>
+                   (chain only) Pass a non-empty comma-separated direct-child sibling group to the
+                   chain conductor in the listed order. Example: --batch-implement TLB-419,TLB-420.
   --error-location When set, prints the C# source filename, method, and line where a parse error or
                    fatal exception originated. Off by default. For parse errors the location is captured
                    at compile time (works in AOT); for exceptions it reads ex.StackTrace (requires

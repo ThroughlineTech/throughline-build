@@ -94,6 +94,43 @@ public class MultiTicketArgParsingTests
     }
 
     [Fact]
+    public void ExtractBatchImplementFlag_ValidList_ReturnsOrderedTicketsAndRemovesFlagPair()
+    {
+        var args = new[] { "chain", "TLB-418", "--batch-implement", "TLB-419,TLB-420,TLB-421", "--debug" };
+        var (ticketIds, error, remaining) = CliArgParser.ExtractBatchImplementFlag(args);
+
+        Assert.Null(error);
+        Assert.Equal(new[] { "TLB-419", "TLB-420", "TLB-421" }, ticketIds);
+        Assert.Equal(new[] { "chain", "TLB-418", "--debug" }, remaining);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("TLB-419,")]
+    [InlineData(",TLB-419")]
+    [InlineData("TLB-419,,TLB-420")]
+    [InlineData("not-a-ticket")]
+    public void ExtractBatchImplementFlag_MalformedList_ReturnsOperatorError(string list)
+    {
+        var args = new[] { "chain", "TLB-418", "--batch-implement", list };
+        var (ticketIds, error, _) = CliArgParser.ExtractBatchImplementFlag(args);
+
+        Assert.Null(ticketIds);
+        Assert.NotNull(error);
+        Assert.Contains("--batch-implement", error);
+    }
+
+    [Fact]
+    public void ExtractBatchImplementFlag_MissingValue_ReturnsOperatorError()
+    {
+        var args = new[] { "chain", "TLB-418", "--batch-implement", "--debug" };
+        var (ticketIds, error, _) = CliArgParser.ExtractBatchImplementFlag(args);
+
+        Assert.Null(ticketIds);
+        Assert.Equal("Error: --batch-implement requires a comma-separated ticket list", error);
+    }
+
+    [Fact]
     public void CliUsage_ContainsMultiTicketSyntaxForMultiTicketVerbs()
     {
         var usage = CliUsage.UsageText;

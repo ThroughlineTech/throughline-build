@@ -1,6 +1,7 @@
 using ThroughlineBuild.Commands;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Phases;
 using Xunit;
 
 namespace ThroughlineBuild.Commands.Tests;
@@ -457,6 +458,30 @@ public class ChainCommandTests
         Assert.False(runner.LastDebug, "expected debug=false to be forwarded to runner");
     }
 
+    [Fact]
+    public async Task BatchImplement_group_forwarded_to_runner_in_order()
+    {
+        var (cmd, runner, _) = BuildCommand();
+        runner.Result = new ChainResult(
+            TicketId: "TLB-1",
+            Steps: Array.Empty<ChainStep>(),
+            Outcome: ChainOutcome.Completed,
+            TotalDuration: TimeSpan.Zero,
+            FinalRationale: null);
+        var ctx = new TicketCommandContext(
+            "TLB-1",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["debug"] = "false",
+                ["batch-implement"] = "TLB-419,TLB-420,TLB-421"
+            });
+
+        await RunCapturingStdout(cmd, ctx);
+
+        Assert.NotNull(runner.LastBatchImplementGroup);
+        Assert.Equal(new[] { "TLB-419", "TLB-420", "TLB-421" }, runner.LastBatchImplementGroup!.TicketIds);
+    }
+
     // --- outcome: ParentCompleted ---
 
     [Fact]
@@ -611,7 +636,13 @@ internal sealed class FakeThrowingChainRunner : IChainRunner
 
     public FakeThrowingChainRunner(Exception exception) => _exception = exception;
 
-    public Task<ChainResult> RunAsync(string ticketId, bool debug, Action<string, ChainStep> onStep, CancellationToken ct, bool noAutoResolve = false)
+    public Task<ChainResult> RunAsync(
+        string ticketId,
+        bool debug,
+        Action<string, ChainStep> onStep,
+        CancellationToken ct,
+        bool noAutoResolve = false,
+        ChainBatchImplementGroup? batchImplementGroup = null)
         => throw _exception;
 }
 
@@ -630,16 +661,19 @@ internal sealed class FakeChainRunner : IChainRunner
 
     public bool LastDebug { get; private set; }
     public string? LastTicketId { get; private set; }
+    public ChainBatchImplementGroup? LastBatchImplementGroup { get; private set; }
 
     public Task<ChainResult> RunAsync(
         string ticketId,
         bool debug,
         Action<string, ChainStep> onStep,
         CancellationToken ct,
-        bool noAutoResolve = false)
+        bool noAutoResolve = false,
+        ChainBatchImplementGroup? batchImplementGroup = null)
     {
         LastTicketId = ticketId;
         LastDebug = debug;
+        LastBatchImplementGroup = batchImplementGroup;
 
         // Call onStep for each step to simulate streaming behavior.
         foreach (var step in Result.Steps)

@@ -7,6 +7,8 @@ namespace ThroughlineBuild.Cli;
 /// </summary>
 public static class CliArgParser
 {
+    private const string BatchImplementFlag = "--batch-implement";
+
     /// <summary>
     /// Scans <paramref name="args"/> for agent-override flags and returns the
     /// extracted values together with the remaining args (with the matched tokens
@@ -62,6 +64,87 @@ public static class CliArgParser
         }
 
         return (agentAll, agentPlan, agentImpl, agentReview, remaining);
+    }
+
+    public static (IReadOnlyList<string>? ticketIds, string? error, IReadOnlyList<string> remaining)
+        ExtractBatchImplementFlag(IReadOnlyList<string> args)
+    {
+        List<string>? ticketIds = null;
+        var remaining = new List<string>(args.Count);
+
+        int i = 0;
+        while (i < args.Count)
+        {
+            if (args[i] != BatchImplementFlag)
+            {
+                remaining.Add(args[i]);
+                i++;
+                continue;
+            }
+
+            if (ticketIds is not null)
+                return (null, "Error: --batch-implement may be specified only once", remaining);
+
+            if (i + 1 >= args.Count || args[i + 1].StartsWith("--", StringComparison.Ordinal))
+                return (null, "Error: --batch-implement requires a comma-separated ticket list", remaining);
+
+            var parseResult = ParseBatchImplementList(args[i + 1]);
+            if (parseResult.Error is not null)
+                return (null, parseResult.Error, remaining);
+
+            ticketIds = parseResult.TicketIds.ToList();
+            i += 2;
+        }
+
+        return (ticketIds, null, remaining);
+    }
+
+    private static (IReadOnlyList<string> TicketIds, string? Error) ParseBatchImplementList(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return (Array.Empty<string>(), "Error: --batch-implement requires a non-empty comma-separated ticket list");
+
+        var parts = raw.Split(',');
+        var ticketIds = new List<string>(parts.Length);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var part in parts)
+        {
+            var ticketId = part.Trim();
+            if (ticketId.Length == 0)
+                return (Array.Empty<string>(), "Error: --batch-implement list contains an empty ticket id");
+
+            if (!IsTicketIdShape(ticketId))
+                return (Array.Empty<string>(), $"Error: malformed ticket id in --batch-implement list: {ticketId}");
+
+            if (!seen.Add(ticketId))
+                return (Array.Empty<string>(), $"Error: duplicate ticket id in --batch-implement list: {ticketId}");
+
+            ticketIds.Add(ticketId);
+        }
+
+        return (ticketIds, null);
+    }
+
+    private static bool IsTicketIdShape(string value)
+    {
+        var dash = value.IndexOf('-');
+        if (dash <= 0 || dash == value.Length - 1)
+            return false;
+
+        for (int i = 0; i < dash; i++)
+        {
+            if (!char.IsAsciiLetterOrDigit(value[i]))
+                return false;
+        }
+
+        for (int i = dash + 1; i < value.Length; i++)
+        {
+            if (!char.IsAsciiDigit(value[i]))
+                return false;
+        }
+
+        return true;
     }
 
     /// <summary>

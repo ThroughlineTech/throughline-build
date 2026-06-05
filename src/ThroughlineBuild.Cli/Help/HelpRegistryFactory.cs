@@ -149,7 +149,7 @@ public static class HelpRegistryFactory
         Name:    "chain",
         Group:   CommandGroup.Pipeline,
         Summary: "Run the full chain for one or more tickets",
-        Usage:   "chain <ticket-id> [ticket-id ...] [--agent <name>] [--agent-plan <name>] [--agent-implement <name>] [--agent-review <name>] [--from-brief] [--no-auto-resolve] [--no-auto-merge] [--continue-past-failure] [--debug] [--summary-json]",
+        Usage:   "chain <ticket-id> [ticket-id ...] [--batch-implement <ticket-id,...>] [--agent <name>] [--agent-plan <name>] [--agent-implement <name>] [--agent-review <name>] [--from-brief] [--no-auto-resolve] [--no-auto-merge] [--continue-past-failure] [--debug] [--summary-json]",
         Options:
         [
             new("--agent <name>",           "Worker agent override for all phases; per-phase flags beat --agent, which beats config", false),
@@ -157,6 +157,7 @@ public static class HelpRegistryFactory
             new("--agent-implement <name>", "Worker agent override for the implement phase only", false),
             new("--agent-review <name>",    "Worker agent override for the review phase only", false),
             new("--from-brief",             "Promote tickets in place; equivalent to [plan] mode = \"promote\" in config.toml", false),
+            new("--batch-implement <ticket-id,...>", "Opt an ordered direct-child sibling group into one batch for the chain conductor", false),
             new("--no-auto-resolve",        "Do not auto-resolve parent chains before dispatching", false),
             new("--no-auto-merge",          "Skip the automatic fast-forward merge during ship", false),
             new("--continue-past-failure",  "Run descendants of a failed ticket instead of skipping them", false),
@@ -177,6 +178,7 @@ public static class HelpRegistryFactory
         [
             new("chain TLB-123", "Run the chain for a single ticket"),
             new("chain TLB-123 TLB-124", "Run tickets in dependency order; descendants of failed ancestors are skipped"),
+            new("chain TLB-123 --batch-implement TLB-124,TLB-125", "Pass an ordered sibling group to the chain conductor"),
             new("chain TLB-123 --agent codex --agent-review claude-code", "Use a default agent with a review-phase override"),
         ]
     );

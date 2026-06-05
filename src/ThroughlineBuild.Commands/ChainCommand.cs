@@ -2,6 +2,7 @@ using System.Text;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Helpers;
+using ThroughlineBuild.Phases;
 
 namespace ThroughlineBuild.Commands;
 
@@ -40,6 +41,17 @@ public sealed class ChainCommand : ITicketCommand
         // Extract --no-auto-resolve flag from args.
         bool noAutoResolve = ctx.Args.TryGetValue("no-auto-resolve", out var narStr) && narStr == "true";
 
+        ChainBatchImplementGroup? batchImplementGroup = null;
+        if (ctx.Args.TryGetValue("batch-implement", out var batchImplementStr) &&
+            !string.IsNullOrWhiteSpace(batchImplementStr))
+        {
+            var ticketIds = batchImplementStr.Split(',')
+                .Select(id => id.Trim())
+                .Where(id => id.Length > 0)
+                .ToArray();
+            batchImplementGroup = new ChainBatchImplementGroup(ticketIds);
+        }
+
         Ticket? initialTicket = null;
         try
         {
@@ -67,7 +79,8 @@ public sealed class ChainCommand : ITicketCommand
                 debugMode,
                 (id, step) => Console.WriteLine(FormatStepLine(id, step)),
                 ct,
-                noAutoResolve).ConfigureAwait(false);
+                noAutoResolve,
+                batchImplementGroup).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {

@@ -1,4 +1,5 @@
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Phases;
 
 namespace ThroughlineBuild.Commands;
 
@@ -14,5 +15,6 @@ public interface IChainRunner
         bool debug,
         Action<string, ChainStep> onStep,
         CancellationToken ct,
-        bool noAutoResolve = false);
+        bool noAutoResolve = false,
+        ChainBatchImplementGroup? batchImplementGroup = null);
 }

@@ -149,6 +149,16 @@ public class HelpRegistryFactoryTests
     }
 
     [Fact]
+    public void Chain_HasBatchImplementOption()
+    {
+        var help = Registry.TryGet("chain")!;
+        Assert.Contains(help.Options, o =>
+            o.Flag == "--batch-implement <ticket-id,...>" &&
+            o.Description.Contains("ordered", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("--batch-implement <ticket-id,...>", help.Usage);
+    }
+
+    [Fact]
     public void Chain_HasPerPhaseAgentOptions()
     {
         var help = Registry.TryGet("chain")!;
