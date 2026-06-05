@@ -40,7 +40,7 @@ Status: Functional.
 - `parse-error.txt` - failure reason when envelope absent / parse failed
 - `cancel-reason.txt` - present on timeout / Ctrl-C ([src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs:491-494](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L491-L494))
 
-The codex / gemini / copilot agents write the same set except they emit `worker-result-summary.txt` instead of `envelope-result.txt` and note "brief delivered via args" for stdin (e.g. [src/ThroughlineBuild.Workers.Codex/CodexAgent.cs:236-255](../../src/ThroughlineBuild.Workers.Codex/CodexAgent.cs#L236-L255)).
+The codex / gemini / copilot agents write the same set except they emit `worker-result-summary.txt` instead of `envelope-result.txt`. Codex captures the brief delivered over stdin in `worker-stdin.txt`.
 
 `phase-status.json` is written by `EarlyExitManifest.Write` when a phase exits before the worker spawns ([src/ThroughlineBuild.Phases/EarlyExitManifest.cs:17-35](../../src/ThroughlineBuild.Phases/EarlyExitManifest.cs#L17-L35)) - a manual `{phase, ticket_id, reason}` JSON object (AOT-safe, no serializer). The dir is created eagerly so the "Debug capture: .build/sessions/<stem>/" footer always points somewhere real even when the phase fails first.
 

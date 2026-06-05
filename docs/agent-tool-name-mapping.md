@@ -60,7 +60,7 @@ codex exec "<prompt>" [--json] [--model <model-id>] [--config <key>=<val>]
 - Progress: stderr streams diagnostic output; `--json` provides structured per-turn events.
 
 **Brief delivery:**
-- Prompt argument: `codex exec "<brief_text>"`.
+- Prompt delivery: `codex exec -`, with the brief written to stdin.
 - Piped stdin: brief is prepended to the prompt arg (or becomes the sole input if no `--prompt` arg). stdin delivery works like Claude Code.
 
 **WORKER_RESULT survival:**

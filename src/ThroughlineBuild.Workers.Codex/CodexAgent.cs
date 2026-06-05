@@ -21,9 +21,9 @@ public class CodexAgent : IWorkerAgent
 
     public async Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
     {
-        // Build args: codex exec --json [--dangerously-bypass-approvals-and-sandbox] "<brief>"
-        // Brief is delivered as the positional prompt argument (not stdin).
-        var args = BuildArgs(brief.Instruction, _options, options);
+        // Build args: codex exec --json [--dangerously-bypass-approvals-and-sandbox] -
+        // The brief is delivered over stdin to avoid the Windows command-line length limit.
+        var args = BuildArgs(_options, options);
         // modelArg is needed below for llm_usage metadata regardless of whether
         // it was emitted on the CLI; resolve it here too.
         _options.Sizes.TryGetValue(options.Size, out var resolvedModelRaw);
@@ -41,6 +41,7 @@ public class CodexAgent : IWorkerAgent
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        psi.StandardInputEncoding = Encoding.UTF8;
         ProcessStreamEncoding.ApplyUtf8(psi);
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);
@@ -109,11 +110,12 @@ public class CodexAgent : IWorkerAgent
         }
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
-        // Brief is in args; close stdin immediately (nothing to pipe)
-        process.StandardInput.Close();
 
         try
         {
+            await process.StandardInput.WriteAsync(brief.Instruction.AsMemory(), cts.Token);
+            await process.StandardInput.FlushAsync(cts.Token);
+            process.StandardInput.Close();
             await process.WaitForExitAsync(cts.Token);
             stopwatch.Stop();
         }
@@ -283,9 +285,9 @@ public class CodexAgent : IWorkerAgent
     // --dangerously-bypass-approvals-and-sandbox puts codex into unattended,
     // unsandboxed execution. Emitted only when options.BypassPermissions is
     // true. ExtraArgs is appended before the resolved model so explicit user
-    // flags can override default ordering, and brief.Instruction is appended
-    // last as the positional prompt.
-    internal static List<string> BuildArgs(string briefInstruction, CodexOptions options, WorkerOptions workerOptions)
+    // flags can override default ordering. The final "-" tells Codex to read
+    // the brief from stdin instead of a positional command-line argument.
+    internal static List<string> BuildArgs(CodexOptions options, WorkerOptions workerOptions)
     {
         var args = new List<string> { "exec", "--json" };
         if (options.BypassPermissions)
@@ -296,7 +298,7 @@ public class CodexAgent : IWorkerAgent
         var modelArg = NormalizeModel(resolvedModelRaw);
         if (modelArg is not null)
             args.AddRange(new[] { "--model", modelArg });
-        args.Add(briefInstruction);
+        args.Add("-");
         return args;
     }
 
@@ -378,7 +380,7 @@ public class CodexAgent : IWorkerAgent
     {
         Directory.CreateDirectory(directory);
 
-        File.WriteAllText(Path.Combine(directory, "worker-stdin.txt"), "(brief delivered via args)", System.Text.Encoding.UTF8);
+        File.WriteAllText(Path.Combine(directory, "worker-stdin.txt"), briefInstruction, System.Text.Encoding.UTF8);
         File.WriteAllText(Path.Combine(directory, "worker-stdout.txt"), stdout, System.Text.Encoding.UTF8);
         File.WriteAllText(Path.Combine(directory, "worker-stderr.txt"), stderr, System.Text.Encoding.UTF8);
 
@@ -410,7 +412,7 @@ public class CodexAgent : IWorkerAgent
         try
         {
             Directory.CreateDirectory(captureDir);
-            File.WriteAllText(Path.Combine(captureDir, "worker-stdin.txt"), "(brief delivered via args)", System.Text.Encoding.UTF8);
+            File.WriteAllText(Path.Combine(captureDir, "worker-stdin.txt"), briefInstruction, System.Text.Encoding.UTF8);
             File.WriteAllText(Path.Combine(captureDir, "worker-stdout.txt"), partialStdout, System.Text.Encoding.UTF8);
             File.WriteAllText(Path.Combine(captureDir, "worker-stderr.txt"), partialStderr, System.Text.Encoding.UTF8);
             File.WriteAllText(Path.Combine(captureDir, "cancel-reason.txt"), "Process cancelled or timed out", System.Text.Encoding.UTF8);

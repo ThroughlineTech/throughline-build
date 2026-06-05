@@ -138,7 +138,7 @@ public class CodexAgentTests
         var options = new CodexOptions { BypassPermissions = true };
         var workerOptions = new WorkerOptions(TimeSpan.FromSeconds(30));
 
-        var args = CodexAgent.BuildArgs("the brief", options, workerOptions);
+        var args = CodexAgent.BuildArgs(options, workerOptions);
 
         Assert.Contains("--dangerously-bypass-approvals-and-sandbox", args);
     }
@@ -149,9 +149,10 @@ public class CodexAgentTests
         var options = new CodexOptions();
         var workerOptions = new WorkerOptions(TimeSpan.FromSeconds(30));
 
-        var args = CodexAgent.BuildArgs("the brief", options, workerOptions);
+        var args = CodexAgent.BuildArgs(options, workerOptions);
 
         Assert.Contains("--json", args);
+        Assert.Equal("-", args[^1]);
     }
 
     [Fact]
@@ -160,8 +161,39 @@ public class CodexAgentTests
         var options = new CodexOptions { BypassPermissions = false };
         var workerOptions = new WorkerOptions(TimeSpan.FromSeconds(30));
 
-        var args = CodexAgent.BuildArgs("the brief", options, workerOptions);
+        var args = CodexAgent.BuildArgs(options, workerOptions);
 
         Assert.DoesNotContain("--dangerously-bypass-approvals-and-sandbox", args);
+    }
+
+    [Fact]
+    public void BuildArgs_UsesStdinSentinelInsteadOfPromptArgument()
+    {
+        var options = new CodexOptions();
+        var workerOptions = new WorkerOptions(TimeSpan.FromSeconds(30));
+
+        var args = CodexAgent.BuildArgs(options, workerOptions);
+
+        Assert.Equal("-", args[^1]);
+    }
+
+    [Fact]
+    public void WriteDebugCapture_RecordsBriefAsStdin()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"codex-capture-{Guid.NewGuid():N}");
+        try
+        {
+            var result = new WorkerResult(Status.Ok, "done", Array.Empty<string>(), null,
+                new Dictionary<string, object>());
+
+            CodexAgent.WriteDebugCapture(directory, "brief with unicode: café", "stdout", "stderr", result);
+
+            Assert.Equal("brief with unicode: café", File.ReadAllText(Path.Combine(directory, "worker-stdin.txt")));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
     }
 }
