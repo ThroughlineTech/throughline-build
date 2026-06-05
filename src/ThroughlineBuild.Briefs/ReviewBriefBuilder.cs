@@ -9,6 +9,7 @@ public static class ReviewBriefBuilder
 {
     const int InstructionBudgetBytes = 50 * 1024;
     const int StderrTailBudgetPerFailure = 2048;
+    const int StdoutTailBudgetPerFailure = 2048;
 
     public static Brief Build(
         string agentName,
@@ -184,21 +185,30 @@ public static class ReviewBriefBuilder
                 var status = check.Passed ? "PASS" : "FAIL";
                 sb.Append($"- {check.Name}: {status} (exit {check.ExitCode}, elapsed {check.Elapsed.TotalSeconds.ToString("F1", CultureInfo.InvariantCulture)}s)\n");
 
-                if (!check.Passed && !string.IsNullOrEmpty(check.StderrTail))
+                if (!check.Passed)
                 {
-                    var stdErr = check.StderrTail;
-                    if (stdErr.Length > StderrTailBudgetPerFailure)
-                    {
-                        stdErr = stdErr.Substring(stdErr.Length - StderrTailBudgetPerFailure);
-                    }
-                    sb.Append("```\n");
-                    sb.Append(stdErr);
-                    sb.Append('\n');
-                    sb.Append("```\n");
+                    // Many toolchains write fatal errors to stdout, not stderr (e.g. dotnet's
+                    // MSB1003, tsc, vite). Surfacing only stderr left such failures invisible to the
+                    // verifier, turning a one-line misconfig into a silent rework loop. Emit both.
+                    AppendStream(sb, "stdout", check.StdoutTail, StdoutTailBudgetPerFailure);
+                    AppendStream(sb, "stderr", check.StderrTail, StderrTailBudgetPerFailure);
                 }
             }
         }
         sb.Append('\n');
         return sb.ToString();
+    }
+
+    // Emit the tail of a captured stream as a labeled fenced block, keeping only the last
+    // `budget` chars (the end holds the error). No-op for empty streams.
+    private static void AppendStream(StringBuilder sb, string label, string? stream, int budget)
+    {
+        if (string.IsNullOrEmpty(stream)) return;
+        var tail = stream.Length > budget ? stream.Substring(stream.Length - budget) : stream;
+        sb.Append(label).Append(":\n");
+        sb.Append("```\n");
+        sb.Append(tail);
+        sb.Append('\n');
+        sb.Append("```\n");
     }
 }

@@ -186,7 +186,7 @@ static async Task<int> RunAsync(string[] args)
         if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]) || args[1].StartsWith("--"))
         {
             Console.Error.WriteLine("Error: op-doc-path is required");
-            Console.Error.WriteLine("Usage: build scaffold <op-doc-path> [--validate-only] [--dry-run] [--accept-warnings] [--debug]");
+            Console.Error.WriteLine("Usage: build scaffold <op-doc-path> [--validate-only] [--dry-run] [--accept-warnings] [--no-profile] [--force-profile] [--debug]");
             return 2;
         }
     }
@@ -882,12 +882,18 @@ static async Task<int> RunAsync(string[] args)
         // Parse scaffold-local flags.
         var scaffoldArgs = new Dictionary<string, string>(StringComparer.Ordinal);
         scaffoldArgs["op_doc_path"] = args[1];
+        bool noProfile = false;
+        bool forceProfile = false;
+        bool validateOnlyFlag = false;
+        bool dryRunFlag = false;
         for (int i = 2; i < args.Length; i++)
         {
             var a = args[i];
-            if (a == "--validate-only") scaffoldArgs["validate_only"] = "true";
-            else if (a == "--dry-run") scaffoldArgs["dry_run"] = "true";
+            if (a == "--validate-only") { scaffoldArgs["validate_only"] = "true"; validateOnlyFlag = true; }
+            else if (a == "--dry-run") { scaffoldArgs["dry_run"] = "true"; dryRunFlag = true; }
             else if (a == "--accept-warnings") scaffoldArgs["accept_warnings"] = "true";
+            else if (a == "--no-profile") noProfile = true;
+            else if (a == "--force-profile") forceProfile = true;
             // --debug and --error-location already stripped by pre-pass; other unknown flags are silently ignored
         }
         if (errorLocation) scaffoldArgs["show_location"] = "true";
@@ -914,7 +920,7 @@ static async Task<int> RunAsync(string[] args)
                     Console.WriteLine(body);
             }
 
-            return tag switch
+            int scaffoldExit = tag switch
             {
                 ScaffoldExitCategory.Clean => 0,
                 ScaffoldExitCategory.ValidationError => 2,
@@ -922,6 +928,22 @@ static async Task<int> RunAsync(string[] args)
                 ScaffoldExitCategory.BackendUnavailable => 4,
                 _ => scaffoldResult.Success ? 0 : 1
             };
+
+            // Derive the project's review/ship checks from the op-doc and write them into
+            // .build/config.toml. Runs only on a real creation run; derivation never changes the
+            // scaffold exit code (the ticket tree is this command's contract, not the config).
+            bool ticketsCreated = tag == ScaffoldExitCategory.Clean || tag == ScaffoldExitCategory.PartialCreation;
+            if (ticketsCreated && !validateOnlyFlag && !dryRunFlag && !noProfile)
+            {
+                await ScaffoldProfileRunner.RunAsync(
+                    args[1], resolvedCwd, config2.Workers, forceProfile, scaffoldCts.Token);
+            }
+            else if (noProfile)
+            {
+                Console.WriteLine("[scaffold] --no-profile: skipped review-check derivation");
+            }
+
+            return scaffoldExit;
         }
         catch (OperationCanceledException)
         {
@@ -970,39 +992,7 @@ static async Task<int> RunAsync(string[] args)
             throw new ConfigException($"missing [workers.{agentName}] sub-table in config");
         var capturedCfg = aCfg;
         var capturedName = agentName;
-        factoryEntries[agentName] = () =>
-        {
-            if (capturedName == "gemini")
-                return new GeminiAgent(new GeminiOptions
-                {
-                    ExecutablePath = capturedCfg.Executable,
-                    MaxOutputTokens = capturedCfg.MaxOutputTokens,
-                    Sizes = capturedCfg.Sizes,
-                    BypassPermissions = capturedCfg.BypassPermissions
-                });
-            if (capturedName == "codex")
-                return new CodexAgent(new CodexOptions
-                {
-                    ExecutablePath = capturedCfg.Executable,
-                    MaxOutputTokens = capturedCfg.MaxOutputTokens,
-                    Sizes = capturedCfg.Sizes,
-                    BypassPermissions = capturedCfg.BypassPermissions
-                });
-            if (capturedName == "copilot")
-                return new CopilotAgent(new CopilotOptions
-                {
-                    ExecutablePath = capturedCfg.Executable,
-                    MaxOutputTokens = capturedCfg.MaxOutputTokens,
-                    Sizes = capturedCfg.Sizes
-                });
-            return new ClaudeCodeAgent(new ClaudeCodeOptions
-            {
-                ExecutablePath = capturedCfg.Executable,
-                MaxOutputTokens = capturedCfg.MaxOutputTokens,
-                Sizes = capturedCfg.Sizes,
-                BypassPermissions = capturedCfg.BypassPermissions
-            });
-        };
+        factoryEntries[agentName] = () => WorkerAgentBuilder.Create(capturedName, capturedCfg);
     }
     var workerFactory = new WorkerAgentFactory(factoryEntries);
 

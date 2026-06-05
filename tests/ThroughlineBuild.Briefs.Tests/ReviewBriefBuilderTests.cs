@@ -198,6 +198,34 @@ public class ReviewBriefBuilderTests
     }
 
     [Fact]
+    public void Build_FailingChecks_RendersStdoutTail()
+    {
+        // Many toolchains (dotnet MSB1003, tsc, vite) write the fatal error to stdout, not stderr.
+        // The review brief must surface stdout so the verifier can see the real failure.
+        const string stdoutError = "MSBUILD : error MSB1003: Specify a project or solution file.";
+        var checks = new[]
+        {
+            new CheckResult(
+                Name: "build",
+                Passed: false,
+                ExitCode: 1,
+                StdoutTail: stdoutError,
+                StderrTail: "",
+                Elapsed: TimeSpan.FromSeconds(1.2))
+        };
+
+        var brief = ReviewBriefBuilder.Build(
+            "claude-code",
+            MinimalTicket(),
+            MinimalDiff(),
+            MinimalImplementerResult(),
+            checks);
+
+        Assert.Contains("build: FAIL", brief.Instruction);
+        Assert.Contains(stdoutError, brief.Instruction);
+    }
+
+    [Fact]
     public void Build_LargeDiff_TruncatesToStayUnderBudget()
     {
         var largePatches = new List<DiffEntry>();

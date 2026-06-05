@@ -30,6 +30,11 @@ Fixture implementer summary.
 ## Automated checks
 - build: PASS (exit 0, elapsed 1.5s)
 - tests: FAIL (exit 1, elapsed 1.5s)
+stdout:
+```
+Some output
+```
+stderr:
 ```
 Test 'X' failed: expected Y got Z
 ```

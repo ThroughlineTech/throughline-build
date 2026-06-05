@@ -418,12 +418,14 @@ public static class HelpRegistryFactory
         Name:    "scaffold",
         Group:   CommandGroup.Configure,
         Summary: "Scaffold an op-doc into Plane",
-        Usage:   "scaffold <op-doc-path> [--validate-only] [--dry-run] [--accept-warnings] [--debug]",
+        Usage:   "scaffold <op-doc-path> [--validate-only] [--dry-run] [--accept-warnings] [--no-profile] [--force-profile] [--debug]",
         Options:
         [
             new("--validate-only",    "Parse and validate the op-doc without creating any tickets",          false),
             new("--dry-run",          "Show what would be created without making Plane API calls",           false),
             new("--accept-warnings",  "Proceed even when the op-doc has non-fatal warnings",                 false),
+            new("--no-profile",       "Skip deriving review/ship checks from the op-doc into config.toml",   false),
+            new("--force-profile",    "Overwrite review/ship checks even if they look hand-customized",      false),
             new("--debug",            "Stream diagnostic output",                                            false),
         ],
         ExitCodes:

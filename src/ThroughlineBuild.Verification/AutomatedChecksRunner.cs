@@ -63,7 +63,8 @@ public class AutomatedChecksRunner
     {
         var psi = new ProcessStartInfo
         {
-            FileName = spec.Executable,
+            // Resolve bare names to a launchable path on Windows (npm -> npm.cmd). No-op elsewhere.
+            FileName = ExecutableResolver.Resolve(spec.Executable),
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
