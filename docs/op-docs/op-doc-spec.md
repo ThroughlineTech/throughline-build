@@ -14,7 +14,14 @@ An op-doc is a planning artifact that drives agent orchestration in the latticef
 # Operation: {kebab-case-slug}
 ```
 
-The exact text `# Operation:` followed by a lowercase kebab slug is required. Do not use `# OP:`, `# Op-Doc:`, or any other prefix - the parser matches this string literally.
+The exact text `# Operation:` followed by a single lowercase kebab slug is required. The slug is one token matching `^[a-z][a-z0-9-]*$` (lowercase letters, digits, hyphens) - it is the operation's stable id and becomes the `Operation: {slug}` ticket title, so it is not a sentence.
+
+The descriptive, human-readable title does NOT belong on this line - it is the lead paragraph immediately below. Never append title words to the slug:
+
+- Right: `# Operation: batch-implement`
+- Wrong: `# Operation: batch-implement cohesive ticket groups`
+
+Do not use `# OP:`, `# Op-Doc:`, or any other prefix - the parser matches this string literally.
 
 ### 2. Lead paragraph (no heading)
 
@@ -247,6 +254,7 @@ No bullets. Closes the loop on the lead paragraph's promise.
 ## Common mistakes to avoid
 
 - Using `# OP:` or any title other than `# Operation: {slug}`.
+- Putting a multi-word title on the `# Operation:` line. The slug is a single kebab token; the human-readable title is the lead paragraph (`# Operation: batch-implement`, not `# Operation: batch-implement cohesive ticket groups`).
 - Placing "What done looks like" before the briefs or between plans - it is always last.
 - Writing Goal sections as bullet lists (they must be paragraphs).
 - Putting requirements in "Why this exists" (that section is narrative context, not spec).
