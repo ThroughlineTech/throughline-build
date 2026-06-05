@@ -10,7 +10,7 @@ namespace ThroughlineBuild.Scaffold;
 public static class OpDocParser
 {
     // Heading patterns
-    private static readonly Regex H1Pattern = new(@"^# Operation:\s*(?<slug>\S+)\s*$", RegexOptions.Compiled);
+    private static readonly Regex H1Pattern = new(@"^# Operation:\s*(?<slug>.+?)\s*$", RegexOptions.Compiled);
     private static readonly Regex H2Pattern = new(@"^## (?<title>.+)$", RegexOptions.Compiled);
     private static readonly Regex H3Pattern = new(@"^### (?<title>.+)$", RegexOptions.Compiled);
     private static readonly Regex H4Pattern = new(@"^#### Brief (?<num>\d{1,2}):\s*(?<slug>.+)$", RegexOptions.Compiled);
