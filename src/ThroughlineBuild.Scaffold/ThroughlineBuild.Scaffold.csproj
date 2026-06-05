@@ -10,6 +10,7 @@
     <ProjectReference Include="..\ThroughlineBuild.Contracts\ThroughlineBuild.Contracts.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <EmbeddedResource Include="Templates\*.md" />
+    <EmbeddedResource Include="..\..\docs\op-docs\op-doc-spec.md" LogicalName="ThroughlineBuild.Scaffold.Docs.op-doc-spec.md" />
+    <EmbeddedResource Include="..\..\docs\op-docs\op-doc-example.md" LogicalName="ThroughlineBuild.Scaffold.Docs.op-doc-example.md" />
   </ItemGroup>
 </Project>

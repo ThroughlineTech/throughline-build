@@ -30,9 +30,9 @@ public class OpDocSpecCommandTests
     }
 
     [Fact]
-    public void OpDocSpecLoader_Load_ReturnsEmbeddedSpec()
+    public void OpDocDocsLoader_LoadSpec_ReturnsEmbeddedSpec()
     {
-        var spec = OpDocSpecLoader.Load();
+        var spec = OpDocDocsLoader.LoadSpec();
 
         Assert.NotEmpty(spec);
         Assert.StartsWith("# Op-Doc Format Spec", spec, StringComparison.Ordinal);
@@ -48,7 +48,7 @@ public class OpDocSpecCommandTests
             var result = OpDocSpecCommand.Execute(dir, write: false, force: false, console);
 
             Assert.Equal(0, result);
-            Assert.Equal(OpDocSpecLoader.Load(), console.Stdout);
+            Assert.Equal(OpDocDocsLoader.LoadSpec(), console.Stdout);
             Assert.False(File.Exists(Path.Combine(dir, "docs", "op-docs", "op-doc-spec.md")));
         }
         finally
@@ -69,9 +69,9 @@ public class OpDocSpecCommandTests
 
             Assert.Equal(0, result);
             Assert.True(File.Exists(target));
-            Assert.Equal(OpDocSpecLoader.Load(), File.ReadAllText(target));
+            Assert.Equal(OpDocDocsLoader.LoadSpec(), File.ReadAllText(target));
             Assert.Equal(
-                new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(OpDocSpecLoader.Load()),
+                new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(OpDocDocsLoader.LoadSpec()),
                 File.ReadAllBytes(target));
         }
         finally
@@ -120,7 +120,7 @@ public class OpDocSpecCommandTests
             var result = OpDocSpecCommand.Execute(dir, write: true, force: true, console);
 
             Assert.Equal(0, result);
-            Assert.Equal(OpDocSpecLoader.Load(), File.ReadAllText(target));
+            Assert.Equal(OpDocDocsLoader.LoadSpec(), File.ReadAllText(target));
         }
         finally
         {
