@@ -248,12 +248,13 @@ public class ChainCommandTests
             Steps: Array.Empty<ChainStep>(),
             Outcome: ChainOutcome.RefusedDirtyTree,
             TotalDuration: TimeSpan.Zero,
-            FinalRationale: "C:/repo has 2 modified tracked files: src/Dirty.cs, docs/dirty.md. Commit, stash, or revert them before running build chain.");
+            FinalRationale: "C:/repo has tracked edits that must be cleaned before running build chain.",
+            DirtyTreeCause: DirtyTreeCause.TrackedChanges);
 
         var (result, output) = await RunCapturingStdout(cmd, MakeCtx());
 
         Assert.False(result.Success);
-        Assert.Contains("modified tracked files", output);
+        Assert.Contains("tracked edits", output);
         Assert.Contains("git status --short", output);
         Assert.Contains("git add <paths> && git commit", output);
         Assert.Contains("git restore <paths>", output);

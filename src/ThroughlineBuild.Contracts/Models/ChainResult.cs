@@ -8,4 +8,5 @@ public record ChainResult(
     string? FinalRationale,
     SubsumedByEvidence? SubsumedBy = null,
     IReadOnlyList<ChainResult>? ChildResults = null,
-    string? SkipReason = null);
+    string? SkipReason = null,
+    DirtyTreeCause? DirtyTreeCause = null);

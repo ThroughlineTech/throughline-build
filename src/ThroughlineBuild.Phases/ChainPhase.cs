@@ -104,7 +104,7 @@ public class ChainPhase
                     }), ct).ConfigureAwait(false);
                 totalSw.Stop();
                 var refused = new ChainResult(options.TicketId, steps, ChainOutcome.RefusedDirtyTree,
-                    totalSw.Elapsed, preflightFailure);
+                    totalSw.Elapsed, preflightFailure, DirtyTreeCause: DirtyTreeCause.Hygiene);
                 await EmitChainEndAsync(refused, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
                 return refused;
             }
@@ -138,7 +138,7 @@ public class ChainPhase
                     }), ct).ConfigureAwait(false);
                 totalSw.Stop();
                 var refused = new ChainResult(options.TicketId, steps, ChainOutcome.RefusedDirtyTree,
-                    totalSw.Elapsed, dirtyMessage);
+                    totalSw.Elapsed, dirtyMessage, DirtyTreeCause: DirtyTreeCause.TrackedChanges);
                 await EmitChainEndAsync(refused, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
                 return refused;
             }

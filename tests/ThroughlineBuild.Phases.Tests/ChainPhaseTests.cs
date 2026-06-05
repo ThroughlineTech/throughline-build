@@ -1282,6 +1282,7 @@ public class ChainPhaseTests
         var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, Debug: false), CancellationToken.None);
 
         Assert.Equal(ChainOutcome.RefusedDirtyTree, result.Outcome);
+        Assert.Equal(DirtyTreeCause.Hygiene, result.DirtyTreeCause);
         Assert.Contains("dangling stash", result.FinalRationale);
         // Refused before planning: no phase steps were recorded and the ticket never moved.
         Assert.Empty(result.Steps);
@@ -1327,6 +1328,7 @@ public class ChainPhaseTests
         var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, Debug: false), CancellationToken.None);
 
         Assert.Equal(ChainOutcome.RefusedDirtyTree, result.Outcome);
+        Assert.Equal(DirtyTreeCause.TrackedChanges, result.DirtyTreeCause);
         Assert.Contains("modified tracked files", result.FinalRationale);
         Assert.Contains("src/Dirty.cs", result.FinalRationale);
         Assert.Empty(result.Steps);
