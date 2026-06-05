@@ -18,7 +18,7 @@ public static class OpDocSpecCommand
     /// <returns>0 on success, 2 on bad arguments or clobber refusal.</returns>
     public static int Execute(string cwd, bool write, bool force, IConsole console)
     {
-        var content = OpDocSpecLoader.Load();
+        var content = OpDocDocsLoader.LoadSpec();
 
         if (!write)
         {
