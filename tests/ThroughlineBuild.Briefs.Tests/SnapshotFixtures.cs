@@ -1,6 +1,7 @@
 using ThroughlineBuild.Briefs;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Helpers;
 
 namespace ThroughlineBuild.Briefs.Tests;
 
@@ -21,6 +22,40 @@ internal static class SnapshotFixtures
         Relations: new[] { new Relation("blocks", "TLB-100"), new Relation("blocked_by", "TLB-99") },
         Labels: Array.Empty<string>(),
         ParentId: null);
+
+    public static IReadOnlyList<Ticket> BatchTickets() => new[]
+    {
+        new Ticket(
+            Id: "TLB-201",
+            Uuid: "snapshot-uuid-201",
+            Title: "First batch ticket",
+            Type: "feature",
+            State: TicketState.Ready,
+            Size: Size.S,
+            Risk: Risk.Low,
+            DescriptionHtml: "<h2>Plan</h2><p>Build the first feature.</p>",
+            Relations: Array.Empty<Relation>(),
+            Labels: Array.Empty<string>(),
+            ParentId: null),
+        new Ticket(
+            Id: "TLB-202",
+            Uuid: "snapshot-uuid-202",
+            Title: "Second batch ticket",
+            Type: "feature",
+            State: TicketState.Ready,
+            Size: Size.M,
+            Risk: Risk.Medium,
+            DescriptionHtml: "<h2>Plan</h2><p>Build on the first feature.</p><ul><li>Use the first ticket's output.</li></ul>",
+            Relations: new[] { new Relation("blocked_by", "TLB-201") },
+            Labels: Array.Empty<string>(),
+            ParentId: null)
+    };
+
+    public static ChainCommitRange ChainCommitRange() => new(
+        StartSha: "chain-start-abc",
+        EndSha: "chain-current-def",
+        CommitCount: 2,
+        TouchedFiles: new[] { "src/Prior.cs", "tests/PriorTests.cs" });
 
     public static RepoState Repo() => new RepoState(
         MainSha: "abc1234567890def",

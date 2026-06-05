@@ -1,0 +1,87 @@
+# Batch Implement Phase Brief
+
+You are an implementing agent. Your job is to apply the plans recorded in this declared batch to the working tree, committing once per ticket in the required order.
+
+## Batch
+- Ticket count: 2
+- Declared order: TLB-201, TLB-202
+
+## Tickets and ordering
+Implement the tickets in the exact declared order below. Each ticket after the first must be built on top of the previous ticket's local commit.
+
+### 1. TLB-201 - First batch ticket
+- Type: feature
+- Size: S
+- Risk: Low
+- Stack position: 1
+- Ordering constraint: First in this batch. Start from the base commit pointer.
+
+Relations:
+(none)
+
+Plan (raw HTML from ticket description; read directly, do not re-render):
+<h2>Plan</h2><p>Build the first feature.</p>
+
+### 2. TLB-202 - Second batch ticket
+- Type: feature
+- Size: M
+- Risk: Medium
+- Stack position: 2
+- Ordering constraint: Must be implemented after ticket TLB-201 and on top of that ticket's commit.
+
+Relations:
+- blocked_by: TLB-201
+
+Plan (raw HTML from ticket description; read directly, do not re-render):
+<h2>Plan</h2><p>Build on the first feature.</p><ul><li>Use the first ticket's output.</li></ul>
+
+## Worktree and branch
+- Worktree path: /repo/.worktrees/ticket-tlb-snap-fixture
+- Branch: ticket/tlb-snap-fixture
+- Base SHA (origin/main): abc1234567890def
+- Current base commit pointer for this group: chain-current-def
+- Chain pointer: current base commit pointer: chain-current-def; prior chain range: chain-start-abc..chain-current-def (2 commit(s))
+
+## Constraints
+- Work only inside the worktree at /repo/.worktrees/ticket-tlb-snap-fixture
+- Commit all changes locally on branch ticket/tlb-snap-fixture
+- Make exactly one local commit per ticket, in declared order.
+- Do NOT combine multiple tickets into one commit.
+- Do NOT force-push, do NOT rebase, do NOT mutate the main branch
+- Do NOT write outside the worktree
+- Do NOT use git stash or the shared stash stack; the stash stack is repo-global and leaks across worktrees, which can corrupt a later ticket's working tree. If you need a clean state to build, build in place rather than stashing.
+
+## Golden and snapshot tests
+
+For golden/snapshot tests, use record-then-justify. Write the production code first, then run the code or test harness and capture its actual output as the golden fixture. If the project has a record/update flag or fixture-regeneration command, use that convention; if it does not, capture the real output verbatim and write that captured output to the fixture. Do NOT hand-author the expected string and iterate until it matches.
+
+Record mode is cheaper than an iterate-until-match loop, but it is also more dangerous: it can silently enshrine wrong output as the expected fixture. The justification step is mandatory and is the point of the process. After recording the fixture, justify the captured output against the ticket's acceptance criteria or spec: explain what the golden represents and why this exact output is correct. Do not justify it by saying the test passes, and do not rubber-stamp it as "looks right". If you cannot justify the captured output against the spec, stop and fix the production code before committing the fixture.
+
+Include a short golden-justification note in `IMPLEMENT_SUMMARY` for every golden/snapshot fixture you record or update. Tie the note to the spec or acceptance criteria so review has something concrete to check beyond the captured blob.
+
+## Required output
+
+Before emitting the WORKER_RESULT envelope, emit one implementation summary block per ticket. Use the ticket's stack position in the block name:
+
+<<<IMPLEMENT_SUMMARY_1_START
+Write a concise summary for ticket 1. Include files changed, key design decisions, verification, and any golden-justification note required by the ticket.
+<<<IMPLEMENT_SUMMARY_1_END
+
+Repeat for every ticket in the batch.
+
+Then emit one batch WORKER_RESULT envelope:
+
+WORKER_RESULT
+{"status":"Ok","summary":"Implemented batch TLB-201, TLB-202","files_changed":["path/relative/to/worktree"],"failure_reason":null,"metadata":{"base_commit_sha":"<base commit pointer from brief>","head_commit_sha":"<HEAD SHA after all ticket commits>","files_changed":["path/relative/to/worktree"]},"tickets":[{"ticket_id":"TLB-201","commit_sha":"<commit SHA after TLB-201>","stack_position":1,"files_changed":["path/relative/to/worktree"],"summary_ref":"IMPLEMENT_SUMMARY_1"},{"ticket_id":"TLB-202","commit_sha":"<commit SHA after TLB-202>","stack_position":2,"files_changed":["path/relative/to/worktree"],"summary_ref":"IMPLEMENT_SUMMARY_2"}]}
+
+- Top-level `status` must be `Ok`, `Failed`, or `Escalate`.
+- Top-level `summary` must summarize the whole batch.
+- Top-level `files_changed` must list every path changed by the whole batch.
+- Top-level `failure_reason` must be null on success or a clear failure reason.
+- Top-level `metadata.base_commit_sha` must be the current base commit pointer from this brief.
+- Top-level `metadata.head_commit_sha` must be the HEAD SHA after all ticket commits land.
+- `tickets` must contain one object per ticket, in declared order.
+- Each ticket object must include `ticket_id`, `commit_sha`, `stack_position`, `files_changed`, and `summary_ref`.
+- Each `commit_sha` must be the local commit created for that ticket.
+- Each `stack_position` must match the declared order above, starting at 1.
+- Each `summary_ref` must name the matching implementation summary block, for example `IMPLEMENT_SUMMARY_1`.
