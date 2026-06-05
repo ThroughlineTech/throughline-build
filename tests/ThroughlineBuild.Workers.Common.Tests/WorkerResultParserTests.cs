@@ -100,6 +100,123 @@ public class WorkerResultParserAotRegressionTests
     }
 }
 
+public class BatchWorkerResultParserTests
+{
+    [Fact]
+    public void SourceGenContext_BatchTicketResult_RoundTripsWithReflectionDisabled()
+    {
+        Assert.False(JsonSerializer.IsReflectionEnabledByDefault);
+        var ticket = new BatchTicketResult(
+            TicketId: "TLB-443",
+            CommitSha: "abc123",
+            StackPosition: 2,
+            FilesChanged: new[] { "src/A.cs", "tests/A.Tests.cs" },
+            SummaryRef: "SUMMARY_TLB_443");
+
+        var json = JsonSerializer.Serialize(ticket, WorkersCommonJsonContext.Default.BatchTicketResult);
+        var roundTrip = JsonSerializer.Deserialize(json, WorkersCommonJsonContext.Default.BatchTicketResult);
+
+        Assert.NotNull(roundTrip);
+        Assert.Equal(ticket.TicketId, roundTrip.TicketId);
+        Assert.Equal(ticket.CommitSha, roundTrip.CommitSha);
+        Assert.Equal(ticket.StackPosition, roundTrip.StackPosition);
+        Assert.Equal(ticket.FilesChanged, roundTrip.FilesChanged);
+        Assert.Equal(ticket.SummaryRef, roundTrip.SummaryRef);
+        Assert.Contains("\"ticket_id\"", json);
+        Assert.Contains("\"commit_sha\"", json);
+        Assert.Contains("\"stack_position\"", json);
+        Assert.Contains("\"files_changed\"", json);
+        Assert.Contains("\"summary_ref\"", json);
+    }
+
+    [Fact]
+    public void TryParseBatch_WellFormedPayload_ReturnsTicketsInDeclaredOrder()
+    {
+        var stdout =
+            "<<<SUMMARY_TLB_443_START\n" +
+            "Implemented contract.\n" +
+            "<<<SUMMARY_TLB_443_END\n" +
+            "<<<SUMMARY_TLB_444_START\n" +
+            "Implemented producer.\n" +
+            "<<<SUMMARY_TLB_444_END\n" +
+            "WORKER_RESULT\n" +
+            "{\n" +
+            "  \"status\": \"Ok\",\n" +
+            "  \"summary\": \"batch complete\",\n" +
+            "  \"files_changed\": [\"src/Batch.cs\"],\n" +
+            "  \"failure_reason\": null,\n" +
+            "  \"metadata\": {\"commit_sha\": \"stack-tip\"},\n" +
+            "  \"tickets\": [\n" +
+            "    {\"ticket_id\":\"TLB-443\",\"commit_sha\":\"sha-443\",\"stack_position\":1,\"files_changed\":[\"src/A.cs\"],\"summary_ref\":\"SUMMARY_TLB_443\"},\n" +
+            "    {\"ticket_id\":\"TLB-444\",\"commit_sha\":\"sha-444\",\"stack_position\":2,\"files_changed\":[\"src/B.cs\"],\"summary_ref\":\"SUMMARY_TLB_444\"}\n" +
+            "  ]\n" +
+            "}\n";
+
+        var outcome = WorkerResultParser.TryParseBatch(stdout);
+
+        Assert.NotNull(outcome.Result);
+        Assert.Equal(Status.Ok, outcome.Result.Status);
+        Assert.Equal("batch complete", outcome.Result.Summary);
+        Assert.Collection(
+            outcome.Result.Tickets,
+            first =>
+            {
+                Assert.Equal("TLB-443", first.TicketId);
+                Assert.Equal("sha-443", first.CommitSha);
+                Assert.Equal(1, first.StackPosition);
+                Assert.Single(first.FilesChanged, "src/A.cs");
+                Assert.Equal("SUMMARY_TLB_443", first.SummaryRef);
+            },
+            second =>
+            {
+                Assert.Equal("TLB-444", second.TicketId);
+                Assert.Equal("sha-444", second.CommitSha);
+                Assert.Equal(2, second.StackPosition);
+                Assert.Single(second.FilesChanged, "src/B.cs");
+                Assert.Equal("SUMMARY_TLB_444", second.SummaryRef);
+            });
+        Assert.Equal("Implemented contract.", outcome.Blocks["SUMMARY_TLB_443"]);
+        Assert.Equal("Implemented producer.", outcome.Blocks["SUMMARY_TLB_444"]);
+    }
+
+    [Fact]
+    public void TryParseBatch_MissingTicketsArray_FailsWithClearMessage()
+    {
+        var stdout =
+            "WORKER_RESULT\n" +
+            "{\"status\":\"Ok\",\"summary\":\"batch complete\",\"files_changed\":[]," +
+            "\"failure_reason\":null,\"metadata\":{}}\n";
+
+        var outcome = WorkerResultParser.TryParseBatch(stdout);
+
+        Assert.Null(outcome.Result);
+        Assert.Equal("ValidationError", outcome.DeserializeErrorType);
+        Assert.NotNull(outcome.DeserializeErrorMessage);
+        Assert.Contains("tickets", outcome.DeserializeErrorMessage);
+        Assert.Contains("array", outcome.DeserializeErrorMessage);
+    }
+
+    [Fact]
+    public void TryParseBatch_MalformedTicketsArray_FailsWithClearMessage()
+    {
+        var stdout =
+            "WORKER_RESULT\n" +
+            "{\"status\":\"Ok\",\"summary\":\"batch complete\",\"files_changed\":[]," +
+            "\"failure_reason\":null,\"metadata\":{},\"tickets\":[" +
+            "{\"ticket_id\":\"TLB-443\",\"commit_sha\":\"sha-443\",\"stack_position\":1," +
+            "\"files_changed\":[],\"summary_ref\":\"SUMMARY_TLB_443\"}," +
+            "{\"ticket_id\":\"TLB-444\",\"commit_sha\":\"sha-444\",\"stack_position\":2," +
+            "\"summary_ref\":\"SUMMARY_TLB_444\"}]}\n";
+
+        var outcome = WorkerResultParser.TryParseBatch(stdout);
+
+        Assert.Null(outcome.Result);
+        Assert.Equal("ValidationError", outcome.DeserializeErrorType);
+        Assert.NotNull(outcome.DeserializeErrorMessage);
+        Assert.Contains("tickets[1].files_changed", outcome.DeserializeErrorMessage);
+    }
+}
+
 /// <summary>
 /// Template-to-parser round-trip test: validates that PlanBriefBuilder's
 /// WORKER_RESULT example block can be successfully parsed by WorkerResultParser.

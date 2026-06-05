@@ -32,7 +32,41 @@ internal sealed class WorkerResultDto
     public Dictionary<string, JsonElement>? Metadata { get; set; }
 }
 
+internal sealed class BatchWorkerResultDto
+{
+    [JsonPropertyName("status")]
+    [JsonConverter(typeof(JsonStringEnumConverter<Status>))]
+    public Status? Status { get; set; }
+    [JsonPropertyName("summary")]
+    public string? Summary { get; set; }
+    [JsonPropertyName("files_changed")]
+    public List<string>? FilesChanged { get; set; }
+    [JsonPropertyName("failure_reason")]
+    public string? FailureReason { get; set; }
+    [JsonPropertyName("metadata")]
+    public Dictionary<string, JsonElement>? Metadata { get; set; }
+    [JsonPropertyName("tickets")]
+    public List<BatchTicketResultDto>? Tickets { get; set; }
+}
+
+internal sealed class BatchTicketResultDto
+{
+    [JsonPropertyName("ticket_id")]
+    public string? TicketId { get; set; }
+    [JsonPropertyName("commit_sha")]
+    public string? CommitSha { get; set; }
+    [JsonPropertyName("stack_position")]
+    public int? StackPosition { get; set; }
+    [JsonPropertyName("files_changed")]
+    public List<string>? FilesChanged { get; set; }
+    [JsonPropertyName("summary_ref")]
+    public string? SummaryRef { get; set; }
+}
+
 [JsonSerializable(typeof(WorkerResultDto))]
+[JsonSerializable(typeof(BatchWorkerResultDto))]
+[JsonSerializable(typeof(BatchTicketResultDto))]
+[JsonSerializable(typeof(BatchTicketResult))]
 [JsonSerializable(typeof(Dictionary<string, JsonElement>))]
 internal partial class WorkersCommonJsonContext : JsonSerializerContext { }
 
@@ -174,6 +208,103 @@ internal static class WorkerResultParser
             catch (NotSupportedException ex)
             {
                 lastFailure = WorkerResultParseOutcome.DeserializeFailed(ex.GetType().Name, ex.Message);
+            }
+        }
+        return lastFailure;
+    }
+
+    internal static BatchWorkerResultParseOutcome TryParseBatch(string stdout)
+    {
+        var lines = stdout.Split('\n');
+
+        if (!TryScanFencedBlocks(lines, out var blocks, out var scanErrorType, out var scanErrorMessage))
+            return BatchWorkerResultParseOutcome.FenceScanFailed(scanErrorType!, scanErrorMessage!);
+
+        var markerIndices = new List<int>();
+        for (int i = 0; i < lines.Length; i++)
+        {
+            if (lines[i].Trim() == "WORKER_RESULT")
+                markerIndices.Add(i);
+        }
+        if (markerIndices.Count == 0)
+            return BatchWorkerResultParseOutcome.MarkerMissing();
+
+        BatchWorkerResultParseOutcome lastFailure = BatchWorkerResultParseOutcome.MarkerMissing();
+        for (int idx = markerIndices.Count - 1; idx >= 0; idx--)
+        {
+            int i = markerIndices[idx];
+            var json = StripCodeFence(string.Join("\n", lines, i + 1, lines.Length - i - 1).Trim());
+            try
+            {
+                var dto = JsonSerializer.Deserialize(json, WorkersCommonJsonContext.Default.BatchWorkerResultDto);
+                if (dto is null)
+                {
+                    lastFailure = BatchWorkerResultParseOutcome.DeserializeFailed("JsonElement", "Deserialization returned null");
+                    continue;
+                }
+                if (dto.Status is null)
+                {
+                    lastFailure = BatchWorkerResultParseOutcome.DeserializeFailed("ValidationError",
+                        $"WORKER_RESULT JSON missing required 'status' field. Payload: {json}");
+                    continue;
+                }
+                if (string.IsNullOrWhiteSpace(dto.Summary))
+                {
+                    lastFailure = BatchWorkerResultParseOutcome.DeserializeFailed("ValidationError",
+                        $"WORKER_RESULT JSON missing or empty 'summary' field. Payload: {json}");
+                    continue;
+                }
+                if (dto.Tickets is null)
+                {
+                    lastFailure = BatchWorkerResultParseOutcome.DeserializeFailed("ValidationError",
+                        "batch WORKER_RESULT JSON missing required non-empty 'tickets' array");
+                    continue;
+                }
+                if (dto.Tickets.Count == 0)
+                {
+                    lastFailure = BatchWorkerResultParseOutcome.DeserializeFailed("ValidationError",
+                        "batch WORKER_RESULT JSON has empty 'tickets' array");
+                    continue;
+                }
+
+                var tickets = new List<BatchTicketResult>(dto.Tickets.Count);
+                var validationFailed = false;
+                for (int ticketIndex = 0; ticketIndex < dto.Tickets.Count; ticketIndex++)
+                {
+                    var ticket = dto.Tickets[ticketIndex];
+                    if (!TryMapBatchTicket(ticket, ticketIndex, out var mappedTicket, out var validationMessage))
+                    {
+                        lastFailure = BatchWorkerResultParseOutcome.DeserializeFailed("ValidationError", validationMessage!);
+                        validationFailed = true;
+                        break;
+                    }
+
+                    tickets.Add(mappedTicket);
+                }
+
+                if (validationFailed)
+                    continue;
+
+                IReadOnlyList<string> files = dto.FilesChanged ?? new List<string>();
+                IReadOnlyDictionary<string, object> meta = dto.Metadata is not null
+                    ? dto.Metadata.ToDictionary(kvp => kvp.Key, kvp => (object)kvp.Value)
+                    : new Dictionary<string, object>();
+                var result = new BatchWorkerResult(
+                    dto.Status.Value,
+                    dto.Summary,
+                    files,
+                    dto.FailureReason,
+                    meta,
+                    tickets);
+                return BatchWorkerResultParseOutcome.Success(result, blocks);
+            }
+            catch (JsonException ex)
+            {
+                lastFailure = BatchWorkerResultParseOutcome.DeserializeFailed(ex.GetType().Name, ex.Message);
+            }
+            catch (NotSupportedException ex)
+            {
+                lastFailure = BatchWorkerResultParseOutcome.DeserializeFailed(ex.GetType().Name, ex.Message);
             }
         }
         return lastFailure;
@@ -349,6 +480,56 @@ internal static class WorkerResultParser
         }
         return true;
     }
+
+    private static bool TryMapBatchTicket(
+        BatchTicketResultDto ticket,
+        int ticketIndex,
+        [NotNullWhen(true)] out BatchTicketResult? result,
+        [NotNullWhen(false)] out string? validationMessage)
+    {
+        result = null;
+        validationMessage = null;
+        var path = $"tickets[{ticketIndex}]";
+
+        if (string.IsNullOrWhiteSpace(ticket.TicketId))
+        {
+            validationMessage = $"{path}.ticket_id is required and must be a non-empty string";
+            return false;
+        }
+        if (string.IsNullOrWhiteSpace(ticket.CommitSha))
+        {
+            validationMessage = $"{path}.commit_sha is required and must be a non-empty string";
+            return false;
+        }
+        if (ticket.StackPosition is null)
+        {
+            validationMessage = $"{path}.stack_position is required";
+            return false;
+        }
+        if (ticket.FilesChanged is null)
+        {
+            validationMessage = $"{path}.files_changed is required and must be an array";
+            return false;
+        }
+        if (ticket.FilesChanged.Any(string.IsNullOrWhiteSpace))
+        {
+            validationMessage = $"{path}.files_changed entries must be non-empty strings";
+            return false;
+        }
+        if (string.IsNullOrWhiteSpace(ticket.SummaryRef))
+        {
+            validationMessage = $"{path}.summary_ref is required and must be a non-empty string";
+            return false;
+        }
+
+        result = new BatchTicketResult(
+            ticket.TicketId,
+            ticket.CommitSha,
+            ticket.StackPosition.Value,
+            ticket.FilesChanged,
+            ticket.SummaryRef);
+        return true;
+    }
 }
 
 internal readonly record struct WorkerResultParseOutcome(
@@ -370,6 +551,28 @@ internal readonly record struct WorkerResultParseOutcome(
         new(Result: null, DeserializeErrorType: errorType, DeserializeErrorMessage: errorMessage, Blocks: EmptyBlocks);
 
     internal static WorkerResultParseOutcome FenceScanFailed(string errorType, string errorMessage) =>
+        new(Result: null, DeserializeErrorType: errorType, DeserializeErrorMessage: errorMessage, Blocks: EmptyBlocks);
+}
+
+internal readonly record struct BatchWorkerResultParseOutcome(
+    BatchWorkerResult? Result,
+    string? DeserializeErrorType,
+    string? DeserializeErrorMessage,
+    IReadOnlyDictionary<string, string> Blocks)
+{
+    private static readonly IReadOnlyDictionary<string, string> EmptyBlocks =
+        new Dictionary<string, string>();
+
+    internal static BatchWorkerResultParseOutcome Success(BatchWorkerResult result, IReadOnlyDictionary<string, string> blocks) =>
+        new(Result: result, DeserializeErrorType: null, DeserializeErrorMessage: null, Blocks: blocks);
+
+    internal static BatchWorkerResultParseOutcome MarkerMissing() =>
+        new(Result: null, DeserializeErrorType: null, DeserializeErrorMessage: null, Blocks: EmptyBlocks);
+
+    internal static BatchWorkerResultParseOutcome DeserializeFailed(string errorType, string errorMessage) =>
+        new(Result: null, DeserializeErrorType: errorType, DeserializeErrorMessage: errorMessage, Blocks: EmptyBlocks);
+
+    internal static BatchWorkerResultParseOutcome FenceScanFailed(string errorType, string errorMessage) =>
         new(Result: null, DeserializeErrorType: errorType, DeserializeErrorMessage: errorMessage, Blocks: EmptyBlocks);
 }
 
