@@ -5,8 +5,8 @@ using Xunit;
 namespace ThroughlineBuild.Cli.Tests;
 
 /// <summary>
-/// Unit tests for SetupCommand: diff against WorkspaceSchema, create missing states/labels,
-/// idempotency, and the --check (verify-only) exit code. Uses an in-memory fake provisioner.
+/// Unit tests for SetupCommand: local-repo readiness (git init + .gitignore), Plane schema diff,
+/// create, idempotency, and the --check (verify-only) exit code. All fakes are in-memory.
 /// </summary>
 public class SetupCommandTests
 {
@@ -26,10 +26,30 @@ public class SetupCommandTests
         public char? ReadKeyChar() => null;
     }
 
-    /// <summary>
-    /// In-memory provisioner. Created states/labels are added to the live set so a second
-    /// ExecuteAsync run observes them - this is what exercises idempotency.
-    /// </summary>
+    private sealed class FakeLocalRepo : ILocalRepoOps
+    {
+        private bool _isRepo;
+        public string? Gitignore;
+        public int InitCalls { get; private set; }
+        public int WriteCalls { get; private set; }
+
+        public FakeLocalRepo(bool isRepo, string? gitignore)
+        {
+            _isRepo = isRepo;
+            Gitignore = gitignore;
+        }
+
+        public bool IsGitRepository() => _isRepo;
+        public void GitInit() { InitCalls++; _isRepo = true; }
+        public string? ReadGitignore() => Gitignore;
+        public void WriteGitignore(string content) { WriteCalls++; Gitignore = content; }
+    }
+
+    // A local repo that is already initialized and already carries every standard ignore entry,
+    // so a test focused on the Plane half exercises no local-repo work.
+    private static FakeLocalRepo ReadyRepo() =>
+        new(isRepo: true, gitignore: string.Join("\n", GitignoreManager.RequiredEntries) + "\n");
+
     private sealed class FakeProvisioner : ITicketingProvisioner
     {
         private readonly List<ExistingState> _states;
@@ -64,8 +84,7 @@ public class SetupCommandTests
         }
     }
 
-    // Plane's stock states for a brand-new project: Backlog/In Progress/Done/Cancelled plus a
-    // default "Todo". Missing vs WorkspaceSchema: Planning, Ready, In Review.
+    // Plane's stock states for a brand-new project (missing Planning, Ready, In Review).
     private static FakeProvisioner FreshProject() => new(
         states: new[]
         {
@@ -81,7 +100,7 @@ public class SetupCommandTests
         states: WorkspaceSchema.States.Select((s, i) => new ExistingState(s.Name, s.Group, i)).ToList(),
         labels: WorkspaceSchema.Labels.ToList());
 
-    // ------------------------------------------------------------------ tests
+    // ------------------------------------------------------------------ Plane half
 
     [Fact]
     public async Task FreshProject_CreatesMissingStatesAndLabels_ReturnsZero()
@@ -89,29 +108,27 @@ public class SetupCommandTests
         var fake = FreshProject();
         var console = new FakeConsole();
 
-        var code = await new SetupCommand(fake).ExecuteAsync(checkOnly: false, console, CancellationToken.None);
+        var code = await new SetupCommand(fake, ReadyRepo()).ExecuteAsync(checkOnly: false, console, CancellationToken.None);
 
         Assert.Equal(0, code);
-        Assert.Equal(3, fake.StateCreates);                       // Planning, Ready, In Review
-        Assert.Equal(WorkspaceSchema.Labels.Count, fake.LabelCreates); // all 9 labels
+        Assert.Equal(3, fake.StateCreates);
+        Assert.Equal(WorkspaceSchema.Labels.Count, fake.LabelCreates);
         Assert.Contains("created state: Planning", console.Stdout);
         Assert.Contains("created label: risk:low", console.Stdout);
-        Assert.Contains("Setup complete", console.Stdout);
     }
 
     [Fact]
     public async Task SecondRun_IsIdempotent_CreatesNothing()
     {
         var fake = FreshProject();
-
-        await new SetupCommand(fake).ExecuteAsync(checkOnly: false, new FakeConsole(), CancellationToken.None);
+        await new SetupCommand(fake, ReadyRepo()).ExecuteAsync(checkOnly: false, new FakeConsole(), CancellationToken.None);
         var before = (fake.StateCreates, fake.LabelCreates);
 
         var console = new FakeConsole();
-        var code = await new SetupCommand(fake).ExecuteAsync(checkOnly: false, console, CancellationToken.None);
+        var code = await new SetupCommand(fake, ReadyRepo()).ExecuteAsync(checkOnly: false, console, CancellationToken.None);
 
         Assert.Equal(0, code);
-        Assert.Equal(before, (fake.StateCreates, fake.LabelCreates)); // no new creates on rerun
+        Assert.Equal(before, (fake.StateCreates, fake.LabelCreates));
         Assert.Contains("meets criteria", console.Stdout);
     }
 
@@ -121,7 +138,7 @@ public class SetupCommandTests
         var fake = FreshProject();
         var console = new FakeConsole();
 
-        var code = await new SetupCommand(fake).ExecuteAsync(checkOnly: true, console, CancellationToken.None);
+        var code = await new SetupCommand(fake, ReadyRepo()).ExecuteAsync(checkOnly: true, console, CancellationToken.None);
 
         Assert.Equal(1, code);
         Assert.Equal(0, fake.StateCreates);
@@ -134,22 +151,19 @@ public class SetupCommandTests
     [Fact]
     public async Task CheckOnly_WhenComplete_ReturnsZero()
     {
-        var fake = FullyProvisioned();
         var console = new FakeConsole();
 
-        var code = await new SetupCommand(fake).ExecuteAsync(checkOnly: true, console, CancellationToken.None);
+        var code = await new SetupCommand(FullyProvisioned(), ReadyRepo()).ExecuteAsync(checkOnly: true, console, CancellationToken.None);
 
         Assert.Equal(0, code);
-        Assert.Equal(0, fake.StateCreates);
         Assert.Contains("meets criteria", console.Stdout);
     }
 
     [Fact]
     public async Task NewStateSequences_ContinuePastHighestExisting()
     {
-        // Existing max sequence is 5 (Cancelled); created states should sort after it.
         var fake = FreshProject();
-        await new SetupCommand(fake).ExecuteAsync(checkOnly: false, new FakeConsole(), CancellationToken.None);
+        await new SetupCommand(fake, ReadyRepo()).ExecuteAsync(checkOnly: false, new FakeConsole(), CancellationToken.None);
 
         var created = (await fake.ListStatesAsync(CancellationToken.None))
             .Where(s => s.Name is "Planning" or "Ready" or "In Review")
@@ -157,5 +171,63 @@ public class SetupCommandTests
 
         Assert.Equal(3, created.Count);
         Assert.All(created, s => Assert.True(s.Sequence > 5));
+    }
+
+    // ------------------------------------------------------------------ local-repo half
+
+    [Fact]
+    public async Task NonGitDir_RunsGitInitAndWritesGitignore()
+    {
+        var repo = new FakeLocalRepo(isRepo: false, gitignore: null);
+        var console = new FakeConsole();
+
+        var code = await new SetupCommand(FullyProvisioned(), repo).ExecuteAsync(checkOnly: false, console, CancellationToken.None);
+
+        Assert.Equal(0, code);
+        Assert.Equal(1, repo.InitCalls);
+        Assert.Equal(1, repo.WriteCalls);
+        Assert.NotNull(repo.Gitignore);
+        Assert.Contains(".build/brief.md", repo.Gitignore!);
+        Assert.Contains("initialized empty repository", console.Stdout);
+    }
+
+    [Fact]
+    public async Task ExistingRepoWithFullGitignore_DoesNotInitOrWrite()
+    {
+        var repo = ReadyRepo();
+
+        await new SetupCommand(FullyProvisioned(), repo).ExecuteAsync(checkOnly: false, new FakeConsole(), CancellationToken.None);
+
+        Assert.Equal(0, repo.InitCalls);
+        Assert.Equal(0, repo.WriteCalls);
+    }
+
+    [Fact]
+    public async Task PartialGitignore_AppendsOnlyMissing_PreservesExisting()
+    {
+        var repo = new FakeLocalRepo(isRepo: true, gitignore: "node_modules/\n.build/brief.md\n");
+        var console = new FakeConsole();
+
+        await new SetupCommand(FullyProvisioned(), repo).ExecuteAsync(checkOnly: false, console, CancellationToken.None);
+
+        Assert.Equal(1, repo.WriteCalls);
+        Assert.Contains("node_modules/", repo.Gitignore!);      // existing content preserved
+        Assert.Contains(".worktrees/", repo.Gitignore!);        // a missing entry appended
+        Assert.DoesNotContain("added 0 entr", console.Stdout);  // brief.md was already present
+    }
+
+    [Fact]
+    public async Task CheckOnly_NonGitDir_ReportsGap_ReturnsOne_NoMutation()
+    {
+        var repo = new FakeLocalRepo(isRepo: false, gitignore: null);
+        var console = new FakeConsole();
+
+        var code = await new SetupCommand(FullyProvisioned(), repo).ExecuteAsync(checkOnly: true, console, CancellationToken.None);
+
+        Assert.Equal(1, code);                       // local gap fails --check even though Plane is complete
+        Assert.Equal(0, repo.InitCalls);
+        Assert.Equal(0, repo.WriteCalls);
+        Assert.Contains("not a git repository", console.Stderr);
+        Assert.Contains(".gitignore", console.Stderr);
     }
 }

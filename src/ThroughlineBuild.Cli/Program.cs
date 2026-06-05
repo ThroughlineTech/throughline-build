@@ -361,7 +361,7 @@ static async Task<int> RunAsync(string[] args)
             ProjectId = config2.Ticketing.PlaneProjectId,
             ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
         });
-        var setupCmd = new SetupCommand(ticketing2);
+        var setupCmd = new SetupCommand(ticketing2, new FileSystemLocalRepoOps(cwd2));
         try
         {
             using var verbCts = new CancellationTokenSource();

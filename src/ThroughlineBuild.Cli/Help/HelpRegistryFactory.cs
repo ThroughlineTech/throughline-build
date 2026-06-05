@@ -363,14 +363,18 @@ public static class HelpRegistryFactory
     private static CommandHelp Setup() => new(
         Name:    "setup",
         Group:   CommandGroup.Configure,
-        Summary: "Provision the Plane project to meet workflow criteria (states + labels)",
+        Summary: "Make a project workflow-ready: git init + .gitignore, and provision the Plane project (states + labels)",
         Usage:   "setup [--check]",
         Options:
         [
-            new("--check", "Verify only: report missing states/labels and exit 1 if any are absent; create nothing", false),
+            new("--check", "Verify only: report any missing git repo, .gitignore entries, or Plane states/labels and exit 1; mutate nothing", false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2, s_exit3],
-        Examples:  []
+        Examples:
+        [
+            new("setup", "Initialize git, top up .gitignore, and create missing Plane states/labels"),
+            new("setup --check", "Report readiness gaps without changing anything (CI gate)"),
+        ]
     );
 
     private static CommandHelp UserGuide() => new(

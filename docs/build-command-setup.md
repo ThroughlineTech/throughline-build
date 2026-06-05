@@ -134,15 +134,21 @@ and follow the browser flow. You only need to do this once per machine.
 
 ---
 
-## Step 3c - Provision the Plane project (`build setup`)
+## Step 3c - Make the project workflow-ready (`build setup`)
 
-`build init` writes your config but does **not** touch the Plane project. The workflow assumes the project carries a specific set of states and labels; the `build` binary resolves them by name at runtime and **hard-fails** when a required label is missing (`Label 'risk:low' not found in Plane project`) and warns when a required state is missing. A brand-new Plane project has neither, so run `setup` once after `init`:
+`build init` writes your config but does **not** touch the git repo or the Plane project. Run `setup` once after `init` to close both gaps:
 
 ```bash
 dotnet run --project src/ThroughlineBuild.Cli -- setup
 ```
 
-This creates any missing states (Backlog, Planning, Ready, In Progress, In Review, Done, Cancelled) and labels (`risk:low|medium|high`, `size:s|m|l`, `plan-ticket`, `stub`, `delegated`). It is **idempotent** - a project that already meets criteria is left untouched, and re-running prints `Plane project meets criteria: ...`.
+It does two idempotent things:
+
+1. **Local repo.** Runs `git init` if the directory is not yet a git repository, then appends a standard, language-neutral ignore list to `.gitignore` **without disturbing existing entries** (it only adds what's missing, under a managed header). The list covers the build tool's own artifacts (`.build/config.toml` - which holds your Plane token - `.build/brief.md`, `.build/events/`, `.build/sessions/`, `.worktrees/`, `secrets/`, `.tmp/`) plus universal OS/editor noise (`.DS_Store`, `Thumbs.db`, `.vs/`, `.idea/`, `*.swp`). It is intentionally stack-neutral - your project's own `.gitignore` rules for `node_modules`, `bin/obj`, `*.pyc`, etc. are yours to keep and are never removed.
+
+2. **Plane project.** The `build` binary resolves states/labels by name at runtime and **hard-fails** when a required label is missing (`Label 'risk:low' not found in Plane project`), warning when a required state is missing. `setup` creates any missing states (Backlog, Planning, Ready, In Progress, In Review, Done, Cancelled) and labels (`risk:low|medium|high`, `size:s|m|l`, `plan-ticket`, `stub`, `delegated`).
+
+A project that already meets criteria is left untouched - re-running just prints what's already present.
 
 To verify without mutating anything (e.g. in CI), use `--check`:
 
