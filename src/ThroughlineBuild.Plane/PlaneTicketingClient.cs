@@ -15,7 +15,7 @@ namespace ThroughlineBuild.Plane;
 /// <summary>
 /// ITicketing implementation backed by the Plane REST API.
 /// </summary>
-public sealed class PlaneTicketingClient : ITicketing
+public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner
 {
     private readonly HttpClient _http;
     private readonly PlaneClientOptions _options;
@@ -270,18 +270,44 @@ public sealed class PlaneTicketingClient : ITicketing
         }
     }
 
-    // Reverse state lookup: uuid -> TicketState
+    // State-name -> TicketState, derived from the canonical WorkspaceSchema so the runtime
+    // translation and the `build setup` provisioner can never disagree about the state set.
     private static readonly Dictionary<string, TicketState> _stateNameMap =
-        new(StringComparer.OrdinalIgnoreCase)
-        {
-            ["Backlog"]     = TicketState.Backlog,
-            ["Planning"]    = TicketState.Planning,
-            ["Ready"]       = TicketState.Ready,
-            ["In Progress"] = TicketState.InProgress,
-            ["In Review"]   = TicketState.InReview,
-            ["Done"]        = TicketState.Done,
-            ["Cancelled"]   = TicketState.Cancelled,
-        };
+        WorkspaceSchema.States.ToDictionary(s => s.Name, s => s.State, StringComparer.OrdinalIgnoreCase);
+
+    // ------------------------------------------------------------------ provisioning (build setup)
+
+    // Default Plane colors for created entries; cosmetic only - `build` matches by name.
+    private const string DefaultStateColor = "#60646C";
+    private const string DefaultLabelColor = "#9CA3AF";
+
+    public async Task<IReadOnlyList<ExistingState>> ListStatesAsync(CancellationToken ct)
+    {
+        var list = await GetJsonAsync<PlaneStateList>(StatesBase, PlaneJsonContext.Default, ct).ConfigureAwait(false);
+        return (list.Results ?? [])
+            .Select(s => new ExistingState(s.Name, s.Group, s.Sequence ?? 0))
+            .ToList();
+    }
+
+    public async Task<IReadOnlyList<string>> ListLabelNamesAsync(CancellationToken ct)
+    {
+        var list = await GetJsonAsync<PlaneLabelList>(LabelsBase, PlaneJsonContext.Default, ct).ConfigureAwait(false);
+        return (list.Results ?? []).Select(l => l.Name).ToList();
+    }
+
+    public async Task CreateStateAsync(string name, string group, double sequence, CancellationToken ct)
+    {
+        var body = new CreateStateRequest(name, group, DefaultStateColor, sequence);
+        await PostJsonAsync(StatesBase, body, PlaneJsonContext.Default, ct).ConfigureAwait(false);
+        _statesByName = null; // force a re-read so a later lookup sees the new state
+    }
+
+    public async Task CreateLabelAsync(string name, CancellationToken ct)
+    {
+        var body = new CreateLabelRequest(name, DefaultLabelColor);
+        await PostJsonAsync(LabelsBase, body, PlaneJsonContext.Default, ct).ConfigureAwait(false);
+        _labelsByName = null; // force a re-read so a later lookup sees the new label
+    }
 
     // ------------------------------------------------------------------ translation
 

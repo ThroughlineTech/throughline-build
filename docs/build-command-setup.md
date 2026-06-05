@@ -134,6 +134,34 @@ and follow the browser flow. You only need to do this once per machine.
 
 ---
 
+## Step 3c - Make the project workflow-ready (`build setup`)
+
+`build init` writes your config but does **not** touch the git repo or the Plane project. Run `setup` once after `init` to close both gaps:
+
+```bash
+dotnet run --project src/ThroughlineBuild.Cli -- setup
+```
+
+It does two idempotent things:
+
+1. **Local repo.** Runs `git init` if the directory is not yet a git repository, then appends a standard, language-neutral ignore list to `.gitignore` **without disturbing existing entries** (it only adds what's missing, under a managed header). The list covers the build tool's own artifacts (`.build/config.toml` - which holds your Plane token - `.build/brief.md`, `.build/events/`, `.build/sessions/`, `.worktrees/`, `secrets/`, `.tmp/`) plus universal OS/editor noise (`.DS_Store`, `Thumbs.db`, `.vs/`, `.idea/`, `*.swp`). It is intentionally stack-neutral - your project's own `.gitignore` rules for `node_modules`, `bin/obj`, `*.pyc`, etc. are yours to keep and are never removed.
+
+2. **Plane project.** The `build` binary resolves states/labels by name at runtime and **hard-fails** when a required label is missing (`Label 'risk:low' not found in Plane project`), warning when a required state is missing. `setup` creates any missing states (Backlog, Planning, Ready, In Progress, In Review, Done, Cancelled) and labels (`risk:low|medium|high`, `size:s|m|l`, `plan-ticket`, `stub`, `delegated`).
+
+A project that already meets criteria is left untouched - re-running just prints what's already present.
+
+To verify without mutating anything (e.g. in CI), use `--check`:
+
+```bash
+dotnet run --project src/ThroughlineBuild.Cli -- setup --check
+```
+
+`--check` exits `0` when the project meets criteria and `1` (listing the gaps on stderr) when it does not, creating nothing.
+
+The end-to-end path on a fresh project is: `build init` (enter config) -> `build setup` -> `build new "..."` -> `build chain <id>`.
+
+---
+
 ## Step 4 - Run a plan
 
 The plan phase sends a structured brief to a Claude Code worker, which investigates the codebase and writes an investigation + implementation plan back into the ticket description on Plane, applying `risk:*` and `size:*` labels and transitioning the ticket to Ready.

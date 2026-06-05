@@ -45,6 +45,7 @@ public static class HelpRegistryFactory
         // Configure
         r.Register(Init());
         r.Register(SetTarget());
+        r.Register(Setup());
         r.Register(UserGuide());
         r.Register(OpDoc());
         r.Register(Scaffold());
@@ -357,6 +358,23 @@ public static class HelpRegistryFactory
         ],
         ExitCodes: [s_exit0, s_exit2],
         Examples:  []
+    );
+
+    private static CommandHelp Setup() => new(
+        Name:    "setup",
+        Group:   CommandGroup.Configure,
+        Summary: "Make a project workflow-ready: git init + .gitignore, and provision the Plane project (states + labels)",
+        Usage:   "setup [--check]",
+        Options:
+        [
+            new("--check", "Verify only: report any missing git repo, .gitignore entries, or Plane states/labels and exit 1; mutate nothing", false),
+        ],
+        ExitCodes: [s_exit0, s_exit1, s_exit2, s_exit3],
+        Examples:
+        [
+            new("setup", "Initialize git, top up .gitignore, and create missing Plane states/labels"),
+            new("setup --check", "Report readiness gaps without changing anything (CI gate)"),
+        ]
     );
 
     private static CommandHelp UserGuide() => new(

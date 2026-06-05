@@ -416,6 +416,39 @@ static async Task<int> RunAsync(string[] args)
         }
     }
 
+    // 'build setup' provisions the Plane project (states + labels) to meet workflow criteria.
+    // No worker, no event log - a thin read/diff/create against the Plane API.
+    if (verb == "setup")
+    {
+        var checkOnly = filteredArgs.Contains("--check");
+        var http2 = new HttpClient();
+        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
+        {
+            BaseUrl = config2.Ticketing.PlaneBaseUrl,
+            ApiToken = secrets2.PlaneApiToken,
+            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
+            ProjectId = config2.Ticketing.PlaneProjectId,
+            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
+        });
+        var setupCmd = new SetupCommand(ticketing2, new FileSystemLocalRepoOps(cwd2));
+        try
+        {
+            using var verbCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+            return await setupCmd.ExecuteAsync(checkOnly, SystemConsole.Instance, verbCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+        catch (PlaneApiException ex)
+        {
+            Console.Error.WriteLine($"Command 'setup' failed: Plane API {ex.Status}: {ex.Body}");
+            return 1;
+        }
+    }
+
     if (verb == "amend" || verb == "close" || verb == "defer" || verb == "reopen")
     {
         var sessionId2 = Guid.NewGuid().ToString("N");
