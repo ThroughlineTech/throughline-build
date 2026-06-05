@@ -201,7 +201,7 @@ Status: **Functional**. The orchestrator. Constructed in `Program.cs` with per-p
 `RunAsync` entry ([src/ThroughlineBuild.Phases/ChainPhase.cs:72-288](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L72-L288)):
 
 1. Fetch the ticket.
-2. **Outermost-only preflight hygiene gate** (skipped on recursion, which sets `SharedWorktreePath`): a dangling stash or conflict on the repo-global tree -> `GateFailure` kind `hygiene_gate_preflight` and `RefusedDirtyTree` ([src/ThroughlineBuild.Phases/ChainPhase.cs:86-110](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L86-L110)).
+2. **Outermost-only preflight hygiene + tracked-dirty gate** (skipped on recursion, which sets `SharedWorktreePath`): a dangling stash or conflict on the repo-global tree -> `GateFailure` kind `hygiene_gate_preflight`; ordinary tracked changes in the main checkout -> `GateFailure` kind `chain_preflight_dirty` with `dirty_count`, `dirty_paths`, and `worktree`. Both return `RefusedDirtyTree` before planning, ticket transitions, worker spawn, review, or ship ([src/ThroughlineBuild.Phases/ChainPhase.cs:86-140](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L86-L140)).
 3. Query children; if any exist, delegate to `RunParentChainAsync` (the tree-aware path) and return ([src/ThroughlineBuild.Phases/ChainPhase.cs:113-117](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L113-L117)).
 4. Otherwise route on state via `ResolveEntryAsync` (the **resume state machine**, [src/ThroughlineBuild.Phases/ChainPhase.cs:960-982](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L960-L982)):
    - `Backlog` -> start at Plan
@@ -492,7 +492,7 @@ Full event-line schema in [docs/event-log-format.md](../event-log-format.md).
 
 - `event-log-format.md` does not enumerate the per-`Data` shape of every kind; the authoritative `Data` keys are in the emitting code cited above.
 - `DispatchStart`/`DispatchEnd` carry an empty `TicketId` (they are batch-scoped, not ticket-scoped); `max_concurrency` is always 1.
-- `GateFailure` carries a `kind` discriminator string identifying which gate fired: `hygiene_gate`, `hygiene_gate_preflight`, `pre_flight_hygiene`, `pre_flight_dirty`, `drift_warning`, `wrong_worktree_branch`, `dirty_worktree_first_attempt`/`dirty_worktree_retry_failed`, `dirty_worktree_after_review`, `implemented_at_superseded`, `shared_worktree_unavailable`, `parent_children_not_done`, etc.
+- `GateFailure` carries a `kind` discriminator string identifying which gate fired: `hygiene_gate`, `hygiene_gate_preflight`, `chain_preflight_dirty`, `pre_flight_hygiene`, `pre_flight_dirty`, `drift_warning`, `wrong_worktree_branch`, `dirty_worktree_first_attempt`/`dirty_worktree_retry_failed`, `dirty_worktree_after_review`, `implemented_at_superseded`, `shared_worktree_unavailable`, `parent_children_not_done`, etc.
 
 ---
 
@@ -506,7 +506,7 @@ Full event-line schema in [docs/event-log-format.md](../event-log-format.md).
 | `RatifiedObsolete` | 0 | obsolete claim ratified; ticket -> Done |
 | `ParentCompleted` | 0 | all eligible children completed |
 | `RefusedInitialState` | 2 | terminal state (`Done`/`Cancelled`); `Planning`/`InProgress` are now resumed, not refused |
-| `RefusedDirtyTree` | 2 | preflight hygiene gate: conflict or unrelated stash on the tree at chain start, refused before planning |
+| `RefusedDirtyTree` | 2 | preflight gate: conflict, unrelated stash, or tracked main-worktree changes at chain start, refused before planning |
 | `ParentHasGrandchildren` | 2 | tree deeper than one level |
 | `StoppedAtPlan` | 3 | planning failed |
 | `ParentStoppedEarly` | 3 | a child did not complete |
@@ -527,7 +527,7 @@ Success set used by dispatchers and the aggregate report: `Completed`, `Ratified
 ## Where the chain stops cleanly vs. requires manual triage
 
 - **Clean stop / success:** `Completed`, `RatifiedObsolete`, `ParentCompleted`, `Skipped`, `RefusedInitialState`, `ReworkCapExceeded` (operator picks up with `build rework`/`build review`).
-- **Requires triage:** `StoppedAtPlan`, `StoppedAtImplement`, `StoppedAtReview`, `StoppedAtShip`, `ParentStoppedEarly`, `ParentHasGrandchildren`, `RefusedDirtyTree` (clean the tree - resolve conflicts / drop the stray stash - then re-chain). Each leaves the ticket(s) in whatever state the failing phase left them.
+- **Requires triage:** `StoppedAtPlan`, `StoppedAtImplement`, `StoppedAtReview`, `StoppedAtShip`, `ParentStoppedEarly`, `ParentHasGrandchildren`, `RefusedDirtyTree` (clean the tree - resolve conflicts, drop the stray stash, or commit/stash/revert tracked main-worktree changes - then re-chain). Each leaves the ticket(s) in whatever state the failing phase left them.
 
 `ChainCommand` surfaces a one-line final summary per outcome on stdout ([src/ThroughlineBuild.Commands/ChainCommand.cs:143-187](../../src/ThroughlineBuild.Commands/ChainCommand.cs#L143-L187)).
 

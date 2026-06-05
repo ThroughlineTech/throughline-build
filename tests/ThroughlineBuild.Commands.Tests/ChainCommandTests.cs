@@ -239,6 +239,27 @@ public class ChainCommandTests
         Assert.DoesNotContain("Final reviewer rationale", output);
     }
 
+    [Fact]
+    public async Task RefusedDirtyTree_for_tracked_changes_returns_main_worktree_cleanup_instructions()
+    {
+        var (cmd, runner, _) = BuildCommand(MakeTicket(TicketState.Backlog));
+        runner.Result = new ChainResult(
+            TicketId: "TLB-1",
+            Steps: Array.Empty<ChainStep>(),
+            Outcome: ChainOutcome.RefusedDirtyTree,
+            TotalDuration: TimeSpan.Zero,
+            FinalRationale: "C:/repo has 2 modified tracked files: src/Dirty.cs, docs/dirty.md. Commit, stash, or revert them before running build chain.");
+
+        var (result, output) = await RunCapturingStdout(cmd, MakeCtx());
+
+        Assert.False(result.Success);
+        Assert.Contains("modified tracked files", output);
+        Assert.Contains("git status --short", output);
+        Assert.Contains("git add <paths> && git commit", output);
+        Assert.Contains("git restore <paths>", output);
+        Assert.DoesNotContain("git stash drop stash@{0}", output);
+    }
+
     // --- outcome: StoppedAtPlan ---
 
     [Fact]

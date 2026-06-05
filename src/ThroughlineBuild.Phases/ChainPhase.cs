@@ -108,6 +108,40 @@ public class ChainPhase
                 await EmitChainEndAsync(refused, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
                 return refused;
             }
+
+            var dirtyTrackedPaths = await _git.GetTrackedChangesAsync(_workingDirectory, ct).ConfigureAwait(false);
+            if (dirtyTrackedPaths.Count > 0)
+            {
+                const int dirtyPathSampleLimit = 25;
+                var dirtyPathSample = dirtyTrackedPaths.Take(dirtyPathSampleLimit).ToList();
+                var dirtyPathList = string.Join(", ", dirtyPathSample);
+                var more = dirtyTrackedPaths.Count > dirtyPathSample.Count
+                    ? $" (+{dirtyTrackedPaths.Count - dirtyPathSample.Count} more)"
+                    : "";
+                var dirtyMessage =
+                    $"{_workingDirectory} has {dirtyTrackedPaths.Count} modified tracked files: " +
+                    $"{dirtyPathList}{more}. Commit, stash, or revert them before running build chain.";
+
+                Console.Error.WriteLine($"[{options.TicketId}] chain refused: {dirtyMessage}");
+                await _events.EmitAsync(new WorkflowEvent(
+                    SessionId: chainSessionId,
+                    Timestamp: DateTimeOffset.UtcNow,
+                    Kind: EventKind.GateFailure,
+                    TicketId: options.TicketId,
+                    Phase: Phase.Chain,
+                    Data: new Dictionary<string, object>
+                    {
+                        ["kind"] = "chain_preflight_dirty",
+                        ["dirty_count"] = dirtyTrackedPaths.Count,
+                        ["dirty_paths"] = dirtyPathSample,
+                        ["worktree"] = _workingDirectory
+                    }), ct).ConfigureAwait(false);
+                totalSw.Stop();
+                var refused = new ChainResult(options.TicketId, steps, ChainOutcome.RefusedDirtyTree,
+                    totalSw.Elapsed, dirtyMessage);
+                await EmitChainEndAsync(refused, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
+                return refused;
+            }
         }
 
         // Parent-ticket chain path: recurse to non-terminal children

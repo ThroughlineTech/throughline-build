@@ -86,10 +86,11 @@ public class ChainPhaseTests
         FakeGitClientChain? git = null,
         Func<BuildOptions, IObsoleteRatifier>? ratifierFactory = null,
         bool forwardGitToChain = false,
-        BuildOptions? baseOptions = null)
+        BuildOptions? baseOptions = null,
+        FakeEventSinkChain? eventSink = null)
     {
         _sessionCounter = 0;
-        var events = new FakeEventSinkChain();
+        var events = eventSink ?? new FakeEventSinkChain();
         git ??= new FakeGitClientChain();
 
         var baseOpts = baseOptions ?? MakeBaseOptions();
@@ -760,7 +761,13 @@ public class ChainPhaseTests
 
     private sealed class FakeEventSinkChain : IEventSink
     {
-        public Task EmitAsync(WorkflowEvent ev, CancellationToken ct) => Task.CompletedTask;
+        public List<WorkflowEvent> Events { get; } = new();
+        public Task EmitAsync(WorkflowEvent ev, CancellationToken ct)
+        {
+            Events.Add(ev);
+            return Task.CompletedTask;
+        }
+
         public Task FlushAsync(CancellationToken ct) => Task.CompletedTask;
     }
 
@@ -1282,6 +1289,105 @@ public class ChainPhaseTests
     }
 
     [Fact]
+    public async Task RunAsync_CleanMainPreflight_AllowsChainToProceed()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        var git = new FakeGitClientChain(trackedChanges: Array.Empty<string>());
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, git: git, forwardGitToChain: true);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, Debug: false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+        Assert.Equal(4, result.Steps.Count);
+        Assert.True(git.GetTrackedChangesCallCount >= 1);
+    }
+
+    [Fact]
+    public async Task RunAsync_DirtyTrackedMain_RefusesBeforeAnyPhaseAndEmitsGateFailure()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        var git = new FakeGitClientChain(trackedChanges: new[] { "src/Dirty.cs", "docs/dirty.md" });
+        var events = new FakeEventSinkChain();
+
+        var chain = BuildChain(
+            ticketing,
+            planWorker,
+            implWorker,
+            verifiers,
+            git: git,
+            forwardGitToChain: true,
+            eventSink: events);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, Debug: false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.RefusedDirtyTree, result.Outcome);
+        Assert.Contains("modified tracked files", result.FinalRationale);
+        Assert.Contains("src/Dirty.cs", result.FinalRationale);
+        Assert.Empty(result.Steps);
+        Assert.Empty(ticketing.Transitions);
+        Assert.Empty(planWorker.SeenOptions);
+
+        var gate = Assert.Single(events.Events.Where(e => e.Kind == EventKind.GateFailure));
+        Assert.Equal(Phase.Chain, gate.Phase);
+        Assert.Equal("chain_preflight_dirty", gate.Data["kind"].ToString());
+        Assert.Equal(2, Convert.ToInt32(gate.Data["dirty_count"]));
+        Assert.Equal(git.WorkingDirectoriesSeenForTrackedChanges[0], gate.Data["worktree"].ToString());
+        var dirtyPaths = Assert.IsAssignableFrom<IReadOnlyList<string>>(gate.Data["dirty_paths"]);
+        Assert.Equal(new[] { "src/Dirty.cs", "docs/dirty.md" }, dirtyPaths);
+
+        Assert.Contains(events.Events, e => e.Kind == EventKind.ChainEnd
+            && e.Data["outcome"].ToString() == ChainOutcome.RefusedDirtyTree.ToString());
+    }
+
+    [Fact]
+    public async Task RunAsync_UntrackedOnlyMain_DoesNotRefuse()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        // GetTrackedChangesAsync mirrors ShipPhase's tracked-only policy; untracked-only
+        // status returns no entries and therefore must not block chain preflight.
+        var git = new FakeGitClientChain(trackedChanges: Array.Empty<string>());
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, git: git, forwardGitToChain: true);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, Debug: false), CancellationToken.None);
+
+        Assert.NotEqual(ChainOutcome.RefusedDirtyTree, result.Outcome);
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+    }
+
+    [Fact]
+    public async Task RunAsync_ParentChain_TrackedDirtyGateRunsOnlyAtOutermostInvocation()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Backlog);
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        var git = new FakeGitClientChain(trackedChanges: Array.Empty<string>());
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, git: git, forwardGitToChain: true);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, Debug: false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        Assert.Equal(1, git.GetTrackedChangesCallsBeforeSharedWorktreeCreation);
+    }
+
+    [Fact]
     public async Task RunAsync_StashForThisTicket_DoesNotRefuse()
     {
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
@@ -1447,9 +1553,15 @@ public class ChainPhaseTests
         private readonly bool _shipFails;
         private readonly List<WorktreeInfo> _worktrees = new();
         private readonly IReadOnlyList<string> _stashEntries;
+        private readonly IReadOnlyList<string> _trackedChanges;
         private readonly int _revListCount;
         public List<string> RemovedWorktrees { get; } = new();
         public List<string> DeletedBranches { get; } = new();
+        public List<string> WorkingDirectoriesSeenForTrackedChanges { get; } = new();
+        public int GetTrackedChangesCallCount => WorkingDirectoriesSeenForTrackedChanges.Count;
+        public int GetTrackedChangesCallsOnMainWorktree { get; private set; }
+        public int GetTrackedChangesCallsBeforeSharedWorktreeCreation { get; private set; }
+        public int CreateWorktreeCallCount { get; private set; }
 
         // When non-null, RebaseAsync dequeues one response per call (falls back to
         // _shipFails-driven default when the queue is empty).
@@ -1466,10 +1578,15 @@ public class ChainPhaseTests
         // Default DivergedWithConflict is safe (no B02 attempted without NoAutoMerge flag).
         public DivergenceState DivergenceStateResult { get; set; } = DivergenceState.DivergedWithConflict;
 
-        public FakeGitClientChain(bool shipFails = false, IReadOnlyList<string>? stashEntries = null, int revListCount = 0)
+        public FakeGitClientChain(
+            bool shipFails = false,
+            IReadOnlyList<string>? stashEntries = null,
+            int revListCount = 0,
+            IReadOnlyList<string>? trackedChanges = null)
         {
             _shipFails = shipFails;
             _stashEntries = stashEntries ?? Array.Empty<string>();
+            _trackedChanges = trackedChanges ?? Array.Empty<string>();
             _revListCount = revListCount;
             // Seed the default single-ticket worktree for backward compatibility.
             _worktrees.Add(new WorktreeInfo("/fake/worktree", BranchName, CommitSha, false, false));
@@ -1496,10 +1613,33 @@ public class ChainPhaseTests
 
         public Task<WorktreeCreateResult> CreateWorktreeAsync(string worktreePath, string newBranch, string fromRef, string mainWorktreePath, CancellationToken ct)
         {
+            CreateWorktreeCallCount++;
             Directory.CreateDirectory(worktreePath);
             // Track the created worktree so ListWorktreesAsync can find it during ship.
             _worktrees.Add(new WorktreeInfo(worktreePath, newBranch, CommitSha, false, false));
             return Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
+        }
+
+        public Task<GitOpResult> CreateBranchAsync(string branch, string fromRef, string worktreePath, CancellationToken ct)
+        {
+            _worktrees.RemoveAll(w => string.Equals(w.Path, worktreePath, StringComparison.OrdinalIgnoreCase));
+            _worktrees.Add(new WorktreeInfo(worktreePath, branch, CommitSha, false, false));
+            return Task.FromResult(new GitOpResult(true, null));
+        }
+
+        public Task<IReadOnlyList<string>> GetTrackedChangesAsync(string workingDirectory, CancellationToken ct)
+        {
+            WorkingDirectoriesSeenForTrackedChanges.Add(workingDirectory);
+            if (!workingDirectory.Contains(".worktrees", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(workingDirectory, "/fake/worktree", StringComparison.OrdinalIgnoreCase))
+            {
+                GetTrackedChangesCallsOnMainWorktree++;
+                if (CreateWorktreeCallCount == 0)
+                    GetTrackedChangesCallsBeforeSharedWorktreeCreation++;
+                return Task.FromResult(_trackedChanges);
+            }
+
+            return Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
         }
 
         public Task<string> HeadShaAsync(string worktreePath, CancellationToken ct) =>

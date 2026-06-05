@@ -93,6 +93,10 @@ build plan TLB-1
 You should see the plan phase complete with a success message. Open Plane and confirm the ticket
 state has moved to Ready.
 
+For chained runs (`build chain TLB-1`, or multiple ticket IDs), start from a clean main checkout.
+Tracked changes in the main worktree are refused before planning; commit, stash, or revert them
+first. Untracked files do not block the chain.
+
 ### 5. Implement the ticket
 
 ```

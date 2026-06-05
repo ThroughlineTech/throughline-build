@@ -372,6 +372,16 @@ public sealed class ChainCommand : ITicketCommand
 
         var output = new StringBuilder();
         output.AppendLine($"Operator triage: chain refused before planning - working tree is not clean: {detail}.");
+        if (detail.Contains("modified tracked files", StringComparison.OrdinalIgnoreCase))
+        {
+            output.AppendLine("Commit, stash, or revert the tracked changes in the main checkout, then re-run the chain:");
+            output.AppendLine("  git status --short");
+            output.AppendLine("  git add <paths> && git commit");
+            output.AppendLine("  # or: git restore <paths>");
+            output.Append($"Then re-run: build chain {ticketId}");
+            return output.ToString();
+        }
+
         output.AppendLine("The git stash stack is repo-global and shared across all worktrees, so a leftover");
         output.AppendLine("stash from unrelated work can be restored into a ticket's tree mid-chain and corrupt it.");
         output.AppendLine("Clean up, then re-run the chain:");
