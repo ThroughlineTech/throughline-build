@@ -144,6 +144,14 @@ public sealed class ParallelDispatcher
 
         totalSw.Stop();
 
+        ChainOutcome? preservedOutcome = failed && allResults.Count > 0
+            && allResults.All(r => r.Outcome == ChainOutcome.RefusedDirtyTree)
+            ? ChainOutcome.RefusedDirtyTree
+            : null;
+        var dispatchOutcome = preservedOutcome == ChainOutcome.RefusedDirtyTree
+            ? ChainOutcome.RefusedDirtyTree.ToString()
+            : failed ? "partial" : "ok";
+
         // Emit DispatchEnd
         await _eventSink.EmitAsync(new WorkflowEvent(
             SessionId: dispatchSessionId,
@@ -153,14 +161,15 @@ public sealed class ParallelDispatcher
             Phase: Phase.Chain,
             Data: new Dictionary<string, object>
             {
-                ["outcome"] = failed ? "partial" : "ok",
+                ["outcome"] = dispatchOutcome,
                 ["total_duration_ms"] = (long)totalSw.Elapsed.TotalMilliseconds
             }), ct).ConfigureAwait(false);
 
         return new ParallelDispatchResult(
             Success: !failed,
             Results: allResults.AsReadOnly(),
-            FailureReason: failureReason);
+            FailureReason: failureReason,
+            PreservedOutcome: preservedOutcome);
     }
 
     /// <summary>

@@ -25,6 +25,15 @@ public class ParallelDispatcherTests
             TotalDuration: TimeSpan.FromMilliseconds(5),
             FinalRationale: "plan failed");
 
+    private static ChainResult MakeDirtyTreeResult(string id) =>
+        new ChainResult(
+            TicketId: id,
+            Steps: Array.Empty<ChainStep>(),
+            Outcome: ChainOutcome.RefusedDirtyTree,
+            TotalDuration: TimeSpan.Zero,
+            FinalRationale: "main worktree has tracked changes",
+            DirtyTreeCause: DirtyTreeCause.TrackedChanges);
+
     private static ChainPhaseOptions BaseOptions =>
         new ChainPhaseOptions(TicketId: "ignored", Debug: false);
 
@@ -294,9 +303,34 @@ public class ParallelDispatcherTests
         };
 
         var (dispatcher, sink) = MakeDispatcher(results);
-        await dispatcher.RunAsync(ids, g, BaseOptions, CancellationToken.None);
+        var outcome = await dispatcher.RunAsync(ids, g, BaseOptions, CancellationToken.None);
 
         var end = sink.Events.Single(e => e.Kind == EventKind.DispatchEnd);
         Assert.Equal("partial", (string)end.Data["outcome"]);
+        Assert.Null(outcome.PreservedOutcome);
+    }
+
+    [Fact]
+    public async Task MultipleTickets_AllRefusedDirtyTree_PreservesRefusalAtDispatchLevel()
+    {
+        var ids = new[] { "TLB-455", "TLB-456", "TLB-457", "TLB-458" };
+        var graph = new TicketGraph();
+        var results = new Dictionary<string, ChainResult>(StringComparer.Ordinal);
+        foreach (var id in ids)
+        {
+            graph.AddNode(id);
+            results[id] = MakeDirtyTreeResult(id);
+        }
+
+        var (dispatcher, sink) = MakeDispatcher(results);
+        var outcome = await dispatcher.RunAsync(ids, graph, BaseOptions, CancellationToken.None);
+
+        Assert.False(outcome.Success);
+        Assert.Equal(4, outcome.Results.Count);
+        Assert.All(outcome.Results, r => Assert.Equal(ChainOutcome.RefusedDirtyTree, r.Outcome));
+        Assert.Equal(ChainOutcome.RefusedDirtyTree, outcome.PreservedOutcome);
+
+        var end = sink.Events.Single(e => e.Kind == EventKind.DispatchEnd);
+        Assert.Equal("RefusedDirtyTree", (string)end.Data["outcome"]);
     }
 }

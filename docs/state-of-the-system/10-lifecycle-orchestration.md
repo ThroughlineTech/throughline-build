@@ -387,8 +387,8 @@ Status: **Functional**, but **serial** - the "parallel" name is now historical (
 - Emit `DispatchStart` (ticket_count, level_count, max_concurrency=1).
 - Process each level: dispatch its tickets under a per-level `SemaphoreSlim(_maxConcurrency, _maxConcurrency)` where `_maxConcurrency` is **hard-pinned to 1** ([src/ThroughlineBuild.Phases/ParallelDispatcher.cs:31-35, 98](../../src/ThroughlineBuild.Phases/ParallelDispatcher.cs#L31-L35)), each running the full `ChainPhase`. Width 1 means tickets within a level run **one at a time**; dependency levels still gate cross-level ordering.
 - After each level, any non-success outcome (`Completed`/`RatifiedObsolete`/`ParentCompleted` are the success set) stops further levels.
-- Emit `DispatchEnd` (`outcome` = `ok`|`partial`, total_duration_ms).
-- Returns `ParallelDispatchResult(Success, Results, FailureReason)`.
+- Emit `DispatchEnd` (`outcome` = `ok`|`partial`|`RefusedDirtyTree`, total_duration_ms). A uniform dirty-tree preflight refusal is preserved instead of being collapsed to `partial`.
+- Returns `ParallelDispatchResult(Success, Results, FailureReason, PreservedOutcome)`.
 
 **Why width 1.** op-29 (brief 04) pinned concurrency to 1 unconditionally. The constructor retains the `maxConcurrency` parameter for API stability but discards it. The reasoning recorded in code: the topological order is the load-bearing part; concurrency is disposable, and running width-1 removes the cross-worker worktree races that the merge-contention machinery (`MainWorktreeLock`, divergence auto-rebase) existed to handle. The former `--max-parallel` flag / `ChainPhaseOptions.ForceParallel` surface was **removed**.
 
@@ -484,7 +484,7 @@ Session ids flow into `WorkflowEvent.SessionId`, the JSONL file naming (via `Ses
 | `TicketSubsumed` | 9 | `ChainPhase` (obsolete ratification Pass) | ticket_id, subsumed_by_commit, files, rationale |
 | `TargetAutoRebased` | 10 | `ShipPhase` (DivergedNoConflict auto-rebase; renamed from `MainAutoRebased`) | from_sha, onto_sha, local_commits_replayed, outcome (clean / raced_to_conflict) |
 | `DispatchStart` | 11 | `ParallelDispatcher` | ticket_count, level_count, max_concurrency |
-| `DispatchEnd` | 12 | `ParallelDispatcher` | outcome (ok / partial), total_duration_ms |
+| `DispatchEnd` | 12 | `ParallelDispatcher` | outcome (ok / partial / RefusedDirtyTree), total_duration_ms |
 
 Full event-line schema in [docs/event-log-format.md](../event-log-format.md).
 

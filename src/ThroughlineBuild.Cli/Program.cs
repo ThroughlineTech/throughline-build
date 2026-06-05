@@ -1772,7 +1772,7 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             Console.WriteLine($"[{r.TicketId}] {r.Outcome} ({durationMs}ms)");
         }
 
-        return (dispatchResult.Success ? 0 : 1, true);
+        return (ChainExitCodeMapper.GetExitCode(dispatchResult), true);
     }
 
     // Single-ticket path (original behavior).
@@ -1842,23 +1842,7 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             // Map ChainResult.Outcome to exit code.
             if (chainCommand.LastChainResult is not null)
             {
-                return (chainCommand.LastChainResult.Outcome switch
-                {
-                    ChainOutcome.Completed => 0,
-                    ChainOutcome.RatifiedObsolete => 0,
-                    ChainOutcome.ParentCompleted => 0,
-                    ChainOutcome.RefusedInitialState => 2,
-                    ChainOutcome.RefusedDirtyTree => 2,
-                    ChainOutcome.ParentHasGrandchildren => 2,
-                    ChainOutcome.StoppedAtPlan => 3,
-                    ChainOutcome.ParentStoppedEarly => 3,
-                    ChainOutcome.Skipped => 3,
-                    ChainOutcome.StoppedAtImplement => 4,
-                    ChainOutcome.StoppedAtReview => 5,
-                    ChainOutcome.ReworkCapExceeded => 6,
-                    ChainOutcome.StoppedAtShip => 7,
-                    _ => 1
-                }, false);
+                return (ChainExitCodeMapper.GetExitCode(chainCommand.LastChainResult.Outcome), false);
             }
             // Unhandled exception path: LastChainResult not set because ChainCommand
             // caught an exception before completing the chain. Print the message so
