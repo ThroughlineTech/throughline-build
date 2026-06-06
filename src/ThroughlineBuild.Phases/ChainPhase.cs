@@ -895,15 +895,30 @@ public class ChainPhase
                 workerResult.FailureReason ?? workerResult.Summary)).ToList().AsReadOnly();
         }
 
-        // Worker succeeded: produce a BatchImplemented result for each ticket in the group.
-        // Per-ticket commit SHAs come from workerResult.Tickets (populated by WorkerResultParser
-        // when the batch-implement template's WORKER_RESULT JSON includes a "tickets" array).
-        var perTicketResults = workerResult.Tickets;
+        // Worker succeeded: confirm the worktree is clean and that each reported SHA
+        // exists in the branch in declared stack order. Fail before any marker is posted
+        // when the check does not hold, naming the first ticket that fails.
+        var verifyBase = !string.IsNullOrEmpty(mainSha) ? mainSha : baseRef;
+        var verifyResult = await BatchCommitVerifier
+            .VerifyAsync(_git, sharedWorktreePath, verifyBase, workerResult.Tickets, ct)
+            .ConfigureAwait(false);
+        if (!verifyResult.Success)
+        {
+            batchSw.Stop();
+            return batchTickets.Select(t => new ChainResult(
+                t.Id, Array.Empty<ChainStep>(),
+                ChainOutcome.StoppedAtImplement, batchSw.Elapsed,
+                verifyResult.FailureReason)).ToList().AsReadOnly();
+        }
+
+        // Produce a BatchImplemented result for each ticket, sourcing per-ticket commit
+        // attribution from the confirmed git state rather than the worker's self-report.
+        var perTicketResults = verifyResult.ConfirmedTickets;
         var results = new List<ChainResult>(batchTickets.Count);
         for (int i = 0; i < batchTickets.Count; i++)
         {
             var ticket = batchTickets[i];
-            var perTicket = perTicketResults?.FirstOrDefault(
+            var perTicket = perTicketResults.FirstOrDefault(
                 r => string.Equals(r.TicketId, ticket.Id, StringComparison.Ordinal));
 
             var implStep = new ChainStep(

@@ -1652,6 +1652,8 @@ public class ChainPhaseTests
         var batchWorker = new BatchFakeWorkerAgent(tickets: perTicketResults);
 
         var git = new FakeGitClientChain();
+        // Seed log: "bbb111" (stack_pos 1, newest) before "aaa000" (stack_pos 0, oldest).
+        git.LogShasResult = new[] { "bbb111", "aaa000" };
         var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
             batchWorker: batchWorker, git: git, forwardGitToChain: true);
 
@@ -1748,6 +1750,131 @@ public class ChainPhaseTests
         Assert.All(result.ChildResults, r => Assert.Equal(ChainOutcome.StoppedAtImplement, r.Outcome));
     }
 
+    // Commit verification: dirty worktree after batch session -> StoppedAtImplement
+    [Fact]
+    public async Task RunAsync_BatchGroup_DirtyWorktreeAfterSession_StoppedAtImplement()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Ready);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Ready);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+
+        var perTicketResults = new List<BatchTicketResult>
+        {
+            new BatchTicketResult("TLB-2", "aaa000", 0, Array.Empty<string>(), "SUMMARY_2"),
+            new BatchTicketResult("TLB-3", "bbb111", 1, Array.Empty<string>(), "SUMMARY_3"),
+        };
+        var batchWorker = new BatchFakeWorkerAgent(tickets: perTicketResults);
+
+        var git = new FakeGitClientChain();
+        // Worker succeeded but left uncommitted files in the shared worktree.
+        git.BatchWorktreeDirtyFiles = new[] { "src/Unfinished.cs" };
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            batchWorker: batchWorker, git: git, forwardGitToChain: true);
+
+        var batchGroup = new ChainBatchImplementGroup(new[] { "TLB-2", "TLB-3" });
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
+            CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentStoppedEarly, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        Assert.All(result.ChildResults!, r => Assert.Equal(ChainOutcome.StoppedAtImplement, r.Outcome));
+        Assert.All(result.ChildResults!, r => Assert.Contains("dirty", r.FinalRationale));
+    }
+
+    // Commit verification: reported commit absent from branch -> StoppedAtImplement, names ticket
+    [Fact]
+    public async Task RunAsync_BatchGroup_ReportedCommitAbsentFromBranch_StoppedAtImplement()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Ready);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Ready);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+
+        var perTicketResults = new List<BatchTicketResult>
+        {
+            new BatchTicketResult("TLB-2", "aaa000", 0, Array.Empty<string>(), "SUMMARY_2"),
+            new BatchTicketResult("TLB-3", "bbb111", 1, Array.Empty<string>(), "SUMMARY_3"),
+        };
+        var batchWorker = new BatchFakeWorkerAgent(tickets: perTicketResults);
+
+        var git = new FakeGitClientChain();
+        // Log contains only TLB-3's commit; TLB-2's "aaa000" is absent.
+        git.LogShasResult = new[] { "bbb111" };
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            batchWorker: batchWorker, git: git, forwardGitToChain: true);
+
+        var batchGroup = new ChainBatchImplementGroup(new[] { "TLB-2", "TLB-3" });
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
+            CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentStoppedEarly, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        Assert.All(result.ChildResults!, r => Assert.Equal(ChainOutcome.StoppedAtImplement, r.Outcome));
+        // The failure reason must name the ticket whose commit is missing.
+        Assert.All(result.ChildResults!, r => Assert.Contains("TLB-2", r.FinalRationale));
+    }
+
+    // Commit verification: commits reported out of declared order -> StoppedAtImplement, names ticket
+    [Fact]
+    public async Task RunAsync_BatchGroup_CommitsOutOfDeclaredOrder_StoppedAtImplement()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Ready);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Ready);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+
+        // Worker says TLB-2 is stack_position 0 (should be oldest) and TLB-3 is
+        // stack_position 1 (newest). Log contradicts: "aaa000" is newest (index 0),
+        // "bbb111" is oldest (index 1) - the declared order is inverted.
+        var perTicketResults = new List<BatchTicketResult>
+        {
+            new BatchTicketResult("TLB-2", "aaa000", 0, Array.Empty<string>(), "SUMMARY_2"),
+            new BatchTicketResult("TLB-3", "bbb111", 1, Array.Empty<string>(), "SUMMARY_3"),
+        };
+        var batchWorker = new BatchFakeWorkerAgent(tickets: perTicketResults);
+
+        var git = new FakeGitClientChain();
+        // "aaa000" newest (index 0), "bbb111" older (index 1): reversed from stack order.
+        git.LogShasResult = new[] { "aaa000", "bbb111" };
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            batchWorker: batchWorker, git: git, forwardGitToChain: true);
+
+        var batchGroup = new ChainBatchImplementGroup(new[] { "TLB-2", "TLB-3" });
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
+            CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentStoppedEarly, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        Assert.All(result.ChildResults!, r => Assert.Equal(ChainOutcome.StoppedAtImplement, r.Outcome));
+        // The failure reason must name the out-of-order ticket (TLB-3 follows TLB-2 but is older).
+        Assert.All(result.ChildResults!, r => Assert.Contains("TLB-3", r.FinalRationale));
+    }
+
     private sealed class FakeGitClientChain : IGitClient
     {
         private readonly bool _shipFails;
@@ -1778,6 +1905,15 @@ public class ChainPhaseTests
         // Returned by ProbeDivergenceAsync when TriggerDivergence is true.
         // Default DivergedWithConflict is safe (no B02 attempted without NoAutoMerge flag).
         public DivergenceState DivergenceStateResult { get; set; } = DivergenceState.DivergedWithConflict;
+
+        // Returned by LogShasAsync. Default null = empty list (interface default).
+        // Seed this with the expected commit SHAs (newest first) for batch session tests.
+        public IReadOnlyList<string>? LogShasResult { get; set; }
+
+        // When non-null, GetTrackedChangesAsync returns this for paths that would
+        // otherwise return empty (i.e., worktree paths and /fake/worktree).
+        // Used to simulate a dirty shared worktree after a batch session.
+        public IReadOnlyList<string>? BatchWorktreeDirtyFiles { get; set; }
 
         public FakeGitClientChain(
             bool shipFails = false,
@@ -1845,6 +1981,9 @@ public class ChainPhaseTests
                 return Task.FromResult(_trackedChanges);
             }
 
+            if (BatchWorktreeDirtyFiles is not null)
+                return Task.FromResult(BatchWorktreeDirtyFiles);
+
             return Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
         }
 
@@ -1886,6 +2025,9 @@ public class ChainPhaseTests
 
         public Task<IReadOnlyList<string>> LogOnelineAsync(string range, int limit, string workingDirectory, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+        public Task<IReadOnlyList<string>> LogShasAsync(string range, int limit, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(LogShasResult ?? (IReadOnlyList<string>)Array.Empty<string>());
 
         public Task<bool> IsAncestorAsync(string ancestor, string descendant, string workingDirectory, CancellationToken ct) =>
             Task.FromResult(!TriggerDivergence);
