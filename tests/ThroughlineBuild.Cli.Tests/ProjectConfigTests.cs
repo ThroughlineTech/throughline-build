@@ -26,9 +26,9 @@ timeout_minutes = 20
 executable = "claude"
 
 [workers.claude-code.sizes]
-small  = "claude-haiku-4-5-20251001"
-medium = "claude-sonnet-4-6"
-large  = "claude-opus-4-7"
+small  = { model = "claude-haiku-4-5-20251001" }
+medium = { model = "claude-sonnet-4-6" }
+large  = { model = "claude-opus-4-7" }
 
 [events]
 log_directory = ".build/events"

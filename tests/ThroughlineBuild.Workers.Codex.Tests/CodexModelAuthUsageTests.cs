@@ -68,20 +68,11 @@ public class CodexModelAuthUsageTests
     }
 
     [Fact]
-    public void CodexOptions_DefaultSizes_HaveAllThreeTiers()
+    public void CodexOptions_DefaultSizes_IsEmpty()
     {
+        // The dead in-code default size map was removed; models come from
+        // [workers.codex.sizes] in config. Default Sizes is empty.
         var opts = new CodexOptions();
-        Assert.True(opts.Sizes.ContainsKey(WorkerSize.Small));
-        Assert.True(opts.Sizes.ContainsKey(WorkerSize.Medium));
-        Assert.True(opts.Sizes.ContainsKey(WorkerSize.Large));
-    }
-
-    [Fact]
-    public void CodexOptions_DefaultSizes_MapToCurrentOpenAiTiers()
-    {
-        var opts = new CodexOptions();
-        Assert.Equal("gpt-5.4-mini", opts.Sizes[WorkerSize.Small]);
-        Assert.Equal("gpt-5.4", opts.Sizes[WorkerSize.Medium]);
-        Assert.Equal("gpt-5.5", opts.Sizes[WorkerSize.Large]);
+        Assert.Empty(opts.Sizes);
     }
 }

@@ -10,10 +10,12 @@ plane_api_token = "REQUIRED_PLANE_API_TOKEN"  # REQUIRED: your Plane API token
 # plane_api_token_env = "PLANE_API_TOKEN"  # alternative for CI: read token from this env var
 
 [llm]
-# default_model = "anthropic:claude-opus-4-7"           # Opus 4.7  - most capable
+# default_model is no longer used for worker-model selection. Worker models come
+# from [workers.<agent>.sizes] below. It remains here only for the close/defer/
+# reopen reason translator; setting it does NOT change which model a worker runs.
+# default_model = "anthropic:claude-opus-4-8"           # Opus 4.8  - most capable
 # default_model = "anthropic:claude-sonnet-4-6"         # Sonnet 4.6 - balanced
 # default_model = "anthropic:claude-haiku-4-5-20251001" # Haiku 4.5 - fastest
-default_model = "anthropic:claude-opus-4-7"
 # anthropic_api_key = "your-anthropic-key-here"         # optional; plan phase uses Claude Code OAuth instead
 # anthropic_api_key_env = "ANTHROPIC_API_KEY"           # alternative for CI: read key from this env var
 
@@ -26,10 +28,13 @@ timeout_minutes = 30
 executable = "claude"
 # max_output_tokens = 32000  # claude-code#24159 caps Opus 4.6 at 32000; do not raise above this
 
+# Claude tiers use stable aliases (haiku/sonnet/opus) that auto-track the current
+# model - never pin a Claude version here. The actually-resolved model still lands
+# in the event log.
 [workers.claude-code.sizes]
-small  = "claude-haiku-4-5-20251001"
-medium = "anthropic:claude-sonnet-4-6"
-large  = "claude-opus-4-7"
+small  = { model = "haiku" }
+medium = { model = "sonnet" }
+large  = { model = "opus" }
 
 # To add a new agent block, copy one of the commented-out examples below and
 # fill in the executable and sizes. Each block is self-contained.
@@ -41,9 +46,10 @@ large  = "claude-opus-4-7"
 
 # [workers.codex.sizes]
 # # openai: prefix is optional; CodexAgent strips it automatically.
-# small  = "gpt-5.4-mini"
-# medium = "gpt-5.5"
-# large  = "gpt-5.5"
+# # effort is Codex-only (reasoning level: minimal | low | medium | high | xhigh).
+# small  = { model = "gpt-5.4-mini", effort = "low" }
+# medium = { model = "gpt-5.5", effort = "medium" }
+# large  = { model = "gpt-5.5", effort = "high" }
 
 # [workers.gemini]
 # executable = "gemini"
@@ -51,9 +57,9 @@ large  = "claude-opus-4-7"
 
 # [workers.gemini.sizes]
 # # google: prefix is optional; GeminiAgent strips it automatically.
-# small  = "gemini-2.0-flash"
-# medium = "gemini-2.5-flash"
-# large  = "gemini-2.5-pro"
+# small  = { model = "gemini-2.0-flash" }
+# medium = { model = "gemini-2.5-flash" }
+# large  = { model = "gemini-2.5-pro" }
 
 # [workers.copilot]
 # executable = "copilot"
@@ -64,9 +70,9 @@ large  = "claude-opus-4-7"
 
 # [workers.copilot.sizes]
 # # Use bare GitHub model IDs (the "github:" prefix is stripped automatically).
-# small  = "claude-3.5-sonnet"
-# medium = "gpt-4o"
-# large  = "claude-3.7-sonnet"
+# small  = { model = "claude-3.5-sonnet" }
+# medium = { model = "gpt-4o" }
+# large  = { model = "claude-3.7-sonnet" }
 
 [events]
 log_directory = ".build/events"

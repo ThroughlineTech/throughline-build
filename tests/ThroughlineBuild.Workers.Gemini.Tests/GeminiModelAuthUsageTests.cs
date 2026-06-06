@@ -188,33 +188,19 @@ public class GeminiModelAuthUsageTests
     // ---------------------------------------------------------------------------
 
     [Fact]
-    public void GeminiOptions_DefaultSizes_ContainsSmall()
+    public void GeminiOptions_DefaultSizes_IsEmpty()
     {
+        // The dead in-code default size map was removed; models come from
+        // [workers.gemini.sizes] in config. Default Sizes is empty.
         var options = new GeminiOptions();
-        Assert.True(options.Sizes.ContainsKey(WorkerSize.Small));
-        Assert.Equal("gemini-2.0-flash", options.Sizes[WorkerSize.Small]);
+        Assert.Empty(options.Sizes);
     }
 
     [Fact]
-    public void GeminiOptions_DefaultSizes_ContainsMedium()
+    public void GeminiOptions_DefaultSizes_IsEmptyCount()
     {
+        // The dead in-code default size map was removed; default Sizes is empty.
         var options = new GeminiOptions();
-        Assert.True(options.Sizes.ContainsKey(WorkerSize.Medium));
-        Assert.Equal("gemini-2.5-flash", options.Sizes[WorkerSize.Medium]);
-    }
-
-    [Fact]
-    public void GeminiOptions_DefaultSizes_ContainsLarge()
-    {
-        var options = new GeminiOptions();
-        Assert.True(options.Sizes.ContainsKey(WorkerSize.Large));
-        Assert.Equal("gemini-2.5-pro", options.Sizes[WorkerSize.Large]);
-    }
-
-    [Fact]
-    public void GeminiOptions_DefaultSizes_AllThreeTiers()
-    {
-        var options = new GeminiOptions();
-        Assert.Equal(3, options.Sizes.Count);
+        Assert.Equal(0, options.Sizes.Count);
     }
 }

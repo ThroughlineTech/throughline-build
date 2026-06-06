@@ -25,8 +25,8 @@ public class CopilotAgent : IWorkerAgent
         foreach (var extra in _options.ExtraArgs)
             args.Add(extra);
         // Resolve size -> model, normalize, add --model flag if resolved
-        _options.Sizes.TryGetValue(options.Size, out var resolvedModelRaw);
-        var modelArg = NormalizeModel(resolvedModelRaw);
+        _options.Sizes.TryGetValue(options.Size, out var tier);
+        var modelArg = NormalizeModel(tier?.Model);
         if (modelArg is not null)
             args.AddRange(new[] { "--model", modelArg });
         // Map AllowedTools to --allow-tool flags (copilot uses per-tool flags, not a comma list)

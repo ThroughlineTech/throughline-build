@@ -26,8 +26,8 @@ public class CodexAgent : IWorkerAgent
         var args = BuildArgs(_options, options);
         // modelArg is needed below for llm_usage metadata regardless of whether
         // it was emitted on the CLI; resolve it here too.
-        _options.Sizes.TryGetValue(options.Size, out var resolvedModelRaw);
-        var modelArg = NormalizeModel(resolvedModelRaw);
+        _options.Sizes.TryGetValue(options.Size, out var tier);
+        var modelArg = NormalizeModel(tier?.Model);
 
         var stdoutBuilder = new StringBuilder();
         var stderrBuilder = new StringBuilder();
@@ -294,8 +294,8 @@ public class CodexAgent : IWorkerAgent
             args.Add("--dangerously-bypass-approvals-and-sandbox");
         foreach (var extra in options.ExtraArgs)
             args.Add(extra);
-        options.Sizes.TryGetValue(workerOptions.Size, out var resolvedModelRaw);
-        var modelArg = NormalizeModel(resolvedModelRaw);
+        options.Sizes.TryGetValue(workerOptions.Size, out var tier);
+        var modelArg = NormalizeModel(tier?.Model);
         if (modelArg is not null)
             args.AddRange(new[] { "--model", modelArg });
         args.Add("-");

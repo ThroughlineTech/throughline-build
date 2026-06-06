@@ -7,8 +7,8 @@ public class ClaudeCodeOptions
     public string ExecutablePath { get; init; } = "claude";
     public IReadOnlyList<string> ExtraArgs { get; init; } = Array.Empty<string>();
     public int? MaxOutputTokens { get; init; } = null;
-    public IReadOnlyDictionary<WorkerSize, string> Sizes { get; init; } =
-        new Dictionary<WorkerSize, string>();
+    public IReadOnlyDictionary<WorkerSize, ModelTier> Sizes { get; init; } =
+        new Dictionary<WorkerSize, ModelTier>();
     // When true (default), pass --dangerously-skip-permissions to the CLI so the
     // headless --print run does not block on the interactive approval gate. Set
     // false from config to opt back into the gate (rarely useful for workers,

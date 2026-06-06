@@ -24,13 +24,12 @@ public class CopilotAgentTests
     }
 
     [Fact]
-    public void Options_DefaultSizesHasThreeEntries()
+    public void Options_DefaultSizesIsEmpty()
     {
+        // The dead in-code default size map was removed; models come from
+        // [workers.copilot.sizes] in config. Default Sizes is empty.
         var opts = new CopilotOptions();
-        Assert.Equal(3, opts.Sizes.Count);
-        Assert.True(opts.Sizes.ContainsKey(WorkerSize.Small));
-        Assert.True(opts.Sizes.ContainsKey(WorkerSize.Medium));
-        Assert.True(opts.Sizes.ContainsKey(WorkerSize.Large));
+        Assert.Empty(opts.Sizes);
     }
 
     [Fact]

@@ -26,8 +26,8 @@ public class GeminiAgent : IWorkerAgent
         var args = BuildArgs(brief.Instruction, _options, options);
         // modelArg is needed below for llm_usage metadata regardless of whether
         // it was emitted on the CLI; resolve it here too.
-        _options.Sizes.TryGetValue(options.Size, out var resolvedModelRaw);
-        var modelArg = NormalizeModel(resolvedModelRaw);
+        _options.Sizes.TryGetValue(options.Size, out var tier);
+        var modelArg = NormalizeModel(tier?.Model);
 
         var stdoutBuilder = new StringBuilder();
         var stderrBuilder = new StringBuilder();
@@ -227,8 +227,8 @@ public class GeminiAgent : IWorkerAgent
         var args = new List<string> { "-p", briefInstruction, "--output-format", "json" };
         if (options.BypassPermissions)
             args.Add("--yolo");
-        options.Sizes.TryGetValue(workerOptions.Size, out var resolvedModelRaw);
-        var modelArg = NormalizeModel(resolvedModelRaw);
+        options.Sizes.TryGetValue(workerOptions.Size, out var tier);
+        var modelArg = NormalizeModel(tier?.Model);
         if (modelArg is not null)
             args.AddRange(new[] { "--model", modelArg });
         foreach (var extra in options.ExtraArgs)

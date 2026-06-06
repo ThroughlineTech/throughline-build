@@ -21,7 +21,7 @@ public record LlmConfig(
     string AnthropicApiKeyEnv,
     string? AnthropicApiKey = null);
 
-public record AgentConfig(string Executable, int? MaxOutputTokens, IReadOnlyDictionary<WorkerSize, string> Sizes, bool BypassPermissions = true);
+public record AgentConfig(string Executable, int? MaxOutputTokens, IReadOnlyDictionary<WorkerSize, ModelTier> Sizes, bool BypassPermissions = true);
 
 public record WorkersConfig(
     string DefaultAgent,
@@ -205,6 +205,13 @@ public static class BuildConfigLoader
         "small", "medium", "large"
     };
 
+    // Keys recognized inside an inline size tier table, e.g.
+    // small = { model = "...", effort = "..." }. effort is optional.
+    private static readonly HashSet<string> KnownTierKeys = new(StringComparer.Ordinal)
+    {
+        "model", "effort"
+    };
+
     private static readonly HashSet<string> KnownEventsKeys = new(StringComparer.Ordinal)
     {
         "log_directory"
@@ -289,7 +296,19 @@ public static class BuildConfigLoader
                             foreach (var sizeKv in sizesTable)
                             {
                                 if (!KnownSizesKeys.Contains(sizeKv.Key))
+                                {
                                     warnings.Add($"warning: unknown config key workers.{kv.Key}.sizes.{sizeKv.Key} - ignored");
+                                    continue;
+                                }
+                                // Recognized size key: warn on unknown keys inside its tier table.
+                                if (sizeKv.Value is TomlTable tierTable)
+                                {
+                                    foreach (var tierKv in tierTable)
+                                    {
+                                        if (!KnownTierKeys.Contains(tierKv.Key))
+                                            warnings.Add($"warning: unknown config key workers.{kv.Key}.sizes.{sizeKv.Key}.{tierKv.Key} - ignored");
+                                    }
+                                }
                             }
                         }
                         else if (!KnownAgentKeys.Contains(agentKv.Key))
@@ -519,7 +538,7 @@ public static class BuildConfigLoader
             if (subTable.TryGetValue("bypass_permissions", out var bpVal) && bpVal is bool bp)
                 bypassPermissions = bp;
 
-            var sizes = new Dictionary<WorkerSize, string>();
+            var sizes = new Dictionary<WorkerSize, ModelTier>();
             if (!subTable.TryGetValue("sizes", out var sizesVal) || sizesVal is not TomlTable sizesTable)
                 throw new ConfigException(
                     $"missing required [workers.{kv.Key}.sizes] sub-table in config; " +
@@ -528,10 +547,31 @@ public static class BuildConfigLoader
             var missing = new List<string>();
             foreach (var (key, ws) in required)
             {
-                if (sizesTable.TryGetValue(key, out var mVal) && mVal is string mStr && !string.IsNullOrEmpty(mStr))
-                    sizes[ws] = mStr;
+                if (sizesTable.TryGetValue(key, out var mVal) && mVal is TomlTable tierTable)
+                {
+                    // Required, non-empty model string.
+                    if (!tierTable.TryGetValue("model", out var modelVal) || modelVal is not string modelStr || string.IsNullOrEmpty(modelStr))
+                        throw new ConfigException(
+                            $"[workers.{kv.Key}.sizes.{key}] must be an inline table with a non-empty 'model' string (e.g. {key} = {{ model = \"...\" }})");
+
+                    // Optional effort string; null when absent or empty.
+                    string? effort = null;
+                    if (tierTable.TryGetValue("effort", out var effortVal) && effortVal is string effortStr && !string.IsNullOrEmpty(effortStr))
+                        effort = effortStr;
+
+                    sizes[ws] = new ModelTier(modelStr, effort);
+                }
+                else if (sizesTable.ContainsKey(key))
+                {
+                    // Present but not a table (bare string or other scalar): the
+                    // pre-release schema dropped the bare-string form entirely.
+                    throw new ConfigException(
+                        $"[workers.{kv.Key}.sizes.{key}] must be an inline table like {{ model = \"...\", effort = \"...\" }}, not a bare string");
+                }
                 else
+                {
                     missing.Add(key);
+                }
             }
             if (missing.Count > 0)
                 throw new ConfigException(

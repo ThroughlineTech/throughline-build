@@ -29,7 +29,7 @@ public class ClaudeCodeAgent : IWorkerAgent
 
         // Build args - brief is delivered via stdin.
         var args = BuildArgs(_options, options);
-        _options.Sizes.TryGetValue(options.Size, out var resolvedModelRaw);
+        _options.Sizes.TryGetValue(options.Size, out var tier);
 
         var stdoutBuilder = new StringBuilder();
         var stderrBuilder = new StringBuilder();
@@ -130,7 +130,7 @@ public class ClaudeCodeAgent : IWorkerAgent
         var stdout = stdoutBuilder.ToString();
         var stderr = stderrBuilder.ToString();
 
-        var fallbackModel = NormalizeModel(resolvedModelRaw);
+        var fallbackModel = NormalizeModel(tier?.Model);
         var result = ParseStdoutEnvelope(stdout, process.ExitCode, stderr, stopwatch.ElapsedMilliseconds, fallbackModel);
 
         if (options.DebugCaptureDirectory is not null)
@@ -378,8 +378,8 @@ public class ClaudeCodeAgent : IWorkerAgent
             args.Add("--dangerously-skip-permissions");
         if (workerOptions.AllowedTools is { Count: > 0 })
             args.AddRange(new[] { "--allowedTools", string.Join(",", workerOptions.AllowedTools) });
-        options.Sizes.TryGetValue(workerOptions.Size, out var resolvedModelRaw);
-        var modelArg = NormalizeModel(resolvedModelRaw);
+        options.Sizes.TryGetValue(workerOptions.Size, out var tier);
+        var modelArg = NormalizeModel(tier?.Model);
         if (modelArg is not null)
             args.AddRange(new[] { "--model", modelArg });
         foreach (var extra in options.ExtraArgs)

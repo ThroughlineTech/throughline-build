@@ -1312,15 +1312,15 @@ public class ClaudeCodeAgentSizeMapTests
     public void Size_Small_ResolvesToHaikuModel_ViaNormalizeModel()
     {
         // Simulates the resolution path: Sizes[Small] -> NormalizeModel -> --model value.
-        var sizes = new Dictionary<WorkerSize, string>
+        var sizes = new Dictionary<WorkerSize, ModelTier>
         {
-            [WorkerSize.Small] = "claude-haiku-4-5-20251001",
-            [WorkerSize.Medium] = "anthropic:claude-sonnet-4-6",
-            [WorkerSize.Large] = "claude-opus-4-7"
+            [WorkerSize.Small] = new ModelTier("claude-haiku-4-5-20251001"),
+            [WorkerSize.Medium] = new ModelTier("anthropic:claude-sonnet-4-6"),
+            [WorkerSize.Large] = new ModelTier("claude-opus-4-8")
         };
 
-        sizes.TryGetValue(WorkerSize.Small, out var rawModel);
-        var modelArg = ClaudeCodeAgent.NormalizeModel(rawModel);
+        sizes.TryGetValue(WorkerSize.Small, out var tier);
+        var modelArg = ClaudeCodeAgent.NormalizeModel(tier?.Model);
 
         Assert.Equal("claude-haiku-4-5-20251001", modelArg);
     }
@@ -1328,15 +1328,15 @@ public class ClaudeCodeAgentSizeMapTests
     [Fact]
     public void Size_Medium_WithVendorPrefix_StripsPrefix()
     {
-        var sizes = new Dictionary<WorkerSize, string>
+        var sizes = new Dictionary<WorkerSize, ModelTier>
         {
-            [WorkerSize.Small] = "claude-haiku-4-5-20251001",
-            [WorkerSize.Medium] = "anthropic:claude-sonnet-4-6",
-            [WorkerSize.Large] = "claude-opus-4-7"
+            [WorkerSize.Small] = new ModelTier("claude-haiku-4-5-20251001"),
+            [WorkerSize.Medium] = new ModelTier("anthropic:claude-sonnet-4-6"),
+            [WorkerSize.Large] = new ModelTier("claude-opus-4-8")
         };
 
-        sizes.TryGetValue(WorkerSize.Medium, out var rawModel);
-        var modelArg = ClaudeCodeAgent.NormalizeModel(rawModel);
+        sizes.TryGetValue(WorkerSize.Medium, out var tier);
+        var modelArg = ClaudeCodeAgent.NormalizeModel(tier?.Model);
 
         Assert.Equal("claude-sonnet-4-6", modelArg);
     }
@@ -1344,11 +1344,11 @@ public class ClaudeCodeAgentSizeMapTests
     [Fact]
     public void EmptySizesDict_NullResolvedModel_NormalizeModelReturnsNull()
     {
-        // When Sizes is empty, TryGetValue returns false and resolvedModelRaw is null.
+        // When Sizes is empty, TryGetValue returns false and tier is null.
         // NormalizeModel(null) must return null so no --model flag is appended.
-        var sizes = new Dictionary<WorkerSize, string>();
-        sizes.TryGetValue(WorkerSize.Medium, out var resolvedModelRaw);
-        var modelArg = ClaudeCodeAgent.NormalizeModel(resolvedModelRaw);
+        var sizes = new Dictionary<WorkerSize, ModelTier>();
+        sizes.TryGetValue(WorkerSize.Medium, out var tier);
+        var modelArg = ClaudeCodeAgent.NormalizeModel(tier?.Model);
 
         Assert.Null(modelArg);
     }

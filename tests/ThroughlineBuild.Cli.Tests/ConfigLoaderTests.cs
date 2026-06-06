@@ -34,9 +34,9 @@ timeout_minutes = 20
 executable = "claude"
 
 [workers.claude-code.sizes]
-small  = "claude-haiku-4-5-20251001"
-medium = "claude-sonnet-4-6"
-large  = "claude-opus-4-7"
+small  = { model = "claude-haiku-4-5-20251001" }
+medium = { model = "claude-sonnet-4-6" }
+large  = { model = "claude-opus-4-7" }
 
 [events]
 log_directory = ".build/events"
@@ -85,9 +85,9 @@ default_agent = "claude-code"
 executable = "claude"
 
 [workers.claude-code.sizes]
-small  = "claude-haiku-4-5-20251001"
-medium = "claude-sonnet-4-6"
-large  = "claude-opus-4-7"
+small  = { model = "claude-haiku-4-5-20251001" }
+medium = { model = "claude-sonnet-4-6" }
+large  = { model = "claude-opus-4-7" }
 
 [events]
 log_directory = ".build/events"
@@ -208,9 +208,9 @@ executable = "claude"
 max_output_tokens = 16000
 
 [workers.claude-code.sizes]
-small  = "claude-haiku-4-5-20251001"
-medium = "claude-sonnet-4-6"
-large  = "claude-opus-4-7"
+small  = { model = "claude-haiku-4-5-20251001" }
+medium = { model = "claude-sonnet-4-6" }
+large  = { model = "claude-opus-4-7" }
 
 [events]
 log_directory = ".build/events"
@@ -427,9 +427,9 @@ log_directory = ".build/events"
 
             var sizes = config.Workers.Agents["claude-code"].Sizes;
             Assert.NotNull(sizes);
-            Assert.Equal("claude-haiku-4-5-20251001", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Small]);
-            Assert.Equal("claude-sonnet-4-6", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Medium]);
-            Assert.Equal("claude-opus-4-7", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Large]);
+            Assert.Equal("claude-haiku-4-5-20251001", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Small].Model);
+            Assert.Equal("claude-sonnet-4-6", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Medium].Model);
+            Assert.Equal("claude-opus-4-7", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Large].Model);
         }
         finally
         {
@@ -488,8 +488,8 @@ default_agent = "claude-code"
 executable = "claude"
 
 [workers.claude-code.sizes]
-small  = "claude-haiku-4-5-20251001"
-medium = "claude-sonnet-4-6"
+small  = { model = "claude-haiku-4-5-20251001" }
+medium = { model = "claude-sonnet-4-6" }
 
 [events]
 log_directory = ".build/events"
@@ -529,17 +529,17 @@ timeout_minutes = 20
 executable = "claude"
 
 [workers.claude-code.sizes]
-small  = "claude-haiku-4-5-20251001"
-medium = "claude-sonnet-4-6"
-large  = "claude-opus-4-7"
+small  = { model = "claude-haiku-4-5-20251001" }
+medium = { model = "claude-sonnet-4-6" }
+large  = { model = "claude-opus-4-7" }
 
 [workers.gemini]
 executable = "gemini"
 
 [workers.gemini.sizes]
-small  = "gemini-2.0-flash"
-medium = "gemini-2.5-flash"
-large  = "gemini-2.5-pro"
+small  = { model = "gemini-2.0-flash" }
+medium = { model = "gemini-2.5-flash" }
+large  = { model = "gemini-2.5-pro" }
 
 [events]
 log_directory = ".build/events"
@@ -553,9 +553,9 @@ log_directory = ".build/events"
             Assert.Equal("gemini", config.Workers.Agents["gemini"].Executable);
             var sizes = config.Workers.Agents["gemini"].Sizes;
             Assert.NotNull(sizes);
-            Assert.Equal("gemini-2.0-flash", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Small]);
-            Assert.Equal("gemini-2.5-flash", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Medium]);
-            Assert.Equal("gemini-2.5-pro", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Large]);
+            Assert.Equal("gemini-2.0-flash", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Small].Model);
+            Assert.Equal("gemini-2.5-flash", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Medium].Model);
+            Assert.Equal("gemini-2.5-pro", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Large].Model);
         }
         finally
         {
@@ -586,9 +586,9 @@ timeout_minutes = 20
 executable = "claude"
 
 [workers.claude-code.sizes]
-small  = "claude-haiku-4-5-20251001"
-medium = "claude-sonnet-4-6"
-large  = "claude-opus-4-7"
+small  = { model = "claude-haiku-4-5-20251001" }
+medium = { model = "claude-sonnet-4-6" }
+large  = { model = "claude-opus-4-7" }
 
 [workers.gemini]
 executable = "gemini"
@@ -646,9 +646,9 @@ executable = "claude"
 bypass_permissions = false
 
 [workers.claude-code.sizes]
-small  = "claude-haiku-4-5-20251001"
-medium = "claude-sonnet-4-6"
-large  = "claude-opus-4-7"
+small  = { model = "claude-haiku-4-5-20251001" }
+medium = { model = "claude-sonnet-4-6" }
+large  = { model = "claude-opus-4-7" }
 
 [events]
 log_directory = ".build/events"
@@ -798,9 +798,9 @@ executable = "claude"
 bypass_permission = true
 
 [workers.claude-code.sizes]
-small  = "claude-haiku-4-5-20251001"
-medium = "claude-sonnet-4-6"
-large  = "claude-opus-4-7"
+small  = { model = "claude-haiku-4-5-20251001" }
+medium = { model = "claude-sonnet-4-6" }
+large  = { model = "claude-opus-4-7" }
 
 [events]
 log_directory = ".build/events"
@@ -862,9 +862,9 @@ default_agent = "claude-code"
 executable = "claude"
 
 [workers.claude-code.sizes]
-small  = "claude-haiku-4-5-20251001"
-medium = "claude-sonnet-4-6"
-large  = "claude-opus-4-7"
+small  = { model = "claude-haiku-4-5-20251001" }
+medium = { model = "claude-sonnet-4-6" }
+large  = { model = "claude-opus-4-7" }
 executable = "oops"
 
 [events]
@@ -962,17 +962,17 @@ timeout_minutes = 20
 executable = "claude"
 
 [workers.claude-code.sizes]
-small  = "claude-haiku-4-5-20251001"
-medium = "claude-sonnet-4-6"
-large  = "claude-opus-4-7"
+small  = { model = "claude-haiku-4-5-20251001" }
+medium = { model = "claude-sonnet-4-6" }
+large  = { model = "claude-opus-4-7" }
 
 [workers.gemini]
 executable = "gemini"
 
 [workers.gemini.sizes]
-small  = "google:gemini-2.0-flash"
-medium = "google:gemini-2.5-flash"
-large  = "google:gemini-2.5-pro"
+small  = { model = "google:gemini-2.0-flash" }
+medium = { model = "google:gemini-2.5-flash" }
+large  = { model = "google:gemini-2.5-pro" }
 
 [events]
 log_directory = ".build/events"
@@ -984,9 +984,172 @@ log_directory = ".build/events"
 
             var sizes = config.Workers.Agents["gemini"].Sizes;
             Assert.NotNull(sizes);
-            Assert.Equal("google:gemini-2.0-flash", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Small]);
-            Assert.Equal("google:gemini-2.5-flash", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Medium]);
-            Assert.Equal("google:gemini-2.5-pro", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Large]);
+            Assert.Equal("google:gemini-2.0-flash", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Small].Model);
+            Assert.Equal("google:gemini-2.5-flash", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Medium].Model);
+            Assert.Equal("google:gemini-2.5-pro", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Large].Model);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    // --- ModelTier inline-table schema (op-33 Brief 01) ---
+
+    [Fact]
+    public void Load_SizeTableWithModelAndEffort_ParsesModelTier()
+    {
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "abc-123"
+plane_api_token_env = "PLANE_TOKEN"
+
+[workers]
+default_agent = "claude-code"
+
+[workers.claude-code]
+executable = "claude"
+
+[workers.claude-code.sizes]
+small  = { model = "gpt-5.4-mini", effort = "low" }
+medium = { model = "claude-sonnet-4-6" }
+large  = { model = "claude-opus-4-7" }
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            var sizes = config.Workers.Agents["claude-code"].Sizes;
+            Assert.Equal("gpt-5.4-mini", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Small].Model);
+            Assert.Equal("low", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Small].Effort);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_SizeTableWithoutEffort_ParsesNullEffort()
+    {
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "abc-123"
+plane_api_token_env = "PLANE_TOKEN"
+
+[workers]
+default_agent = "claude-code"
+
+[workers.claude-code]
+executable = "claude"
+
+[workers.claude-code.sizes]
+small  = { model = "claude-haiku-4-5-20251001" }
+medium = { model = "claude-sonnet-4-6" }
+large  = { model = "claude-opus-4-7" }
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            var sizes = config.Workers.Agents["claude-code"].Sizes;
+            Assert.Equal("claude-sonnet-4-6", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Medium].Model);
+            Assert.Null(sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Medium].Effort);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_BareStringSizeValue_ThrowsConfigException()
+    {
+        // The bare-string size form was dropped; a scalar value must throw.
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "abc-123"
+plane_api_token_env = "PLANE_TOKEN"
+
+[workers]
+default_agent = "claude-code"
+
+[workers.claude-code]
+executable = "claude"
+
+[workers.claude-code.sizes]
+small  = { model = "claude-haiku-4-5-20251001" }
+medium = { model = "claude-sonnet-4-6" }
+large  = "claude-opus-4-7"
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var ex = Assert.Throws<ConfigException>(() => BuildConfigLoader.Load(path));
+            Assert.True(
+                ex.Message.Contains("inline table") || ex.Message.Contains("model"),
+                $"expected message mentioning 'inline table' or 'model', got: {ex.Message}");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_UnknownKeyInsideSizeTable_EmitsWarning()
+    {
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "abc-123"
+plane_api_token_env = "PLANE_TOKEN"
+
+[workers]
+default_agent = "claude-code"
+
+[workers.claude-code]
+executable = "claude"
+
+[workers.claude-code.sizes]
+small  = { model = "claude-haiku-4-5-20251001", reasoning = "z" }
+medium = { model = "claude-sonnet-4-6" }
+large  = { model = "claude-opus-4-7" }
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            var config = BuildConfigLoader.Load(path, w => captured.Add(w));
+
+            Assert.Contains(captured, w => w.Contains("workers.claude-code.sizes.small.reasoning"));
+            // Config still loads successfully (non-fatal).
+            Assert.Equal("plane", config.Ticketing.BackendName);
         }
         finally
         {

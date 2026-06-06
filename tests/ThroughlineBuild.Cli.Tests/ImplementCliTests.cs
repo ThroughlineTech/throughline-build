@@ -156,9 +156,9 @@ public class ImplementCliTests
                 "executable = \"claude\"\n" +
                 "\n" +
                 "[workers.claude-code.sizes]\n" +
-                "small = \"claude-haiku-4-5-20251001\"\n" +
-                "medium = \"claude-sonnet-4-6\"\n" +
-                "large = \"claude-opus-4-7\"\n" +
+                "small = { model = \"claude-haiku-4-5-20251001\" }\n" +
+                "medium = { model = \"claude-sonnet-4-6\" }\n" +
+                "large = { model = \"claude-opus-4-7\" }\n" +
                 "\n" +
                 "[events]\n" +
                 "log_directory = \".build/events\"\n";
@@ -244,9 +244,9 @@ public class ImplementCliTests
                 "executable = \"claude\"\n" +
                 "\n" +
                 "[workers.claude-code.sizes]\n" +
-                "small = \"claude-haiku-4-5-20251001\"\n" +
-                "medium = \"claude-sonnet-4-6\"\n" +
-                "large = \"claude-opus-4-7\"\n" +
+                "small = { model = \"claude-haiku-4-5-20251001\" }\n" +
+                "medium = { model = \"claude-sonnet-4-6\" }\n" +
+                "large = { model = \"claude-opus-4-7\" }\n" +
                 "\n" +
                 "[events]\n" +
                 "log_directory = \".build/events\"\n";
