@@ -98,9 +98,22 @@ public class ClaudeCodeAgent : IWorkerAgent
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
-        // Send brief via stdin then close to signal EOF
-        await process.StandardInput.WriteAsync(brief.Instruction);
-        process.StandardInput.Close();
+        // Send brief via stdin then close to signal EOF. If the subprocess exits before
+        // reading stdin - an immediate startup error, a rate-limit exit, or the nested-session
+        // guard rejecting `claude` inside another Claude Code session - the pipe closes
+        // mid-write and WriteAsync throws IOException. Swallow it: a broken stdin pipe must
+        // NOT abort the whole orchestrator. WaitForExit below still runs, and the captured
+        // stderr (surfaced by ParseStdoutEnvelope) carries the real cause as a clean
+        // WorkerResult.Failed. See TLB-472.
+        try
+        {
+            await process.StandardInput.WriteAsync(brief.Instruction);
+            process.StandardInput.Close();
+        }
+        catch (IOException ex)
+        {
+            stderrBuilder.AppendLine($"[worker stdin] subprocess closed stdin before the brief was sent: {ex.Message}");
+        }
 
         try
         {
@@ -263,14 +276,17 @@ public class ClaudeCodeAgent : IWorkerAgent
         if (envelope is null)
         {
             var head = stdout.Length > 200 ? stdout[..200] : stdout;
+            // Include stderr: when stdout is empty/garbage the cause almost always lives in
+            // stderr (e.g. the worker subprocess exited immediately with an error message),
+            // and without it the failure reason is undiagnosable. See TLB-472.
             if (parseError is not null)
             {
-                var failureReason = $"Failed to parse Claude Code JSON envelope: {parseError}. Stdout head: {head}";
+                var failureReason = $"Failed to parse Claude Code JSON envelope: {parseError}. Stdout head: {head}. Stderr: {stderr}";
                 Console.Error.WriteLine($"[WorkerResultParser] {failureReason}");
                 return new WorkerResult(Status.Failed, "Failed to parse Claude Code JSON envelope", Array.Empty<string>(),
                     failureReason, new Dictionary<string, object>());
             }
-            var nullFailureReason = $"Deserialized envelope was null. Stdout head: {head}";
+            var nullFailureReason = $"Deserialized envelope was null. Stdout head: {head}. Stderr: {stderr}";
             Console.Error.WriteLine($"[WorkerResultParser] {nullFailureReason}");
             return new WorkerResult(Status.Failed, "Claude Code JSON envelope was null after deserialization", Array.Empty<string>(),
                 nullFailureReason, new Dictionary<string, object>());

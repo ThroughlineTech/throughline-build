@@ -414,6 +414,22 @@ public class ClaudeCodeAgentEnvelopeParserTests
     }
 
     [Fact]
+    public void EnvelopeParser_EmptyStdout_SurfacesStderrInFailureReason()
+    {
+        // When the worker subprocess exits before producing any stdout (e.g. an immediate
+        // startup error or the nested-session guard), the cause lives in stderr. The failure
+        // reason must carry it so the failure is diagnosable rather than an opaque
+        // "envelope was null". See TLB-472.
+        var result = ClaudeCodeAgent.ParseStdoutEnvelope(
+            stdout: "", exitCode: 1,
+            stderr: "Claude Code cannot be launched inside another Claude Code session.");
+
+        Assert.Equal(Status.Failed, result.Status);
+        Assert.NotNull(result.FailureReason);
+        Assert.Contains("cannot be launched inside another Claude Code session", result.FailureReason);
+    }
+
+    [Fact]
     public void EnvelopeParser_MalformedWorkerResultJson_ReturnsFailedWithDeserializeAttribution()
     {
         var stdout = MakeEnvelope("WORKER_RESULT\nthis is not valid json");
