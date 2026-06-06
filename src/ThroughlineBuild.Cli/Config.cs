@@ -54,6 +54,24 @@ public record PlanConfig(string Mode)
     public static PlanConfig Default => new PlanConfig("investigate");
 }
 
+// [batch] section: caps that gate the batch-implement path. When any cap is exceeded the
+// conductor falls back to the proven per-ticket chain and logs which cap triggered the fallback.
+// All caps are checked before the batch session starts, using only declared ticket metadata
+// (count, size score from S/M/L labels, total description bytes as a context proxy).
+// Default values are intentionally conservative: they keep batch mode useful for the common
+// cohesive group of 2-8 small-to-medium tickets while blocking oversized or context-heavy groups.
+public record BatchConfig(
+    // Maximum number of tickets allowed in a single batch session.
+    int MaxTickets = 8,
+    // Maximum aggregate size score (S=1, M=2, L=4). Caps the total change footprint.
+    int MaxSizeScore = 16,
+    // Maximum total bytes of ticket description HTML across all batch tickets.
+    // Used as a proxy for the estimated worker context required to hold all plans at once.
+    int MaxDescriptionBytes = 200_000)
+{
+    public static BatchConfig Default => new BatchConfig();
+}
+
 public record BuildConfig(
     TicketingConfig Ticketing,
     LlmConfig Llm,
@@ -63,7 +81,8 @@ public record BuildConfig(
     ShipConfig Ship,
     WorkConfig Work,
     ProjectContext Project,
-    PlanConfig Plan)
+    PlanConfig Plan,
+    BatchConfig Batch)
 {
     public string ResolveTargetBranch() => Work.TargetBranch ?? Ship.BaseBranch;
 
@@ -129,6 +148,7 @@ public static class BuildConfigLoader
         var work = ReadWorkSection(root);
         var project = ReadProjectSection(root, path);
         var plan = ReadPlanSection(root);
+        var batch = ReadBatchSection(root);
 
         // Non-fatal unknown-key warning pass: emit one warning per unrecognized key.
         var warnings = new List<string>();
@@ -146,7 +166,7 @@ public static class BuildConfigLoader
         foreach (var warning in warnings)
             emit(warning);
 
-        return new BuildConfig(ticketing, llm, workers, events, review, ship, work, project, plan);
+        return new BuildConfig(ticketing, llm, workers, events, review, ship, work, project, plan, batch);
     }
 
     public static string ResolveLogDirectory(string configFilePath, string rawLogDir, string cwdFallback)
@@ -175,7 +195,7 @@ public static class BuildConfigLoader
 
     private static readonly HashSet<string> KnownTopLevelSections = new(StringComparer.Ordinal)
     {
-        "ticketing", "llm", "workers", "events", "review", "ship", "work", "plan", "project"
+        "ticketing", "llm", "workers", "events", "review", "ship", "work", "plan", "project", "batch"
     };
 
     private static readonly HashSet<string> KnownTicketingKeys = new(StringComparer.Ordinal)
@@ -246,6 +266,11 @@ public static class BuildConfigLoader
     {
         "language", "framework", "package_manager", "build_command", "test_command",
         "install_command", "dev_command", "plane_project_url", "workflow_tool", "notes_file"
+    };
+
+    private static readonly HashSet<string> KnownBatchKeys = new(StringComparer.Ordinal)
+    {
+        "max_tickets", "max_size_score", "max_description_bytes"
     };
 
     private static void CollectUnknownKeyWarnings(TomlTable root, List<string> warnings)
@@ -407,6 +432,16 @@ public static class BuildConfigLoader
             {
                 if (!KnownProjectKeys.Contains(kv.Key))
                     warnings.Add($"warning: unknown config key project.{kv.Key} - ignored");
+            }
+        }
+
+        // [batch]
+        if (root.TryGetValue("batch", out var batchRaw) && batchRaw is TomlTable batch)
+        {
+            foreach (var kv in batch)
+            {
+                if (!KnownBatchKeys.Contains(kv.Key))
+                    warnings.Add($"warning: unknown config key batch.{kv.Key} - ignored");
             }
         }
     }
@@ -703,6 +738,25 @@ public static class BuildConfigLoader
                 $"key 'mode' in [plan] must be either \"investigate\" or \"promote\", got \"{mode}\"");
 
         return new PlanConfig(mode);
+    }
+
+    private static BatchConfig ReadBatchSection(TomlTable root)
+    {
+        if (!root.TryGetValue("batch", out var val) || val is not TomlTable t)
+            return BatchConfig.Default;
+
+        var maxTickets = OptionalInt(t, "max_tickets", BatchConfig.Default.MaxTickets);
+        var maxSizeScore = OptionalInt(t, "max_size_score", BatchConfig.Default.MaxSizeScore);
+        var maxDescriptionBytes = OptionalInt(t, "max_description_bytes", BatchConfig.Default.MaxDescriptionBytes);
+
+        if (maxTickets < 1)
+            throw new ConfigException("key 'max_tickets' in [batch] must be a positive integer");
+        if (maxSizeScore < 1)
+            throw new ConfigException("key 'max_size_score' in [batch] must be a positive integer");
+        if (maxDescriptionBytes < 1)
+            throw new ConfigException("key 'max_description_bytes' in [batch] must be a positive integer");
+
+        return new BatchConfig(maxTickets, maxSizeScore, maxDescriptionBytes);
     }
 
     private static ProjectContext ReadProjectSection(TomlTable root, string configPath)

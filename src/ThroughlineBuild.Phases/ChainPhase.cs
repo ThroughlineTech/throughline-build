@@ -1356,6 +1356,42 @@ public class ChainPhase
     /// Classifies batch review rework feedback as localized (names exactly one batch ticket)
     /// or cross-ticket (names zero or multiple tickets, or relates to integration seams).
     /// </summary>
+    /// <summary>
+    /// Checks the declared batch group against the configured size caps before any session
+    /// starts. Returns a human-readable description of the first exceeded cap (e.g.
+    /// "max_tickets=8 (actual 10)"), or null when all caps pass. Three caps are checked
+    /// in order: ticket count, aggregate size score (S=1/M=2/L=4), and total description
+    /// bytes (a proxy for estimated worker context). The caller logs the returned string and
+    /// falls back to the per-ticket chain path.
+    /// </summary>
+    internal static string? CheckBatchSizeCaps(IReadOnlyList<Ticket> batchTickets, BuildOptions opts)
+    {
+        if (batchTickets.Count > opts.BatchMaxTickets)
+            return $"max_tickets={opts.BatchMaxTickets} (actual {batchTickets.Count})";
+
+        int sizeScore = 0;
+        foreach (var t in batchTickets)
+        {
+            sizeScore += t.Size switch
+            {
+                Size.S => 1,
+                Size.M => 2,
+                Size.L => 4,
+                _ => 1
+            };
+        }
+        if (sizeScore > opts.BatchMaxSizeScore)
+            return $"max_size_score={opts.BatchMaxSizeScore} (actual {sizeScore})";
+
+        int descBytes = 0;
+        foreach (var t in batchTickets)
+            descBytes += System.Text.Encoding.UTF8.GetByteCount(t.DescriptionHtml ?? string.Empty);
+        if (descBytes > opts.BatchMaxDescriptionBytes)
+            return $"max_description_bytes={opts.BatchMaxDescriptionBytes} (actual {descBytes})";
+
+        return null;
+    }
+
     internal static BatchReworkRoute ClassifyBatchRework(
         IReadOnlyList<Ticket> batchTickets,
         string rationale)
@@ -1764,6 +1800,33 @@ public class ChainPhase
 
             if (batchTickets.Count > 0)
             {
+                // Batch size gate (TLB-454): check declared group against configured caps before
+                // starting any session. When any cap is exceeded, fall back to the per-ticket
+                // chain path instead of running an oversized batch. The triggering cap is named
+                // in the run output and in the event log so the downgrade is never silent.
+                var capViolation = CheckBatchSizeCaps(batchTickets, _baseOptions);
+                if (capViolation is not null)
+                {
+                    Console.Error.WriteLine(
+                        $"[{parentTicket.Id}] batch-size-fallback: cap exceeded ({capViolation}); " +
+                        $"running per-ticket chain for all {batchTickets.Count} ticket(s) instead.");
+                    await _events.EmitAsync(new WorkflowEvent(
+                        SessionId: _sessionIdGenerator(),
+                        Timestamp: DateTimeOffset.UtcNow,
+                        Kind: EventKind.GateFailure,
+                        TicketId: parentTicket.Id,
+                        Phase: Phase.Chain,
+                        Data: new Dictionary<string, object>
+                        {
+                            ["kind"] = "batch_size_cap_exceeded",
+                            ["cap"] = capViolation,
+                            ["ticket_count"] = batchTickets.Count
+                        }), ct).ConfigureAwait(false);
+                    // Do not set batchedTicketIds; per-ticket loop below handles all group members.
+                }
+                else
+                {
+
                 batchedTicketIds = new HashSet<string>(
                     batchTickets.Select(t => t.Id), StringComparer.Ordinal);
 
@@ -1801,6 +1864,7 @@ public class ChainPhase
                     if (!batchReviewPassed)
                         anyStoppedEarly = true;
                 }
+                } // end else (cap not exceeded)
             }
         }
 

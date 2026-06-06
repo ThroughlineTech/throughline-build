@@ -1304,7 +1304,10 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
         LiveStderrSink: debugMode ? Console.Error : null,
         ProgressDigestSink: enableDigest ? Console.Error : null,
         TargetBranch: config2.ResolveTargetBranch(),
-        PromotePlan: effectivePromotePlan);
+        PromotePlan: effectivePromotePlan,
+        BatchMaxTickets: config2.Batch.MaxTickets,
+        BatchMaxSizeScore: config2.Batch.MaxSizeScore,
+        BatchMaxDescriptionBytes: config2.Batch.MaxDescriptionBytes);
 
     string planeUrl = BuildPlaneUrl(config2.Ticketing.PlaneBaseUrl, config2.Ticketing.PlaneWorkspaceSlug, ticketId);
     string? artifactsPath = debugCaptureDir is not null

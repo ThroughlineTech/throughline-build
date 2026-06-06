@@ -22,7 +22,17 @@ public record BuildOptions(
     // combined review pass is always triggered (in addition to the pass already required
     // when the first returns Rework). Set to 0 to always force a second pass; set to a
     // high value (e.g. int.MaxValue) to disable size-based second passes entirely.
-    int BatchReviewSizeThreshold = 5);
+    int BatchReviewSizeThreshold = 5,
+    // Batch size caps (TLB-454): pre-execution gate that compares the declared group
+    // against these caps before starting a batch session. When any cap is exceeded the
+    // conductor falls back to the per-ticket chain path and logs which cap triggered it.
+    // max_tickets: maximum number of tickets allowed in a single batch session.
+    int BatchMaxTickets = 8,
+    // max_size_score: maximum aggregate size score (S=1, M=2, L=4).
+    int BatchMaxSizeScore = 16,
+    // max_description_bytes: maximum total bytes of ticket description HTML.
+    // Proxy for estimated worker context required to hold all plans simultaneously.
+    int BatchMaxDescriptionBytes = 200_000);
 
 public record PlanResult(
     bool Success,

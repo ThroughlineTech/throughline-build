@@ -1156,4 +1156,115 @@ log_directory = ".build/events"
             File.Delete(path);
         }
     }
+
+    // --- [batch] section tests (TLB-454) ---
+
+    [Fact]
+    public void Load_NoBatchSection_ReturnsBatchDefaults()
+    {
+        var path = WriteToml(ValidToml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            Assert.Equal(8, config.Batch.MaxTickets);
+            Assert.Equal(16, config.Batch.MaxSizeScore);
+            Assert.Equal(200_000, config.Batch.MaxDescriptionBytes);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_BatchSectionWithAllKeys_ReturnsConfiguredValues()
+    {
+        var toml = ValidToml + """
+
+[batch]
+max_tickets = 5
+max_size_score = 10
+max_description_bytes = 50000
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            Assert.Equal(5, config.Batch.MaxTickets);
+            Assert.Equal(10, config.Batch.MaxSizeScore);
+            Assert.Equal(50_000, config.Batch.MaxDescriptionBytes);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_BatchSectionWithPartialKeys_UsesDefaultsForMissing()
+    {
+        var toml = ValidToml + """
+
+[batch]
+max_tickets = 3
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            Assert.Equal(3, config.Batch.MaxTickets);
+            Assert.Equal(16, config.Batch.MaxSizeScore);
+            Assert.Equal(200_000, config.Batch.MaxDescriptionBytes);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_BatchSectionWithUnknownKey_EmitsWarningAndLoads()
+    {
+        var toml = ValidToml + """
+
+[batch]
+max_tickets = 4
+unknown_batch_key = "ignored"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            var config = BuildConfigLoader.Load(path, w => captured.Add(w));
+
+            Assert.Contains(captured, w => w.Contains("batch.unknown_batch_key"));
+            Assert.Equal(4, config.Batch.MaxTickets);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_BatchMaxTicketsZero_ThrowsConfigException()
+    {
+        var toml = ValidToml + """
+
+[batch]
+max_tickets = 0
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            Assert.Throws<ConfigException>(() => BuildConfigLoader.Load(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }
