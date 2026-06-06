@@ -80,7 +80,7 @@ public static class BatchImplementBriefBuilder
         for (int i = 0; i < tickets.Count; i++)
         {
             if (i > 0)
-                builder.AppendLine();
+                builder.Append('\n');
 
             var ticket = tickets[i];
             var relations = ticket.Relations.Count > 0
@@ -90,21 +90,27 @@ public static class BatchImplementBriefBuilder
                 ? "First in this batch. Start from the base commit pointer."
                 : $"Must be implemented after ticket {tickets[i - 1].Id} and on top of that ticket's commit.";
 
-            builder.AppendLine($"### {i + 1}. {ticket.Id} - {ticket.Title}");
-            builder.AppendLine($"- Type: {ticket.Type}");
-            builder.AppendLine($"- Size: {ticket.Size}");
-            builder.AppendLine($"- Risk: {ticket.Risk}");
-            builder.AppendLine($"- Stack position: {i + 1}");
-            builder.AppendLine($"- Ordering constraint: {ordering}");
-            builder.AppendLine();
-            builder.AppendLine("Relations:");
-            builder.AppendLine(relations);
-            builder.AppendLine();
-            builder.AppendLine("Plan (raw HTML from ticket description; read directly, do not re-render):");
-            builder.AppendLine(ticket.DescriptionHtml);
+            AppendLine(builder, $"### {i + 1}. {ticket.Id} - {ticket.Title}");
+            AppendLine(builder, $"- Type: {ticket.Type}");
+            AppendLine(builder, $"- Size: {ticket.Size}");
+            AppendLine(builder, $"- Risk: {ticket.Risk}");
+            AppendLine(builder, $"- Stack position: {i + 1}");
+            AppendLine(builder, $"- Ordering constraint: {ordering}");
+            builder.Append('\n');
+            AppendLine(builder, "Relations:");
+            AppendLine(builder, relations);
+            builder.Append('\n');
+            AppendLine(builder, "Plan (raw HTML from ticket description; read directly, do not re-render):");
+            AppendLine(builder, ticket.DescriptionHtml);
         }
 
         return builder.ToString().TrimEnd();
+    }
+
+    private static void AppendLine(StringBuilder builder, string value)
+    {
+        builder.Append(value);
+        builder.Append('\n');
     }
 
     private static string BuildChainPointer(string baseCommitSha, ChainCommitRange? chainCommitRange)
