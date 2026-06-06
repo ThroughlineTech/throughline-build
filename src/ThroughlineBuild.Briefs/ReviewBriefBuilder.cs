@@ -7,7 +7,14 @@ namespace ThroughlineBuild.Briefs;
 
 public static class ReviewBriefBuilder
 {
-    const int InstructionBudgetBytes = 50 * 1024;
+    // The reviewer is a full agent dispatched into the feature worktree (the branch is
+    // checked out), so it can fetch anything it needs with read-only git. We inline the
+    // complete diff when it is small enough to be cheap, and fall back to "go read it
+    // yourself" for large diffs rather than truncating. Truncating the diff makes the
+    // reviewer reject code it never saw; because each rework round grows the diff, more
+    // gets truncated each pass, which turns into an unbreakable rework loop (the TLB-475
+    // chain hit the rework cap this way with every automated check passing). See TLB-477.
+    const int InlinePatchBudgetBytes = 300 * 1024;
     const int StderrTailBudgetPerFailure = 2048;
     const int StdoutTailBudgetPerFailure = 2048;
 
@@ -22,6 +29,7 @@ public static class ReviewBriefBuilder
         var proj = project ?? ProjectContext.Empty;
 
         var changedFilesSection = BuildChangedFilesSection(diff);
+        var patchContentSection = BuildPatchContentSection(diff);
         var automatedChecksSection = BuildAutomatedChecksSection(checkResults);
 
         var workerResultJson =
@@ -43,18 +51,10 @@ public static class ReviewBriefBuilder
             ["description_html"] = ticket.DescriptionHtml,
             ["implementer_summary"] = implementerResult.Summary,
             ["changed_files_section"] = changedFilesSection,
-            ["patch_content_section"] = "",
+            ["patch_content_section"] = patchContentSection,
             ["automated_checks_section"] = automatedChecksSection,
             ["worker_result_json"] = workerResultJson
         };
-
-        // Budget for the patch body is derived from the substituted template with patch_content_section
-        // initially empty. This mirrors the original sb.Length-based budget semantically: total instruction
-        // length is bounded by InstructionBudgetBytes.
-        var lengthWithoutPatch = template.Substitute(vars).Length;
-        int remainingBudget = InstructionBudgetBytes - lengthWithoutPatch;
-
-        vars["patch_content_section"] = BuildPatchContentSection(diff, remainingBudget);
 
         var instruction = template.Substitute(vars);
 
@@ -120,54 +120,77 @@ public static class ReviewBriefBuilder
         return sb.ToString();
     }
 
-    private static string BuildPatchContentSection(GitDiff diff, int remainingBudget)
+    // Inline the full diff when it fits InlinePatchBudgetBytes; otherwise hand the reviewer
+    // the read-only command to pull each file's diff from the worktree itself. We never
+    // truncate a patch: a half-shown patch reads as "missing code" to the verifier and
+    // drives false-negative rework (see TLB-477 / the class-level comment).
+    private static string BuildPatchContentSection(GitDiff diff)
     {
         var sb = new StringBuilder();
         sb.Append("## Patch content\n");
-        if (diff.Entries.Count > 0)
-        {
-            var entriesWithPatches = diff.Entries.Where(e => e.PatchContent != null).ToList();
 
-            if (entriesWithPatches.Count > 0)
-            {
-                int perFileBudget = Math.Max(remainingBudget / entriesWithPatches.Count, 2048);
-
-                foreach (var entry in entriesWithPatches)
-                {
-                    if (sb.Length >= remainingBudget)
-                    {
-                        sb.Append($"- {entry.Path}: patch omitted (budget exhausted)\n");
-                        continue;
-                    }
-
-                    var patchContent = entry.PatchContent!;
-                    sb.Append("```diff\n");
-
-                    if (patchContent.Length <= perFileBudget)
-                    {
-                        sb.Append(patchContent);
-                        sb.Append('\n');
-                    }
-                    else
-                    {
-                        var truncated = patchContent.Substring(0, perFileBudget);
-                        sb.Append(truncated);
-                        sb.Append('\n');
-                        int remainingChars = patchContent.Length - perFileBudget;
-                        sb.Append($"... [truncated: {remainingChars} more chars]\n");
-                    }
-
-                    sb.Append("```\n");
-                    sb.Append('\n');
-                }
-            }
-        }
-        else
+        if (diff.Entries.Count == 0)
         {
             sb.Append("(no patches)\n");
             sb.Append('\n');
+            return sb.ToString();
         }
+
+        var entriesWithPatches = diff.Entries.Where(e => e.PatchContent != null).ToList();
+        long totalPatchBytes = entriesWithPatches.Sum(e => (long)e.PatchContent!.Length);
+
+        // Fetch-on-demand: either no inline patch was captured, or the diff is too large
+        // to inline cheaply. Either way the branch is checked out in the reviewer's working
+        // directory, so it reads the change itself with read-only git.
+        if (entriesWithPatches.Count == 0)
+        {
+            AppendFetchDirective(
+                sb,
+                diff,
+                "Patch content was not captured for this review, so the diff is not inlined below.");
+            return sb.ToString();
+        }
+
+        if (totalPatchBytes > InlinePatchBudgetBytes)
+        {
+            var sizeKb = (totalPatchBytes / 1024).ToString(CultureInfo.InvariantCulture);
+            AppendFetchDirective(
+                sb,
+                diff,
+                $"The diff is large ({sizeKb} KB of patch across {entriesWithPatches.Count} file(s)) and is not inlined below.");
+            return sb.ToString();
+        }
+
+        // Inline mode: the whole diff fits, so include every file's patch in full.
+        foreach (var entry in entriesWithPatches)
+        {
+            sb.Append("```diff\n");
+            sb.Append(entry.PatchContent);
+            sb.Append('\n');
+            sb.Append("```\n");
+            sb.Append('\n');
+        }
+
         return sb.ToString();
+    }
+
+    // Emits the "read the diff yourself" block: a one-line reason, the exact read-only
+    // command to view each file's diff from the worktree, and a reminder to stay read-only.
+    private static void AppendFetchDirective(StringBuilder sb, GitDiff diff, string reason)
+    {
+        sb.Append(reason);
+        sb.Append('\n');
+        sb.Append('\n');
+        sb.Append("The feature branch is checked out in your working directory. You MUST read the\n");
+        sb.Append("changes yourself before judging - for each file in the list above, view its diff:\n");
+        sb.Append('\n');
+        sb.Append("```\n");
+        sb.Append($"git diff {diff.FromRef}...{diff.ToRef} -- <path>\n");
+        sb.Append("```\n");
+        sb.Append('\n');
+        sb.Append("You may also `git show`, `git log`, or read the file directly for surrounding\n");
+        sb.Append("context. Do not run any git command that writes (no stash/checkout/reset/rebase).\n");
+        sb.Append('\n');
     }
 
     private static string BuildAutomatedChecksSection(IReadOnlyList<CheckResult> checkResults)

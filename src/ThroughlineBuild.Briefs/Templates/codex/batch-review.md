@@ -9,9 +9,11 @@ Each section below describes one ticket and its commit range within the batch st
 {{ticket_sections}}
 
 {{changed_files_section}}{{patch_content_section}}{{automated_checks_section}}## Constraints
-- You are read-only with respect to git: do NOT run git stash, git checkout, git reset, or git rebase. The stash stack is repo-global and leaks across worktrees; any mutation of git state in the review phase can corrupt a later ticket's working tree.
-- Base your verdict on the combined diff and the automated check results supplied above.
-- If you need to understand the code state, read the diff and the file contents as shown. You do not need a clean build to reach a verdict.
+- The batch branch is checked out in your working directory. You MAY and SHOULD read files and run read-only git (git diff, git show, git log, cat) to inspect the full change - that is how you verify, not a last resort.
+- Read-only with respect to git: do NOT run git stash, git checkout, git reset, git rebase, or anything that writes. The stash stack and index are repo-global and leak across worktrees, so any git mutation in review can corrupt a later ticket's tree. Reading is always safe.
+- Read the diff of every changed file before you reach a verdict. A review based only on the file list, the ticket plans, or a partial patch is wrong. When the patch section says the diff is not inlined, fetch it with the command shown there.
+- Never rework or fail for code you have not looked at. "I cannot see X in this brief" is not a finding - if you have not opened the file, open it. Every finding must name a concrete defect you confirmed in the code.
+- You do not need a clean build to reach a verdict; the automated check results above already capture build/test status.
 - Your verdict covers the entire batch. Name the specific ticket(s) with issues in your rationale.
 
 ## Required output

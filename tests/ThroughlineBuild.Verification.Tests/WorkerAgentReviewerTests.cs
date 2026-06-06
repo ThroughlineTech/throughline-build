@@ -544,8 +544,8 @@ public class WorkerAgentReviewerTests
         Assert.Contains("git reset", instruction, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("git rebase", instruction, StringComparison.OrdinalIgnoreCase);
 
-        // Template must direct the verifier to use the synthesized diff and automated checks.
-        Assert.Contains("synthesized diff", instruction, StringComparison.OrdinalIgnoreCase);
+        // Template must direct the verifier to read the diff of every changed file before judging.
+        Assert.Contains("Read the diff of every changed file", instruction, StringComparison.OrdinalIgnoreCase);
     }
 
     // -------------------------------------------------------------------------

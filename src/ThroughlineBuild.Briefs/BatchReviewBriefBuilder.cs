@@ -7,7 +7,11 @@ namespace ThroughlineBuild.Briefs;
 
 public static class BatchReviewBriefBuilder
 {
-    private const int InstructionBudgetBytes = 60 * 1024;
+    // Inline the combined diff when it fits; otherwise tell the reviewer to read it itself
+    // from the worktree. We never truncate - a truncated patch reads as missing code and
+    // drives false-negative rework, and the combined stack diff is even larger than a
+    // single-ticket diff. See TLB-477 and the matching note in ReviewBriefBuilder.
+    private const int InlinePatchBudgetBytes = 300 * 1024;
     private const int StderrTailBudgetPerFailure = 2048;
     private const int StdoutTailBudgetPerFailure = 2048;
 
@@ -32,6 +36,7 @@ public static class BatchReviewBriefBuilder
 
         var ticketSections = BuildTicketSections(tickets, confirmedTickets, baseRef);
         var changedFilesSection = BuildChangedFilesSection(diff);
+        var patchContentSection = BuildPatchContentSection(diff);
         var automatedChecksSection = BuildAutomatedChecksSection(checkResults);
         var workerResultJson = BuildWorkerResultJson();
 
@@ -40,16 +45,12 @@ public static class BatchReviewBriefBuilder
             ["ticket_count"] = tickets.Count.ToString(CultureInfo.InvariantCulture),
             ["ticket_sections"] = ticketSections,
             ["changed_files_section"] = changedFilesSection,
-            ["patch_content_section"] = "",
+            ["patch_content_section"] = patchContentSection,
             ["automated_checks_section"] = automatedChecksSection,
             ["worker_result_json"] = workerResultJson
         };
 
         var template = TemplateLoader.Load(agentName, "batch-review.md");
-        var lengthWithoutPatch = template.Substitute(vars).Length;
-        int remainingBudget = InstructionBudgetBytes - lengthWithoutPatch;
-        vars["patch_content_section"] = BuildPatchContentSection(diff, remainingBudget);
-
         var instruction = template.Substitute(vars);
 
         var context = new Dictionary<string, string>
@@ -156,47 +157,73 @@ public static class BatchReviewBriefBuilder
         return sb.ToString();
     }
 
-    private static string BuildPatchContentSection(GitDiff diff, int remainingBudget)
+    // Inline the full combined diff when it fits InlinePatchBudgetBytes; otherwise hand the
+    // reviewer the read-only command to pull it from the worktree. Never truncate - see the
+    // class-level note and TLB-477.
+    private static string BuildPatchContentSection(GitDiff diff)
     {
         var sb = new StringBuilder();
         sb.Append("## Combined patch content\n");
-        if (diff.Entries.Count > 0)
-        {
-            var entriesWithPatches = diff.Entries.Where(e => e.PatchContent != null).ToList();
-            if (entriesWithPatches.Count > 0)
-            {
-                int perFileBudget = Math.Max(remainingBudget / entriesWithPatches.Count, 2048);
-                foreach (var entry in entriesWithPatches)
-                {
-                    if (sb.Length >= remainingBudget)
-                    {
-                        sb.Append($"- {entry.Path}: patch omitted (budget exhausted)\n");
-                        continue;
-                    }
-                    var patchContent = entry.PatchContent!;
-                    sb.Append("```diff\n");
-                    if (patchContent.Length <= perFileBudget)
-                    {
-                        sb.Append(patchContent);
-                        sb.Append('\n');
-                    }
-                    else
-                    {
-                        sb.Append(patchContent.Substring(0, perFileBudget));
-                        sb.Append('\n');
-                        sb.Append($"... [truncated: {patchContent.Length - perFileBudget} more chars]\n");
-                    }
-                    sb.Append("```\n");
-                    sb.Append('\n');
-                }
-            }
-        }
-        else
+
+        if (diff.Entries.Count == 0)
         {
             sb.Append("(no patches)\n");
             sb.Append('\n');
+            return sb.ToString();
         }
+
+        var entriesWithPatches = diff.Entries.Where(e => e.PatchContent != null).ToList();
+        long totalPatchBytes = entriesWithPatches.Sum(e => (long)e.PatchContent!.Length);
+
+        if (entriesWithPatches.Count == 0)
+        {
+            AppendFetchDirective(
+                sb,
+                diff,
+                "Patch content was not captured for this review, so the combined diff is not inlined below.");
+            return sb.ToString();
+        }
+
+        if (totalPatchBytes > InlinePatchBudgetBytes)
+        {
+            var sizeKb = (totalPatchBytes / 1024).ToString(CultureInfo.InvariantCulture);
+            AppendFetchDirective(
+                sb,
+                diff,
+                $"The combined diff is large ({sizeKb} KB of patch across {entriesWithPatches.Count} file(s)) and is not inlined below.");
+            return sb.ToString();
+        }
+
+        foreach (var entry in entriesWithPatches)
+        {
+            sb.Append("```diff\n");
+            sb.Append(entry.PatchContent);
+            sb.Append('\n');
+            sb.Append("```\n");
+            sb.Append('\n');
+        }
+
         return sb.ToString();
+    }
+
+    // Emits the "read the diff yourself" block: the reason, the exact read-only command
+    // to view each file's diff in the worktree, and a read-only reminder.
+    private static void AppendFetchDirective(StringBuilder sb, GitDiff diff, string reason)
+    {
+        sb.Append(reason);
+        sb.Append('\n');
+        sb.Append('\n');
+        sb.Append("The batch branch is checked out in your working directory. You MUST read the\n");
+        sb.Append("changes yourself before judging - for each file in the list above, view its diff:\n");
+        sb.Append('\n');
+        sb.Append("```\n");
+        sb.Append($"git diff {diff.FromRef}...{diff.ToRef} -- <path>\n");
+        sb.Append("```\n");
+        sb.Append('\n');
+        sb.Append("Use the per-ticket commit ranges above to scope each ticket. You may also\n");
+        sb.Append("`git show`, `git log`, or read files directly. Do not run any git command that\n");
+        sb.Append("writes (no stash/checkout/reset/rebase).\n");
+        sb.Append('\n');
     }
 
     private static string BuildAutomatedChecksSection(IReadOnlyList<CheckResult> checkResults)

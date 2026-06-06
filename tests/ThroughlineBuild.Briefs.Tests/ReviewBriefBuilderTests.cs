@@ -226,8 +226,11 @@ public class ReviewBriefBuilderTests
     }
 
     [Fact]
-    public void Build_LargeDiff_TruncatesToStayUnderBudget()
+    public void Build_LargeDiff_EmitsFetchDirectiveInsteadOfTruncating()
     {
+        // A diff that exceeds the inline budget must NOT be truncated - a truncated patch
+        // reads as "missing code" to the verifier and drives false-negative rework (TLB-477).
+        // Instead the reviewer is told to pull the diff itself from the worktree.
         var largePatches = new List<DiffEntry>();
         for (int i = 0; i < 30; i++)
         {
@@ -250,8 +253,72 @@ public class ReviewBriefBuilderTests
             MinimalImplementerResult(),
             Array.Empty<CheckResult>());
 
-        Assert.True(brief.Instruction.Length < 55 * 1024, "Instruction should stay under ~55 KB budget");
-        Assert.Contains("[truncated:", brief.Instruction);
+        // No inlined patch body, no truncation marker.
+        Assert.DoesNotContain("[truncated:", brief.Instruction);
+        Assert.DoesNotContain(new string('x', 4096), brief.Instruction);
+        // The brief stays small because the multi-MB patch is not inlined.
+        Assert.True(brief.Instruction.Length < 16 * 1024, "Instruction should stay small when the diff is fetched on demand");
+        // Reviewer is given the exact read-only command and the changed-file list.
+        Assert.Contains("git diff origin/main...feature/test -- <path>", brief.Instruction);
+        Assert.Contains("checked out in your working directory", brief.Instruction);
+        Assert.Contains("file0.cs", brief.Instruction);
+    }
+
+    [Fact]
+    public void Build_DiffWithinBudget_InlinesEveryPatchInFull()
+    {
+        // Under the inline budget, every file's patch is included verbatim with no truncation.
+        var patchA = "@@ marker-alpha @@\n" + new string('a', 40 * 1024);
+        var patchB = "@@ marker-beta @@\n" + new string('b', 40 * 1024);
+        var diff = MinimalDiff() with
+        {
+            Entries = new[]
+            {
+                new DiffEntry("a.cs", DiffKind.Modified, null, 100, 50, patchA),
+                new DiffEntry("b.cs", DiffKind.Modified, null, 100, 50, patchB)
+            }
+        };
+
+        var brief = ReviewBriefBuilder.Build(
+            "claude-code",
+            MinimalTicket(),
+            diff,
+            MinimalImplementerResult(),
+            Array.Empty<CheckResult>());
+
+        Assert.Contains("marker-alpha", brief.Instruction);
+        Assert.Contains("marker-beta", brief.Instruction);
+        Assert.Contains(patchA, brief.Instruction);
+        Assert.Contains(patchB, brief.Instruction);
+        Assert.DoesNotContain("[truncated:", brief.Instruction);
+        // The fetch command is emitted only in fetch-on-demand mode, never when inlined.
+        Assert.DoesNotContain("git diff origin/main...feature/test -- <path>", brief.Instruction);
+    }
+
+    [Fact]
+    public void Build_EntriesWithoutPatchContent_EmitsFetchDirective()
+    {
+        // Changed files exist but no inline patch was captured: the reviewer must fetch it.
+        var diff = MinimalDiff() with
+        {
+            Entries = new[]
+            {
+                new DiffEntry("a.cs", DiffKind.Modified, null, 10, 2, null),
+                new DiffEntry("b.cs", DiffKind.Added, null, 30, 0, null)
+            }
+        };
+
+        var brief = ReviewBriefBuilder.Build(
+            "claude-code",
+            MinimalTicket(),
+            diff,
+            MinimalImplementerResult(),
+            Array.Empty<CheckResult>());
+
+        Assert.Contains("not captured", brief.Instruction);
+        Assert.Contains("git diff origin/main...feature/test -- <path>", brief.Instruction);
+        Assert.Contains("Modified a.cs", brief.Instruction);
+        Assert.Contains("Added b.cs", brief.Instruction);
     }
 
     [Fact]
