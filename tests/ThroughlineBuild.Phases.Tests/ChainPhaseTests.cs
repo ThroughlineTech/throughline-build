@@ -1176,6 +1176,147 @@ public class ChainPhaseTests
     }
 
     [Fact]
+    public async Task RunAsync_DryRunLeafRoot_ReturnsOneNodePreviewAndDoesNotExecutePhases()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var chain = BuildChain(ticketing, planWorker, implWorker, new Queue<IVerifier>());
+
+        var originalOut = Console.Out;
+        var stdout = new StringWriter();
+        Console.SetOut(stdout);
+        ChainResult result;
+        try
+        {
+            result = await chain.RunAsync(
+                new ChainPhaseOptions(TicketId, false, DryRun: true),
+                CancellationToken.None);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        Assert.Equal(ChainOutcome.DryRunPreview, result.Outcome);
+        var preview = Assert.Single(result.ChildResults!);
+        Assert.Equal(TicketId, preview.TicketId);
+        Assert.Equal(ChainOutcome.DryRunPreview, preview.Outcome);
+        Assert.Empty(result.Steps);
+        Assert.Empty(ticketing.Transitions);
+        Assert.Empty(planWorker.SeenOptions);
+        Assert.Empty(implWorker.SeenOptions);
+
+        var output = stdout.ToString();
+        Assert.Contains("post-order schedule:", output);
+        Assert.Contains("1. TLB-1 - run plan/implement/review/ship", output);
+        Assert.Contains("ticket/tlb-1 from main before TLB-1", output);
+    }
+
+    [Fact]
+    public async Task RunAsync_MaxDepthZero_ParentWithChild_StopsBeforeVisitingChild()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child });
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, new Queue<IVerifier>());
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, MaxDepth: 0),
+            CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentStoppedEarly, result.Outcome);
+        Assert.Contains("Depth cap 0 reached", result.FinalRationale);
+        Assert.Empty(planWorker.SeenOptions);
+        Assert.Empty(implWorker.SeenOptions);
+    }
+
+    [Fact]
+    public async Task RunAsync_MaxDepthOne_AllowsChildAtDepthOne()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, MaxDepth: 1),
+            CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        var childResult = Assert.Single(result.ChildResults!);
+        Assert.Equal("TLB-2", childResult.TicketId);
+        Assert.Equal(ChainOutcome.Completed, childResult.Outcome);
+    }
+
+    [Fact]
+    public async Task RunAsync_MaxDepthOne_StopsBeforeGrandchildAtDepthTwo()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
+        var grandchild = MakeChildTicket("TLB-3", "grandchild-uuid-1", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child });
+        ticketing.SeedChildren("child-uuid-1", new[] { grandchild });
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, new Queue<IVerifier>());
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, MaxDepth: 1),
+            CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentStoppedEarly, result.Outcome);
+        var childResult = Assert.Single(result.ChildResults!);
+        Assert.Equal("TLB-2", childResult.TicketId);
+        Assert.Equal(ChainOutcome.ParentStoppedEarly, childResult.Outcome);
+        Assert.Contains("Depth cap 1 reached", childResult.FinalRationale);
+        Assert.Empty(planWorker.SeenOptions);
+        Assert.Empty(implWorker.SeenOptions);
+    }
+
+    [Fact]
+    public async Task RunAsync_MaxDepthTwo_AllowsGrandchildAtDepthTwo()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
+        var grandchild = MakeChildTicket("TLB-3", "grandchild-uuid-1", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child });
+        ticketing.SeedChildren("child-uuid-1", new[] { grandchild });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, MaxDepth: 2),
+            CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        var childResult = Assert.Single(result.ChildResults!);
+        Assert.Equal(ChainOutcome.ParentCompleted, childResult.Outcome);
+        var grandchildResult = Assert.Single(childResult.ChildResults!);
+        Assert.Equal("TLB-3", grandchildResult.TicketId);
+        Assert.Equal(ChainOutcome.Completed, grandchildResult.Outcome);
+    }
+
+    [Fact]
     public async Task RunAsync_ParentWithOneDoneChildAndOneBacklogChild_SkipsDone_OneChildResult_ParentCompleted()
     {
         // Parent has 1 Done child (skipped) and 1 Backlog child (processed).
@@ -1313,6 +1454,33 @@ public class ChainPhaseTests
         Assert.Equal("TLB-3", result.ChildResults[1].TicketId);
         // Dep analysis ran (GetRelationsAsync called for each eligible child)
         Assert.Equal(2, ticketing.GetRelationsCallCount);
+    }
+
+    [Fact]
+    public async Task RunAsync_ParentWithNumericEarlierChildBlockedByLaterChild_DependencyOverridesNumericOrder()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var numericFirst = MakeChildTicket("TLB-2", "child-uuid-low", TicketState.Backlog);
+        var blocker = MakeChildTicket("TLB-10", "child-uuid-high", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { numericFirst, blocker });
+        ticketing.SeedRelations("TLB-2", new[] { new Relation("blocked_by", "TLB-10") });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        Assert.Equal(2, result.ChildResults!.Count);
+        Assert.Equal("TLB-10", result.ChildResults[0].TicketId);
+        Assert.Equal("TLB-2", result.ChildResults[1].TicketId);
     }
 
     [Fact]

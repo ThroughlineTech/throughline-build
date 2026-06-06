@@ -46,9 +46,9 @@ public sealed class ChainCommand : ITicketCommand
         int maxDepth = 16;
         if (ctx.Args.TryGetValue("max-depth", out var maxDepthStr) &&
             !string.IsNullOrWhiteSpace(maxDepthStr) &&
-            (!int.TryParse(maxDepthStr, out maxDepth) || maxDepth < 1))
+            (!int.TryParse(maxDepthStr, out maxDepth) || maxDepth < 0))
         {
-            return new CommandResult(false, "--max-depth must be a positive integer");
+            return new CommandResult(false, "--max-depth must be a non-negative integer");
         }
 
         ChainBatchImplementGroup? batchImplementGroup = null;

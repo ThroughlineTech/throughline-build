@@ -94,17 +94,6 @@ static async Task<int> RunAsync(string[] args)
             fromBrief = true;
         else if (a == "--skip-baseline")
             skipBaseline = true;
-        else if (a == "--dry-run")
-            chainDryRun = true;
-        else if (a == "--max-depth")
-        {
-            if (i + 1 >= args.Length || args[i + 1].StartsWith("--", StringComparison.Ordinal))
-            {
-                Console.Error.WriteLine("Error: --max-depth requires a positive integer");
-                return 2;
-            }
-            chainMaxDepth = args[++i];
-        }
         else
             filteredArgs.Add(a);
     }
@@ -120,6 +109,17 @@ static async Task<int> RunAsync(string[] args)
     bool batchImplementAllChildren = false;
     if (verb == "chain")
     {
+        var (chainFlagArgs, chainFlagError, dryRun, maxDepth) = ExtractChainTraversalFlags(args);
+        if (chainFlagError is not null)
+        {
+            Console.Error.WriteLine(chainFlagError);
+            return 2;
+        }
+
+        chainDryRun = dryRun;
+        chainMaxDepth = maxDepth;
+        args = chainFlagArgs.ToArray();
+
         var (extractedBatchTicketIds, isAllChildren, batchImplementError, argsAfterBatchImplementFlag) =
             CliArgParser.ExtractBatchImplementFlag(args);
         if (batchImplementError is not null)
@@ -1623,6 +1623,34 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
 
 // Extracted from RunAsync to reduce the async state-machine size for Native AOT compilation.
 // Returns (code, true) to exit directly, or (code, false) to set dispatchExitCode and break.
+static (IReadOnlyList<string> Args, string? Error, bool DryRun, string? MaxDepth) ExtractChainTraversalFlags(string[] args)
+{
+    var filtered = new List<string>(args.Length);
+    bool dryRun = false;
+    string? maxDepth = null;
+
+    for (int i = 0; i < args.Length; i++)
+    {
+        var a = args[i];
+        if (a == "--dry-run")
+        {
+            dryRun = true;
+        }
+        else if (a == "--max-depth")
+        {
+            if (i + 1 >= args.Length || args[i + 1].StartsWith("--", StringComparison.Ordinal))
+                return (filtered, "Error: --max-depth requires a non-negative integer", dryRun, maxDepth);
+            maxDepth = args[++i];
+        }
+        else
+        {
+            filtered.Add(a);
+        }
+    }
+
+    return (filtered, null, dryRun, maxDepth);
+}
+
 static async Task<(int code, bool direct)> RunChainVerbAsync(
     string ticketId,
     string[] args,
@@ -1649,9 +1677,9 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
 {
     var parsedMaxDepth = 16;
     if (!string.IsNullOrWhiteSpace(chainMaxDepth) &&
-        (!int.TryParse(chainMaxDepth, out parsedMaxDepth) || parsedMaxDepth < 1))
+        (!int.TryParse(chainMaxDepth, out parsedMaxDepth) || parsedMaxDepth < 0))
     {
-        Console.Error.WriteLine("Error: --max-depth must be a positive integer");
+        Console.Error.WriteLine("Error: --max-depth must be a non-negative integer");
         return (2, true);
     }
 

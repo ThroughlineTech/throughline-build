@@ -132,6 +132,42 @@ public class ChainCommandTests
     }
 
     [Fact]
+    public async Task MaxDepthZero_is_forwarded_as_root_only_depth_cap()
+    {
+        var (cmd, runner, _) = BuildCommand();
+        var ctx = new TicketCommandContext(
+            "TLB-1",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["debug"] = "false",
+                ["max-depth"] = "0"
+            });
+
+        var (result, _) = await RunCapturingStdout(cmd, ctx);
+
+        Assert.True(result.Success);
+        Assert.Equal(0, runner.LastMaxDepth);
+    }
+
+    [Fact]
+    public async Task NegativeMaxDepth_returns_usage_failure()
+    {
+        var (cmd, _, _) = BuildCommand();
+        var ctx = new TicketCommandContext(
+            "TLB-1",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["debug"] = "false",
+                ["max-depth"] = "-1"
+            });
+
+        var (result, _) = await RunCapturingStdout(cmd, ctx);
+
+        Assert.False(result.Success);
+        Assert.Contains("non-negative integer", result.Message);
+    }
+
+    [Fact]
     public async Task HappyPath_returns_success()
     {
         var (cmd, runner, _) = BuildCommand();

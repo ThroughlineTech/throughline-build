@@ -159,7 +159,7 @@ public static class HelpRegistryFactory
             new("--from-brief",             "Promote tickets in place; equivalent to [plan] mode = \"promote\" in config.toml", false),
             new("--batch-implement <ticket-id,...>", "Opt an ordered direct-child sibling group into one batch for the chain conductor", false),
             new("--dry-run",                   "Print the post-order tree schedule and branch topology without running phases", false),
-            new("--max-depth <n>",             "Set the recursive chain traversal depth cap", false),
+            new("--max-depth <n>",             "Set the root-based traversal depth cap; 0 is root-only, 1 includes direct children", false),
             new("--no-auto-resolve",        "Do not auto-resolve parent chains before dispatching", false),
             new("--no-auto-merge",          "Skip the automatic fast-forward merge during ship", false),
             new("--continue-past-failure",  "Run descendants of a failed ticket instead of skipping them", false),

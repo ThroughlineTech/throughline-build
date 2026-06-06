@@ -225,6 +225,28 @@ public class ChainPhase
                 $"Cycle detected while traversing ticket tree at {options.TicketId}.");
         }
 
+        if (options.DryRun)
+        {
+            var plan = await BuildDryRunPlanAsync(ticket, options.MaxDepth, ct).ConfigureAwait(false);
+            PrintDryRunPlan(plan, options.MaxDepth);
+            totalSw.Stop();
+            return new ChainResult(
+                options.TicketId,
+                steps,
+                ChainOutcome.DryRunPreview,
+                totalSw.Elapsed,
+                "Dry-run only; no phases were executed.",
+                ChildResults: plan.PostOrder
+                    .Select(item => new ChainResult(
+                        item.Ticket.Id,
+                        Array.Empty<ChainStep>(),
+                        ChainOutcome.DryRunPreview,
+                        TimeSpan.Zero,
+                        item.HasLiveChildren ? "Internal node preview." : "Leaf preview."))
+                    .ToList()
+                    .AsReadOnly());
+        }
+
         // Parent-ticket chain path: recurse to non-terminal children
         var chainChildren = await _ticketing.QueryAsync(new TicketQuery(ParentId: ticket.Uuid), ct).ConfigureAwait(false);
         if (chainChildren.Count > 0)
@@ -240,45 +262,7 @@ public class ChainPhase
                     $"Depth cap {options.MaxDepth} reached at {options.TicketId}.");
             }
 
-            if (options.DryRun)
-            {
-                var plan = await BuildDryRunPlanAsync(ticket, options.MaxDepth, ct).ConfigureAwait(false);
-                PrintDryRunPlan(plan, options.MaxDepth);
-                totalSw.Stop();
-                return new ChainResult(
-                    options.TicketId,
-                    steps,
-                    ChainOutcome.DryRunPreview,
-                    totalSw.Elapsed,
-                    "Dry-run only; no phases were executed.",
-                    ChildResults: plan.PostOrder
-                        .Select(item => new ChainResult(
-                            item.Ticket.Id,
-                            Array.Empty<ChainStep>(),
-                            ChainOutcome.DryRunPreview,
-                            TimeSpan.Zero,
-                            item.HasLiveChildren ? "Internal node preview." : "Leaf preview."))
-                        .ToList()
-                        .AsReadOnly());
-            }
-
             return await RunParentChainAsync(options, ticket, chainChildren, ct).ConfigureAwait(false);
-        }
-
-        if (options.DryRun)
-        {
-            Console.WriteLine($"[{options.TicketId}] dry-run chain plan (max depth {options.MaxDepth}):");
-            Console.WriteLine("post-order schedule:");
-            Console.WriteLine($"  1. leaf {options.TicketId} -> run plan/implement/review/ship");
-            Console.WriteLine("branch topology:");
-            Console.WriteLine($"  {PhaseWorktreeLayout.BranchName(options.TicketId)} from {_baseOptions.TargetBranch}");
-            totalSw.Stop();
-            return new ChainResult(
-                options.TicketId,
-                steps,
-                ChainOutcome.DryRunPreview,
-                totalSw.Elapsed,
-                "Dry-run only; no phases were executed.");
         }
 
         // Resolve where the chain enters based on the ticket's current state. Backlog/Ready/InReview
