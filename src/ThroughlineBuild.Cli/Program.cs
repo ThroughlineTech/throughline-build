@@ -68,9 +68,12 @@ static async Task<int> RunAsync(string[] args)
     bool continuePastFailure = false;
     bool fromBrief = false;
     bool skipBaseline = false;
+    bool chainDryRun = false;
+    string? chainMaxDepth = null;
     var filteredArgs = new List<string>(args.Length);
-    foreach (var a in args)
+    for (int i = 0; i < args.Length; i++)
     {
+        var a = args[i];
         if (a == "--debug")
             debugMode = true;
         else if (a == "--quiet")
@@ -91,6 +94,17 @@ static async Task<int> RunAsync(string[] args)
             fromBrief = true;
         else if (a == "--skip-baseline")
             skipBaseline = true;
+        else if (a == "--dry-run")
+            chainDryRun = true;
+        else if (a == "--max-depth")
+        {
+            if (i + 1 >= args.Length || args[i + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                Console.Error.WriteLine("Error: --max-depth requires a positive integer");
+                return 2;
+            }
+            chainMaxDepth = args[++i];
+        }
         else
             filteredArgs.Add(a);
     }
@@ -1057,7 +1071,7 @@ static async Task<int> RunAsync(string[] args)
             verb, ticketId, args, cwd, ticketing, workerFactory, config2,
             ResolveLogDir(config2.Events.LogDirectory), sessionContext,
             debugMode, quietMode, summaryJson, errorLocation, noAutoMerge,
-            noAutoResolve, continuePastFailure, fromBrief, noPush, skipBaseline, EffectiveAgentFor,
+            noAutoResolve, continuePastFailure, fromBrief, noPush, skipBaseline, chainDryRun, chainMaxDepth, EffectiveAgentFor,
             batchImplementTicketIds, batchImplementAllChildren);
         dispatchExitCode = iterCode;
         if (iterAction == 2) return iterCode;
@@ -1266,6 +1280,8 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
     bool fromBrief,
     bool noPush,
     bool skipBaseline,
+    bool chainDryRun,
+    string? chainMaxDepth,
     Func<string, string> effectiveAgentFor,
     IReadOnlyList<string>? batchImplementTicketIds,
     bool batchImplementAllChildren = false)
@@ -1596,7 +1612,7 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
         var (chainCode, chainDirect) = await RunChainVerbAsync(
             ticketId, args, cwd, ticketing, eventSink, buildOptions, config2,
             workerFactory, debugMode, debugCaptureDir, enableDigest,
-            noAutoMerge, noAutoResolve, continuePastFailure, fromBrief, noPush, skipBaseline, effectiveAgentFor,
+            noAutoMerge, noAutoResolve, continuePastFailure, fromBrief, noPush, skipBaseline, chainDryRun, chainMaxDepth, effectiveAgentFor,
             batchImplementTicketIds, batchImplementAllChildren);
         // chainDirect=true means return from RunAsync; false means set dispatchExitCode + break
         return (chainCode, chainDirect ? 2 : 1);
@@ -1625,10 +1641,20 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
     bool fromBrief,
     bool noPush,
     bool skipBaseline,
+    bool chainDryRun,
+    string? chainMaxDepth,
     Func<string, string> effectiveAgentFor,
     IReadOnlyList<string>? batchImplementTicketIds,
     bool batchImplementAllChildren = false)
 {
+    var parsedMaxDepth = 16;
+    if (!string.IsNullOrWhiteSpace(chainMaxDepth) &&
+        (!int.TryParse(chainMaxDepth, out parsedMaxDepth) || parsedMaxDepth < 1))
+    {
+        Console.Error.WriteLine("Error: --max-depth must be a positive integer");
+        return (2, true);
+    }
+
     // Collect additional positional ticket IDs beyond args[1] (args[0] is the verb).
     var extraTicketIds = new List<string>();
     for (int i = 2; i < args.Length; i++)
@@ -1816,7 +1842,9 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             TicketId: ticketId,
             Debug: debugMode,
             NoAutoResolve: noAutoResolve,
-            BatchImplementGroup: batchImplementGroup);
+            BatchImplementGroup: batchImplementGroup,
+            DryRun: chainDryRun,
+            MaxDepth: parsedMaxDepth);
 
         ThroughlineBuild.Contracts.Models.ParallelDispatchResult dispatchResult;
         try
@@ -1872,6 +1900,8 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
                     {
                         ["debug"] = debugMode ? "true" : "false",
                         ["no-auto-resolve"] = noAutoResolve ? "true" : "false",
+                        ["dry-run"] = chainDryRun ? "true" : "false",
+                        ["max-depth"] = chainMaxDepth ?? "",
                         ["batch-implement"] = batchImplementGroup switch {
                             null => "",
                             ChainBatchImplementGroup.AllEligibleChildren => "*",
@@ -1907,6 +1937,8 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
         {
             ["debug"] = debugMode ? "true" : "false",
             ["no-auto-resolve"] = noAutoResolve ? "true" : "false",
+            ["dry-run"] = chainDryRun ? "true" : "false",
+            ["max-depth"] = chainMaxDepth ?? "",
             ["batch-implement"] = batchImplementGroup switch {
                 null => "",
                 ChainBatchImplementGroup.AllEligibleChildren => "*",

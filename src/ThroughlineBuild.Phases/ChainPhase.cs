@@ -37,7 +37,11 @@ public record ChainPhaseOptions(
     bool NoAutoResolve = false,
     string? SharedWorktreePath = null,
     ChainCommitRange? ChainCommitRange = null,
-    ChainBatchImplementGroup? BatchImplementGroup = null);
+    ChainBatchImplementGroup? BatchImplementGroup = null,
+    bool DryRun = false,
+    int MaxDepth = 16,
+    int Depth = 0,
+    IReadOnlySet<string>? VisitedTicketUuids = null);
 
 public class ChainPhase
 {
@@ -209,11 +213,71 @@ public class ChainPhase
             }
         }
 
+        if (options.VisitedTicketUuids is not null && options.VisitedTicketUuids.Contains(ticket.Uuid))
+        {
+            totalSw.Stop();
+            return new ChainResult(
+                options.TicketId,
+                steps,
+                ChainOutcome.ParentStoppedEarly,
+                totalSw.Elapsed,
+                $"Cycle detected while traversing ticket tree at {options.TicketId}.");
+        }
+
         // Parent-ticket chain path: recurse to non-terminal children
         var chainChildren = await _ticketing.QueryAsync(new TicketQuery(ParentId: ticket.Uuid), ct).ConfigureAwait(false);
         if (chainChildren.Count > 0)
         {
+            if (options.Depth >= options.MaxDepth)
+            {
+                totalSw.Stop();
+                return new ChainResult(
+                    options.TicketId,
+                    steps,
+                    ChainOutcome.ParentStoppedEarly,
+                    totalSw.Elapsed,
+                    $"Depth cap {options.MaxDepth} reached at {options.TicketId}.");
+            }
+
+            if (options.DryRun)
+            {
+                var plan = await BuildDryRunPlanAsync(ticket, options.MaxDepth, ct).ConfigureAwait(false);
+                PrintDryRunPlan(plan, options.MaxDepth);
+                totalSw.Stop();
+                return new ChainResult(
+                    options.TicketId,
+                    steps,
+                    ChainOutcome.ParentCompleted,
+                    totalSw.Elapsed,
+                    "Dry-run only; no phases were executed.",
+                    ChildResults: plan.PostOrder
+                        .Select(item => new ChainResult(
+                            item.Ticket.Id,
+                            Array.Empty<ChainStep>(),
+                            item.HasLiveChildren ? ChainOutcome.ParentCompleted : ChainOutcome.Skipped,
+                            TimeSpan.Zero,
+                            item.HasLiveChildren ? "Internal node preview." : "Leaf preview."))
+                        .ToList()
+                        .AsReadOnly());
+            }
+
             return await RunParentChainAsync(options, ticket, chainChildren, ct).ConfigureAwait(false);
+        }
+
+        if (options.DryRun)
+        {
+            Console.WriteLine($"[{options.TicketId}] dry-run chain plan (max depth {options.MaxDepth}):");
+            Console.WriteLine("post-order schedule:");
+            Console.WriteLine($"  1. leaf {options.TicketId} -> run plan/implement/review/ship");
+            Console.WriteLine("branch topology:");
+            Console.WriteLine($"  {PhaseWorktreeLayout.BranchName(options.TicketId)} from {_baseOptions.TargetBranch}");
+            totalSw.Stop();
+            return new ChainResult(
+                options.TicketId,
+                steps,
+                ChainOutcome.ParentCompleted,
+                totalSw.Elapsed,
+                "Dry-run only; no phases were executed.");
         }
 
         // Resolve where the chain enters based on the ticket's current state. Backlog/Ready/InReview
@@ -1659,44 +1723,6 @@ public class ChainPhase
             .ThenBy(c => c.Id, StringComparer.Ordinal)
             .ToList();
 
-        // A parent chain operates exactly one level deep: it runs its direct children.
-        // If any eligible child has live children of its own, the tree is deeper than this
-        // command handles. Stop and tell the operator to chain the intermediate ticket
-        // directly, rather than recursing (which previously ran away into Plane's rate limiter).
-        var deeperTickets = (await Task.WhenAll(eligible.Select(async child =>
-        {
-            var grandchildren = await _ticketing
-                .QueryAsync(new TicketQuery(ParentId: child.Uuid), ct).ConfigureAwait(false);
-            var hasLiveGrandchildren = grandchildren
-                .Where(g => g.State != TicketState.Done && g.State != TicketState.Cancelled)
-                .Any(g => !string.Equals(g.Uuid, child.Uuid, StringComparison.Ordinal));
-            return hasLiveGrandchildren ? child.Id : null;
-        })).ConfigureAwait(false))
-            .Where(id => id is not null)
-            .Cast<string>()
-            .ToList();
-
-        if (deeperTickets.Count > 0)
-        {
-            var notice = new ChainStep(
-                PhaseName: "chain",
-                ReworkRoundNumber: -1,
-                Status: Status.Failed,
-                FailureReason: $"grandchildren present under {string.Join(", ", deeperTickets)}",
-                Verdict: null,
-                Duration: TimeSpan.Zero,
-                PhaseSessionId: _sessionIdGenerator());
-            options.OnStep?.Invoke(options.TicketId, notice);
-
-            totalSw.Stop();
-            return new ChainResult(
-                TicketId: options.TicketId,
-                Steps: Array.Empty<ChainStep>(),
-                Outcome: ChainOutcome.ParentHasGrandchildren,
-                TotalDuration: totalSw.Elapsed,
-                FinalRationale: $"Tree is deeper than one level. Chain the intermediate ticket(s) directly: {string.Join(", ", deeperTickets)}.");
-        }
-
         // Build a level-based execution schedule from sibling blocked_by relations so that
         // dependent siblings are serialized while independent siblings still run in order.
         var siblingGraph = await BuildSiblingGraphAsync(eligible, ct).ConfigureAwait(false);
@@ -1707,15 +1733,6 @@ public class ChainPhase
         // edge between them and are unordered relative to each other (Brief 17).
         PrintDispatchOrder(options.TicketId, levels);
 
-        // Create one shared worktree for the entire parent chain. Each child ticket creates
-        // its own branch inside this worktree; ship skips decruft so the worktree stays alive
-        // until all children are done. The worktree is removed once here at chain end.
-        var sharedWorktreeNames = PhaseWorktreeLayout.Compute(parentTicket.Id, parentTicket.Title, _workingDirectory);
-        // Placeholder branch the shared worktree is created on. Children immediately switch the
-        // worktree to their own ticket/<slug> branches, so this branch never receives commits -
-        // it is pure scaffolding and is deleted at chain end (see cleanup below).
-        var sharedChainBranch = $"chain/{sharedWorktreeNames.Slug}";
-        string? sharedWorktreePath = null;
         string? baseRefForSharedWt = null;
         try
         {
@@ -1738,6 +1755,9 @@ public class ChainPhase
         }
         catch { /* non-fatal: chainStartSha stays null */ }
 
+        var sharedWorktreeNames = PhaseWorktreeLayout.Compute(parentTicket.Id, parentTicket.Title, _workingDirectory);
+        var sharedChainBranch = $"chain/{sharedWorktreeNames.Slug}";
+        string? sharedWorktreePath = null;
         if (baseRefForSharedWt is not null && eligible.Count > 0)
         {
             var createResult = await _git.CreateWorktreeAsync(
@@ -1747,11 +1767,6 @@ public class ChainPhase
                 _workingDirectory,
                 ct).ConfigureAwait(false);
 
-            // Self-heal a leftover placeholder branch from a prior chain run that removed its
-            // shared worktree but never deleted the branch. Because chain/<slug> is only ever
-            // scaffolding (children switch to their own branches immediately), a pre-existing one
-            // is safe to delete and recreate. Without this, the stale branch makes creation collide
-            // and forces every re-run into the degraded per-ticket fallback indefinitely.
             if (!createResult.Success)
             {
                 var existing = await _git.ListLocalBranchesAsync(sharedChainBranch, _workingDirectory, ct).ConfigureAwait(false);
@@ -1773,10 +1788,6 @@ public class ChainPhase
             }
             else
             {
-                // Shared worktree could not be created (commonly: the path already exists from a
-                // prior interrupted parent chain). The chain still runs, but each child now builds
-                // in its own standalone worktree with per-ticket decruft - a meaningfully different
-                // layout. Surface it loudly instead of degrading silently.
                 Console.Error.WriteLine(
                     $"[{parentTicket.Id}] warning: shared chain worktree unavailable " +
                     $"({createResult.FailureReason}); falling back to per-ticket worktrees. " +
@@ -1799,18 +1810,12 @@ public class ChainPhase
         var allChildResults = new List<ChainResult>();
         bool anyStoppedEarly = false;
 
-        // Batch implement branch: when a batch group is declared and a batch worker is wired in,
-        // run ONE implement session for the whole group inside the shared worktree.
-        // Only tickets that are in the eligible set and in Ready state join the batch;
-        // tickets not in the group (or not in Ready state) are dispatched per-ticket below.
         HashSet<string>? batchedTicketIds = null;
         if (options.BatchImplementGroup is not null
             && _batchWorker is not null
             && sharedWorktreePath is not null
             && !anyStoppedEarly)
         {
-            // AllEligibleChildren: flatten topological levels in dispatch order, keep only Ready.
-            // ExplicitList: filter to the operator-supplied IDs that are in the eligible set and Ready.
             IReadOnlyList<Ticket> batchTickets;
             if (options.BatchImplementGroup is ChainBatchImplementGroup.AllEligibleChildren)
             {
@@ -1835,10 +1840,6 @@ public class ChainPhase
 
             if (batchTickets.Count > 0)
             {
-                // Batch size gate (TLB-454): check declared group against configured caps before
-                // starting any session. When any cap is exceeded, fall back to the per-ticket
-                // chain path instead of running an oversized batch. The triggering cap is named
-                // in the run output and in the event log so the downgrade is never silent.
                 var capViolation = CheckBatchSizeCaps(batchTickets, _baseOptions);
                 if (capViolation is not null)
                 {
@@ -1857,49 +1858,44 @@ public class ChainPhase
                             ["cap"] = capViolation,
                             ["ticket_count"] = batchTickets.Count
                         }), ct).ConfigureAwait(false);
-                    // Do not set batchedTicketIds; per-ticket loop below handles all group members.
                 }
                 else
                 {
+                    batchedTicketIds = new HashSet<string>(
+                        batchTickets.Select(t => t.Id), StringComparer.Ordinal);
 
-                batchedTicketIds = new HashSet<string>(
-                    batchTickets.Select(t => t.Id), StringComparer.Ordinal);
+                    var batchOutcome = await RunBatchImplementSessionAsync(
+                        options, batchTickets, sharedWorktreePath, baseRefForSharedWt!, chainStartSha, ct)
+                        .ConfigureAwait(false);
 
-                var batchOutcome = await RunBatchImplementSessionAsync(
-                    options, batchTickets, sharedWorktreePath, baseRefForSharedWt!, chainStartSha, ct)
-                    .ConfigureAwait(false);
-
-                foreach (var br in batchOutcome.Results)
-                {
-                    allChildResults.Add(br);
-                    if (!IsChainSuccess(br.Outcome))
+                    foreach (var br in batchOutcome.Results)
                     {
-                        anyStoppedEarly = true;
-                        break;
+                        allChildResults.Add(br);
+                        if (!IsChainSuccess(br.Outcome))
+                        {
+                            anyStoppedEarly = true;
+                            break;
+                        }
+                    }
+
+                    if (!anyStoppedEarly
+                        && _batchWorker is not null
+                        && batchOutcome.ConfirmedTickets is not null
+                        && batchOutcome.ConfirmedTickets.Count > 0)
+                    {
+                        var batchReviewPassed = await RunBatchReviewAndReworkAsync(
+                            batchTickets,
+                            batchOutcome.ConfirmedTickets,
+                            batchOutcome.BranchName,
+                            batchOutcome.BaseRef,
+                            sharedWorktreePath,
+                            chainStartSha,
+                            ct).ConfigureAwait(false);
+
+                        if (!batchReviewPassed)
+                            anyStoppedEarly = true;
                     }
                 }
-
-                // Combined review + rework loop: review the full batch stack diff, then route
-                // any Rework verdict to localized (single ticket) or cross-ticket rework and
-                // re-review. Fail stops immediately. MaxReworkRounds caps the loop.
-                if (!anyStoppedEarly
-                    && _batchWorker is not null
-                    && batchOutcome.ConfirmedTickets is not null
-                    && batchOutcome.ConfirmedTickets.Count > 0)
-                {
-                    var batchReviewPassed = await RunBatchReviewAndReworkAsync(
-                        batchTickets,
-                        batchOutcome.ConfirmedTickets,
-                        batchOutcome.BranchName,
-                        batchOutcome.BaseRef,
-                        sharedWorktreePath!,
-                        chainStartSha,
-                        ct).ConfigureAwait(false);
-
-                    if (!batchReviewPassed)
-                        anyStoppedEarly = true;
-                }
-                } // end else (cap not exceeded)
             }
         }
 
@@ -1953,7 +1949,9 @@ public class ChainPhase
                 {
                     TicketId = child.Id,
                     SharedWorktreePath = sharedWorktreePath,
-                    ChainCommitRange = childCommitRange
+                    ChainCommitRange = childCommitRange,
+                    Depth = options.Depth + 1,
+                    VisitedTicketUuids = AddVisited(options.VisitedTicketUuids, parentTicket.Uuid)
                 };
                 var childResult = await RunAsync(childOptions, ct).ConfigureAwait(false);
 
@@ -1980,24 +1978,14 @@ public class ChainPhase
 
         var childResults = allChildResults;
 
-        // Remove the shared worktree now that all children are done. Failure is non-fatal.
         if (sharedWorktreePath is not null)
         {
             try
             {
                 var decrufter = new WorktreeDecrufter(_git);
                 await decrufter.DecruftAsync(sharedWorktreePath, _workingDirectory, ct).ConfigureAwait(false);
-                // The decrufter removes the worktree directory but never deletes branches. Delete the
-                // chain/<slug> placeholder here so it does not leak and collide with the next run's
-                // shared-worktree creation. force:true because it is unmerged scaffolding by design.
                 await _git.DeleteBranchAsync(sharedChainBranch, force: true, _workingDirectory, ct).ConfigureAwait(false);
 
-                // Delete each shipped child's ticket/<id> branch. Per-child ship leaves these in
-                // place (the branch was checked out in the now-removed shared worktree, so it could
-                // not be deleted in-flight). Only successfully-shipped children have a branch to drop;
-                // RatifiedObsolete/stopped children either never cut one or carry unmerged work, so
-                // they are skipped. force:true because the branch is merged into the local target by
-                // the child's own ship - the same reason ShipPhase force-deletes (see Step 13).
                 foreach (var childResult in allChildResults)
                 {
                     if (childResult.Outcome != ChainOutcome.Completed)
@@ -2026,6 +2014,112 @@ public class ChainPhase
             TotalDuration: totalSw.Elapsed,
             FinalRationale: finalRationale,
             ChildResults: childResults.AsReadOnly());
+    }
+
+    private static IReadOnlySet<string> AddVisited(IReadOnlySet<string>? visited, string uuid)
+    {
+        var next = visited is null
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : new HashSet<string>(visited, StringComparer.Ordinal);
+        next.Add(uuid);
+        return next;
+    }
+
+    private sealed record DryRunItem(Ticket Ticket, int Depth, bool HasLiveChildren, string IntegrationBranch);
+
+    private sealed record DryRunPlan(
+        Ticket Root,
+        IReadOnlyList<DryRunItem> PostOrder,
+        IReadOnlyList<string> Warnings);
+
+    private async Task<DryRunPlan> BuildDryRunPlanAsync(Ticket root, int maxDepth, CancellationToken ct)
+    {
+        var items = new List<DryRunItem>();
+        var warnings = new List<string>();
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+
+        await VisitDryRunAsync(root, depth: 0, parentIntegrationBranch: _baseOptions.TargetBranch, maxDepth, visited, items, warnings, ct)
+            .ConfigureAwait(false);
+
+        return new DryRunPlan(root, items.AsReadOnly(), warnings.AsReadOnly());
+    }
+
+    private async Task VisitDryRunAsync(
+        Ticket ticket,
+        int depth,
+        string parentIntegrationBranch,
+        int maxDepth,
+        HashSet<string> visited,
+        List<DryRunItem> items,
+        List<string> warnings,
+        CancellationToken ct)
+    {
+        if (!visited.Add(ticket.Uuid))
+        {
+            warnings.Add($"cycle detected at {ticket.Id}; subtree omitted");
+            return;
+        }
+
+        var children = await _ticketing.QueryAsync(new TicketQuery(ParentId: ticket.Uuid), ct).ConfigureAwait(false);
+        var eligible = children
+            .Where(c => c.State != TicketState.Done && c.State != TicketState.Cancelled)
+            .Where(c => !string.Equals(c.Uuid, ticket.Uuid, StringComparison.Ordinal))
+            .OrderBy(c => TicketNumber(c.Id))
+            .ThenBy(c => c.Id, StringComparer.Ordinal)
+            .ToList();
+
+        var integrationBranch = eligible.Count > 0
+            ? $"chain/{PhaseWorktreeLayout.Compute(ticket.Id, ticket.Title, _workingDirectory).Slug}"
+            : PhaseWorktreeLayout.BranchName(ticket.Id);
+
+        if (eligible.Count > 0)
+        {
+            if (depth >= maxDepth)
+            {
+                warnings.Add($"depth cap {maxDepth} reached at {ticket.Id}; subtree omitted");
+            }
+            else
+            {
+                var graph = await BuildSiblingGraphAsync(eligible, ct).ConfigureAwait(false);
+                var levels = TopologicalSorter.ComputeLevels(graph);
+                foreach (var childId in levels.SelectMany(level => level))
+                {
+                    var child = eligible.First(c => string.Equals(c.Id, childId, StringComparison.Ordinal));
+                    await VisitDryRunAsync(child, depth + 1, integrationBranch, maxDepth, visited, items, warnings, ct)
+                        .ConfigureAwait(false);
+                }
+            }
+        }
+
+        items.Add(new DryRunItem(ticket, depth, eligible.Count > 0, integrationBranch));
+        visited.Remove(ticket.Uuid);
+    }
+
+    private static void PrintDryRunPlan(DryRunPlan plan, int maxDepth)
+    {
+        Console.WriteLine($"[{plan.Root.Id}] dry-run chain plan (max depth {maxDepth}):");
+        Console.WriteLine("post-order schedule:");
+        for (int i = 0; i < plan.PostOrder.Count; i++)
+        {
+            var item = plan.PostOrder[i];
+            var action = item.HasLiveChildren
+                ? $"roll up internal node on {item.IntegrationBranch}"
+                : "run plan/implement/review/ship";
+            Console.WriteLine($"  {i + 1}. {new string(' ', item.Depth * 2)}{item.Ticket.Id} - {action}");
+        }
+
+        Console.WriteLine("branch topology:");
+        foreach (var item in plan.PostOrder.Where(i => i.HasLiveChildren).OrderBy(i => i.Depth).ThenBy(i => TicketNumber(i.Ticket.Id)))
+            Console.WriteLine($"  {item.IntegrationBranch} integrates subtree for {item.Ticket.Id}");
+        foreach (var item in plan.PostOrder.Where(i => !i.HasLiveChildren))
+            Console.WriteLine($"  {PhaseWorktreeLayout.BranchName(item.Ticket.Id)} forks from accumulated branch before {item.Ticket.Id}");
+
+        if (plan.Warnings.Count > 0)
+        {
+            Console.WriteLine("warnings:");
+            foreach (var warning in plan.Warnings)
+                Console.WriteLine($"  {warning}");
+        }
     }
 
     /// <summary>

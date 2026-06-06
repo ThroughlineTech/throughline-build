@@ -112,6 +112,26 @@ public class ChainCommandTests
     }
 
     [Fact]
+    public async Task DryRunAndMaxDepth_are_forwarded_to_runner()
+    {
+        var (cmd, runner, _) = BuildCommand();
+        var ctx = new TicketCommandContext(
+            "TLB-1",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["debug"] = "false",
+                ["dry-run"] = "true",
+                ["max-depth"] = "4"
+            });
+
+        var (result, _) = await RunCapturingStdout(cmd, ctx);
+
+        Assert.True(result.Success);
+        Assert.True(runner.LastDryRun);
+        Assert.Equal(4, runner.LastMaxDepth);
+    }
+
+    [Fact]
     public async Task HappyPath_returns_success()
     {
         var (cmd, runner, _) = BuildCommand();
@@ -668,7 +688,9 @@ internal sealed class FakeThrowingChainRunner : IChainRunner
         Action<string, ChainStep> onStep,
         CancellationToken ct,
         bool noAutoResolve = false,
-        ChainBatchImplementGroup? batchImplementGroup = null)
+        ChainBatchImplementGroup? batchImplementGroup = null,
+        bool dryRun = false,
+        int maxDepth = 16)
         => throw _exception;
 }
 
@@ -688,6 +710,8 @@ internal sealed class FakeChainRunner : IChainRunner
     public bool LastDebug { get; private set; }
     public string? LastTicketId { get; private set; }
     public ChainBatchImplementGroup? LastBatchImplementGroup { get; private set; }
+    public bool LastDryRun { get; private set; }
+    public int LastMaxDepth { get; private set; }
 
     public Task<ChainResult> RunAsync(
         string ticketId,
@@ -695,11 +719,15 @@ internal sealed class FakeChainRunner : IChainRunner
         Action<string, ChainStep> onStep,
         CancellationToken ct,
         bool noAutoResolve = false,
-        ChainBatchImplementGroup? batchImplementGroup = null)
+        ChainBatchImplementGroup? batchImplementGroup = null,
+        bool dryRun = false,
+        int maxDepth = 16)
     {
         LastTicketId = ticketId;
         LastDebug = debug;
         LastBatchImplementGroup = batchImplementGroup;
+        LastDryRun = dryRun;
+        LastMaxDepth = maxDepth;
 
         // Call onStep for each step to simulate streaming behavior.
         foreach (var step in Result.Steps)

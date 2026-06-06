@@ -41,6 +41,16 @@ public sealed class ChainCommand : ITicketCommand
         // Extract --no-auto-resolve flag from args.
         bool noAutoResolve = ctx.Args.TryGetValue("no-auto-resolve", out var narStr) && narStr == "true";
 
+        bool dryRun = ctx.Args.TryGetValue("dry-run", out var dryRunStr) && dryRunStr == "true";
+
+        int maxDepth = 16;
+        if (ctx.Args.TryGetValue("max-depth", out var maxDepthStr) &&
+            !string.IsNullOrWhiteSpace(maxDepthStr) &&
+            (!int.TryParse(maxDepthStr, out maxDepth) || maxDepth < 1))
+        {
+            return new CommandResult(false, "--max-depth must be a positive integer");
+        }
+
         ChainBatchImplementGroup? batchImplementGroup = null;
         if (ctx.Args.TryGetValue("batch-implement", out var batchImplementStr) &&
             !string.IsNullOrWhiteSpace(batchImplementStr))
@@ -88,7 +98,9 @@ public sealed class ChainCommand : ITicketCommand
                 (id, step) => Console.WriteLine(FormatStepLine(id, step)),
                 ct,
                 noAutoResolve,
-                batchImplementGroup).ConfigureAwait(false);
+                batchImplementGroup,
+                dryRun,
+                maxDepth).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {

@@ -1109,11 +1109,11 @@ public class ChainPhaseTests
     }
 
     [Fact]
-    public async Task RunAsync_ParentWhoseChildHasItsOwnChildren_StopsWithParentHasGrandchildren_RunsNothing()
+    public async Task RunAsync_ParentWhoseChildHasItsOwnChildren_RunsGrandchildThenRollsUpParents()
     {
-        // Operation -> plan -> brief: a 3-level tree. Chaining the operation must NOT
-        // recurse into the grandchildren (that was the infinite-recursion bug). It
-        // stops and tells the operator to chain the intermediate plan directly.
+        // Operation -> plan -> brief: a 3-level tree. Chaining the operation now
+        // recurses post-order: run the brief leaf, roll up the plan, then roll up
+        // the operation.
         var parent = MakeTicket(TicketState.Backlog);                              // uuid ticket-uuid-1
         var plan = MakeChildTicket("TLB-2", "plan-uuid", TicketState.Backlog);     // child of parent
         var brief = MakeChildTicket("TLB-3", "brief-uuid", TicketState.Backlog);   // child of plan
@@ -1122,14 +1122,21 @@ public class ChainPhaseTests
         ticketing.SeedChildren("ticket-uuid-1", new[] { plan });   // parent -> plan
         ticketing.SeedChildren("plan-uuid", new[] { brief });      // plan -> brief (grandchild)
 
-        var chain = BuildChain(ticketing, new FakeWorkerAgent(null), new FakeWorkerAgent(null), new Queue<IVerifier>());
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
         var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
 
-        Assert.Equal(ChainOutcome.ParentHasGrandchildren, result.Outcome);
-        Assert.Contains("TLB-2", result.FinalRationale);
-        Assert.Null(result.ChildResults);
-        // Nothing ran: no phase transitions, no comments posted.
-        Assert.Empty(ticketing.Transitions);
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        var planResult = Assert.Single(result.ChildResults!);
+        Assert.Equal("TLB-2", planResult.TicketId);
+        Assert.Equal(ChainOutcome.ParentCompleted, planResult.Outcome);
+        var briefResult = Assert.Single(planResult.ChildResults!);
+        Assert.Equal("TLB-3", briefResult.TicketId);
+        Assert.Equal(ChainOutcome.Completed, briefResult.Outcome);
     }
 
     [Fact]

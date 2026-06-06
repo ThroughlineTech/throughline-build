@@ -16,5 +16,7 @@ public interface IChainRunner
         Action<string, ChainStep> onStep,
         CancellationToken ct,
         bool noAutoResolve = false,
-        ChainBatchImplementGroup? batchImplementGroup = null);
+        ChainBatchImplementGroup? batchImplementGroup = null,
+        bool dryRun = false,
+        int maxDepth = 16);
 }

@@ -23,14 +23,18 @@ public sealed class DefaultChainRunner : IChainRunner
         Action<string, ChainStep> onStep,
         CancellationToken ct,
         bool noAutoResolve = false,
-        ChainBatchImplementGroup? batchImplementGroup = null)
+        ChainBatchImplementGroup? batchImplementGroup = null,
+        bool dryRun = false,
+        int maxDepth = 16)
     {
         var options = new ChainPhaseOptions(
             ticketId,
             debug,
             onStep,
             noAutoResolve,
-            BatchImplementGroup: batchImplementGroup);
+            BatchImplementGroup: batchImplementGroup,
+            DryRun: dryRun,
+            MaxDepth: maxDepth);
         return _chainPhase.RunAsync(options, ct);
     }
 }
