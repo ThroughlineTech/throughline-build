@@ -103,18 +103,20 @@ static async Task<int> RunAsync(string[] args)
 
     var verb = args[0];
     IReadOnlyList<string>? batchImplementTicketIds = null;
+    bool batchImplementAllChildren = false;
     if (verb == "chain")
     {
-        var (extractedBatchTicketIds, batchImplementError, argsAfterBatchImplementFlag) =
+        var (extractedBatchTicketIds, isAllChildren, batchImplementError, argsAfterBatchImplementFlag) =
             CliArgParser.ExtractBatchImplementFlag(args);
         if (batchImplementError is not null)
         {
             Console.Error.WriteLine(batchImplementError);
-            Console.Error.WriteLine("Usage: build chain <ticket-id> [--batch-implement TLB-1,TLB-2,...]");
+            Console.Error.WriteLine("Usage: build chain <ticket-id> [--batch-implement [TLB-1,TLB-2,...]]");
             return 2;
         }
 
         batchImplementTicketIds = extractedBatchTicketIds;
+        batchImplementAllChildren = isAllChildren;
         args = ((List<string>)argsAfterBatchImplementFlag).ToArray();
     }
 
@@ -1056,7 +1058,7 @@ static async Task<int> RunAsync(string[] args)
             ResolveLogDir(config2.Events.LogDirectory), sessionContext,
             debugMode, quietMode, summaryJson, errorLocation, noAutoMerge,
             noAutoResolve, continuePastFailure, fromBrief, noPush, skipBaseline, EffectiveAgentFor,
-            batchImplementTicketIds);
+            batchImplementTicketIds, batchImplementAllChildren);
         dispatchExitCode = iterCode;
         if (iterAction == 2) return iterCode;
         if (iterAction == 1) break;
@@ -1265,7 +1267,8 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
     bool noPush,
     bool skipBaseline,
     Func<string, string> effectiveAgentFor,
-    IReadOnlyList<string>? batchImplementTicketIds)
+    IReadOnlyList<string>? batchImplementTicketIds,
+    bool batchImplementAllChildren = false)
 {
     var sessionId = Guid.NewGuid().ToString("N");
     var fileStem = SessionFileNameBuilder.Build(
@@ -1592,7 +1595,7 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
             ticketId, args, cwd, ticketing, eventSink, buildOptions, config2,
             workerFactory, debugMode, debugCaptureDir, enableDigest,
             noAutoMerge, noAutoResolve, continuePastFailure, fromBrief, noPush, skipBaseline, effectiveAgentFor,
-            batchImplementTicketIds);
+            batchImplementTicketIds, batchImplementAllChildren);
         // chainDirect=true means return from RunAsync; false means set dispatchExitCode + break
         return (chainCode, chainDirect ? 2 : 1);
     }
@@ -1621,7 +1624,8 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
     bool noPush,
     bool skipBaseline,
     Func<string, string> effectiveAgentFor,
-    IReadOnlyList<string>? batchImplementTicketIds)
+    IReadOnlyList<string>? batchImplementTicketIds,
+    bool batchImplementAllChildren = false)
 {
     // Collect additional positional ticket IDs beyond args[1] (args[0] is the verb).
     var extraTicketIds = new List<string>();
@@ -1729,7 +1733,12 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
         chainShipFactory: chainShipPhaseFactory);
 
     ChainBatchImplementGroup? batchImplementGroup = null;
-    if (batchImplementTicketIds is { Count: > 0 })
+    if (batchImplementAllChildren)
+    {
+        // Bare --batch-implement flag: batch all eligible children discovered at runtime.
+        batchImplementGroup = new ChainBatchImplementGroup.AllEligibleChildren();
+    }
+    else if (batchImplementTicketIds is { Count: > 0 })
     {
         var validation = await ValidateBatchImplementGroupAsync(ticketing, ticketId, batchImplementTicketIds, CancellationToken.None)
             .ConfigureAwait(false);
@@ -1858,7 +1867,12 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
                     {
                         ["debug"] = debugMode ? "true" : "false",
                         ["no-auto-resolve"] = noAutoResolve ? "true" : "false",
-                        ["batch-implement"] = batchImplementGroup is null ? "" : string.Join(",", batchImplementGroup.TicketIds)
+                        ["batch-implement"] = batchImplementGroup switch {
+                            null => "",
+                            ChainBatchImplementGroup.AllEligibleChildren => "*",
+                            ChainBatchImplementGroup.ExplicitList e => string.Join(",", e.TicketIds),
+                            _ => ""
+                        }
                     });
                     var singleCommand = new ChainCommand(chainRunner, ticketing);
                     await singleCommand.ExecuteAsync(singleCtx, token).ConfigureAwait(false);
@@ -1888,7 +1902,12 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
         {
             ["debug"] = debugMode ? "true" : "false",
             ["no-auto-resolve"] = noAutoResolve ? "true" : "false",
-            ["batch-implement"] = batchImplementGroup is null ? "" : string.Join(",", batchImplementGroup.TicketIds)
+            ["batch-implement"] = batchImplementGroup switch {
+                null => "",
+                ChainBatchImplementGroup.AllEligibleChildren => "*",
+                ChainBatchImplementGroup.ExplicitList e => string.Join(",", e.TicketIds),
+                _ => ""
+            }
         });
         var cmdResult = await chainCommand.ExecuteAsync(chainCtx, cts.Token).ConfigureAwait(false);
 
@@ -1973,7 +1992,7 @@ static async Task<(ChainBatchImplementGroup? Group, string? Error)> ValidateBatc
             $"{chainTicketId}; not siblings in that group: {string.Join(", ", nonSiblingIds)}");
     }
 
-    return (new ChainBatchImplementGroup(batchTicketIds.ToArray()), null);
+    return (new ChainBatchImplementGroup.ExplicitList(batchTicketIds.ToArray()), null);
 }
 
 // Returns the first line of ex.StackTrace, trimmed, or "(no stack trace)" when absent.

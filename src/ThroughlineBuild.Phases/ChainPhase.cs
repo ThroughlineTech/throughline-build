@@ -10,7 +10,25 @@ using ThroughlineBuild.Workers.Common;
 
 namespace ThroughlineBuild.Phases;
 
-public record ChainBatchImplementGroup(IReadOnlyList<string> TicketIds);
+/// <summary>
+/// Represents the batch implement group for a parent chain.
+/// Either all eligible children (auto-discovered at runtime in dependency/numeric order)
+/// or an explicit operator-supplied list.
+/// </summary>
+public abstract record ChainBatchImplementGroup
+{
+    /// <summary>
+    /// Batch all eligible direct children, discovered at runtime in dependency/numeric order.
+    /// Used when --batch-implement is specified without a ticket list.
+    /// </summary>
+    public sealed record AllEligibleChildren : ChainBatchImplementGroup;
+
+    /// <summary>
+    /// Batch exactly the listed ticket IDs in the specified order.
+    /// Used when --batch-implement is specified with an explicit comma-separated list.
+    /// </summary>
+    public sealed record ExplicitList(IReadOnlyList<string> TicketIds) : ChainBatchImplementGroup;
+}
 
 public record ChainPhaseOptions(
     string TicketId,
@@ -1791,12 +1809,29 @@ public class ChainPhase
             && sharedWorktreePath is not null
             && !anyStoppedEarly)
         {
-            var batchGroup = options.BatchImplementGroup;
-            var batchTickets = batchGroup.TicketIds
-                .Where(id => eligible.Any(e => string.Equals(e.Id, id, StringComparison.Ordinal)))
-                .Select(id => eligible.First(e => string.Equals(e.Id, id, StringComparison.Ordinal)))
-                .Where(t => t.State == TicketState.Ready)
-                .ToList();
+            // AllEligibleChildren: flatten topological levels in dispatch order, keep only Ready.
+            // ExplicitList: filter to the operator-supplied IDs that are in the eligible set and Ready.
+            IReadOnlyList<Ticket> batchTickets;
+            if (options.BatchImplementGroup is ChainBatchImplementGroup.AllEligibleChildren)
+            {
+                batchTickets = levels
+                    .SelectMany(level => level
+                        .Select(id => eligible.First(c => string.Equals(c.Id, id, StringComparison.Ordinal))))
+                    .Where(t => t.State == TicketState.Ready)
+                    .ToList();
+            }
+            else if (options.BatchImplementGroup is ChainBatchImplementGroup.ExplicitList explicitGroup)
+            {
+                batchTickets = explicitGroup.TicketIds
+                    .Where(id => eligible.Any(e => string.Equals(e.Id, id, StringComparison.Ordinal)))
+                    .Select(id => eligible.First(e => string.Equals(e.Id, id, StringComparison.Ordinal)))
+                    .Where(t => t.State == TicketState.Ready)
+                    .ToList();
+            }
+            else
+            {
+                batchTickets = Array.Empty<Ticket>();
+            }
 
             if (batchTickets.Count > 0)
             {

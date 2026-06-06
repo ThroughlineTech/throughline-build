@@ -1664,7 +1664,7 @@ public class ChainPhaseTests
         var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
             batchWorker: batchWorker, git: git, forwardGitToChain: true);
 
-        var batchGroup = new ChainBatchImplementGroup(new[] { "TLB-2", "TLB-3" });
+        var batchGroup = new ChainBatchImplementGroup.ExplicitList(new[] { "TLB-2", "TLB-3" });
         var result = await chain.RunAsync(
             new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
             CancellationToken.None);
@@ -1755,7 +1755,7 @@ public class ChainPhaseTests
         var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
             batchWorker: batchWorker, git: git, forwardGitToChain: true);
 
-        var batchGroup = new ChainBatchImplementGroup(new[] { "TLB-2", "TLB-3" });
+        var batchGroup = new ChainBatchImplementGroup.ExplicitList(new[] { "TLB-2", "TLB-3" });
         var result = await chain.RunAsync(
             new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
             CancellationToken.None);
@@ -1799,7 +1799,7 @@ public class ChainPhaseTests
         var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
             batchWorker: batchWorker, git: git, forwardGitToChain: true);
 
-        var batchGroup = new ChainBatchImplementGroup(new[] { "TLB-2", "TLB-3" });
+        var batchGroup = new ChainBatchImplementGroup.ExplicitList(new[] { "TLB-2", "TLB-3" });
         var result = await chain.RunAsync(
             new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
             CancellationToken.None);
@@ -1839,7 +1839,7 @@ public class ChainPhaseTests
         var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
             batchWorker: batchWorker, git: git, forwardGitToChain: true);
 
-        var batchGroup = new ChainBatchImplementGroup(new[] { "TLB-2", "TLB-3" });
+        var batchGroup = new ChainBatchImplementGroup.ExplicitList(new[] { "TLB-2", "TLB-3" });
         var result = await chain.RunAsync(
             new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
             CancellationToken.None);
@@ -1883,7 +1883,7 @@ public class ChainPhaseTests
         var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
             batchWorker: batchWorker, git: git, forwardGitToChain: true);
 
-        var batchGroup = new ChainBatchImplementGroup(new[] { "TLB-2", "TLB-3" });
+        var batchGroup = new ChainBatchImplementGroup.ExplicitList(new[] { "TLB-2", "TLB-3" });
         var result = await chain.RunAsync(
             new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
             CancellationToken.None);
@@ -1926,7 +1926,7 @@ public class ChainPhaseTests
         var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
             batchWorker: batchWorker, git: git, forwardGitToChain: true);
 
-        var batchGroup = new ChainBatchImplementGroup(new[] { "TLB-2", "TLB-3" });
+        var batchGroup = new ChainBatchImplementGroup.ExplicitList(new[] { "TLB-2", "TLB-3" });
         var result = await chain.RunAsync(
             new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
             CancellationToken.None);
@@ -1989,7 +1989,7 @@ public class ChainPhaseTests
         var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
             batchWorker: batchWorker, git: git, forwardGitToChain: true);
 
-        var batchGroup = new ChainBatchImplementGroup(new[] { "TLB-2", "TLB-3" });
+        var batchGroup = new ChainBatchImplementGroup.ExplicitList(new[] { "TLB-2", "TLB-3" });
         var result = await chain.RunAsync(
             new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
             CancellationToken.None);
@@ -2008,6 +2008,129 @@ public class ChainPhaseTests
             .Where(c => c.html.Contains("[implemented_at:"))
             .ToList();
         Assert.Empty(implementedAtComments);
+    }
+
+    // -------------------------------------------------------------------------
+    // AllEligibleChildren batch tests (TLB-473)
+    // -------------------------------------------------------------------------
+
+    // Bare --batch-implement: AllEligibleChildren uses the full eligible set in dispatch order.
+    // All children are Ready so both join the batch - same as explicit list with same IDs.
+    [Fact]
+    public async Task RunAsync_AllEligibleChildren_AllReadyChildren_BatchesAllInOrder()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Ready);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Ready);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+
+        var perTicketResults = new List<BatchTicketResult>
+        {
+            new BatchTicketResult("TLB-2", "aaa000", 0, Array.Empty<string>(), "SUMMARY_2"),
+            new BatchTicketResult("TLB-3", "bbb111", 1, Array.Empty<string>(), "SUMMARY_3"),
+        };
+        var batchWorker = new BatchFakeWorkerAgent(tickets: perTicketResults);
+
+        var git = new FakeGitClientChain();
+        git.LogShasResult = new[] { "bbb111", "aaa000" };
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            batchWorker: batchWorker, git: git, forwardGitToChain: true);
+
+        // AllEligibleChildren: no explicit list - discovers children at runtime.
+        var batchGroup = new ChainBatchImplementGroup.AllEligibleChildren();
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
+            CancellationToken.None);
+
+        // Both children batched: one batch-implement session + one combined review pass = 2 calls.
+        Assert.Equal(2, batchWorker.CallCount);
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        Assert.Equal(2, result.ChildResults!.Count);
+        Assert.All(result.ChildResults, r => Assert.Equal(ChainOutcome.BatchImplemented, r.Outcome));
+    }
+
+    // AllEligibleChildren with no eligible children (all Done): batch worker never called,
+    // falls through to no-children behavior (ParentCompleted with empty child list).
+    [Fact]
+    public async Task RunAsync_AllEligibleChildren_NoEligibleChildren_BatchWorkerNotCalled()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        // Both children are Done: not eligible for batching or per-ticket chain.
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Done);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Done);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        var batchWorker = new BatchFakeWorkerAgent();
+
+        var git = new FakeGitClientChain();
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            batchWorker: batchWorker, git: git, forwardGitToChain: true);
+
+        var batchGroup = new ChainBatchImplementGroup.AllEligibleChildren();
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
+            CancellationToken.None);
+
+        // Batch worker never invoked when there are no eligible (non-Done/Cancelled) children.
+        Assert.Equal(0, batchWorker.CallCount);
+        // Parent chain completes with no child results (all children were already terminal).
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+    }
+
+    // AllEligibleChildren: when auto-assembled group exceeds the max_tickets cap the chain
+    // falls back to per-ticket dispatch for all children rather than running a batch session.
+    [Fact]
+    public async Task RunAsync_AllEligibleChildren_CapExceeded_FallsBackToPerTicket()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Ready);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Ready);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        // Two children, two reviews needed for per-ticket path.
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        var batchWorker = new BatchFakeWorkerAgent();
+
+        var git = new FakeGitClientChain();
+        // Cap of 1 ticket: 2 children will exceed it, triggering per-ticket fallback.
+        var tightCaps = new BuildOptions(
+            SessionId: "test",
+            WorkerName: "claude-code",
+            WorkerTimeout: TimeSpan.FromMinutes(5),
+            BatchMaxTickets: 1);
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            batchWorker: batchWorker, git: git, forwardGitToChain: true, baseOptions: tightCaps);
+
+        var batchGroup = new ChainBatchImplementGroup.AllEligibleChildren();
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
+            CancellationToken.None);
+
+        // Cap exceeded: batch worker not called; per-ticket chain ran for both children.
+        Assert.Equal(0, batchWorker.CallCount);
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        Assert.Equal(2, result.ChildResults!.Count);
+        // Per-ticket chain runs each child through full plan/implement/review/ship.
+        Assert.All(result.ChildResults, r => Assert.Equal(ChainOutcome.Completed, r.Outcome));
     }
 
     private sealed class FakeGitClientChain : IGitClient

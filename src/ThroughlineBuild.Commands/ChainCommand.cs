@@ -45,11 +45,19 @@ public sealed class ChainCommand : ITicketCommand
         if (ctx.Args.TryGetValue("batch-implement", out var batchImplementStr) &&
             !string.IsNullOrWhiteSpace(batchImplementStr))
         {
-            var ticketIds = batchImplementStr.Split(',')
-                .Select(id => id.Trim())
-                .Where(id => id.Length > 0)
-                .ToArray();
-            batchImplementGroup = new ChainBatchImplementGroup(ticketIds);
+            if (batchImplementStr == "*")
+            {
+                // "*" is the sentinel written by Program.cs for the bare --batch-implement flag.
+                batchImplementGroup = new ChainBatchImplementGroup.AllEligibleChildren();
+            }
+            else
+            {
+                var ticketIds = batchImplementStr.Split(',')
+                    .Select(id => id.Trim())
+                    .Where(id => id.Length > 0)
+                    .ToArray();
+                batchImplementGroup = new ChainBatchImplementGroup.ExplicitList(ticketIds);
+            }
         }
 
         Ticket? initialTicket = null;

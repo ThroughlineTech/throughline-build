@@ -97,9 +97,10 @@ public class MultiTicketArgParsingTests
     public void ExtractBatchImplementFlag_ValidList_ReturnsOrderedTicketsAndRemovesFlagPair()
     {
         var args = new[] { "chain", "TLB-418", "--batch-implement", "TLB-419,TLB-420,TLB-421", "--debug" };
-        var (ticketIds, error, remaining) = CliArgParser.ExtractBatchImplementFlag(args);
+        var (ticketIds, isAllChildren, error, remaining) = CliArgParser.ExtractBatchImplementFlag(args);
 
         Assert.Null(error);
+        Assert.False(isAllChildren);
         Assert.Equal(new[] { "TLB-419", "TLB-420", "TLB-421" }, ticketIds);
         Assert.Equal(new[] { "chain", "TLB-418", "--debug" }, remaining);
     }
@@ -113,21 +114,55 @@ public class MultiTicketArgParsingTests
     public void ExtractBatchImplementFlag_MalformedList_ReturnsOperatorError(string list)
     {
         var args = new[] { "chain", "TLB-418", "--batch-implement", list };
-        var (ticketIds, error, _) = CliArgParser.ExtractBatchImplementFlag(args);
+        var (ticketIds, isAllChildren, error, _) = CliArgParser.ExtractBatchImplementFlag(args);
 
         Assert.Null(ticketIds);
+        Assert.False(isAllChildren);
         Assert.NotNull(error);
         Assert.Contains("--batch-implement", error);
     }
 
+    // Bare flag at end of args: returns AllChildren sentinel, no error.
     [Fact]
-    public void ExtractBatchImplementFlag_MissingValue_ReturnsOperatorError()
+    public void ExtractBatchImplementFlag_BareFlagAtEnd_ReturnsAllChildrenTrue()
+    {
+        var args = new[] { "chain", "TLB-418", "--batch-implement" };
+        var (ticketIds, isAllChildren, error, remaining) = CliArgParser.ExtractBatchImplementFlag(args);
+
+        Assert.Null(error);
+        Assert.True(isAllChildren);
+        Assert.Null(ticketIds);
+        // Flag itself is consumed; only verb and ticket-id remain.
+        Assert.Equal(new[] { "chain", "TLB-418" }, remaining);
+    }
+
+    // Bare flag followed by another flag: returns AllChildren, leaves following flag in remaining.
+    [Fact]
+    public void ExtractBatchImplementFlag_BareFlagFollowedByOtherFlag_ReturnsAllChildrenAndKeepsTailFlag()
+    {
+        var args = new[] { "chain", "TLB-418", "--batch-implement", "--ship" };
+        var (ticketIds, isAllChildren, error, remaining) = CliArgParser.ExtractBatchImplementFlag(args);
+
+        Assert.Null(error);
+        Assert.True(isAllChildren);
+        Assert.Null(ticketIds);
+        // --ship is NOT consumed as the value; it stays in remaining.
+        Assert.Equal(new[] { "chain", "TLB-418", "--ship" }, remaining);
+    }
+
+    // Old behavior that was an error is now AllChildren (keeping this as a renamed test to
+    // document the intentional behavior change from TLB-473).
+    [Fact]
+    public void ExtractBatchImplementFlag_BareFlagFollowedByDebugFlag_NoLongerErrors_ReturnsAllChildren()
     {
         var args = new[] { "chain", "TLB-418", "--batch-implement", "--debug" };
-        var (ticketIds, error, _) = CliArgParser.ExtractBatchImplementFlag(args);
+        var (ticketIds, isAllChildren, error, remaining) = CliArgParser.ExtractBatchImplementFlag(args);
 
+        // TLB-473: was an error before; now returns AllChildren sentinel.
+        Assert.Null(error);
+        Assert.True(isAllChildren);
         Assert.Null(ticketIds);
-        Assert.Equal("Error: --batch-implement requires a comma-separated ticket list", error);
+        Assert.Contains("--debug", remaining);
     }
 
     [Fact]

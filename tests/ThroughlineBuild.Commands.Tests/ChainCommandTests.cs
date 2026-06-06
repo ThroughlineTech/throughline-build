@@ -479,7 +479,33 @@ public class ChainCommandTests
         await RunCapturingStdout(cmd, ctx);
 
         Assert.NotNull(runner.LastBatchImplementGroup);
-        Assert.Equal(new[] { "TLB-419", "TLB-420", "TLB-421" }, runner.LastBatchImplementGroup!.TicketIds);
+        var explicitGroup = Assert.IsType<ChainBatchImplementGroup.ExplicitList>(runner.LastBatchImplementGroup);
+        Assert.Equal(new[] { "TLB-419", "TLB-420", "TLB-421" }, explicitGroup.TicketIds);
+    }
+
+    // TLB-473: bare --batch-implement sentinel ("*") produces AllEligibleChildren group.
+    [Fact]
+    public async Task BatchImplement_AllChildren_sentinel_forwarded_to_runner()
+    {
+        var (cmd, runner, _) = BuildCommand();
+        runner.Result = new ChainResult(
+            TicketId: "TLB-1",
+            Steps: Array.Empty<ChainStep>(),
+            Outcome: ChainOutcome.Completed,
+            TotalDuration: TimeSpan.Zero,
+            FinalRationale: null);
+        var ctx = new TicketCommandContext(
+            "TLB-1",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["debug"] = "false",
+                ["batch-implement"] = "*"
+            });
+
+        await RunCapturingStdout(cmd, ctx);
+
+        Assert.NotNull(runner.LastBatchImplementGroup);
+        Assert.IsType<ChainBatchImplementGroup.AllEligibleChildren>(runner.LastBatchImplementGroup);
     }
 
     // --- outcome: ParentCompleted ---

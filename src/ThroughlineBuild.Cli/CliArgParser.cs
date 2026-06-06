@@ -66,10 +66,20 @@ public static class CliArgParser
         return (agentAll, agentPlan, agentImpl, agentReview, remaining);
     }
 
-    public static (IReadOnlyList<string>? ticketIds, string? error, IReadOnlyList<string> remaining)
+    /// <summary>
+    /// Scans <paramref name="args"/> for <c>--batch-implement</c> and extracts its value.
+    /// When the flag is present with a comma-separated list the list is parsed and returned.
+    /// When the flag is present with no following value (bare flag, or the next token starts
+    /// with <c>--</c>), <c>isAllChildren</c> is set to <c>true</c> as an explicit sentinel
+    /// meaning "batch all eligible direct children"; this is NOT the same as an empty list.
+    /// When the flag is absent all returned values are null/false.
+    /// Malformed explicit lists (empty id, bad shape, duplicate) are still an error.
+    /// </summary>
+    public static (IReadOnlyList<string>? ticketIds, bool isAllChildren, string? error, IReadOnlyList<string> remaining)
         ExtractBatchImplementFlag(IReadOnlyList<string> args)
     {
         List<string>? ticketIds = null;
+        bool allChildren = false;
         var remaining = new List<string>(args.Count);
 
         int i = 0;
@@ -82,21 +92,26 @@ public static class CliArgParser
                 continue;
             }
 
-            if (ticketIds is not null)
-                return (null, "Error: --batch-implement may be specified only once", remaining);
+            if (ticketIds is not null || allChildren)
+                return (null, false, "Error: --batch-implement may be specified only once", remaining);
 
+            // Bare flag: next token is missing or starts with '--'. Treat as "all children".
             if (i + 1 >= args.Count || args[i + 1].StartsWith("--", StringComparison.Ordinal))
-                return (null, "Error: --batch-implement requires a comma-separated ticket list", remaining);
+            {
+                allChildren = true;
+                i += 1; // consume only the flag, not the following token
+                continue;
+            }
 
             var parseResult = ParseBatchImplementList(args[i + 1]);
             if (parseResult.Error is not null)
-                return (null, parseResult.Error, remaining);
+                return (null, false, parseResult.Error, remaining);
 
             ticketIds = parseResult.TicketIds.ToList();
             i += 2;
         }
 
-        return (ticketIds, null, remaining);
+        return (ticketIds, allChildren, null, remaining);
     }
 
     private static (IReadOnlyList<string> TicketIds, string? Error) ParseBatchImplementList(string raw)
