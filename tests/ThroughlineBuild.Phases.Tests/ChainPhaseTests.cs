@@ -1629,6 +1629,8 @@ public class ChainPhaseTests
     // AC1+AC2+AC4: parent with 2 Ready children declared in a batch group runs exactly
     // one batch worker session inside the shared chain worktree, and both children
     // receive BatchImplemented outcomes with per-ticket commit SHAs from the Tickets array.
+    // AC5 (TLB-449): each child gets a per-ticket implemented_at marker comment and is
+    // transitioned to InReview, matching single-ticket observable state.
     [Fact]
     public async Task RunAsync_BatchGroup_TwoReadyChildren_OneWorkerSession_BothBatchImplemented()
     {
@@ -1675,6 +1677,19 @@ public class ChainPhaseTests
         Assert.Contains("aaa000", r2.FinalRationale);
         var r3 = result.ChildResults.First(r => r.TicketId == "TLB-3");
         Assert.Contains("bbb111", r3.FinalRationale);
+
+        // AC5 (TLB-449): each child has an implemented_at marker comment with its own SHA.
+        var comments2 = ticketing.PostedComments.Where(c => c.id == "TLB-2").ToList();
+        Assert.NotEmpty(comments2);
+        Assert.Contains("[implemented_at: aaa000]", comments2[0].html);
+        Assert.Contains("(branch ", comments2[0].html);
+        var comments3 = ticketing.PostedComments.Where(c => c.id == "TLB-3").ToList();
+        Assert.NotEmpty(comments3);
+        Assert.Contains("[implemented_at: bbb111]", comments3[0].html);
+        Assert.Contains("(branch ", comments3[0].html);
+        // Each child ended in InReview.
+        Assert.Contains(("TLB-2", TicketState.InReview), ticketing.Transitions);
+        Assert.Contains(("TLB-3", TicketState.InReview), ticketing.Transitions);
     }
 
     // AC3: when no BatchImplementGroup is declared the batch worker is never called;

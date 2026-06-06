@@ -6,6 +6,7 @@ using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Git;
 using ThroughlineBuild.Helpers;
+using ThroughlineBuild.Workers.Common;
 
 namespace ThroughlineBuild.Phases;
 
@@ -913,6 +914,9 @@ public class ChainPhase
 
         // Produce a BatchImplemented result for each ticket, sourcing per-ticket commit
         // attribution from the confirmed git state rather than the worker's self-report.
+        // For each confirmed ticket, post the implemented_at marker and transition to InReview
+        // so downstream review and ship read the batch stack through the same markers and states
+        // as a single-ticket run.
         var perTicketResults = verifyResult.ConfirmedTickets;
         var results = new List<ChainResult>(batchTickets.Count);
         for (int i = 0; i < batchTickets.Count; i++)
@@ -920,6 +924,38 @@ public class ChainPhase
             var ticket = batchTickets[i];
             var perTicket = perTicketResults.FirstOrDefault(
                 r => string.Equals(r.TicketId, ticket.Id, StringComparison.Ordinal));
+
+            if (perTicket is not null)
+            {
+                // Resolve per-ticket summary markdown from the worker's fenced blocks (best-effort).
+                string summaryHtml = "";
+                if (workerResult.Blocks is not null &&
+                    !string.IsNullOrEmpty(perTicket.SummaryRef) &&
+                    workerResult.Blocks.TryGetValue(perTicket.SummaryRef, out var summaryMarkdown) &&
+                    !string.IsNullOrEmpty(summaryMarkdown))
+                {
+                    summaryHtml = MarkdownRenderer.Render(summaryMarkdown);
+                }
+
+                // Post the implemented_at marker in the same shape as a single-ticket run.
+                // Batch fields use parens (not brackets) so the marker parser does not read
+                // them as additional markers.
+                var commentHtml =
+                    $"<p>[implemented_at: {perTicket.CommitSha}] (branch {batchBranchName})" +
+                    $" (batch: stack_position={perTicket.StackPosition})</p>{summaryHtml}";
+                try
+                {
+                    await _ticketing.CreateCommentAsync(ticket.Id, commentHtml, ct).ConfigureAwait(false);
+                }
+                catch { /* non-fatal: marker posting failure must not block the batch result */ }
+
+                // Transition InProgress -> InReview to match single-ticket run observable state.
+                try
+                {
+                    await _ticketing.TransitionAsync(ticket.Id, TicketState.InReview, ct).ConfigureAwait(false);
+                }
+                catch { /* non-fatal: transition failure must not block the batch result */ }
+            }
 
             var implStep = new ChainStep(
                 PhaseName: "batch-implement",
