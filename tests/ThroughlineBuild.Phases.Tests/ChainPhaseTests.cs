@@ -87,7 +87,8 @@ public class ChainPhaseTests
         Func<BuildOptions, IObsoleteRatifier>? ratifierFactory = null,
         bool forwardGitToChain = false,
         BuildOptions? baseOptions = null,
-        FakeEventSinkChain? eventSink = null)
+        FakeEventSinkChain? eventSink = null,
+        IWorkerAgent? batchWorker = null)
     {
         _sessionCounter = 0;
         var events = eventSink ?? new FakeEventSinkChain();
@@ -121,7 +122,8 @@ public class ChainPhaseTests
             sessionIdGenerator: NextSessionId,
             workingDirectory: WorkDir,
             ratifierFactory: ratifierFactory,
-            gitClient: forwardGitToChain ? git : null);
+            gitClient: forwardGitToChain ? git : null,
+            batchWorker: batchWorker);
     }
 
     [Fact]
@@ -756,6 +758,37 @@ public class ChainPhaseTests
                     new Dictionary<string, object>()));
             return Task.FromResult(new WorkerResult(
                 Status.Ok, "ok", Array.Empty<string>(), null, _metadata, _blocks));
+        }
+    }
+
+    // Returns a configurable WorkerResult (with optional per-ticket Tickets array) and
+    // tracks how many times ExecuteAsync was called so tests can assert call count.
+    private sealed class BatchFakeWorkerAgent : IWorkerAgent
+    {
+        private readonly IReadOnlyList<BatchTicketResult>? _tickets;
+        private readonly Status _status;
+        public int CallCount { get; private set; }
+        public string Name => "claude-code";
+        public IWorkerProgressDigester? Digester => null;
+
+        public BatchFakeWorkerAgent(
+            IReadOnlyList<BatchTicketResult>? tickets = null,
+            Status status = Status.Ok)
+        {
+            _tickets = tickets;
+            _status = status;
+        }
+
+        public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
+        {
+            CallCount++;
+            return Task.FromResult(new WorkerResult(
+                _status,
+                _status == Status.Ok ? "batch ok" : "batch failed",
+                Array.Empty<string>(),
+                _status != Status.Ok ? "batch error" : null,
+                new Dictionary<string, object>(),
+                Tickets: _tickets));
         }
     }
 
@@ -1587,6 +1620,132 @@ public class ChainPhaseTests
         var index = File.ReadAllText(indexPath);
         Assert.Contains(Path.Combine("TLB-2", "implement", "round-0"), index);
         Assert.Contains(Path.Combine("TLB-3", "implement", "round-0"), index);
+    }
+
+    // -------------------------------------------------------------------------
+    // Batch implement tests
+    // -------------------------------------------------------------------------
+
+    // AC1+AC2+AC4: parent with 2 Ready children declared in a batch group runs exactly
+    // one batch worker session inside the shared chain worktree, and both children
+    // receive BatchImplemented outcomes with per-ticket commit SHAs from the Tickets array.
+    [Fact]
+    public async Task RunAsync_BatchGroup_TwoReadyChildren_OneWorkerSession_BothBatchImplemented()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Ready);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Ready);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        // No verifiers enqueued: batch tickets skip review and ship.
+
+        var perTicketResults = new List<BatchTicketResult>
+        {
+            new BatchTicketResult("TLB-2", "aaa000", 0, Array.Empty<string>(), "SUMMARY_2"),
+            new BatchTicketResult("TLB-3", "bbb111", 1, Array.Empty<string>(), "SUMMARY_3"),
+        };
+        var batchWorker = new BatchFakeWorkerAgent(tickets: perTicketResults);
+
+        var git = new FakeGitClientChain();
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            batchWorker: batchWorker, git: git, forwardGitToChain: true);
+
+        var batchGroup = new ChainBatchImplementGroup(new[] { "TLB-2", "TLB-3" });
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
+            CancellationToken.None);
+
+        // AC1: exactly one worker session for the whole group.
+        Assert.Equal(1, batchWorker.CallCount);
+        // Parent completed because all batch children succeeded.
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        Assert.Equal(2, result.ChildResults!.Count);
+        // AC4: both children have BatchImplemented outcome.
+        Assert.All(result.ChildResults, r => Assert.Equal(ChainOutcome.BatchImplemented, r.Outcome));
+        // Per-ticket commit SHAs from the Tickets array appear in FinalRationale.
+        var r2 = result.ChildResults.First(r => r.TicketId == "TLB-2");
+        Assert.Contains("aaa000", r2.FinalRationale);
+        var r3 = result.ChildResults.First(r => r.TicketId == "TLB-3");
+        Assert.Contains("bbb111", r3.FinalRationale);
+    }
+
+    // AC3: when no BatchImplementGroup is declared the batch worker is never called;
+    // children run the normal per-ticket plan/implement/review/ship loop.
+    [Fact]
+    public async Task RunAsync_NoBatchGroupInOptions_BatchWorkerNotCalled_ChildrenComplete()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var batchWorker = new BatchFakeWorkerAgent();
+
+        var git = new FakeGitClientChain();
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            batchWorker: batchWorker, git: git, forwardGitToChain: true);
+
+        // No BatchImplementGroup in options.
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false),
+            CancellationToken.None);
+
+        Assert.Equal(0, batchWorker.CallCount);
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        Assert.Equal(2, result.ChildResults!.Count);
+        Assert.All(result.ChildResults, r => Assert.Equal(ChainOutcome.Completed, r.Outcome));
+    }
+
+    // Failure path: when the batch worker returns Failed the first batch ticket stops the
+    // parent chain and the parent outcome is ParentStoppedEarly.
+    [Fact]
+    public async Task RunAsync_BatchGroup_WorkerFails_ParentStoppedEarly()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Ready);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Ready);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+
+        var batchWorker = new BatchFakeWorkerAgent(status: Status.Failed);
+
+        var git = new FakeGitClientChain();
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            batchWorker: batchWorker, git: git, forwardGitToChain: true);
+
+        var batchGroup = new ChainBatchImplementGroup(new[] { "TLB-2", "TLB-3" });
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
+            CancellationToken.None);
+
+        // Batch worker was called once; it failed.
+        Assert.Equal(1, batchWorker.CallCount);
+        // Parent stopped early because batch implement failed.
+        Assert.Equal(ChainOutcome.ParentStoppedEarly, result.Outcome);
+        // The loop breaks after recording the first StoppedAtImplement result.
+        Assert.NotNull(result.ChildResults);
+        Assert.NotEmpty(result.ChildResults!);
+        Assert.All(result.ChildResults, r => Assert.Equal(ChainOutcome.StoppedAtImplement, r.Outcome));
     }
 
     private sealed class FakeGitClientChain : IGitClient

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Text.Json;
+using ThroughlineBuild.Briefs;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Git;
@@ -42,6 +43,9 @@ public class ChainPhase
     // that carries real work can be resumed with its prior feedback. Null falls back to a
     // synthesized resume note (e.g. an interrupted initial implement that was never reviewed).
     private readonly IReviewFeedbackRetriever? _feedbackRetriever;
+    // Optional: when set, batch implement groups in the parent chain dispatch one session here
+    // instead of running a per-ticket implement+review+ship loop for each group member.
+    private readonly IWorkerAgent? _batchWorker;
 
     public ChainPhase(
         ITicketing ticketing,
@@ -56,7 +60,8 @@ public class ChainPhase
         Func<BuildOptions, IObsoleteRatifier>? ratifierFactory = null,
         Func<BuildOptions, ShipPhase>? chainShipFactory = null,
         IGitClient? gitClient = null,
-        IReviewFeedbackRetriever? feedbackRetriever = null)
+        IReviewFeedbackRetriever? feedbackRetriever = null,
+        IWorkerAgent? batchWorker = null)
     {
         _ticketing = ticketing;
         _events = events;
@@ -71,6 +76,7 @@ public class ChainPhase
         _ratifierFactory = ratifierFactory;
         _git = gitClient ?? new ProcessGitClient();
         _feedbackRetriever = feedbackRetriever;
+        _batchWorker = batchWorker;
     }
 
     public async Task<ChainResult> RunAsync(ChainPhaseOptions options, CancellationToken ct)
@@ -775,6 +781,153 @@ public class ChainPhase
         return verdict;
     }
 
+    /// <summary>
+    /// Runs a single implement session for all tickets in the batch group, then returns one
+    /// <see cref="ChainResult"/> per ticket with outcome <see cref="ChainOutcome.BatchImplemented"/>.
+    /// The session executes inside the already-created shared chain worktree. All batch commits
+    /// stack on the first ticket's branch; review and ship are left to future briefs (Brief 05/06).
+    /// </summary>
+    private async Task<IReadOnlyList<ChainResult>> RunBatchImplementSessionAsync(
+        ChainPhaseOptions options,
+        IReadOnlyList<Ticket> batchTickets,
+        string sharedWorktreePath,
+        string baseRef,
+        string? chainStartSha,
+        CancellationToken ct)
+    {
+        var batchSw = Stopwatch.StartNew();
+
+        // Create the first ticket's branch in the shared worktree; all batch commits stack on it.
+        var firstTicket = batchTickets[0];
+        var batchBranchName = PhaseWorktreeLayout.BranchName(firstTicket.Id);
+        var branchResult = await _git.CreateBranchAsync(
+            batchBranchName, baseRef, sharedWorktreePath, ct).ConfigureAwait(false);
+        if (!branchResult.Success)
+        {
+            batchSw.Stop();
+            var branchFail = new ChainResult(
+                firstTicket.Id, Array.Empty<ChainStep>(),
+                ChainOutcome.StoppedAtImplement, batchSw.Elapsed,
+                $"batch implement: branch create for {batchBranchName} failed: {branchResult.FailureReason}");
+            return new[] { branchFail };
+        }
+
+        // Transition all batch tickets Ready -> InProgress to mark that work has started.
+        foreach (var ticket in batchTickets)
+        {
+            try
+            {
+                await _ticketing.TransitionAsync(ticket.Id, TicketState.InProgress, ct)
+                    .ConfigureAwait(false);
+            }
+            catch { /* non-fatal: transition failure must not block the batch session */ }
+        }
+
+        // Build the chain commit range for the brief (best-effort; null is safe).
+        ChainCommitRange? batchCommitRange = null;
+        if (chainStartSha is not null)
+        {
+            try
+            {
+                var (_, currentTargetSha) = await BaseRefResolver.ResolveAsync(
+                    _git, _workingDirectory, _baseOptions.TargetBranch, ct).ConfigureAwait(false);
+                batchCommitRange = await ChainCommitRangeHelper.ComputeAsync(
+                    _git, chainStartSha, currentTargetSha, _workingDirectory, ct).ConfigureAwait(false);
+            }
+            catch { /* non-fatal */ }
+        }
+
+        // Build the RepoState for the brief.
+        string mainSha;
+        try
+        {
+            mainSha = await _git.RevParseAsync(baseRef, _workingDirectory, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            mainSha = string.Empty;
+        }
+        var topLevelEntries = Directory.EnumerateFileSystemEntries(_workingDirectory).ToList().AsReadOnly();
+        var repoState = new RepoState(mainSha, topLevelEntries);
+
+        // Build the batch implement brief.
+        var batchSessionId = _sessionIdGenerator();
+        var batchBrief = BatchImplementBriefBuilder.Build(
+            _batchWorker!.Name,
+            batchTickets,
+            repoState,
+            batchBranchName,
+            sharedWorktreePath,
+            batchCommitRange);
+
+        // Emit start step for the batch session (associated with the first ticket for tracing).
+        EmitPhaseStart(options with { TicketId = firstTicket.Id }, "batch-implement", -1, batchSessionId);
+
+        var implSw = Stopwatch.StartNew();
+
+        // Compute the max worker size across all batch tickets.
+        var maxSize = batchTickets.Max(t => WorkerSizeMapper.FromTicketSize(t.Size));
+        var batchBuildOpts = BuildPhaseOptions(batchSessionId, firstTicket.Id, "batch-implement");
+        var workerOptions = new WorkerOptions(
+            _baseOptions.WorkerTimeout,
+            _baseOptions.WorkerAllowedTools,
+            DebugCaptureDirectory: batchBuildOpts.DebugCaptureDirectory,
+            LiveStdoutSink: _baseOptions.LiveStdoutSink,
+            LiveStderrSink: _baseOptions.LiveStderrSink,
+            ProgressDigestSink: _baseOptions.ProgressDigestSink,
+            Size: maxSize);
+        if (batchBuildOpts.DebugCaptureDirectory is not null)
+            Directory.CreateDirectory(batchBuildOpts.DebugCaptureDirectory);
+
+        var workerResult = await _batchWorker!
+            .ExecuteAsync(batchBrief, sharedWorktreePath, workerOptions, ct)
+            .ConfigureAwait(false);
+
+        implSw.Stop();
+
+        // Worker failed: return a StoppedAtImplement result for every ticket in the group.
+        if (workerResult.Status == Status.Failed || workerResult.Status == Status.Escalate)
+        {
+            batchSw.Stop();
+            return batchTickets.Select(t => new ChainResult(
+                t.Id, Array.Empty<ChainStep>(),
+                ChainOutcome.StoppedAtImplement, batchSw.Elapsed,
+                workerResult.FailureReason ?? workerResult.Summary)).ToList().AsReadOnly();
+        }
+
+        // Worker succeeded: produce a BatchImplemented result for each ticket in the group.
+        // Per-ticket commit SHAs come from workerResult.Tickets (populated by WorkerResultParser
+        // when the batch-implement template's WORKER_RESULT JSON includes a "tickets" array).
+        var perTicketResults = workerResult.Tickets;
+        var results = new List<ChainResult>(batchTickets.Count);
+        for (int i = 0; i < batchTickets.Count; i++)
+        {
+            var ticket = batchTickets[i];
+            var perTicket = perTicketResults?.FirstOrDefault(
+                r => string.Equals(r.TicketId, ticket.Id, StringComparison.Ordinal));
+
+            var implStep = new ChainStep(
+                PhaseName: "batch-implement",
+                ReworkRoundNumber: 0,
+                Status: Status.Ok,
+                FailureReason: null,
+                Verdict: null,
+                Duration: implSw.Elapsed,
+                PhaseSessionId: batchSessionId);
+
+            results.Add(new ChainResult(
+                TicketId: ticket.Id,
+                Steps: new[] { implStep },
+                Outcome: ChainOutcome.BatchImplemented,
+                TotalDuration: batchSw.Elapsed,
+                FinalRationale: perTicket is not null
+                    ? $"batch implement succeeded; commit {perTicket.CommitSha}"
+                    : "batch implement succeeded"));
+        }
+
+        return results.AsReadOnly();
+    }
+
     private async Task<ChainResult> RunParentChainAsync(
         ChainPhaseOptions options,
         Ticket parentTicket,
@@ -935,6 +1088,44 @@ public class ChainPhase
         var allChildResults = new List<ChainResult>();
         bool anyStoppedEarly = false;
 
+        // Batch implement branch: when a batch group is declared and a batch worker is wired in,
+        // run ONE implement session for the whole group inside the shared worktree.
+        // Only tickets that are in the eligible set and in Ready state join the batch;
+        // tickets not in the group (or not in Ready state) are dispatched per-ticket below.
+        HashSet<string>? batchedTicketIds = null;
+        if (options.BatchImplementGroup is not null
+            && _batchWorker is not null
+            && sharedWorktreePath is not null
+            && !anyStoppedEarly)
+        {
+            var batchGroup = options.BatchImplementGroup;
+            var batchTickets = batchGroup.TicketIds
+                .Where(id => eligible.Any(e => string.Equals(e.Id, id, StringComparison.Ordinal)))
+                .Select(id => eligible.First(e => string.Equals(e.Id, id, StringComparison.Ordinal)))
+                .Where(t => t.State == TicketState.Ready)
+                .ToList();
+
+            if (batchTickets.Count > 0)
+            {
+                batchedTicketIds = new HashSet<string>(
+                    batchTickets.Select(t => t.Id), StringComparer.Ordinal);
+
+                var batchResults = await RunBatchImplementSessionAsync(
+                    options, batchTickets, sharedWorktreePath, baseRefForSharedWt!, chainStartSha, ct)
+                    .ConfigureAwait(false);
+
+                foreach (var br in batchResults)
+                {
+                    allChildResults.Add(br);
+                    if (!IsChainSuccess(br.Outcome))
+                    {
+                        anyStoppedEarly = true;
+                        break;
+                    }
+                }
+            }
+        }
+
         foreach (var level in levels)
         {
             if (anyStoppedEarly)
@@ -942,6 +1133,7 @@ public class ChainPhase
 
             var levelTickets = level
                 .Select(id => eligible.First(c => string.Equals(c.Id, id, StringComparison.Ordinal)))
+                .Where(child => batchedTicketIds is null || !batchedTicketIds.Contains(child.Id))
                 .ToList();
 
             // Parent chains intentionally dispatch one child at a time. A successful child
@@ -1115,7 +1307,8 @@ public class ChainPhase
     private static bool IsChainSuccess(ChainOutcome outcome) =>
         outcome is ChainOutcome.Completed
             or ChainOutcome.RatifiedObsolete
-            or ChainOutcome.ParentCompleted;
+            or ChainOutcome.ParentCompleted
+            or ChainOutcome.BatchImplemented;
 
     /// <summary>
     /// Decides where the chain enters for a single (leaf) ticket and performs any state-reconciliation
