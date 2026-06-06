@@ -1698,7 +1698,7 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             BaseBranch: config2.Ship.BaseBranch,
             DeleteFeatureBranch: config2.Ship.DeleteFeatureBranch,
             NoAutoMerge: noAutoMerge,
-            TargetBranch: config2.ResolveTargetBranch(),
+            TargetBranch: buildOpts.TargetBranch,
             NoPush: noPush || !config2.Ship.Push,
             TargetBranchOverridden: config2.TargetBranchOverridden,
             SkipBaseline: skipBaseline,
@@ -1724,23 +1724,17 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             git: new ProcessGitClient(cwd));
     };
 
-    // Ship factory used within the parent-chain shared-worktree path: identical to
-    // shipPhaseFactory but with SkipDecruft=true so the shared worktree is not torn
-    // down after each ticket. ChainPhase removes it once after all children complete.
+    // Ship factory used within parent-chain accumulation: honors the phase target
+    // branch so leaves ship into the current integration branch.
     var chainShipPhaseFactory = (BuildOptions buildOpts) =>
     {
         var chainShipOptions = new ShipOptions(
             RegressionChecks: config2.Ship.RegressionChecks,
             Remote: config2.Ship.Remote,
             BaseBranch: config2.Ship.BaseBranch,
-            // Never delete the feature branch from inside the per-child ship: the branch is still
-            // checked out in the shared chain worktree at ship time, so `git branch -d/-D` always
-            // fails with "used by worktree". ChainPhase deletes child branches at chain end, after
-            // the shared worktree is torn down. (Decruft is likewise skipped here for the same
-            // shared-worktree reason.)
             DeleteFeatureBranch: false,
             NoAutoMerge: noAutoMerge,
-            TargetBranch: config2.ResolveTargetBranch(),
+            TargetBranch: buildOpts.TargetBranch,
             SkipDecruft: true,
             NoPush: noPush || !config2.Ship.Push,
             TargetBranchOverridden: config2.TargetBranchOverridden,
@@ -1928,6 +1922,7 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
                 r.Outcome == ChainOutcome.Completed
                 || r.Outcome == ChainOutcome.RatifiedObsolete
                 || r.Outcome == ChainOutcome.ParentCompleted
+                || r.Outcome == ChainOutcome.DryRunPreview
                 || r.Outcome == ChainOutcome.Skipped);
             return (allGood ? 0 : 1, true);
         }

@@ -122,7 +122,7 @@ public class ChainPhaseTests
             sessionIdGenerator: NextSessionId,
             workingDirectory: WorkDir,
             ratifierFactory: ratifierFactory,
-            gitClient: forwardGitToChain ? git : null,
+            gitClient: git,
             batchWorker: batchWorker);
     }
 
@@ -135,7 +135,8 @@ public class ChainPhaseTests
         var verifiers = new Queue<IVerifier>();
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
 
-        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
+        var git = new FakeGitClientChain();
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, git: git);
         var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
 
         Assert.Equal(ChainOutcome.Completed, result.Outcome);
@@ -400,7 +401,8 @@ public class ChainPhaseTests
         var verifiers = new Queue<IVerifier>();
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
 
-        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
+        var git = new FakeGitClientChain();
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, git: git);
         var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
 
         Assert.Equal(ChainOutcome.Completed, result.Outcome);
@@ -478,7 +480,8 @@ public class ChainPhaseTests
         var verifiers = new Queue<IVerifier>();
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
 
-        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
+        var git = new FakeGitClientChain();
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, git: git);
         var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
 
         Assert.Equal(ChainOutcome.Completed, result.Outcome);
@@ -1070,13 +1073,17 @@ public class ChainPhaseTests
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
 
-        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
+        var git = new FakeGitClientChain();
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, git: git);
         var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
 
         Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
         Assert.NotNull(result.ChildResults);
         Assert.Equal(2, result.ChildResults!.Count);
         Assert.All(result.ChildResults, r => Assert.Equal(ChainOutcome.Completed, r.Outcome));
+        Assert.Contains(git.CreatedWorktrees, c => c.branch == "chain/tlb-1" && c.fromRef == "main");
+        Assert.Contains(git.CreatedWorktrees, c => c.branch == "ticket/tlb-2" && c.fromRef == "chain/tlb-1");
+        Assert.Contains(git.CreatedWorktrees, c => c.branch == "ticket/tlb-3" && c.fromRef == "chain/tlb-1");
     }
 
     [Fact]
@@ -1127,7 +1134,8 @@ public class ChainPhaseTests
         var verifiers = new Queue<IVerifier>();
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
 
-        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
+        var git = new FakeGitClientChain();
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, git: git);
         var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
 
         Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
@@ -1137,6 +1145,34 @@ public class ChainPhaseTests
         var briefResult = Assert.Single(planResult.ChildResults!);
         Assert.Equal("TLB-3", briefResult.TicketId);
         Assert.Equal(ChainOutcome.Completed, briefResult.Outcome);
+
+        Assert.Contains(git.CreatedWorktrees, c => c.branch == "chain/tlb-1" && c.fromRef == "main");
+        Assert.Contains(git.CreatedWorktrees, c => c.branch == "chain/tlb-2" && c.fromRef == "chain/tlb-1");
+        Assert.Contains(git.CreatedWorktrees, c => c.branch == "ticket/tlb-3" && c.fromRef == "chain/tlb-2");
+        Assert.Contains(git.FastForwardMerges, m => m.mergeRef == "chain/tlb-2");
+    }
+
+    [Fact]
+    public async Task RunAsync_DryRunTree_ReportsPreviewOutcomes_NotSkipped()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var chain = BuildChain(ticketing, planWorker, implWorker, new Queue<IVerifier>());
+
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, DryRun: true),
+            CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.DryRunPreview, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        Assert.All(result.ChildResults!, childResult => Assert.Equal(ChainOutcome.DryRunPreview, childResult.Outcome));
+        Assert.DoesNotContain(result.ChildResults!, childResult => childResult.Outcome == ChainOutcome.Skipped);
     }
 
     [Fact]
@@ -2150,6 +2186,9 @@ public class ChainPhaseTests
         private readonly string _currentBranch;
         public List<string> RemovedWorktrees { get; } = new();
         public List<string> DeletedBranches { get; } = new();
+        public List<(string path, string branch, string fromRef)> CreatedWorktrees { get; } = new();
+        public List<(string branch, string fromRef, string worktreePath)> CreatedBranches { get; } = new();
+        public List<(string mergeRef, string worktreePath)> FastForwardMerges { get; } = new();
         public List<string> WorkingDirectoriesSeenForTrackedChanges { get; } = new();
         public int GetTrackedChangesCallCount => WorkingDirectoriesSeenForTrackedChanges.Count;
         public int GetTrackedChangesCallsOnMainWorktree { get; private set; }
@@ -2202,8 +2241,12 @@ public class ChainPhaseTests
         public Task<IReadOnlyList<string>> ListStashEntriesAsync(string workingDirectory, CancellationToken ct) =>
             Task.FromResult(_stashEntries);
 
-        public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
-            Task.FromResult(MainSha);
+        public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct)
+        {
+            if (refspec.StartsWith("origin/chain/", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("remote integration branch absent");
+            return Task.FromResult(MainSha);
+        }
 
         public Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<WorktreeInfo>>(_worktrees.AsReadOnly());
@@ -2221,6 +2264,7 @@ public class ChainPhaseTests
         public Task<WorktreeCreateResult> CreateWorktreeAsync(string worktreePath, string newBranch, string fromRef, string mainWorktreePath, CancellationToken ct)
         {
             CreateWorktreeCallCount++;
+            CreatedWorktrees.Add((worktreePath, newBranch, fromRef));
             Directory.CreateDirectory(worktreePath);
             // Track the created worktree so ListWorktreesAsync can find it during ship.
             _worktrees.Add(new WorktreeInfo(worktreePath, newBranch, CommitSha, false, false));
@@ -2229,6 +2273,7 @@ public class ChainPhaseTests
 
         public Task<GitOpResult> CreateBranchAsync(string branch, string fromRef, string worktreePath, CancellationToken ct)
         {
+            CreatedBranches.Add((branch, fromRef, worktreePath));
             _worktrees.RemoveAll(w => string.Equals(w.Path, worktreePath, StringComparison.OrdinalIgnoreCase));
             _worktrees.Add(new WorktreeInfo(worktreePath, branch, CommitSha, false, false));
             return Task.FromResult(new GitOpResult(true, null));
@@ -2276,8 +2321,11 @@ public class ChainPhaseTests
             return Task.FromResult(new GitOpResult(true, null));
         }
 
-        public Task<GitOpResult> FastForwardMergeAsync(string mergeRef, string mainWorktreePath, CancellationToken ct) =>
-            Task.FromResult(new GitOpResult(true, null));
+        public Task<GitOpResult> FastForwardMergeAsync(string mergeRef, string mainWorktreePath, CancellationToken ct)
+        {
+            FastForwardMerges.Add((mergeRef, mainWorktreePath));
+            return Task.FromResult(new GitOpResult(true, null));
+        }
 
         public Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct)
         {

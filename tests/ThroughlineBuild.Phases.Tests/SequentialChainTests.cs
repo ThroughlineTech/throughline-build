@@ -437,18 +437,15 @@ public class SequentialChainTests
         // Act
         var result = await chain.RunAsync(new ChainPhaseOptions(ParentId, false), CancellationToken.None);
 
-        // Assert: chain completed and exactly one chain-level worktree was created and removed.
+        // Assert: chain completed and created one integration worktree plus one fresh
+        // worktree per leaf. Integration branches/worktrees are retained for resume.
         Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
 
-        // The chain creates one shared worktree at the start (via CreateWorktreeAsync with the
-        // chain/<slug> placeholder branch) and removes it once via WorktreeDecrufter at the end.
-        // The ImplementPhase for each child does NOT call CreateWorktreeAsync again because
-        // SharedWorktreePath is set (Brief 06 behavior).
-        // Total creates: 1 (chain-level shared worktree only).
-        Assert.Equal(1, git.CreateWorktreeCallCount);
+        // Total creates: 1 parent integration worktree + 2 child leaf worktrees.
+        Assert.Equal(3, git.CreateWorktreeCallCount);
 
-        // Total removes: 1 (chain-level teardown via WorktreeDecrufter only).
-        Assert.Equal(1, git.RemoveWorktreeCallCount);
+        // Chain-level cleanup no longer deletes the accumulated integration topology.
+        Assert.Equal(0, git.RemoveWorktreeCallCount);
     }
 
     // ==========================================================================
@@ -456,11 +453,10 @@ public class SequentialChainTests
     // ==========================================================================
 
     [Fact]
-    public async Task ParentChain_DeletesPlaceholderChainBranch_AtChainEnd()
+    public async Task ParentChain_RetainsIntegrationBranch_AtChainEnd()
     {
-        // The shared worktree is created on a chain/<slug> placeholder branch. The decrufter removes
-        // the worktree directory but never branches, so the chain must delete the placeholder itself
-        // at chain end - otherwise it leaks and collides with the next run's shared-worktree creation.
+        // The parent owns a chain/<slug> integration branch. It is the accumulated subtree branch
+        // and must remain after chain completion so failed/retried chains can resume from it.
         var parent = MakeParent();
         var child1 = MakeChild(Child1Id, Child1Uuid, TicketState.Backlog);
 
@@ -477,15 +473,14 @@ public class SequentialChainTests
 
         Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
         var chainBranch = "chain/" + PhaseWorktreeLayout.Compute(ParentId, ParentTitle, Path.GetTempPath()).Slug;
-        Assert.Contains(chainBranch, git.DeletedBranches);
+        Assert.DoesNotContain(chainBranch, git.DeletedBranches);
     }
 
     [Fact]
-    public async Task ParentChain_SelfHealsLeftoverChainBranch_UsesSharedWorktreeNotFallback()
+    public async Task ParentChain_LeftoverChainBranch_ChecksOutExistingIntegrationBranch()
     {
-        // A prior interrupted chain left a chain/<slug> branch behind. The shared-worktree creation
-        // collides on it; the chain must delete the stale placeholder and retry so it still runs on
-        // the shared worktree (CreateBranchAsync path) instead of degrading to per-ticket fallback.
+        // A prior interrupted chain left a chain/<slug> integration branch behind. The chain must
+        // check it out and continue accumulating, not delete the branch and lose prior subtree work.
         var parent = MakeParent();
         var child1 = MakeChild(Child1Id, Child1Uuid, TicketState.Backlog);
 
@@ -503,20 +498,17 @@ public class SequentialChainTests
         Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
         Assert.NotNull(result.ChildResults);
         Assert.All(result.ChildResults!, r => Assert.Equal(ChainOutcome.Completed, r.Outcome));
-        // Proof the shared worktree was used (not fallback): the child created its branch inside the
-        // shared worktree via CreateBranchAsync rather than cutting its own worktree.
-        Assert.True(git.CreateBranchCallCount >= 1, "child should create its branch inside the shared worktree");
+        Assert.True(git.CheckoutWorktreeCallCount >= 1, "existing integration branch should be checked out");
         var chainBranch = "chain/" + PhaseWorktreeLayout.Compute(ParentId, ParentTitle, Path.GetTempPath()).Slug;
-        Assert.Contains(chainBranch, git.DeletedBranches);
+        Assert.DoesNotContain(chainBranch, git.DeletedBranches);
     }
 
     [Fact]
-    public async Task ParentChain_DeletesShippedChildBranches_AtChainEnd()
+    public async Task ParentChain_RetainsShippedChildBranches_AtChainEnd()
     {
-        // Each child cuts its ticket/<id> branch inside the shared chain worktree, so the per-child
-        // ship cannot delete it (git refuses to delete a branch checked out in a worktree). The chain
-        // must delete the shipped children's branches itself at chain end, after the shared worktree
-        // is torn down - otherwise every child branch leaks (the bug behind the worktree/branch pileup).
+        // Each child now runs in a fresh leaf worktree cut from the current integration branch.
+        // The chain does not delete those branches during chain-level cleanup; completed branch
+        // topology remains available for resume/debugging.
         var parent = MakeParent();
         var child1 = MakeChild(Child1Id, Child1Uuid, TicketState.Backlog);
         var child2 = MakeChild(Child2Id, Child2Uuid, TicketState.Backlog);
@@ -537,9 +529,8 @@ public class SequentialChainTests
         Assert.NotNull(result.ChildResults);
         Assert.All(result.ChildResults!, r => Assert.Equal(ChainOutcome.Completed, r.Outcome));
 
-        // Both children's ticket branches are deleted at chain end.
-        Assert.Contains(PhaseWorktreeLayout.BranchName(Child1Id), git.DeletedBranches);
-        Assert.Contains(PhaseWorktreeLayout.BranchName(Child2Id), git.DeletedBranches);
+        Assert.DoesNotContain(PhaseWorktreeLayout.BranchName(Child1Id), git.DeletedBranches);
+        Assert.DoesNotContain(PhaseWorktreeLayout.BranchName(Child2Id), git.DeletedBranches);
     }
 
     // ==========================================================================
@@ -731,6 +722,7 @@ public class SequentialChainTests
         public int CreateWorktreeCallCount { get; private set; }
         public int RemoveWorktreeCallCount { get; private set; }
         public int CreateBranchCallCount { get; private set; }
+        public int CheckoutWorktreeCallCount { get; private set; }
         public List<string> DeletedBranches { get; } = new();
 
         public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
@@ -769,7 +761,18 @@ public class SequentialChainTests
 
         public Task<IReadOnlyList<string>> ListLocalBranchesAsync(string pattern, string workingDirectory, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<string>>(
-                _existingBranches.Contains(pattern) ? new[] { pattern } : Array.Empty<string>());
+                _existingBranches.Contains(pattern) ||
+                (_leftoverChainBranch && pattern.StartsWith("chain/", StringComparison.Ordinal))
+                    ? new[] { pattern }
+                    : Array.Empty<string>());
+
+        public Task<WorktreeCreateResult> CheckoutWorktreeAsync(string worktreePath, string existingBranch, string mainWorktreePath, CancellationToken ct)
+        {
+            CheckoutWorktreeCallCount++;
+            Directory.CreateDirectory(worktreePath);
+            _worktrees.Add(new WorktreeInfo(worktreePath, existingBranch, CommitSha, false, false));
+            return Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
+        }
 
         public Task<string> HeadShaAsync(string worktreePath, CancellationToken ct) =>
             Task.FromResult(CommitSha);

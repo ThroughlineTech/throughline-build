@@ -15,6 +15,7 @@ public static class ChainExitCodeMapper
         ChainOutcome.Completed => 0,
         ChainOutcome.RatifiedObsolete => 0,
         ChainOutcome.ParentCompleted => 0,
+        ChainOutcome.DryRunPreview => 0,
         ChainOutcome.RefusedInitialState => 2,
         ChainOutcome.RefusedDirtyTree => 2,
         ChainOutcome.RefusedWrongBranch => 2,

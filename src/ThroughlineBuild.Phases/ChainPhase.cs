@@ -41,7 +41,8 @@ public record ChainPhaseOptions(
     bool DryRun = false,
     int MaxDepth = 16,
     int Depth = 0,
-    IReadOnlySet<string>? VisitedTicketUuids = null);
+    IReadOnlySet<string>? VisitedTicketUuids = null,
+    string? ChainTargetBranch = null);
 
 public class ChainPhase
 {
@@ -112,11 +113,11 @@ public class ChainPhase
         var ticket = await _ticketing.GetAsync(options.TicketId, ct).ConfigureAwait(false);
 
         // Preflight hygiene gate: run ONCE at the outermost chain entry (children recurse
-        // with SharedWorktreePath set, so they are skipped here). The stash stack is
+        // with ChainTargetBranch set, so they are skipped here). The stash stack is
         // repo-global and leaks across worktrees, so a dangling stash or conflict left on
         // the tree can corrupt a ticket mid-chain. Catch it here - before any planning -
         // instead of burning a plan round and failing opaquely inside implement.
-        if (options.SharedWorktreePath is null)
+        if (options.ChainTargetBranch is null)
         {
             // Wrong-branch guard: the chain ends by shipping into _baseOptions.TargetBranch,
             // and ShipPhase performs that merge by advancing whatever HEAD the MAIN worktree
@@ -247,14 +248,14 @@ public class ChainPhase
                 return new ChainResult(
                     options.TicketId,
                     steps,
-                    ChainOutcome.ParentCompleted,
+                    ChainOutcome.DryRunPreview,
                     totalSw.Elapsed,
                     "Dry-run only; no phases were executed.",
                     ChildResults: plan.PostOrder
                         .Select(item => new ChainResult(
                             item.Ticket.Id,
                             Array.Empty<ChainStep>(),
-                            item.HasLiveChildren ? ChainOutcome.ParentCompleted : ChainOutcome.Skipped,
+                            ChainOutcome.DryRunPreview,
                             TimeSpan.Zero,
                             item.HasLiveChildren ? "Internal node preview." : "Leaf preview."))
                         .ToList()
@@ -275,7 +276,7 @@ public class ChainPhase
             return new ChainResult(
                 options.TicketId,
                 steps,
-                ChainOutcome.ParentCompleted,
+                ChainOutcome.DryRunPreview,
                 totalSw.Elapsed,
                 "Dry-run only; no phases were executed.");
         }
@@ -322,7 +323,7 @@ public class ChainPhase
         if (startPhase == StartPhase.Plan)
         {
             var sessionId = _sessionIdGenerator();
-            var buildOpts = BuildPhaseOptions(sessionId, options.TicketId, "plan");
+            var buildOpts = BuildPhaseOptions(sessionId, options.TicketId, "plan", targetBranch: options.ChainTargetBranch);
             EmitPhaseStart(options, "plan", -1, sessionId);
             var sw = Stopwatch.StartNew();
             var planResult = await _planFactory(buildOpts).RunAsync(options.TicketId, _workingDirectory, ct)
@@ -417,11 +418,13 @@ public class ChainPhase
         }
 
         var shipSessionId = _sessionIdGenerator();
-        var shipBuildOpts = BuildPhaseOptions(shipSessionId, options.TicketId, "ship");
+        var shipBuildOpts = BuildPhaseOptions(shipSessionId, options.TicketId, "ship", targetBranch: options.ChainTargetBranch);
         EmitPhaseStart(options, "ship", -1, shipSessionId);
         var shipSw = Stopwatch.StartNew();
-        // When running inside a parent-chain shared worktree, use the chain ship factory (SkipDecruft=true).
-        var activeShipFactory = (options.SharedWorktreePath is not null && _chainShipFactory is not null)
+        // When running inside a parent-chain integration branch, use the chain ship
+        // factory when supplied. The factory honors BuildOptions.TargetBranch, so the
+        // leaf ships into the current integration branch rather than the configured root.
+        var activeShipFactory = (options.ChainTargetBranch is not null && _chainShipFactory is not null)
             ? _chainShipFactory
             : _shipFactory;
         var shipResult = await activeShipFactory(shipBuildOpts).RunAsync(options.TicketId, _workingDirectory, ct)
@@ -507,7 +510,7 @@ public class ChainPhase
         while (true)
         {
             var implSessionId = _sessionIdGenerator();
-            var implBuildOpts = BuildPhaseOptions(implSessionId, options.TicketId, "implement", round);
+            var implBuildOpts = BuildPhaseOptions(implSessionId, options.TicketId, "implement", round, options.ChainTargetBranch);
             // Pass the chain's prior-commit pointer on the first implement round only.
             // Rework rounds (feedback != null) reuse the same worktree with the agent's
             // own edits already in place, so replaying the handoff is redundant.
@@ -707,7 +710,7 @@ public class ChainPhase
         return rationale.Length <= 200 ? rationale : rationale.Substring(0, 200);
     }
 
-    private BuildOptions BuildPhaseOptions(string sessionId, string ticketId, string phaseName, int? round = null)
+    private BuildOptions BuildPhaseOptions(string sessionId, string ticketId, string phaseName, int? round = null, string? targetBranch = null)
     {
         var debugCaptureDirectory = ScopeDebugCaptureDirectory(
             _baseOptions.DebugCaptureDirectory,
@@ -721,7 +724,8 @@ public class ChainPhase
             return _baseOptions with
             {
                 SessionId = sessionId,
-                DebugCaptureDirectory = debugCaptureDirectory
+                DebugCaptureDirectory = debugCaptureDirectory,
+                TargetBranch = targetBranch ?? _baseOptions.TargetBranch
             };
         }
 
@@ -729,7 +733,8 @@ public class ChainPhase
         {
             SessionId = sessionId,
             DebugCaptureDirectory = debugCaptureDirectory,
-            ProgressDigestSink = new PrefixedTextWriter($"[{ticketId}] ", _baseOptions.ProgressDigestSink)
+            ProgressDigestSink = new PrefixedTextWriter($"[{ticketId}] ", _baseOptions.ProgressDigestSink),
+            TargetBranch = targetBranch ?? _baseOptions.TargetBranch
         };
     }
 
@@ -1733,65 +1738,37 @@ public class ChainPhase
         // edge between them and are unordered relative to each other (Brief 17).
         PrintDispatchOrder(options.TicketId, levels);
 
-        string? baseRefForSharedWt = null;
-        try
-        {
-            (baseRefForSharedWt, _) = await BaseRefResolver.ResolveAsync(_git, _workingDirectory, _baseOptions.TargetBranch, ct).ConfigureAwait(false);
-        }
-        catch
-        {
-            // If we cannot resolve the base ref we fall back to null and let each child
-            // handle ref resolution independently (standalone worktree per ticket path).
-            baseRefForSharedWt = null;
-        }
+        var integrationBaseRef = options.ChainTargetBranch ?? _baseOptions.TargetBranch;
+        var integrationNames = PhaseWorktreeLayout.Compute(parentTicket.Id, parentTicket.Title, _workingDirectory);
+        var integrationBranch = ChainIntegrationBranch(parentTicket);
+        var integrationWorktreePath = integrationNames.WorktreePath;
 
         // Capture the target head SHA once at chain start so ChainCommitRangeHelper can
         // later compute the range of commits the chain has produced (Brief 08).
         string? chainStartSha = null;
         try
         {
-            if (baseRefForSharedWt is not null)
-                chainStartSha = await _git.RevParseAsync(baseRefForSharedWt, _workingDirectory, ct).ConfigureAwait(false);
+            chainStartSha = await _git.RevParseAsync(integrationBaseRef, _workingDirectory, ct).ConfigureAwait(false);
         }
         catch { /* non-fatal: chainStartSha stays null */ }
 
-        var sharedWorktreeNames = PhaseWorktreeLayout.Compute(parentTicket.Id, parentTicket.Title, _workingDirectory);
-        var sharedChainBranch = $"chain/{sharedWorktreeNames.Slug}";
         string? sharedWorktreePath = null;
-        if (baseRefForSharedWt is not null && eligible.Count > 0)
+        if (eligible.Count > 0)
         {
-            var createResult = await _git.CreateWorktreeAsync(
-                sharedWorktreeNames.WorktreePath,
-                sharedChainBranch,
-                baseRefForSharedWt,
-                _workingDirectory,
+            var createResult = await EnsureIntegrationWorktreeAsync(
+                integrationBranch,
+                integrationBaseRef,
+                integrationWorktreePath,
                 ct).ConfigureAwait(false);
-
-            if (!createResult.Success)
-            {
-                var existing = await _git.ListLocalBranchesAsync(sharedChainBranch, _workingDirectory, ct).ConfigureAwait(false);
-                if (existing.Any(b => string.Equals(b, sharedChainBranch, StringComparison.Ordinal)))
-                {
-                    await _git.DeleteBranchAsync(sharedChainBranch, force: true, _workingDirectory, ct).ConfigureAwait(false);
-                    createResult = await _git.CreateWorktreeAsync(
-                        sharedWorktreeNames.WorktreePath,
-                        sharedChainBranch,
-                        baseRefForSharedWt,
-                        _workingDirectory,
-                        ct).ConfigureAwait(false);
-                }
-            }
-
             if (createResult.Success)
             {
-                sharedWorktreePath = sharedWorktreeNames.WorktreePath;
+                sharedWorktreePath = createResult.AbsolutePath ?? integrationWorktreePath;
             }
             else
             {
                 Console.Error.WriteLine(
-                    $"[{parentTicket.Id}] warning: shared chain worktree unavailable " +
-                    $"({createResult.FailureReason}); falling back to per-ticket worktrees. " +
-                    $"If a prior chain was interrupted, remove {sharedWorktreeNames.WorktreePath} and re-run.");
+                    $"[{parentTicket.Id}] integration worktree unavailable " +
+                    $"({createResult.FailureReason}); cannot safely accumulate nested chain branches.");
                 await _events.EmitAsync(new WorkflowEvent(
                     SessionId: _sessionIdGenerator(),
                     Timestamp: DateTimeOffset.UtcNow,
@@ -1800,10 +1777,19 @@ public class ChainPhase
                     Phase: Phase.Chain,
                     Data: new Dictionary<string, object>
                     {
-                        ["kind"] = "shared_worktree_unavailable",
+                        ["kind"] = "integration_worktree_unavailable",
                         ["detail"] = createResult.FailureReason ?? "unknown",
-                        ["path"] = sharedWorktreeNames.WorktreePath
+                        ["branch"] = integrationBranch,
+                        ["path"] = integrationWorktreePath
                     }), ct).ConfigureAwait(false);
+                totalSw.Stop();
+                return new ChainResult(
+                    options.TicketId,
+                    Array.Empty<ChainStep>(),
+                    ChainOutcome.ParentStoppedEarly,
+                    totalSw.Elapsed,
+                    $"Could not create integration branch {integrationBranch}: {createResult.FailureReason}",
+                    ChildResults: Array.Empty<ChainResult>());
             }
         }
 
@@ -1865,7 +1851,7 @@ public class ChainPhase
                         batchTickets.Select(t => t.Id), StringComparer.Ordinal);
 
                     var batchOutcome = await RunBatchImplementSessionAsync(
-                        options, batchTickets, sharedWorktreePath, baseRefForSharedWt!, chainStartSha, ct)
+                        options, batchTickets, sharedWorktreePath, integrationBranch, chainStartSha, ct)
                         .ConfigureAwait(false);
 
                     foreach (var br in batchOutcome.Results)
@@ -1933,12 +1919,12 @@ public class ChainPhase
                 // the pointer null, which is safe - the brief is identical to the
                 // no-pointer baseline.
                 ChainCommitRange? childCommitRange = null;
-                if (chainStartSha is not null && baseRefForSharedWt is not null)
+                if (chainStartSha is not null)
                 {
                     try
                     {
-                        var (_, currentTargetSha) = await BaseRefResolver.ResolveAsync(
-                            _git, _workingDirectory, _baseOptions.TargetBranch, ct).ConfigureAwait(false);
+                        var currentTargetSha = await _git.RevParseAsync(integrationBranch, _workingDirectory, ct)
+                            .ConfigureAwait(false);
                         childCommitRange = await ChainCommitRangeHelper.ComputeAsync(
                             _git, chainStartSha, currentTargetSha, _workingDirectory, ct).ConfigureAwait(false);
                     }
@@ -1948,10 +1934,11 @@ public class ChainPhase
                 var childOptions = options with
                 {
                     TicketId = child.Id,
-                    SharedWorktreePath = sharedWorktreePath,
+                    SharedWorktreePath = null,
                     ChainCommitRange = childCommitRange,
                     Depth = options.Depth + 1,
-                    VisitedTicketUuids = AddVisited(options.VisitedTicketUuids, parentTicket.Uuid)
+                    VisitedTicketUuids = AddVisited(options.VisitedTicketUuids, parentTicket.Uuid),
+                    ChainTargetBranch = integrationBranch
                 };
                 var childResult = await RunAsync(childOptions, ct).ConfigureAwait(false);
 
@@ -1973,29 +1960,29 @@ public class ChainPhase
                     anyStoppedEarly = true;
                     break;
                 }
+
+                if (childResult.Outcome == ChainOutcome.ParentCompleted)
+                {
+                    var childIntegrationBranch = ChainIntegrationBranch(child);
+                    var mergeResult = await _git.FastForwardMergeAsync(
+                        childIntegrationBranch,
+                        sharedWorktreePath ?? integrationWorktreePath,
+                        ct).ConfigureAwait(false);
+                    if (!mergeResult.Success)
+                    {
+                        allChildResults[^1] = childResult with
+                        {
+                            Outcome = ChainOutcome.ParentStoppedEarly,
+                            FinalRationale = $"failed to merge {childIntegrationBranch} into {integrationBranch}: {mergeResult.FailureReason}"
+                        };
+                        anyStoppedEarly = true;
+                        break;
+                    }
+                }
             }
         }
 
         var childResults = allChildResults;
-
-        if (sharedWorktreePath is not null)
-        {
-            try
-            {
-                var decrufter = new WorktreeDecrufter(_git);
-                await decrufter.DecruftAsync(sharedWorktreePath, _workingDirectory, ct).ConfigureAwait(false);
-                await _git.DeleteBranchAsync(sharedChainBranch, force: true, _workingDirectory, ct).ConfigureAwait(false);
-
-                foreach (var childResult in allChildResults)
-                {
-                    if (childResult.Outcome != ChainOutcome.Completed)
-                        continue;
-                    var childBranch = PhaseWorktreeLayout.BranchName(childResult.TicketId);
-                    await _git.DeleteBranchAsync(childBranch, force: true, _workingDirectory, ct).ConfigureAwait(false);
-                }
-            }
-            catch { /* non-fatal: ticket transitions are already committed */ }
-        }
 
         // Attempt parent rollup (fail-soft)
         try { await _ticketing.RollupParentAsync(options.TicketId, ct).ConfigureAwait(false); }
@@ -2025,7 +2012,50 @@ public class ChainPhase
         return next;
     }
 
-    private sealed record DryRunItem(Ticket Ticket, int Depth, bool HasLiveChildren, string IntegrationBranch);
+    private static string ChainIntegrationBranch(Ticket ticket)
+    {
+        var slug = SlugBuilder.BuildTicketSlug(ticket.Id);
+        return $"chain/{slug}";
+    }
+
+    private async Task<WorktreeCreateResult> EnsureIntegrationWorktreeAsync(
+        string branch,
+        string fromRef,
+        string worktreePath,
+        CancellationToken ct)
+    {
+        var existingWorktrees = await _git.ListWorktreesAsync(ct).ConfigureAwait(false);
+        var existingWorktree = existingWorktrees.FirstOrDefault(
+            w => string.Equals(w.Branch, branch, StringComparison.OrdinalIgnoreCase));
+        if (existingWorktree is not null)
+            return new WorktreeCreateResult(true, null, existingWorktree.Path);
+
+        var existingBranches = await _git.ListLocalBranchesAsync(branch, _workingDirectory, ct).ConfigureAwait(false);
+        if (existingBranches.Any(b => string.Equals(b, branch, StringComparison.OrdinalIgnoreCase)))
+            return await _git.CheckoutWorktreeAsync(worktreePath, branch, _workingDirectory, ct).ConfigureAwait(false);
+
+        var createResult = await _git.CreateWorktreeAsync(
+            worktreePath,
+            branch,
+            fromRef,
+            _workingDirectory,
+            ct).ConfigureAwait(false);
+        if (createResult.Success)
+            return createResult;
+
+        existingBranches = await _git.ListLocalBranchesAsync(branch, _workingDirectory, ct).ConfigureAwait(false);
+        if (existingBranches.Any(b => string.Equals(b, branch, StringComparison.OrdinalIgnoreCase)))
+            return await _git.CheckoutWorktreeAsync(worktreePath, branch, _workingDirectory, ct).ConfigureAwait(false);
+
+        return createResult;
+    }
+
+    private sealed record DryRunItem(
+        Ticket Ticket,
+        int Depth,
+        bool HasLiveChildren,
+        string IntegrationBranch,
+        string BaseBranch);
 
     private sealed record DryRunPlan(
         Ticket Root,
@@ -2069,7 +2099,7 @@ public class ChainPhase
             .ToList();
 
         var integrationBranch = eligible.Count > 0
-            ? $"chain/{PhaseWorktreeLayout.Compute(ticket.Id, ticket.Title, _workingDirectory).Slug}"
+            ? ChainIntegrationBranch(ticket)
             : PhaseWorktreeLayout.BranchName(ticket.Id);
 
         if (eligible.Count > 0)
@@ -2091,7 +2121,7 @@ public class ChainPhase
             }
         }
 
-        items.Add(new DryRunItem(ticket, depth, eligible.Count > 0, integrationBranch));
+        items.Add(new DryRunItem(ticket, depth, eligible.Count > 0, integrationBranch, parentIntegrationBranch));
         visited.Remove(ticket.Uuid);
     }
 
@@ -2110,9 +2140,9 @@ public class ChainPhase
 
         Console.WriteLine("branch topology:");
         foreach (var item in plan.PostOrder.Where(i => i.HasLiveChildren).OrderBy(i => i.Depth).ThenBy(i => TicketNumber(i.Ticket.Id)))
-            Console.WriteLine($"  {item.IntegrationBranch} integrates subtree for {item.Ticket.Id}");
+            Console.WriteLine($"  {item.IntegrationBranch} from {item.BaseBranch} integrates subtree for {item.Ticket.Id}");
         foreach (var item in plan.PostOrder.Where(i => !i.HasLiveChildren))
-            Console.WriteLine($"  {PhaseWorktreeLayout.BranchName(item.Ticket.Id)} forks from accumulated branch before {item.Ticket.Id}");
+            Console.WriteLine($"  {PhaseWorktreeLayout.BranchName(item.Ticket.Id)} from {item.BaseBranch} before {item.Ticket.Id}");
 
         if (plan.Warnings.Count > 0)
         {

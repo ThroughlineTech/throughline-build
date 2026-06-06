@@ -134,7 +134,8 @@ public sealed class ChainCommand : ITicketCommand
         // Emit operator triage suggestions if the chain did not complete.
         if (result.Outcome != ChainOutcome.Completed &&
             result.Outcome != ChainOutcome.RatifiedObsolete &&
-            result.Outcome != ChainOutcome.ParentCompleted)
+            result.Outcome != ChainOutcome.ParentCompleted &&
+            result.Outcome != ChainOutcome.DryRunPreview)
         {
             var triage = GetOperatorTriageSuggestions(ticketId, result, initialTicket);
             if (!string.IsNullOrEmpty(triage))
@@ -147,7 +148,8 @@ public sealed class ChainCommand : ITicketCommand
         // Return success for Completed, RatifiedObsolete, and ParentCompleted.
         bool success = result.Outcome == ChainOutcome.Completed
             || result.Outcome == ChainOutcome.RatifiedObsolete
-            || result.Outcome == ChainOutcome.ParentCompleted;
+            || result.Outcome == ChainOutcome.ParentCompleted
+            || result.Outcome == ChainOutcome.DryRunPreview;
         return new CommandResult(success, string.Empty);
     }
 
@@ -235,6 +237,9 @@ public sealed class ChainCommand : ITicketCommand
             ChainOutcome.Skipped =>
                 $"[{ticketId}] skipped ({durationStr}){(result.SkipReason is not null ? " - " + result.SkipReason : "")}",
 
+            ChainOutcome.DryRunPreview =>
+                $"[{ticketId}] dry-run preview ({durationStr})",
+
             _ => $"[{ticketId}] chain stopped: unknown outcome {result.Outcome}"
         };
     }
@@ -261,7 +266,8 @@ public sealed class ChainCommand : ITicketCommand
             var durationStr = FormatDuration(r.TotalDuration);
             bool isSuccess = r.Outcome == ChainOutcome.Completed
                 || r.Outcome == ChainOutcome.RatifiedObsolete
-                || r.Outcome == ChainOutcome.ParentCompleted;
+                || r.Outcome == ChainOutcome.ParentCompleted
+                || r.Outcome == ChainOutcome.DryRunPreview;
             bool isSkipped = r.Outcome == ChainOutcome.Skipped;
 
             if (isSkipped)
@@ -340,6 +346,9 @@ public sealed class ChainCommand : ITicketCommand
 
             ChainOutcome.ParentHasGrandchildren =>
                 GetParentHasGrandchildrenTriage(result),
+
+            ChainOutcome.DryRunPreview =>
+                null,
 
             _ => null
         };
