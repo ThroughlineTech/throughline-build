@@ -17,7 +17,12 @@ public record BuildOptions(
     System.IO.TextWriter? LiveStderrSink = null,
     System.IO.TextWriter? ProgressDigestSink = null,
     string TargetBranch = "main",
-    bool PromotePlan = false);
+    bool PromotePlan = false,
+    // Batch review: when the ticket count of a batch exceeds this threshold, a second
+    // combined review pass is always triggered (in addition to the pass already required
+    // when the first returns Rework). Set to 0 to always force a second pass; set to a
+    // high value (e.g. int.MaxValue) to disable size-based second passes entirely.
+    int BatchReviewSizeThreshold = 5);
 
 public record PlanResult(
     bool Success,

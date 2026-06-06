@@ -782,12 +782,17 @@ public class ChainPhaseTests
         public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
         {
             CallCount++;
+            // Include verdict=Pass so combined-review calls return a valid passing verdict.
+            // The implement call ignores the verdict key, so this is safe for both phases.
+            var metadata = _status == Status.Ok
+                ? new Dictionary<string, object> { ["verdict"] = "Pass", ["rationale"] = "looks good" }
+                : new Dictionary<string, object>();
             return Task.FromResult(new WorkerResult(
                 _status,
                 _status == Status.Ok ? "batch ok" : "batch failed",
                 Array.Empty<string>(),
                 _status != Status.Ok ? "batch error" : null,
-                new Dictionary<string, object>(),
+                metadata,
                 Tickets: _tickets));
         }
     }
@@ -1664,9 +1669,9 @@ public class ChainPhaseTests
             new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
             CancellationToken.None);
 
-        // AC1: exactly one worker session for the whole group.
-        Assert.Equal(1, batchWorker.CallCount);
-        // Parent completed because all batch children succeeded.
+        // AC1: two worker sessions - one batch implement session + one combined review pass.
+        Assert.Equal(2, batchWorker.CallCount);
+        // Parent completed because all batch children succeeded and review passed.
         Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
         Assert.NotNull(result.ChildResults);
         Assert.Equal(2, result.ChildResults!.Count);

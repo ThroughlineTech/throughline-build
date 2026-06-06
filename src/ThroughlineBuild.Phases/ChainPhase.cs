@@ -782,13 +782,22 @@ public class ChainPhase
         return verdict;
     }
 
+    // Wraps the per-ticket ChainResults from a batch implement session alongside the
+    // verified commit attributions and branch metadata needed to run a combined review.
+    // ConfirmedTickets is null when the session failed before any commits were verified.
+    private sealed record BatchImplementOutcome(
+        IReadOnlyList<ChainResult> Results,
+        IReadOnlyList<BatchTicketResult>? ConfirmedTickets,
+        string BranchName,
+        string BaseRef);
+
     /// <summary>
     /// Runs a single implement session for all tickets in the batch group, then returns one
     /// <see cref="ChainResult"/> per ticket with outcome <see cref="ChainOutcome.BatchImplemented"/>.
     /// The session executes inside the already-created shared chain worktree. All batch commits
-    /// stack on the first ticket's branch; review and ship are left to future briefs (Brief 05/06).
+    /// stack on the first ticket's branch; the combined review runs after this returns.
     /// </summary>
-    private async Task<IReadOnlyList<ChainResult>> RunBatchImplementSessionAsync(
+    private async Task<BatchImplementOutcome> RunBatchImplementSessionAsync(
         ChainPhaseOptions options,
         IReadOnlyList<Ticket> batchTickets,
         string sharedWorktreePath,
@@ -810,7 +819,7 @@ public class ChainPhase
                 firstTicket.Id, Array.Empty<ChainStep>(),
                 ChainOutcome.StoppedAtImplement, batchSw.Elapsed,
                 $"batch implement: branch create for {batchBranchName} failed: {branchResult.FailureReason}");
-            return new[] { branchFail };
+            return new BatchImplementOutcome(new[] { branchFail }, null, batchBranchName, baseRef);
         }
 
         // Transition all batch tickets Ready -> InProgress to mark that work has started.
@@ -989,16 +998,20 @@ public class ChainPhase
                                 failureReason));
                         }
                     }
-                    return partialResults.AsReadOnly();
+                    return new BatchImplementOutcome(
+                        partialResults.AsReadOnly(), null, batchBranchName,
+                        !string.IsNullOrEmpty(mainSha) ? mainSha : baseRef);
                 }
                 // Partial verification failed: fall through to total failure path.
             }
 
             batchSw.Stop();
-            return batchTickets.Select(t => new ChainResult(
-                t.Id, Array.Empty<ChainStep>(),
-                ChainOutcome.StoppedAtImplement, batchSw.Elapsed,
-                failureReason)).ToList().AsReadOnly();
+            return new BatchImplementOutcome(
+                batchTickets.Select(t => new ChainResult(
+                    t.Id, Array.Empty<ChainStep>(),
+                    ChainOutcome.StoppedAtImplement, batchSw.Elapsed,
+                    failureReason)).ToList().AsReadOnly(),
+                null, batchBranchName, baseRef);
         }
 
         // Worker succeeded: confirm the worktree is clean and that each reported SHA
@@ -1011,10 +1024,12 @@ public class ChainPhase
         if (!verifyResult.Success)
         {
             batchSw.Stop();
-            return batchTickets.Select(t => new ChainResult(
-                t.Id, Array.Empty<ChainStep>(),
-                ChainOutcome.StoppedAtImplement, batchSw.Elapsed,
-                verifyResult.FailureReason)).ToList().AsReadOnly();
+            return new BatchImplementOutcome(
+                batchTickets.Select(t => new ChainResult(
+                    t.Id, Array.Empty<ChainStep>(),
+                    ChainOutcome.StoppedAtImplement, batchSw.Elapsed,
+                    verifyResult.FailureReason)).ToList().AsReadOnly(),
+                null, batchBranchName, !string.IsNullOrEmpty(mainSha) ? mainSha : baseRef);
         }
 
         // Produce a BatchImplemented result for each ticket, sourcing per-ticket commit
@@ -1081,7 +1096,242 @@ public class ChainPhase
                     : "batch implement succeeded"));
         }
 
-        return results.AsReadOnly();
+        return new BatchImplementOutcome(
+            results.AsReadOnly(),
+            verifyResult.ConfirmedTickets,
+            batchBranchName,
+            !string.IsNullOrEmpty(mainSha) ? mainSha : baseRef);
+    }
+
+    /// <summary>
+    /// Runs one combined review pass over the full batch stack diff. When the first pass
+    /// returns Rework, or when the batch size exceeds
+    /// <see cref="BuildOptions.BatchReviewSizeThreshold"/>, a second pass is run for
+    /// additional scrutiny. Returns true when the final verdict is Pass.
+    /// </summary>
+    private async Task<bool> RunCombinedBatchReviewAsync(
+        IReadOnlyList<Ticket> batchTickets,
+        IReadOnlyList<BatchTicketResult> confirmedTickets,
+        string batchBranchName,
+        string baseRef,
+        string sharedWorktreePath,
+        string chainSessionId,
+        CancellationToken ct)
+    {
+        var primaryTicketId = batchTickets[0].Id;
+        bool sizeExceedsThreshold = batchTickets.Count > _baseOptions.BatchReviewSizeThreshold;
+
+        // Compute the combined diff once - both passes use the same combined diff since
+        // the worktree does not change between review passes.
+        GitDiff combinedDiff;
+        try
+        {
+            combinedDiff = await _git
+                .DiffAsync(baseRef, batchBranchName, _workingDirectory, includePatchContent: true, ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            await _events.EmitAsync(new WorkflowEvent(
+                SessionId: chainSessionId,
+                Timestamp: DateTimeOffset.UtcNow,
+                Kind: EventKind.GateFailure,
+                TicketId: primaryTicketId,
+                Phase: Phase.Review,
+                Data: new Dictionary<string, object>
+                {
+                    ["kind"] = "batch_review_diff_failed",
+                    ["error"] = ex.Message
+                }), ct).ConfigureAwait(false);
+            return false;
+        }
+
+        // Pass 1
+        var (pass1Verdict, pass1Rationale, pass1Checks) = await RunOneBatchReviewPassAsync(
+            batchTickets, confirmedTickets, baseRef, combinedDiff,
+            sharedWorktreePath, chainSessionId, pass: 1, ct).ConfigureAwait(false);
+
+        await PostBatchReviewCommentAsync(
+            primaryTicketId, 1, pass1Verdict, pass1Rationale, pass1Checks, ct).ConfigureAwait(false);
+
+        // Fail: no second pass - a Fail verdict is a structural problem that a second
+        // review pass cannot change.
+        if (pass1Verdict == VerdictKind.Fail)
+            return false;
+
+        // Second pass: triggered when first returned Rework, or the batch exceeds the size
+        // threshold (large diffs warrant more than one reviewer pass regardless of verdict).
+        bool needSecondPass = pass1Verdict == VerdictKind.Rework || sizeExceedsThreshold;
+        if (!needSecondPass)
+            return true;
+
+        var (pass2Verdict, pass2Rationale, pass2Checks) = await RunOneBatchReviewPassAsync(
+            batchTickets, confirmedTickets, baseRef, combinedDiff,
+            sharedWorktreePath, chainSessionId, pass: 2, ct).ConfigureAwait(false);
+
+        await PostBatchReviewCommentAsync(
+            primaryTicketId, 2, pass2Verdict, pass2Rationale, pass2Checks, ct).ConfigureAwait(false);
+
+        return pass2Verdict == VerdictKind.Pass;
+    }
+
+    /// <summary>
+    /// Dispatches the batch review worker for one pass and parses the resulting verdict.
+    /// </summary>
+    private async Task<(VerdictKind verdict, string rationale, IReadOnlyList<string> checksFailed)>
+        RunOneBatchReviewPassAsync(
+            IReadOnlyList<Ticket> batchTickets,
+            IReadOnlyList<BatchTicketResult> confirmedTickets,
+            string baseRef,
+            GitDiff combinedDiff,
+            string sharedWorktreePath,
+            string chainSessionId,
+            int pass,
+            CancellationToken ct)
+    {
+        var primaryTicketId = batchTickets[0].Id;
+        var reviewSessionId = _sessionIdGenerator();
+
+        await _events.EmitAsync(new WorkflowEvent(
+            SessionId: reviewSessionId,
+            Timestamp: DateTimeOffset.UtcNow,
+            Kind: EventKind.WorkerSpawn,
+            TicketId: primaryTicketId,
+            Phase: Phase.Review,
+            Data: new Dictionary<string, object>
+            {
+                ["worker"] = _batchWorker!.Name,
+                ["role"] = "batch_verifier",
+                ["pass"] = pass
+            }), ct).ConfigureAwait(false);
+
+        var reviewBrief = BatchReviewBriefBuilder.Build(
+            _batchWorker!.Name,
+            batchTickets,
+            confirmedTickets,
+            baseRef,
+            combinedDiff,
+            checkResults: Array.Empty<CheckResult>());
+
+        var maxSize = batchTickets.Max(t => WorkerSizeMapper.FromTicketSize(t.Size));
+        var workerOptions = new WorkerOptions(
+            _baseOptions.WorkerTimeout,
+            _baseOptions.WorkerAllowedTools,
+            DebugCaptureDirectory: _baseOptions.DebugCaptureDirectory,
+            LiveStdoutSink: _baseOptions.LiveStdoutSink,
+            LiveStderrSink: _baseOptions.LiveStderrSink,
+            ProgressDigestSink: _baseOptions.ProgressDigestSink,
+            Size: maxSize);
+
+        // Workers run in the shared worktree (where the batch branch is checked out).
+        var workerResult = await _batchWorker!
+            .ExecuteAsync(reviewBrief, sharedWorktreePath, workerOptions, ct)
+            .ConfigureAwait(false);
+
+        await _events.EmitAsync(new WorkflowEvent(
+            SessionId: reviewSessionId,
+            Timestamp: DateTimeOffset.UtcNow,
+            Kind: EventKind.VerifierVerdict,
+            TicketId: primaryTicketId,
+            Phase: Phase.Review,
+            Data: new Dictionary<string, object>
+            {
+                ["worker_status"] = workerResult.Status.ToString(),
+                ["pass"] = pass
+            }), ct).ConfigureAwait(false);
+
+        if (workerResult.Status != Status.Ok)
+        {
+            var reason = workerResult.FailureReason ?? workerResult.Status.ToString();
+            return (VerdictKind.Fail, $"batch review worker failed (pass {pass}): {reason}", Array.Empty<string>());
+        }
+
+        var metadata = workerResult.Metadata;
+        var verdictRaw = TryGetBatchReviewMetadataString(metadata, "verdict");
+        VerdictKind kind;
+        if (string.Equals(verdictRaw, "Pass", StringComparison.OrdinalIgnoreCase))
+            kind = VerdictKind.Pass;
+        else if (string.Equals(verdictRaw, "Rework", StringComparison.OrdinalIgnoreCase))
+            kind = VerdictKind.Rework;
+        else
+            kind = VerdictKind.Fail;
+
+        var blocks = workerResult.Blocks ?? new Dictionary<string, string>();
+        string rationale;
+        if (FencedBlockResolver.TryResolveRef(blocks, metadata, "rationale_ref", out var resolvedRationale, out _)
+            && resolvedRationale is not null)
+            rationale = resolvedRationale;
+        else
+            rationale = TryGetBatchReviewMetadataString(metadata, "rationale") ?? "";
+
+        var checksFailed = ParseBatchReviewChecksFailed(metadata);
+        return (kind, rationale, checksFailed);
+    }
+
+    private async Task PostBatchReviewCommentAsync(
+        string ticketId,
+        int pass,
+        VerdictKind verdict,
+        string rationale,
+        IReadOnlyList<string> checksFailed,
+        CancellationToken ct)
+    {
+        try
+        {
+            var checksNote = checksFailed.Count > 0
+                ? $" checks_failed: {string.Join(", ", checksFailed)}"
+                : "";
+            var passNote = pass > 1 ? $" (pass {pass})" : "";
+            var commentHtml =
+                $"<p>[batch_review{passNote}: {verdict}]{checksNote}</p>" +
+                $"<p>{System.Net.WebUtility.HtmlEncode(rationale)}</p>";
+            await _ticketing.CreateCommentAsync(ticketId, commentHtml, ct).ConfigureAwait(false);
+        }
+        catch { /* non-fatal */ }
+    }
+
+    private static string? TryGetBatchReviewMetadataString(
+        IReadOnlyDictionary<string, object> metadata, string key)
+    {
+        if (!metadata.TryGetValue(key, out var val)) return null;
+        if (val is string s) return s;
+        if (val is System.Text.Json.JsonElement je
+            && je.ValueKind == System.Text.Json.JsonValueKind.String)
+            return je.GetString();
+        return val?.ToString();
+    }
+
+    private static IReadOnlyList<string> ParseBatchReviewChecksFailed(
+        IReadOnlyDictionary<string, object> metadata)
+    {
+        if (!metadata.TryGetValue("checks_failed", out var raw) || raw is null)
+            return Array.Empty<string>();
+        if (raw is IEnumerable<string> strings)
+            return strings.ToArray();
+        if (raw is IEnumerable<object> objects)
+        {
+            var result = new List<string>();
+            foreach (var item in objects)
+            {
+                if (item is string s) result.Add(s);
+                else if (item is System.Text.Json.JsonElement je
+                    && je.ValueKind == System.Text.Json.JsonValueKind.String)
+                    result.Add(je.GetString() ?? "");
+            }
+            return result;
+        }
+        if (raw is System.Text.Json.JsonElement arrayElem
+            && arrayElem.ValueKind == System.Text.Json.JsonValueKind.Array)
+        {
+            var result = new List<string>();
+            foreach (var elem in arrayElem.EnumerateArray())
+            {
+                if (elem.ValueKind == System.Text.Json.JsonValueKind.String)
+                    result.Add(elem.GetString() ?? "");
+            }
+            return result;
+        }
+        return Array.Empty<string>();
     }
 
     private async Task<ChainResult> RunParentChainAsync(
@@ -1266,11 +1516,11 @@ public class ChainPhase
                 batchedTicketIds = new HashSet<string>(
                     batchTickets.Select(t => t.Id), StringComparer.Ordinal);
 
-                var batchResults = await RunBatchImplementSessionAsync(
+                var batchOutcome = await RunBatchImplementSessionAsync(
                     options, batchTickets, sharedWorktreePath, baseRefForSharedWt!, chainStartSha, ct)
                     .ConfigureAwait(false);
 
-                foreach (var br in batchResults)
+                foreach (var br in batchOutcome.Results)
                 {
                     allChildResults.Add(br);
                     if (!IsChainSuccess(br.Outcome))
@@ -1278,6 +1528,27 @@ public class ChainPhase
                         anyStoppedEarly = true;
                         break;
                     }
+                }
+
+                // Combined review: one pass over the full batch stack diff after a successful
+                // batch implement. A second pass is run when the first returns Rework or when
+                // the batch size exceeds the configured threshold (BuildOptions.BatchReviewSizeThreshold).
+                if (!anyStoppedEarly
+                    && _batchWorker is not null
+                    && batchOutcome.ConfirmedTickets is not null
+                    && batchOutcome.ConfirmedTickets.Count > 0)
+                {
+                    var batchReviewPassed = await RunCombinedBatchReviewAsync(
+                        batchTickets,
+                        batchOutcome.ConfirmedTickets,
+                        batchOutcome.BranchName,
+                        batchOutcome.BaseRef,
+                        sharedWorktreePath!,
+                        _sessionIdGenerator(),
+                        ct).ConfigureAwait(false);
+
+                    if (!batchReviewPassed)
+                        anyStoppedEarly = true;
                 }
             }
         }
