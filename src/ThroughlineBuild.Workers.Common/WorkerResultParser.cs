@@ -30,6 +30,8 @@ internal sealed class WorkerResultDto
     public string? FailureReason { get; set; }
     [JsonPropertyName("metadata")]
     public Dictionary<string, JsonElement>? Metadata { get; set; }
+    [JsonPropertyName("tickets")]
+    public List<BatchTicketResultDto>? Tickets { get; set; }
 }
 
 internal sealed class BatchWorkerResultDto
@@ -194,12 +196,34 @@ internal static class WorkerResultParser
                 IReadOnlyDictionary<string, object> meta = dto.Metadata is not null
                     ? dto.Metadata.ToDictionary(kvp => kvp.Key, kvp => (object)kvp.Value)
                     : new Dictionary<string, object>();
+
+                // Parse optional top-level tickets array (batch implement responses).
+                IReadOnlyList<BatchTicketResult>? tickets = null;
+                if (dto.Tickets is { Count: > 0 })
+                {
+                    var ticketList = new List<BatchTicketResult>(dto.Tickets.Count);
+                    bool ticketValidationFailed = false;
+                    for (int ti = 0; ti < dto.Tickets.Count; ti++)
+                    {
+                        if (!TryMapBatchTicket(dto.Tickets[ti], ti, out var mapped, out var msg))
+                        {
+                            lastFailure = WorkerResultParseOutcome.DeserializeFailed("ValidationError", msg!);
+                            ticketValidationFailed = true;
+                            break;
+                        }
+                        ticketList.Add(mapped);
+                    }
+                    if (ticketValidationFailed) continue;
+                    tickets = ticketList.AsReadOnly();
+                }
+
                 var result = new WorkerResult(
                     dto.Status.Value,
                     dto.Summary,
                     files,
                     dto.FailureReason,
-                    meta);
+                    meta,
+                    Tickets: tickets);
                 return WorkerResultParseOutcome.Success(result, blocks);
             }
             catch (JsonException ex)
