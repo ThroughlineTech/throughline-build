@@ -380,6 +380,28 @@ public class TransitionAsyncTests
 
         Assert.Equal(500, ex.Status);
     }
+
+    [Fact]
+    public async Task TransitionAsync_ToDone_RollsUpParentImmediately()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(
+            RollupTestData.ChildAndParentIssueListJson(childStateUuid: TestData.StateUuid))); // snapshot
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.FullStateListJson()));       // state cache
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.PatchOkJson()));                   // child PATCH Done
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.ParentExpandedJson()));      // parent expanded
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.SiblingsDoneJson()));        // all children Done
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.PatchParentOkJson()));       // parent PATCH Done
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.CommentOkJson()));           // rollup comment
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        await client.TransitionAsync("TLB-25", TicketState.Done, CancellationToken.None);
+
+        var patchReqs = handler.Requests.Where(r => r.Method == HttpMethod.Patch).ToList();
+        Assert.Equal(2, patchReqs.Count);
+        Assert.Contains(RollupTestData.DoneStateUuid, patchReqs[0].Body);
+        Assert.Contains(RollupTestData.DoneStateUuid, patchReqs[1].Body);
+    }
 }
 
 public class RateLimitRetryTests
@@ -722,8 +744,11 @@ public class PlaneApiExceptionTests
 internal static class RollupTestData
 {
     public const string ParentUuid = "pppppppp-0000-0000-0000-000000000001";
+    public const string GrandparentUuid = "gggggggg-0000-0000-0000-000000000001";
     public const string ChildUuid = "aaaaaaaa-0000-0000-0000-000000000002";
     public const string InProgressStateUuid = "bbbbbbbb-0000-0000-0000-000000000002";
+    public const string DoneStateUuid = "bbbbbbbb-0000-0000-0000-000000000003";
+    public const string CancelledStateUuid = "bbbbbbbb-0000-0000-0000-000000000005";
 
     // Child issue list with parent set
     public static string ChildIssueListJson() =>
@@ -744,6 +769,72 @@ internal static class RollupTestData
         }
         """;
 
+    public static string ChildAndParentIssueListJson(string childStateUuid = InProgressStateUuid, string? parentOfParentUuid = null) =>
+        $$"""
+        {
+          "results": [
+            {
+              "id": "{{ChildUuid}}",
+              "sequence_id": 25,
+              "name": "child-ticket",
+              "description_html": "<p>desc</p>",
+              "state": "{{childStateUuid}}",
+              "label_ids": [],
+              "parent": "{{ParentUuid}}",
+              "type": null
+            },
+            {
+              "id": "{{ParentUuid}}",
+              "sequence_id": 10,
+              "name": "parent-ticket",
+              "description_html": "<p>desc</p>",
+              "state": "{{TestData.StateUuid}}",
+              "label_ids": [],
+              "parent": {{(parentOfParentUuid is null ? "null" : $"\"{parentOfParentUuid}\"")}},
+              "type": null
+            }
+          ]
+        }
+        """;
+
+    public static string ChildParentAndGrandparentIssueListJson() =>
+        $$"""
+        {
+          "results": [
+            {
+              "id": "{{ChildUuid}}",
+              "sequence_id": 25,
+              "name": "child-ticket",
+              "description_html": "<p>desc</p>",
+              "state": "{{DoneStateUuid}}",
+              "label_ids": [],
+              "parent": "{{ParentUuid}}",
+              "type": null
+            },
+            {
+              "id": "{{ParentUuid}}",
+              "sequence_id": 10,
+              "name": "parent-ticket",
+              "description_html": "<p>desc</p>",
+              "state": "{{TestData.StateUuid}}",
+              "label_ids": [],
+              "parent": "{{GrandparentUuid}}",
+              "type": null
+            },
+            {
+              "id": "{{GrandparentUuid}}",
+              "sequence_id": 1,
+              "name": "grandparent-ticket",
+              "description_html": "<p>desc</p>",
+              "state": "{{TestData.StateUuid}}",
+              "label_ids": [],
+              "parent": null,
+              "type": null
+            }
+          ]
+        }
+        """;
+
     // State list (same as TestData but with In Review added)
     public static string FullStateListJson() =>
         $$"""
@@ -751,9 +842,9 @@ internal static class RollupTestData
           "results": [
             { "id": "{{TestData.StateUuid}}", "name": "Backlog", "group": "backlog" },
             { "id": "{{InProgressStateUuid}}", "name": "In Progress", "group": "started" },
-            { "id": "bbbbbbbb-0000-0000-0000-000000000003", "name": "Done", "group": "completed" },
+            { "id": "{{DoneStateUuid}}", "name": "Done", "group": "completed" },
             { "id": "bbbbbbbb-0000-0000-0000-000000000004", "name": "In Review", "group": "unstarted" },
-            { "id": "bbbbbbbb-0000-0000-0000-000000000005", "name": "Cancelled", "group": "cancelled" }
+            { "id": "{{CancelledStateUuid}}", "name": "Cancelled", "group": "cancelled" }
           ]
         }
         """;
@@ -769,6 +860,16 @@ internal static class RollupTestData
         }
         """;
 
+    public static string GrandparentExpandedJson() =>
+        $$"""
+        {
+          "id": "{{GrandparentUuid}}",
+          "sequence_id": 1,
+          "parent": null,
+          "state": { "id": "{{TestData.StateUuid}}", "name": "Backlog" }
+        }
+        """;
+
     // Siblings list with one child in "In Progress"
     public static string SiblingsInProgressJson() =>
         $$"""
@@ -779,6 +880,54 @@ internal static class RollupTestData
               "sequence_id": 25,
               "parent": "{{ParentUuid}}",
               "state": { "id": "{{InProgressStateUuid}}", "name": "In Progress" }
+            }
+          ]
+        }
+        """;
+
+    public static string SiblingsDoneJson() =>
+        $$"""
+        {
+          "results": [
+            {
+              "id": "{{ChildUuid}}",
+              "sequence_id": 25,
+              "parent": "{{ParentUuid}}",
+              "state": { "id": "{{DoneStateUuid}}", "name": "Done" }
+            }
+          ]
+        }
+        """;
+
+    public static string GrandparentSiblingsDoneJson() =>
+        $$"""
+        {
+          "results": [
+            {
+              "id": "{{ParentUuid}}",
+              "sequence_id": 10,
+              "parent": "{{GrandparentUuid}}",
+              "state": { "id": "{{DoneStateUuid}}", "name": "Done" }
+            }
+          ]
+        }
+        """;
+
+    public static string SiblingsDoneAndCancelledJson() =>
+        $$"""
+        {
+          "results": [
+            {
+              "id": "{{ChildUuid}}",
+              "sequence_id": 25,
+              "parent": "{{ParentUuid}}",
+              "state": { "id": "{{DoneStateUuid}}", "name": "Done" }
+            },
+            {
+              "id": "aaaaaaaa-0000-0000-0000-000000000003",
+              "sequence_id": 26,
+              "parent": "{{ParentUuid}}",
+              "state": { "id": "{{CancelledStateUuid}}", "name": "Cancelled" }
             }
           ]
         }
@@ -822,6 +971,79 @@ public class RollupParentAsyncTests
 
         var patchReqs = handler.Requests.Where(r => r.Method == HttpMethod.Patch).ToList();
         Assert.NotEmpty(patchReqs);
+    }
+
+    [Fact]
+    public async Task AllDirectChildrenDone_TransitionsParentToDone()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(
+            RollupTestData.ChildAndParentIssueListJson(childStateUuid: RollupTestData.DoneStateUuid)));
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.FullStateListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.ParentExpandedJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.SiblingsDoneJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.PatchParentOkJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.CommentOkJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var result = await client.RollupParentAsync("TLB-25", CancellationToken.None);
+
+        Assert.True(result.ParentTransitioned);
+        Assert.Equal("Done", result.NewParentState);
+        Assert.Null(result.FailureReason);
+
+        var patchReq = Assert.Single(handler.Requests.Where(r => r.Method == HttpMethod.Patch));
+        Assert.Contains(RollupTestData.DoneStateUuid, patchReq.Body);
+    }
+
+    [Fact]
+    public async Task CancelledSibling_BlocksParentDoneCompletion()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(
+            RollupTestData.ChildAndParentIssueListJson(childStateUuid: RollupTestData.DoneStateUuid)));
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.FullStateListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.ParentExpandedJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.SiblingsDoneAndCancelledJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.PatchParentOkJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.CommentOkJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var result = await client.RollupParentAsync("TLB-25", CancellationToken.None);
+
+        Assert.True(result.ParentTransitioned);
+        Assert.Equal("In Review", result.NewParentState);
+
+        var patchReq = Assert.Single(handler.Requests.Where(r => r.Method == HttpMethod.Patch));
+        Assert.DoesNotContain(RollupTestData.DoneStateUuid, patchReq.Body);
+    }
+
+    [Fact]
+    public async Task DoneParent_ReevaluatesItsOwnParent()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.ChildParentAndGrandparentIssueListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.FullStateListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.ParentExpandedJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.SiblingsDoneJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.PatchParentOkJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.CommentOkJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.GrandparentExpandedJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.GrandparentSiblingsDoneJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.PatchParentOkJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(RollupTestData.CommentOkJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var result = await client.RollupParentAsync("TLB-25", CancellationToken.None);
+
+        Assert.True(result.ParentTransitioned);
+        Assert.Equal("Done", result.NewParentState);
+
+        var patchReqs = handler.Requests.Where(r => r.Method == HttpMethod.Patch).ToList();
+        Assert.Equal(2, patchReqs.Count);
+        Assert.Contains($"/issues/{RollupTestData.ParentUuid}/", patchReqs[0].RequestUri!.ToString());
+        Assert.Contains($"/issues/{RollupTestData.GrandparentUuid}/", patchReqs[1].RequestUri!.ToString());
+        Assert.All(patchReqs, req => Assert.Contains(RollupTestData.DoneStateUuid, req.Body));
     }
 
     [Fact]

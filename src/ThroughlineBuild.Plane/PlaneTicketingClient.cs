@@ -514,6 +514,7 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
 
     public async Task TransitionAsync(string id, TicketState newState, CancellationToken ct)
     {
+        var transitioned = false;
         await _pipeline.ExecuteAsync(async token =>
         {
             var seq = ParseSequenceId(id);
@@ -552,7 +553,11 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
             // Write-through: keep the snapshot's state fresh so the next phase's state guard
             // reads the state this transition just wrote, not the value cached at first load.
             UpdateCachedIssue(issue.Id, i => i with { StateId = stateId });
+            transitioned = true;
         }, ct).ConfigureAwait(false);
+
+        if (transitioned && newState == TicketState.Done)
+            await RollupParentAsync(id, ct).ConfigureAwait(false);
     }
 
     public async Task AppendDescriptionAsync(string id, string html, CancellationToken ct)
@@ -733,6 +738,9 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
                 new CreateCommentRequest(commentHtml),
                 PlaneJsonContext.Default,
                 ct).ConfigureAwait(false);
+
+            if (desired == "Done")
+                await RollupParentAsync($"{_options.ProjectIdentifier}-{parentExpanded.SequenceId}", ct).ConfigureAwait(false);
 
             return new RollupResult(true, desired, null);
         }
@@ -1153,13 +1161,13 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
             return null;
 
         var stateNames = siblings.Select(s => ExtractStateName(s.State)).ToList();
-        var nonCancelled = stateNames.Where(n => n != "Cancelled").ToList();
-
-        // Rule 1: all non-Cancelled are Done -> "Done"
-        if (nonCancelled.Count > 0 && nonCancelled.All(n => n == "Done"))
+        // Rule 1: every direct child is Done -> "Done". Cancelled children still block
+        // completion because they are not Done.
+        if (stateNames.All(n => n == "Done"))
             return "Done";
 
         // Rule 2: all non-Cancelled are in (In Review, Done) -> "In Review"
+        var nonCancelled = stateNames.Where(n => n != "Cancelled").ToList();
         if (nonCancelled.Count > 0 && nonCancelled.All(n => n == "In Review" || n == "Done"))
             return "In Review";
 
