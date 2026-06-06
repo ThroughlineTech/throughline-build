@@ -33,10 +33,21 @@ public static class BaseRefResolver
         catch
         {
             // No origin remote (or origin/<target> never fetched): fall back to the local
-            // target branch. Propagates if the local branch is also absent - the caller
-            // treats that as a hard git failure.
-            var localOnlySha = await git.RevParseAsync(targetBranch, workingDirectory, ct).ConfigureAwait(false);
-            return (targetBranch, localOnlySha);
+            // target branch.
+            try
+            {
+                var localOnlySha = await git.RevParseAsync(targetBranch, workingDirectory, ct).ConfigureAwait(false);
+                return (targetBranch, localOnlySha);
+            }
+            catch
+            {
+                // Neither origin/<target> nor local <target> resolves. Surface an actionable
+                // error instead of git's raw "ambiguous argument '<target>'" plumbing message,
+                // distinguishing a repo with no commits at all (unborn HEAD) from a repo whose
+                // base branch is simply named differently.
+                throw await BuildUnresolvableBaseErrorAsync(git, workingDirectory, targetBranch, ct)
+                    .ConfigureAwait(false);
+            }
         }
 
         // origin/<target> exists. Prefer the local branch only when it is strictly ahead.
@@ -59,5 +70,32 @@ public static class BaseRefResolver
         }
 
         return (remoteRef, remoteSha);
+    }
+
+    // Builds the actionable exception thrown when the base branch cannot be resolved at all.
+    // Probes HEAD to tell "repo has no commits yet" apart from "target branch named differently"
+    // so the operator sees a fix-it instruction rather than git's "ambiguous argument" plumbing.
+    private static async Task<InvalidOperationException> BuildUnresolvableBaseErrorAsync(
+        IGitClient git, string workingDirectory, string targetBranch, CancellationToken ct)
+    {
+        bool hasCommits;
+        try
+        {
+            await git.RevParseAsync("HEAD", workingDirectory, ct).ConfigureAwait(false);
+            hasCommits = true;
+        }
+        catch
+        {
+            hasCommits = false;
+        }
+
+        return hasCommits
+            ? new InvalidOperationException(
+                $"base branch '{targetBranch}' does not exist in {workingDirectory}. " +
+                "Create it, or point build at the right branch with 'build settarget <branch>'.")
+            : new InvalidOperationException(
+                $"repository at {workingDirectory} has no commits yet, so base branch " +
+                $"'{targetBranch}' cannot be resolved. Create an initial commit before running build " +
+                "(e.g. 'git commit --allow-empty -m init').");
     }
 }

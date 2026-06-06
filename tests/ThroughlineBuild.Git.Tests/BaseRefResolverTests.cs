@@ -20,6 +20,18 @@ public class BaseRefResolverTests : IDisposable
         return dir;
     }
 
+    private string CreateTempEmptyGitRepo()
+    {
+        // Fresh repo with an unborn HEAD: no commits, no branches (the survey-smoketest case).
+        var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(dir);
+        _tempDirs.Add(dir);
+        RunGit(dir, "init", "-b", "main");
+        RunGit(dir, "config", "user.email", "test@test.com");
+        RunGit(dir, "config", "user.name", "Test");
+        return dir;
+    }
+
     private static string RunGit(string workingDirectory, params string[] args)
     {
         var psi = new ProcessStartInfo("git")
@@ -73,15 +85,35 @@ public class BaseRefResolverTests : IDisposable
     }
 
     [Fact]
-    public async Task ResolveAsync_NoOriginAndNoMain_Throws()
+    public async Task ResolveAsync_NoOriginAndNoMain_ThrowsActionableMissingBranchError()
     {
         var repoDir = CreateTempGitRepoWithMain();
-        // Rename the only branch off "main" so neither origin/main nor main resolves.
+        // Rename the only branch off "main" so neither origin/main nor main resolves,
+        // but the repo still has commits (HEAD resolves).
         RunGit(repoDir, "branch", "-m", "main", "trunk");
         var client = new ProcessGitClient(repoDir);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await BaseRefResolver.ResolveAsync(client, repoDir, "main", CancellationToken.None));
+
+        Assert.Contains("base branch 'main' does not exist", ex.Message);
+        Assert.Contains("build settarget", ex.Message);
+        // The raw git plumbing message must not leak through.
+        Assert.DoesNotContain("ambiguous argument", ex.Message);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_RepoWithNoCommits_ThrowsActionableNoCommitsError()
+    {
+        var repoDir = CreateTempEmptyGitRepo();
+        var client = new ProcessGitClient(repoDir);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await BaseRefResolver.ResolveAsync(client, repoDir, "main", CancellationToken.None));
+
+        Assert.Contains("has no commits yet", ex.Message);
+        Assert.Contains("initial commit", ex.Message);
+        Assert.DoesNotContain("ambiguous argument", ex.Message);
     }
 
     [Fact]
