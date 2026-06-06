@@ -4,8 +4,8 @@ Throughline Build (`build`) is a CLI that drives AI coding agents through a plan
 cycle, using Plane as the ticketing backend. This guide covers installation, configuration, and
 running your first ticket end-to-end.
 
-> **Config reference:** `.build/config.toml.example` in your project root has every supported key
-> with inline comments. For binary downloads and release notes see
+> **Config reference:** run `build init --print-template` to print a fully-commented config with every
+> supported key to stdout. For binary downloads and release notes see
 > https://github.com/danrichardson/latticeflow/releases.
 
 ## Prerequisites

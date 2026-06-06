@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using ThroughlineBuild.Cli;
+using ThroughlineBuild.Commands;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Phases;
@@ -142,28 +143,14 @@ public class ShipCliTests
     }
 
     [Fact]
-    public void ConfigExampleFile_ContainsShipSection()
+    public void ConfigTemplate_ContainsShipSection()
     {
-        var examplePath = FindConfigExampleFile();
-        Assert.NotNull(examplePath);
-
-        var content = File.ReadAllText(examplePath!);
+        // The embedded config.toml.template is the single config reference (the former
+        // checked-in example was retired). Verify it still documents the ship section
+        // so operators see it via `build init` / `build init --print-template`.
+        var content = ConfigTemplateLoader.Load();
         Assert.Contains("[ship]", content);
         Assert.Contains("[[ship.regression_checks]]", content);
-    }
-
-    private static string? FindConfigExampleFile()
-    {
-        var here = AppContext.BaseDirectory;
-        var dir = new DirectoryInfo(here);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "throughline-build.sln")))
-        {
-            dir = dir.Parent;
-        }
-        if (dir is null) return null;
-
-        var candidate = Path.Combine(dir.FullName, ".build", "config.toml.example");
-        return File.Exists(candidate) ? candidate : null;
     }
 
     private static string? LocateBuildExecutable()

@@ -19,13 +19,13 @@ There are two distinct config concerns:
 
 ## Step 1 - Create `.build/config.toml`
 
-Copy the example file and fill in your values:
+Generate the config from the built-in template:
 
 ```bash
-cp .build/config.toml.example .build/config.toml
+build init
 ```
 
-For this project the values are in `.build/config.toml.example` - copy and use them as-is. The placeholders you will see there (`your-workspace`, `uuid-of-your-project`) must be replaced with the real values from the project's Plane workspace. Ask a teammate for the correct UUIDs if you do not have them.
+This writes `.build/config.toml` from the embedded template (use `build init --print-template` to preview it without writing a file). The placeholders you will see there (`your-workspace`, `uuid-of-your-project`, and the Plane token) must be replaced with the real values from the project's Plane workspace. Ask a teammate for the correct UUIDs if you do not have them.
 
 The config shape looks like this:
 
