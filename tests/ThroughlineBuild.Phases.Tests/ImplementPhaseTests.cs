@@ -37,6 +37,15 @@ public class ImplementPhaseTests
             ["files_changed"] = new[] { "src/Foo.cs" }
         });
 
+    // A clean-exit-but-no-WORKER_RESULT failure, as the vendor agents now tag it (TLB-471).
+    private static WorkerResult EnvelopeMissingResult() => new WorkerResult(
+        Status.Failed, "No WORKER_RESULT found in output", Array.Empty<string>(),
+        "Envelope result did not contain a WORKER_RESULT block. Stderr: ",
+        new Dictionary<string, object>
+        {
+            [WorkerResultMetadata.EnvelopeStatusKey] = WorkerResultMetadata.EnvelopeMissing
+        });
+
     [Fact]
     public async Task RunAsync_HappyPath_ReturnsSuccessAndPostsImplementedAtComment()
     {
@@ -164,6 +173,98 @@ public class ImplementPhaseTests
         Assert.Contains("commit_sha", result.FailureReason ?? "");
         Assert.Single(ticketing.Transitions);
         Assert.Equal(TicketState.InProgress, ticketing.Transitions[0].state);
+    }
+
+    [Fact]
+    public async Task RunAsync_WorkerOmittedEnvelopeButCommitted_SalvagesToInReview()
+    {
+        // The worker ran a clean session that committed real work but ended without the
+        // WORKER_RESULT envelope. HEAD (CommitSha) is ahead of base (MainSha) and the tree
+        // is clean -> ImplementPhase salvages instead of discarding 40 minutes of work.
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.Ready));
+        var worker = new FakeWorkerAgent(EnvelopeMissingResult());
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha);
+        var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(CommitSha, result.CommitSha);
+        Assert.Null(result.FailureReason);
+
+        // Transitioned InProgress then InReview, just like a normal Ok implement.
+        Assert.Equal(2, ticketing.Transitions.Count);
+        Assert.Equal(TicketState.InProgress, ticketing.Transitions[0].state);
+        Assert.Equal(TicketState.InReview, ticketing.Transitions[1].state);
+
+        // implemented_at comment posted, carrying the real HEAD and a recovery note.
+        Assert.Single(ticketing.Comments);
+        Assert.Contains("implemented_at", ticketing.Comments[0].html);
+        Assert.Contains(CommitSha, ticketing.Comments[0].html);
+        Assert.Contains("recovered", ticketing.Comments[0].html);
+
+        // Recovery is surfaced as a diagnostic event.
+        var recovered = events.Events
+            .Where(e => e.Kind == EventKind.GateFailure && e.Data["kind"].ToString() == "implement_envelope_recovered")
+            .ToList();
+        Assert.Single(recovered);
+    }
+
+    [Fact]
+    public async Task RunAsync_WorkerFailedWithoutEnvelopeFlag_DoesNotSalvage()
+    {
+        // An explicit Failed (no envelope_status flag) is a real failure - never salvaged.
+        var failed = new WorkerResult(Status.Failed, "boom", Array.Empty<string>(), "worker exploded",
+            new Dictionary<string, object>());
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.Ready));
+        var worker = new FakeWorkerAgent(failed);
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha);
+        var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Empty(ticketing.Comments);
+        Assert.Single(ticketing.Transitions);
+        Assert.Equal(TicketState.InProgress, ticketing.Transitions[0].state);
+        Assert.Empty(events.Events.Where(e =>
+            e.Kind == EventKind.GateFailure && e.Data["kind"].ToString() == "implement_envelope_recovered"));
+    }
+
+    [Fact]
+    public async Task RunAsync_EnvelopeMissingButDirtyTree_DoesNotSalvage()
+    {
+        // Envelope missing but the worktree has uncommitted changes -> the session did not
+        // finish; do not promote it to review.
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.Ready));
+        var worker = new FakeWorkerAgent(EnvelopeMissingResult());
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha);
+        git.TrackedChangesQueue.Enqueue(new[] { "src/Foo.cs" });
+        var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Empty(ticketing.Comments);
+    }
+
+    [Fact]
+    public async Task RunAsync_EnvelopeMissingButNoNewCommits_DoesNotSalvage()
+    {
+        // Envelope missing and HEAD is still at the base ref -> nothing was committed to review.
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.Ready));
+        var worker = new FakeWorkerAgent(EnvelopeMissingResult());
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, MainSha);
+        var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Empty(ticketing.Comments);
     }
 
     [Fact]
