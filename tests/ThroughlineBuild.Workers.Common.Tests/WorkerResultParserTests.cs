@@ -100,6 +100,101 @@ public class WorkerResultParserAotRegressionTests
     }
 }
 
+/// <summary>
+/// TLB-476: the MissingStatusField discriminator distinguishes the recoverable
+/// "valid JSON object, no status key" failure from every other deserialize failure.
+/// The vendor agents read it to tag envelope_status=missing_status so ImplementPhase
+/// can salvage a committed, clean session.
+/// </summary>
+public class WorkerResultParserMissingStatusFieldTests
+{
+    [Fact]
+    public void TryParse_ValidJsonMissingStatus_SetsMissingStatusField()
+    {
+        // The exact shape that broke chain 473: a hand-rolled summary object.
+        var stdout =
+            "WORKER_RESULT\n" +
+            "{\"outcome\":\"Completed\",\"ticket\":\"TLB-473\",\"commit\":\"8d3cf8b\"}\n";
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.Null(outcome.Result);
+        Assert.Equal("ValidationError", outcome.DeserializeErrorType);
+        Assert.True(outcome.MissingStatusField);
+        Assert.Contains("status", outcome.DeserializeErrorMessage);
+    }
+
+    [Fact]
+    public void TryParse_StatusExplicitNull_SetsMissingStatusField()
+    {
+        var stdout =
+            "WORKER_RESULT\n" +
+            "{\"status\":null,\"summary\":\"done\",\"files_changed\":[],\"failure_reason\":null,\"metadata\":{}}\n";
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.Null(outcome.Result);
+        Assert.True(outcome.MissingStatusField);
+    }
+
+    [Fact]
+    public void TryParse_MissingSummaryButHasStatus_DoesNotSetMissingStatusField()
+    {
+        // status is present, so this is a different validation failure - not recoverable.
+        var stdout =
+            "WORKER_RESULT\n" +
+            "{\"status\":\"Ok\",\"files_changed\":[],\"failure_reason\":null,\"metadata\":{}}\n";
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.Null(outcome.Result);
+        Assert.Equal("ValidationError", outcome.DeserializeErrorType);
+        Assert.False(outcome.MissingStatusField);
+    }
+
+    [Fact]
+    public void TryParse_UnrecognizedStatusEnumValue_DoesNotSetMissingStatusField()
+    {
+        // A bad enum value throws inside the converter (JsonException) - the payload is not a
+        // trustworthy "valid object missing status", so it must not be flagged recoverable.
+        var stdout =
+            "WORKER_RESULT\n" +
+            "{\"status\":\"Bogus\",\"summary\":\"done\",\"files_changed\":[],\"failure_reason\":null,\"metadata\":{}}\n";
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.Null(outcome.Result);
+        Assert.Equal("JsonException", outcome.DeserializeErrorType);
+        Assert.False(outcome.MissingStatusField);
+    }
+
+    [Fact]
+    public void TryParse_JsonSyntaxError_DoesNotSetMissingStatusField()
+    {
+        var stdout =
+            "WORKER_RESULT\n" +
+            "{not valid json\n";
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.Null(outcome.Result);
+        Assert.False(outcome.MissingStatusField);
+    }
+
+    [Fact]
+    public void TryParse_HappyPath_DoesNotSetMissingStatusField()
+    {
+        var stdout =
+            "WORKER_RESULT\n" +
+            "{\"status\":\"Ok\",\"summary\":\"done\",\"files_changed\":[],\"failure_reason\":null,\"metadata\":{}}\n";
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.NotNull(outcome.Result);
+        Assert.False(outcome.MissingStatusField);
+    }
+}
+
 public class BatchWorkerResultParserTests
 {
     [Fact]

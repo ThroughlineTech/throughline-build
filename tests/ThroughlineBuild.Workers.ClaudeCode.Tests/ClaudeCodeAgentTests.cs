@@ -442,6 +442,36 @@ public class ClaudeCodeAgentEnvelopeParserTests
         Assert.Contains("JsonException", result.FailureReason);
     }
 
+    // Regression for TLB-476: the worker hand-rolled {"outcome":"Completed",...} - a valid JSON
+    // object missing the required 'status' field - instead of the prescribed schema. The result is
+    // Failed (the envelope is unusable), but it must be TAGGED envelope_status=missing_status so
+    // ImplementPhase can salvage the committed, clean session instead of discarding the branch.
+    [Fact]
+    public void EnvelopeParser_ValidJsonMissingStatus_TagsEnvelopeStatusMissingStatus()
+    {
+        var stdout = MakeEnvelope("WORKER_RESULT\n{\"outcome\":\"Completed\",\"ticket\":\"TLB-473\",\"commit\":\"8d3cf8b\"}");
+
+        var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 0, stderr: "");
+
+        Assert.Equal(Status.Failed, result.Status);
+        Assert.True(result.Metadata.TryGetValue(WorkerResultMetadata.EnvelopeStatusKey, out var es));
+        Assert.Equal(WorkerResultMetadata.EnvelopeMissingStatus, es?.ToString());
+    }
+
+    // The recovery tag is narrow: a JSON SYNTAX error (truncated / non-object payload) is NOT a
+    // committed-but-non-conforming session - it stays untrustworthy and carries no envelope_status
+    // tag, so ImplementPhase's salvage gate rejects it. TLB-476.
+    [Fact]
+    public void EnvelopeParser_JsonSyntaxError_DoesNotTagEnvelopeStatus()
+    {
+        var stdout = MakeEnvelope("WORKER_RESULT\nthis is not valid json");
+
+        var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 0, stderr: "");
+
+        Assert.Equal(Status.Failed, result.Status);
+        Assert.False(result.Metadata.ContainsKey(WorkerResultMetadata.EnvelopeStatusKey));
+    }
+
     // NDJSON path: stream-json output is a sequence of events; the last type=result
     // line carries the terminal envelope. The parser must locate that line and
     // route its inner result text through WorkerResultParser exactly like the

@@ -318,16 +318,18 @@ public class ImplementPhase : IWorkflowPhase
         }
 
         // Step 14: If worker failed, leave in InProgress - UNLESS the worker ran a clean
-        // session that committed real work but omitted the WORKER_RESULT envelope. That narrow
-        // case (envelope_status=missing + clean worktree + HEAD advanced past base) is
-        // recoverable: ImplementPhase already trusts git HEAD as ground truth (Step 16), so
-        // discarding a committed, reviewable branch over a missing trailing marker just throws
-        // the work away. Synthesize the success the worker failed to report and let review be
-        // the gate. See TLB-471.
+        // session that committed real work but failed to return a usable WORKER_RESULT envelope.
+        // Two narrow, recoverable cases (both gated on clean worktree + HEAD advanced past base):
+        //   - envelope_status=missing: no trailing marker at all (TLB-471).
+        //   - envelope_status=missing_status: a marker whose valid-JSON payload omitted the
+        //     required 'status' field (TLB-476).
+        // ImplementPhase already trusts git HEAD as ground truth (Step 16), so discarding a
+        // committed, reviewable branch over a missing/garbled trailing envelope just throws the
+        // work away. Synthesize the success the worker failed to report and let review be the gate.
         bool recoveredEnvelope = false;
         if (workerResult.Status != Status.Ok)
         {
-            var salvaged = await TrySalvageMissingEnvelopeAsync(workerResult, canonicalWorktreePath, mainSha, ct).ConfigureAwait(false);
+            var salvaged = await TrySalvageCommittedSessionAsync(workerResult, canonicalWorktreePath, mainSha, ct).ConfigureAwait(false);
             if (salvaged is null)
                 return new ImplementResult(false, ticketId, null, canonicalBranchName, canonicalWorktreePath,
                     workerResult.FailureReason ?? workerResult.Summary ?? workerResult.Status.ToString(),
@@ -411,9 +413,14 @@ public class ImplementPhase : IWorkflowPhase
             ? MarkdownRenderer.Render(implementSummaryMarkdown)
             : "";
         // Parens (not brackets) so the marker parser does not read this note as a second marker.
-        var recoveryNote = recoveredEnvelope
-            ? " (recovered: worker omitted the WORKER_RESULT envelope; SHA reconstructed from git HEAD)"
-            : "";
+        var recoveryNote = "";
+        if (recoveredEnvelope)
+        {
+            var recoveredKind = TryGetString(workerResult.Metadata, WorkerResultMetadata.EnvelopeStatusKey);
+            recoveryNote = recoveredKind == WorkerResultMetadata.EnvelopeMissingStatus
+                ? " (recovered: worker emitted a WORKER_RESULT envelope missing the required status field; SHA reconstructed from git HEAD)"
+                : " (recovered: worker omitted the WORKER_RESULT envelope; SHA reconstructed from git HEAD)";
+        }
         var commentHtml = $"<p>[implemented_at: {actualHeadSha}] (branch {canonicalBranchName}){discrepancyNote}{recoveryNote}</p>{summaryHtml}";
         await _ticketing.CreateCommentAsync(ticketId, commentHtml, ct).ConfigureAwait(false);
         await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
@@ -434,23 +441,32 @@ public class ImplementPhase : IWorkflowPhase
         return new ImplementResult(true, ticketId, actualHeadSha, canonicalBranchName, canonicalWorktreePath, null, reworkRound);
     }
 
-    // Salvage path for a worker that finished a clean, committed session but never emitted a
-    // WORKER_RESULT envelope (e.g. a long or context-compacted session that did the work and
-    // committed it, then ended its turn without the trailing marker). Returns a synthesized Ok
-    // result - with commit_sha set to the real HEAD - when ALL of these hold, else null so the
-    // caller fails exactly as before:
-    //   - the failure is specifically the envelope-missing kind (envelope_status=missing), NOT
-    //     an explicit Failed/NeedsRework/Escalate envelope, a deserialize error, a non-zero
-    //     exit, or a timeout (those all mean the tree is not trustworthy - respect them);
+    // Salvage path for a worker that finished a clean, committed session but did not return a
+    // usable WORKER_RESULT envelope. Two recoverable shapes, both tagged via envelope_status:
+    //   - EnvelopeMissing ("missing"): no WORKER_RESULT marker at all (e.g. a long or
+    //     context-compacted session that did the work, committed it, then ended its turn without
+    //     the trailing marker). See TLB-471.
+    //   - EnvelopeMissingStatus ("missing_status"): a marker was present and its payload parsed
+    //     as a valid JSON object, but it omitted the required 'status' field (e.g. the worker
+    //     hand-rolled a non-conforming summary like {"outcome":"Completed",...} instead of the
+    //     prescribed {"status":...} schema). Same recoverable situation - arguably stronger,
+    //     since the worker reported a real commit. See TLB-476.
+    // Returns a synthesized Ok result - with commit_sha set to the real HEAD - when ALL of these
+    // hold, else null so the caller fails exactly as before:
+    //   - envelope_status is one of the two recoverable values above, NOT an explicit
+    //     Failed/NeedsRework/Escalate envelope, a JSON syntax error, an unrecognized status enum
+    //     value, a non-zero exit, or a timeout (those all mean the tree is not trustworthy);
     //   - the worktree is clean (uncommitted changes mean the session did not finish, so the
     //     work is not safely reviewable);
     //   - HEAD has advanced past the base ref (otherwise nothing was committed to review).
-    // Review remains the real quality gate for whatever was committed. See TLB-471.
-    private async Task<WorkerResult?> TrySalvageMissingEnvelopeAsync(
+    // Review remains the real quality gate for whatever was committed.
+    private async Task<WorkerResult?> TrySalvageCommittedSessionAsync(
         WorkerResult workerResult, string worktreePath, string baseSha, CancellationToken ct)
     {
         var envelopeStatus = TryGetString(workerResult.Metadata, WorkerResultMetadata.EnvelopeStatusKey);
-        if (!string.Equals(envelopeStatus, WorkerResultMetadata.EnvelopeMissing, StringComparison.Ordinal))
+        bool missingEnvelope = string.Equals(envelopeStatus, WorkerResultMetadata.EnvelopeMissing, StringComparison.Ordinal);
+        bool missingStatus = string.Equals(envelopeStatus, WorkerResultMetadata.EnvelopeMissingStatus, StringComparison.Ordinal);
+        if (!missingEnvelope && !missingStatus)
             return null;
 
         var dirty = await WorkingTreeHygieneGate.DirtyFilesCheckAsync(_git, worktreePath, ct).ConfigureAwait(false);
@@ -465,10 +481,13 @@ public class ImplementPhase : IWorkflowPhase
         {
             ["commit_sha"] = headSha
         };
+        var summary = missingStatus
+            ? "Recovered implement session (worker emitted a WORKER_RESULT envelope missing the required status field)"
+            : "Recovered implement session (worker omitted WORKER_RESULT envelope)";
         return workerResult with
         {
             Status = Status.Ok,
-            Summary = "Recovered implement session (worker omitted WORKER_RESULT envelope)",
+            Summary = summary,
             FailureReason = null,
             Metadata = meta
         };

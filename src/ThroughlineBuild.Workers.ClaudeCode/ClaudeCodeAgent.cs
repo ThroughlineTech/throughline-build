@@ -323,8 +323,15 @@ public class ClaudeCodeAgent : IWorkerAgent
         {
             var failureReason = $"Failed to deserialize WORKER_RESULT JSON: {outcome.DeserializeErrorType}: {outcome.DeserializeErrorMessage}";
             Console.Error.WriteLine($"[WorkerResultParser] {failureReason}");
+            // A valid JSON object that merely omitted the required 'status' field is a committed
+            // session worth salvaging (clean tree + HEAD advanced); tag it so ImplementPhase can
+            // recover it instead of discarding the branch. Any other deserialize error stays
+            // untagged (untrustworthy). See TLB-476.
+            var metadata = outcome.MissingStatusField
+                ? new Dictionary<string, object> { [WorkerResultMetadata.EnvelopeStatusKey] = WorkerResultMetadata.EnvelopeMissingStatus }
+                : new Dictionary<string, object>();
             return new WorkerResult(Status.Failed, "Failed to deserialize WORKER_RESULT JSON", Array.Empty<string>(),
-                failureReason, new Dictionary<string, object>());
+                failureReason, metadata);
         }
 
         if (exitCode != 0)

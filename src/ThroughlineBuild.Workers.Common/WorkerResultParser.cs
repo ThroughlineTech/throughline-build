@@ -152,7 +152,12 @@ internal static class WorkerResultParser
                 }
                 if (dto.Status is null)
                 {
-                    lastFailure = WorkerResultParseOutcome.DeserializeFailed("ValidationError",
+                    // The payload deserialized as a valid JSON object but carried no 'status' key
+                    // (or status:null). Flag this specific subcase via MissingStatus so the vendor
+                    // agents can tag a committed-but-non-conforming session as recoverable. A JSON
+                    // syntax error or an unrecognized status enum value instead lands in the
+                    // catch(JsonException) below and is NOT flagged. See TLB-476.
+                    lastFailure = WorkerResultParseOutcome.MissingStatus(
                         $"WORKER_RESULT JSON missing required 'status' field. Payload: {json}");
                     continue;
                 }
@@ -566,6 +571,14 @@ internal readonly record struct WorkerResultParseOutcome(
     private static readonly IReadOnlyDictionary<string, string> EmptyBlocks =
         new Dictionary<string, string>();
 
+    // True only for the "payload parsed as a valid JSON object but the required 'status'
+    // field was absent or null" failure. Vendor agents read this to tag the WorkerResult
+    // with envelope_status=missing_status so ImplementPhase can salvage a committed, clean
+    // session whose only fault was a non-conforming trailing envelope. Stays false for JSON
+    // syntax errors, unrecognized status enum values, missing summary, escalation/fence
+    // errors, and the success path. See TLB-476.
+    internal bool MissingStatusField { get; init; }
+
     internal static WorkerResultParseOutcome Success(WorkerResult result, IReadOnlyDictionary<string, string> blocks) =>
         new(Result: result, DeserializeErrorType: null, DeserializeErrorMessage: null, Blocks: blocks);
 
@@ -574,6 +587,11 @@ internal readonly record struct WorkerResultParseOutcome(
 
     internal static WorkerResultParseOutcome DeserializeFailed(string errorType, string errorMessage) =>
         new(Result: null, DeserializeErrorType: errorType, DeserializeErrorMessage: errorMessage, Blocks: EmptyBlocks);
+
+    // Specialized DeserializeFailed for the recoverable "valid JSON object, no status key" case.
+    internal static WorkerResultParseOutcome MissingStatus(string errorMessage) =>
+        new(Result: null, DeserializeErrorType: "ValidationError", DeserializeErrorMessage: errorMessage, Blocks: EmptyBlocks)
+        { MissingStatusField = true };
 
     internal static WorkerResultParseOutcome FenceScanFailed(string errorType, string errorMessage) =>
         new(Result: null, DeserializeErrorType: errorType, DeserializeErrorMessage: errorMessage, Blocks: EmptyBlocks);

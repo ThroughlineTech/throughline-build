@@ -178,8 +178,13 @@ public class CodexAgent : IWorkerAgent
         {
             var reason = $"Failed to deserialize WORKER_RESULT JSON: {outcome.DeserializeErrorType}: {outcome.DeserializeErrorMessage}";
             Console.Error.WriteLine($"[CodexAgent] {reason}");
+            // A valid JSON object missing only the required 'status' field is a committed session
+            // worth salvaging; tag it so ImplementPhase can recover it. See TLB-476.
+            var metadata = outcome.MissingStatusField
+                ? new Dictionary<string, object> { [WorkerResultMetadata.EnvelopeStatusKey] = WorkerResultMetadata.EnvelopeMissingStatus }
+                : new Dictionary<string, object>();
             return new WorkerResult(Status.Failed, "Failed to deserialize WORKER_RESULT JSON", Array.Empty<string>(),
-                reason, new Dictionary<string, object>());
+                reason, metadata);
         }
 
         if (exitCode != 0)
