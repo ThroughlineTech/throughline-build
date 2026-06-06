@@ -1103,13 +1103,26 @@ public class ChainPhase
             !string.IsNullOrEmpty(mainSha) ? mainSha : baseRef);
     }
 
+    // Outcome returned by RunCombinedBatchReviewAsync so callers can distinguish
+    // Pass / Rework / Fail and read the feedback without re-parsing worker metadata.
+    private sealed record BatchReviewOutcome(
+        bool Passed,
+        VerdictKind FinalVerdict,
+        string Rationale,
+        IReadOnlyList<string> ChecksFailed);
+
+    // Routing classification for batch review rework feedback.
+    // Localized: feedback names exactly one ticket -> per-ticket rework on that ticket.
+    // CrossTicket: feedback spans the group -> re-enter batch context.
+    internal enum BatchReworkRoute { Localized, CrossTicket }
+
     /// <summary>
     /// Runs one combined review pass over the full batch stack diff. When the first pass
     /// returns Rework, or when the batch size exceeds
     /// <see cref="BuildOptions.BatchReviewSizeThreshold"/>, a second pass is run for
-    /// additional scrutiny. Returns true when the final verdict is Pass.
+    /// additional scrutiny. Returns the final verdict outcome.
     /// </summary>
-    private async Task<bool> RunCombinedBatchReviewAsync(
+    private async Task<BatchReviewOutcome> RunCombinedBatchReviewAsync(
         IReadOnlyList<Ticket> batchTickets,
         IReadOnlyList<BatchTicketResult> confirmedTickets,
         string batchBranchName,
@@ -1143,7 +1156,8 @@ public class ChainPhase
                     ["kind"] = "batch_review_diff_failed",
                     ["error"] = ex.Message
                 }), ct).ConfigureAwait(false);
-            return false;
+            return new BatchReviewOutcome(false, VerdictKind.Fail,
+                $"diff failed: {ex.Message}", Array.Empty<string>());
         }
 
         // Pass 1
@@ -1157,13 +1171,13 @@ public class ChainPhase
         // Fail: no second pass - a Fail verdict is a structural problem that a second
         // review pass cannot change.
         if (pass1Verdict == VerdictKind.Fail)
-            return false;
+            return new BatchReviewOutcome(false, VerdictKind.Fail, pass1Rationale, pass1Checks);
 
         // Second pass: triggered when first returned Rework, or the batch exceeds the size
         // threshold (large diffs warrant more than one reviewer pass regardless of verdict).
         bool needSecondPass = pass1Verdict == VerdictKind.Rework || sizeExceedsThreshold;
         if (!needSecondPass)
-            return true;
+            return new BatchReviewOutcome(true, VerdictKind.Pass, pass1Rationale, pass1Checks);
 
         var (pass2Verdict, pass2Rationale, pass2Checks) = await RunOneBatchReviewPassAsync(
             batchTickets, confirmedTickets, baseRef, combinedDiff,
@@ -1172,7 +1186,11 @@ public class ChainPhase
         await PostBatchReviewCommentAsync(
             primaryTicketId, 2, pass2Verdict, pass2Rationale, pass2Checks, ct).ConfigureAwait(false);
 
-        return pass2Verdict == VerdictKind.Pass;
+        return new BatchReviewOutcome(
+            pass2Verdict == VerdictKind.Pass,
+            pass2Verdict,
+            pass2Rationale,
+            pass2Checks);
     }
 
     /// <summary>
@@ -1332,6 +1350,239 @@ public class ChainPhase
             return result;
         }
         return Array.Empty<string>();
+    }
+
+    /// <summary>
+    /// Classifies batch review rework feedback as localized (names exactly one batch ticket)
+    /// or cross-ticket (names zero or multiple tickets, or relates to integration seams).
+    /// </summary>
+    internal static BatchReworkRoute ClassifyBatchRework(
+        IReadOnlyList<Ticket> batchTickets,
+        string rationale)
+    {
+        int count = 0;
+        foreach (var ticket in batchTickets)
+        {
+            if (rationale.Contains(ticket.Id, StringComparison.Ordinal))
+                count++;
+            if (count > 1)
+                return BatchReworkRoute.CrossTicket;
+        }
+        return count == 1 ? BatchReworkRoute.Localized : BatchReworkRoute.CrossTicket;
+    }
+
+    /// <summary>
+    /// Runs the initial combined review and any required rework rounds (up to MaxReworkRounds).
+    /// Localized feedback (single ticket named) triggers per-ticket rework; cross-ticket feedback
+    /// re-enters batch context. Returns true if the final verdict is Pass.
+    /// </summary>
+    private async Task<bool> RunBatchReviewAndReworkAsync(
+        IReadOnlyList<Ticket> batchTickets,
+        IReadOnlyList<BatchTicketResult> confirmedTickets,
+        string batchBranchName,
+        string baseRef,
+        string sharedWorktreePath,
+        string? chainStartSha,
+        CancellationToken ct)
+    {
+        var currentConfirmedTickets = confirmedTickets;
+
+        // Initial review
+        var outcome = await RunCombinedBatchReviewAsync(
+            batchTickets, currentConfirmedTickets, batchBranchName, baseRef,
+            sharedWorktreePath, _sessionIdGenerator(), ct).ConfigureAwait(false);
+
+        if (outcome.Passed) return true;
+        if (outcome.FinalVerdict == VerdictKind.Fail) return false;
+
+        // Rework loop: up to MaxReworkRounds attempts
+        for (int reworkRound = 1; reworkRound <= MaxReworkRounds; reworkRound++)
+        {
+            var feedback = new ReviewFeedback(outcome.Rationale, outcome.ChecksFailed, reworkRound);
+            var route = ClassifyBatchRework(batchTickets, outcome.Rationale);
+
+            if (route == BatchReworkRoute.Localized)
+            {
+                // Exactly one batch ticket is mentioned: run per-ticket rework on that ticket.
+                var targetTicket = batchTickets.First(
+                    t => outcome.Rationale.Contains(t.Id, StringComparison.Ordinal));
+                var reworkOk = await RunLocalizedBatchReworkAsync(
+                    targetTicket.Id, feedback, sharedWorktreePath, reworkRound, ct)
+                    .ConfigureAwait(false);
+                if (!reworkOk)
+                    return false;
+            }
+            else
+            {
+                // Feedback spans the group: re-enter batch context with the feedback.
+                var newConfirmed = await RunCrossTicketBatchReworkAsync(
+                    batchTickets, batchBranchName, baseRef, sharedWorktreePath,
+                    chainStartSha, feedback, ct).ConfigureAwait(false);
+                if (newConfirmed is null)
+                    return false;
+                currentConfirmedTickets = newConfirmed;
+            }
+
+            // Re-review after rework
+            outcome = await RunCombinedBatchReviewAsync(
+                batchTickets, currentConfirmedTickets, batchBranchName, baseRef,
+                sharedWorktreePath, _sessionIdGenerator(), ct).ConfigureAwait(false);
+
+            if (outcome.Passed) return true;
+            if (outcome.FinalVerdict == VerdictKind.Fail) return false;
+            // If Rework again and rounds remain, continue the loop
+        }
+
+        return false; // MaxReworkRounds exceeded
+    }
+
+    /// <summary>
+    /// Handles localized batch rework: a single ticket identified by the review feedback is
+    /// reworked via the standard per-ticket ImplementPhase path. The rework commit is additive;
+    /// it lands on the batch branch and leaves existing marker-bearing commits intact.
+    /// </summary>
+    private async Task<bool> RunLocalizedBatchReworkAsync(
+        string targetTicketId,
+        ReviewFeedback feedback,
+        string sharedWorktreePath,
+        int reworkRound,
+        CancellationToken ct)
+    {
+        // Transition the affected ticket InReview -> InProgress so ImplementPhase's
+        // state check passes. ImplementPhase will transition it back to InReview after
+        // adding the rework commit and posting a new [implemented_at:] marker.
+        try
+        {
+            await _ticketing.TransitionAsync(targetTicketId, TicketState.InProgress, ct)
+                .ConfigureAwait(false);
+        }
+        catch { /* non-fatal: ImplementPhase will surface the wrong-state error if needed */ }
+
+        var sessionId = _sessionIdGenerator();
+        var buildOpts = BuildPhaseOptions(sessionId, targetTicketId, "batch-rework-localized");
+        var implPhaseOpts = new ImplementPhaseOptions(
+            ReviewFeedback: feedback,
+            SharedWorktreePath: sharedWorktreePath);
+        var implPhase = _implementFactory(buildOpts, implPhaseOpts);
+        var implResult = await implPhase.RunAsync(targetTicketId, _workingDirectory, ct)
+            .ConfigureAwait(false);
+        return implResult.Success;
+    }
+
+    /// <summary>
+    /// Handles cross-ticket batch rework: re-runs the batch implement worker with the review
+    /// feedback embedded in the brief. Rework commits are additive and land on top of the
+    /// existing batch branch. Returns the updated confirmed-ticket list on success, or null
+    /// if the rework session failed completely.
+    /// </summary>
+    private async Task<IReadOnlyList<BatchTicketResult>?> RunCrossTicketBatchReworkAsync(
+        IReadOnlyList<Ticket> batchTickets,
+        string batchBranchName,
+        string baseRef,
+        string sharedWorktreePath,
+        string? chainStartSha,
+        ReviewFeedback feedback,
+        CancellationToken ct)
+    {
+        // Transition all tickets InReview -> InProgress for the rework session.
+        foreach (var ticket in batchTickets)
+        {
+            try
+            {
+                await _ticketing.TransitionAsync(ticket.Id, TicketState.InProgress, ct)
+                    .ConfigureAwait(false);
+            }
+            catch { /* non-fatal */ }
+        }
+
+        // Build chain commit range for context (best-effort).
+        ChainCommitRange? batchCommitRange = null;
+        if (chainStartSha is not null)
+        {
+            try
+            {
+                var (_, currentTargetSha) = await BaseRefResolver.ResolveAsync(
+                    _git, _workingDirectory, _baseOptions.TargetBranch, ct).ConfigureAwait(false);
+                batchCommitRange = await ChainCommitRangeHelper.ComputeAsync(
+                    _git, chainStartSha, currentTargetSha, _workingDirectory, ct).ConfigureAwait(false);
+            }
+            catch { /* non-fatal */ }
+        }
+
+        string mainSha;
+        try
+        {
+            mainSha = await _git.RevParseAsync(baseRef, _workingDirectory, ct).ConfigureAwait(false);
+        }
+        catch { mainSha = string.Empty; }
+
+        var topLevelEntries = Directory.EnumerateFileSystemEntries(_workingDirectory).ToList().AsReadOnly();
+        var repoState = new RepoState(mainSha, topLevelEntries);
+
+        var reworkSessionId = _sessionIdGenerator();
+        var firstTicket = batchTickets[0];
+        var batchBuildOpts = BuildPhaseOptions(reworkSessionId, firstTicket.Id, "batch-rework-cross");
+
+        var batchBrief = BatchImplementBriefBuilder.Build(
+            _batchWorker!.Name,
+            batchTickets,
+            repoState,
+            batchBranchName,
+            sharedWorktreePath,
+            batchCommitRange,
+            reworkFeedback: feedback);
+
+        var maxSize = batchTickets.Max(t => WorkerSizeMapper.FromTicketSize(t.Size));
+        var workerOptions = new WorkerOptions(
+            _baseOptions.WorkerTimeout,
+            _baseOptions.WorkerAllowedTools,
+            DebugCaptureDirectory: batchBuildOpts.DebugCaptureDirectory,
+            LiveStdoutSink: _baseOptions.LiveStdoutSink,
+            LiveStderrSink: _baseOptions.LiveStderrSink,
+            ProgressDigestSink: _baseOptions.ProgressDigestSink,
+            Size: maxSize);
+        if (batchBuildOpts.DebugCaptureDirectory is not null)
+            Directory.CreateDirectory(batchBuildOpts.DebugCaptureDirectory);
+
+        var workerResult = await _batchWorker!
+            .ExecuteAsync(batchBrief, sharedWorktreePath, workerOptions, ct)
+            .ConfigureAwait(false);
+
+        // Require at least some committed tickets to continue.
+        var reportedTickets = workerResult.Tickets;
+        if (reportedTickets is null || reportedTickets.Count == 0)
+            return null;
+
+        var verifyBase = !string.IsNullOrEmpty(mainSha) ? mainSha : baseRef;
+        var verifyResult = await BatchCommitVerifier
+            .VerifyAsync(_git, sharedWorktreePath, verifyBase, reportedTickets, ct)
+            .ConfigureAwait(false);
+
+        if (!verifyResult.Success)
+            return null;
+
+        // Post new [implemented_at:] markers for the rework commits and transition
+        // confirmed tickets back to InReview.
+        foreach (var confirmed in verifyResult.ConfirmedTickets)
+        {
+            var markerHtml =
+                $"<p>[implemented_at: {confirmed.CommitSha}] (branch {batchBranchName})" +
+                $" (batch-rework: stack_position={confirmed.StackPosition})</p>";
+            try
+            {
+                await _ticketing.CreateCommentAsync(confirmed.TicketId, markerHtml, ct)
+                    .ConfigureAwait(false);
+            }
+            catch { /* non-fatal */ }
+            try
+            {
+                await _ticketing.TransitionAsync(confirmed.TicketId, TicketState.InReview, ct)
+                    .ConfigureAwait(false);
+            }
+            catch { /* non-fatal */ }
+        }
+
+        return verifyResult.ConfirmedTickets;
     }
 
     private async Task<ChainResult> RunParentChainAsync(
@@ -1530,21 +1781,21 @@ public class ChainPhase
                     }
                 }
 
-                // Combined review: one pass over the full batch stack diff after a successful
-                // batch implement. A second pass is run when the first returns Rework or when
-                // the batch size exceeds the configured threshold (BuildOptions.BatchReviewSizeThreshold).
+                // Combined review + rework loop: review the full batch stack diff, then route
+                // any Rework verdict to localized (single ticket) or cross-ticket rework and
+                // re-review. Fail stops immediately. MaxReworkRounds caps the loop.
                 if (!anyStoppedEarly
                     && _batchWorker is not null
                     && batchOutcome.ConfirmedTickets is not null
                     && batchOutcome.ConfirmedTickets.Count > 0)
                 {
-                    var batchReviewPassed = await RunCombinedBatchReviewAsync(
+                    var batchReviewPassed = await RunBatchReviewAndReworkAsync(
                         batchTickets,
                         batchOutcome.ConfirmedTickets,
                         batchOutcome.BranchName,
                         batchOutcome.BaseRef,
                         sharedWorktreePath!,
-                        _sessionIdGenerator(),
+                        chainStartSha,
                         ct).ConfigureAwait(false);
 
                     if (!batchReviewPassed)

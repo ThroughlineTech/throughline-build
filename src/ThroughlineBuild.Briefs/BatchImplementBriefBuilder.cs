@@ -13,6 +13,7 @@ public static class BatchImplementBriefBuilder
         string branchName,
         string worktreePath,
         ChainCommitRange? chainCommitRange,
+        ReviewFeedback? reworkFeedback = null,
         ProjectContext? project = null)
     {
         if (tickets.Count == 0)
@@ -25,6 +26,8 @@ public static class BatchImplementBriefBuilder
         var declaredOrder = string.Join(", ", tickets.Select(t => t.Id));
         var workerResultJson = BuildWorkerResultJson(tickets);
 
+        var reworkSection = BuildReworkSection(reworkFeedback);
+
         var vars = new Dictionary<string, string>
         {
             ["ticket_ids"] = declaredOrder,
@@ -36,6 +39,7 @@ public static class BatchImplementBriefBuilder
             ["main_sha"] = repo.MainSha,
             ["base_commit_sha"] = baseCommitSha,
             ["chain_pointer"] = chainPointer,
+            ["rework_section"] = reworkSection,
             ["worker_result_json"] = workerResultJson
         };
 
@@ -138,6 +142,28 @@ public static class BatchImplementBriefBuilder
             "\"head_commit_sha\":\"<HEAD SHA after all ticket commits>\"," +
             "\"files_changed\":[\"path/relative/to/worktree\"]}," +
             $"\"tickets\":[{ticketResults}]}}";
+    }
+
+    private static string BuildReworkSection(ReviewFeedback? feedback)
+    {
+        if (feedback is null)
+            return string.Empty;
+
+        var sb = new StringBuilder();
+        sb.Append('\n');
+        sb.Append($"## Rework feedback (round {feedback.ReworkRoundNumber})\n\n");
+        sb.Append("A previous batch implementation was reviewed and the following issues were identified. ");
+        sb.Append("Address these issues before committing. ");
+        sb.Append("Do NOT amend or rewrite commits that already carry an `[implemented_at:]` marker; add new commits on top of the existing stack.\n\n");
+        sb.Append(feedback.Rationale);
+        sb.Append('\n');
+        if (feedback.ChecksFailed.Count > 0)
+        {
+            sb.Append("\nChecks that failed:\n");
+            foreach (var check in feedback.ChecksFailed)
+                sb.Append($"- {check}\n");
+        }
+        return sb.ToString();
     }
 
     private static IReadOnlyList<string> Deduplicate(IEnumerable<string> files)

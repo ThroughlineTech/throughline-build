@@ -131,6 +131,104 @@ public class BatchImplementBriefBuilderTests
         Assert.Equal(expected, brief.Instruction);
     }
 
+    // --- Rework feedback section (TLB-453) ---
+
+    [Fact]
+    public void Build_WithReworkFeedback_IncludesReworkSectionInInstruction()
+    {
+        var feedback = new ReviewFeedback(
+            Rationale: "TLB-201 is missing error handling for null inputs.",
+            ChecksFailed: new[] { "unit-tests" },
+            ReworkRoundNumber: 1);
+
+        var brief = BatchImplementBriefBuilder.Build(
+            "claude-code",
+            SnapshotFixtures.BatchTickets(),
+            SnapshotFixtures.Repo(),
+            SnapshotFixtures.FixtureBranch,
+            SnapshotFixtures.FixtureWorktree,
+            SnapshotFixtures.ChainCommitRange(),
+            reworkFeedback: feedback);
+
+        Assert.Contains("## Rework feedback (round 1)", brief.Instruction);
+        Assert.Contains("TLB-201 is missing error handling for null inputs.", brief.Instruction);
+        Assert.Contains("Do NOT amend or rewrite commits", brief.Instruction);
+        Assert.Contains("- unit-tests", brief.Instruction);
+    }
+
+    [Fact]
+    public void Build_WithReworkFeedback_RoundNumberReflectedInHeader()
+    {
+        var feedback = new ReviewFeedback(
+            Rationale: "Fix the interface.",
+            ChecksFailed: Array.Empty<string>(),
+            ReworkRoundNumber: 2);
+
+        var brief = BatchImplementBriefBuilder.Build(
+            "claude-code",
+            SnapshotFixtures.BatchTickets(),
+            SnapshotFixtures.Repo(),
+            SnapshotFixtures.FixtureBranch,
+            SnapshotFixtures.FixtureWorktree,
+            SnapshotFixtures.ChainCommitRange(),
+            reworkFeedback: feedback);
+
+        Assert.Contains("## Rework feedback (round 2)", brief.Instruction);
+    }
+
+    [Fact]
+    public void Build_WithReworkFeedback_NoChecks_OmitsChecksList()
+    {
+        var feedback = new ReviewFeedback(
+            Rationale: "Add missing guard.",
+            ChecksFailed: Array.Empty<string>(),
+            ReworkRoundNumber: 1);
+
+        var brief = BatchImplementBriefBuilder.Build(
+            "claude-code",
+            SnapshotFixtures.BatchTickets(),
+            SnapshotFixtures.Repo(),
+            SnapshotFixtures.FixtureBranch,
+            SnapshotFixtures.FixtureWorktree,
+            SnapshotFixtures.ChainCommitRange(),
+            reworkFeedback: feedback);
+
+        Assert.Contains("## Rework feedback (round 1)", brief.Instruction);
+        Assert.DoesNotContain("Checks that failed:", brief.Instruction);
+    }
+
+    [Fact]
+    public void Build_WithoutReworkFeedback_OmitsReworkSection()
+    {
+        var brief = BuildSnapshotBrief();
+
+        Assert.DoesNotContain("## Rework feedback", brief.Instruction);
+        Assert.DoesNotContain("Do NOT amend or rewrite commits", brief.Instruction);
+    }
+
+    [Fact]
+    public void Build_WithReworkFeedback_ReworkSectionAppearsBeforeConstraints()
+    {
+        var feedback = new ReviewFeedback(
+            Rationale: "Fix the bug.",
+            ChecksFailed: Array.Empty<string>(),
+            ReworkRoundNumber: 1);
+
+        var brief = BatchImplementBriefBuilder.Build(
+            "claude-code",
+            SnapshotFixtures.BatchTickets(),
+            SnapshotFixtures.Repo(),
+            SnapshotFixtures.FixtureBranch,
+            SnapshotFixtures.FixtureWorktree,
+            SnapshotFixtures.ChainCommitRange(),
+            reworkFeedback: feedback);
+
+        var reworkIdx = brief.Instruction.IndexOf("## Rework feedback", StringComparison.Ordinal);
+        var constraintsIdx = brief.Instruction.IndexOf("## Constraints", StringComparison.Ordinal);
+        Assert.True(reworkIdx >= 0 && constraintsIdx >= 0 && reworkIdx < constraintsIdx,
+            "Rework section should appear before Constraints section.");
+    }
+
     private static Brief BuildSnapshotBrief() =>
         BatchImplementBriefBuilder.Build(
             "claude-code",

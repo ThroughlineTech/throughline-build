@@ -17,7 +17,7 @@ Implement the tickets in the exact declared order below. Each ticket after the f
 - Base SHA (origin/main): {{main_sha}}
 - Current base commit pointer for this group: {{base_commit_sha}}
 - Chain pointer: {{chain_pointer}}
-
+{{rework_section}}
 ## Constraints
 - Work only inside the worktree at {{worktree_path}}
 - Commit all changes locally on branch {{branch}}
