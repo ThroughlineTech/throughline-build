@@ -340,6 +340,28 @@ static async Task<int> RunAsync(string[] args)
         return 2;
     }
 
+    // 'build models refresh' re-probes Codex and rewrites the [workers.codex.sizes] block
+    // in place. Runs in the early pre-config-load band like 'init' because it edits the
+    // config file rather than consuming it.
+    if (verb == "models")
+    {
+        var modelsSub = args.Length >= 2 ? args[1] : null;
+        if (modelsSub != "refresh")
+        {
+            Console.Error.WriteLine("Error: models subcommand is required");
+            Console.Error.WriteLine("Usage: build models refresh");
+            return 2;
+        }
+        if (args.Length > 2)
+        {
+            Console.Error.WriteLine($"Error: unknown argument: {args[2]}");
+            Console.Error.WriteLine("Usage: build models refresh");
+            return 2;
+        }
+        return ModelsRefreshCommand.Execute(rawCwd, SystemConsole.Instance,
+            () => new CodexModelProbe().ProbeAsync().GetAwaiter().GetResult());
+    }
+
     var resolverGit = new ProcessGitClient(rawCwd);
     var resolvedCwd = await MainWorktreeResolver.ResolveAsync(resolverGit, rawCwd, CancellationToken.None);
 

@@ -24,6 +24,7 @@ Usage:
   build user-guide [--force] [--print-template]   Write the operator user guide to docs/throughline_build_userguide.md; --force overwrites an existing file; --print-template prints to stdout
   build op-doc spec [--print] [--write] [--force] Print the embedded op-doc authoring spec to stdout by default; --write materializes docs/op-docs/op-doc-spec.md; --force overwrites an existing generated copy
   build op-doc new <slug> [--write]               Generate a minimal valid op-doc skeleton for <slug>; prints to stdout by default; --write writes docs/op-docs/op-<slug>.md
+  build models refresh                            Re-probe Codex ('codex debug models') and rewrite the [workers.codex.sizes] block in .build/config.toml in place, printing a current-to-proposed diff; only the Codex block changes; a probe failure leaves the file unchanged
   build settarget <branch>     Validate <branch> exists as a local git ref and write target_branch = "<branch>" under [work] in .build/config.toml; exits 2 if branch not found locally (run git checkout -b <branch> first)
   build settarget --unset      Remove target_branch from [work] in .build/config.toml; noop if key is already absent
   build settarget              Print the current resolved target_branch value: shows [work] override if set, or base_branch default from [ship] if not
