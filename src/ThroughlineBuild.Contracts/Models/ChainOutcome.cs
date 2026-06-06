@@ -10,6 +10,7 @@ public enum ChainOutcome
     ReworkCapExceeded,
     RefusedInitialState,
     RefusedDirtyTree,   // working tree not clean at chain start (conflict or unrelated stash) - refused before planning
+    RefusedWrongBranch, // main worktree not on the ship target branch at chain start - refused before planning
     RatifiedObsolete,
     ParentCompleted,    // all eligible children completed
     ParentStoppedEarly, // one or more children stopped before completing

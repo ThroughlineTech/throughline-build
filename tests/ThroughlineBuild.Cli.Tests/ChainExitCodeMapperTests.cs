@@ -24,6 +24,12 @@ public class ChainExitCodeMapperTests
         Assert.Equal(2, ChainExitCodeMapper.GetExitCode(dispatchResult));
     }
 
+    [Fact]
+    public void WrongBranchRefusal_MapsToPreflightRefusalExitCode()
+    {
+        Assert.Equal(2, ChainExitCodeMapper.GetExitCode(ChainOutcome.RefusedWrongBranch));
+    }
+
     private static ChainResult MakeDirtyResult(string ticketId) => new(
         TicketId: ticketId,
         Steps: Array.Empty<ChainStep>(),

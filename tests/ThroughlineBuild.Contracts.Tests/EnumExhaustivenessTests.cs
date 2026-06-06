@@ -76,6 +76,7 @@ public class EnumExhaustivenessTests
             ChainOutcome.ReworkCapExceeded,
             ChainOutcome.RefusedInitialState,
             ChainOutcome.RefusedDirtyTree,
+            ChainOutcome.RefusedWrongBranch,
             ChainOutcome.RatifiedObsolete,
             ChainOutcome.ParentCompleted,
             ChainOutcome.ParentStoppedEarly,

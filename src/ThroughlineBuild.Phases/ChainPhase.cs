@@ -89,6 +89,43 @@ public class ChainPhase
         // instead of burning a plan round and failing opaquely inside implement.
         if (options.SharedWorktreePath is null)
         {
+            // Wrong-branch guard: the chain ends by shipping into _baseOptions.TargetBranch,
+            // and ShipPhase performs that merge by advancing whatever HEAD the MAIN worktree
+            // points at (FastForwardMergeAsync). If the main worktree is parked on a different
+            // branch (or detached), the ship gate refuses - but only after plan/implement/review
+            // have already burned minutes of work. Mirror that ship preflight here, before any
+            // planning, so the operator fixes the branch up front instead of discovering it at
+            // the very end. The two checks compare against the same target branch and must agree.
+            var targetBranch = _baseOptions.TargetBranch;
+            var currentBranch = await _git.CurrentBranchAsync(_workingDirectory, ct).ConfigureAwait(false);
+            if (!string.Equals(currentBranch, targetBranch, StringComparison.Ordinal))
+            {
+                var wrongBranchMessage =
+                    $"{_workingDirectory} is on '{currentBranch}' (or detached); the chain ships into " +
+                    $"'{targetBranch}', so the main worktree must be on '{targetBranch}' before starting. " +
+                    $"Switch with 'git switch {targetBranch}' and re-run.";
+
+                Console.Error.WriteLine($"[{options.TicketId}] chain refused: {wrongBranchMessage}");
+                await _events.EmitAsync(new WorkflowEvent(
+                    SessionId: chainSessionId,
+                    Timestamp: DateTimeOffset.UtcNow,
+                    Kind: EventKind.GateFailure,
+                    TicketId: options.TicketId,
+                    Phase: Phase.Chain,
+                    Data: new Dictionary<string, object>
+                    {
+                        ["kind"] = "chain_preflight_wrong_branch",
+                        ["expected"] = targetBranch,
+                        ["actual"] = currentBranch,
+                        ["worktree"] = _workingDirectory
+                    }), ct).ConfigureAwait(false);
+                totalSw.Stop();
+                var refused = new ChainResult(options.TicketId, steps, ChainOutcome.RefusedWrongBranch,
+                    totalSw.Elapsed, wrongBranchMessage);
+                await EmitChainEndAsync(refused, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
+                return refused;
+            }
+
             var preflightBranch = PhaseWorktreeLayout.BranchName(ticket.Id);
             var preflightFailure = await WorkingTreeHygieneGate
                 .CheckAsync(_git, _workingDirectory, preflightBranch, ct).ConfigureAwait(false);

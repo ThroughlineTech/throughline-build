@@ -1348,6 +1348,45 @@ public class ChainPhaseTests
     }
 
     [Fact]
+    public async Task RunAsync_WrongBranchMain_RefusesBeforeAnyPhaseAndEmitsGateFailure()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        // Main worktree parked on a feature branch while the chain targets "main": the ship
+        // gate would refuse, so the preflight guard must refuse first, before any phase runs.
+        var git = new FakeGitClientChain(currentBranch: "some-feature-branch");
+        var events = new FakeEventSinkChain();
+
+        var chain = BuildChain(
+            ticketing,
+            planWorker,
+            implWorker,
+            verifiers,
+            git: git,
+            forwardGitToChain: true,
+            eventSink: events);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, Debug: false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.RefusedWrongBranch, result.Outcome);
+        Assert.Contains("some-feature-branch", result.FinalRationale);
+        Assert.Contains("must be on 'main'", result.FinalRationale);
+        Assert.Empty(result.Steps);
+        Assert.Empty(ticketing.Transitions);
+        Assert.Empty(planWorker.SeenOptions);
+
+        var gate = Assert.Single(events.Events.Where(e => e.Kind == EventKind.GateFailure));
+        Assert.Equal(Phase.Chain, gate.Phase);
+        Assert.Equal("chain_preflight_wrong_branch", gate.Data["kind"].ToString());
+        Assert.Equal("main", gate.Data["expected"].ToString());
+        Assert.Equal("some-feature-branch", gate.Data["actual"].ToString());
+
+        Assert.Contains(events.Events, e => e.Kind == EventKind.ChainEnd
+            && e.Data["outcome"].ToString() == ChainOutcome.RefusedWrongBranch.ToString());
+    }
+
+    [Fact]
     public async Task RunAsync_UntrackedOnlyMain_DoesNotRefuse()
     {
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
@@ -1557,6 +1596,7 @@ public class ChainPhaseTests
         private readonly IReadOnlyList<string> _stashEntries;
         private readonly IReadOnlyList<string> _trackedChanges;
         private readonly int _revListCount;
+        private readonly string _currentBranch;
         public List<string> RemovedWorktrees { get; } = new();
         public List<string> DeletedBranches { get; } = new();
         public List<string> WorkingDirectoriesSeenForTrackedChanges { get; } = new();
@@ -1584,15 +1624,20 @@ public class ChainPhaseTests
             bool shipFails = false,
             IReadOnlyList<string>? stashEntries = null,
             int revListCount = 0,
-            IReadOnlyList<string>? trackedChanges = null)
+            IReadOnlyList<string>? trackedChanges = null,
+            string currentBranch = "main")
         {
             _shipFails = shipFails;
             _stashEntries = stashEntries ?? Array.Empty<string>();
             _trackedChanges = trackedChanges ?? Array.Empty<string>();
             _revListCount = revListCount;
+            _currentBranch = currentBranch;
             // Seed the default single-ticket worktree for backward compatibility.
             _worktrees.Add(new WorktreeInfo("/fake/worktree", BranchName, CommitSha, false, false));
         }
+
+        public Task<string> CurrentBranchAsync(string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(_currentBranch);
 
         public Task<IReadOnlyList<string>> ListStashEntriesAsync(string workingDirectory, CancellationToken ct) =>
             Task.FromResult(_stashEntries);
