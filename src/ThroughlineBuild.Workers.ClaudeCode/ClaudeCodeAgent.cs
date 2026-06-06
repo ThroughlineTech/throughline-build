@@ -317,8 +317,11 @@ public class ClaudeCodeAgent : IWorkerAgent
 
         var markerFailureReason = $"Envelope result did not contain a WORKER_RESULT block. Stderr: {stderr}";
         Console.Error.WriteLine($"[WorkerResultParser] {markerFailureReason}");
+        // Clean exit (code 0, parseable envelope) but no WORKER_RESULT marker: tag it so
+        // ImplementPhase can salvage a committed session that merely omitted the envelope. See TLB-471.
         return new WorkerResult(Status.Failed, "No WORKER_RESULT found in output", Array.Empty<string>(),
-            markerFailureReason, new Dictionary<string, object>());
+            markerFailureReason,
+            new Dictionary<string, object> { [WorkerResultMetadata.EnvelopeStatusKey] = WorkerResultMetadata.EnvelopeMissing });
     }
 
     // Builds the llm_usage metadata dictionary from the Claude Code JSON envelope.

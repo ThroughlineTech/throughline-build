@@ -213,8 +213,11 @@ public class GeminiAgent : IWorkerAgent
 
         var markerReason = $"No WORKER_RESULT block found in stdout. Stderr: {stderr}";
         Console.Error.WriteLine($"[GeminiAgent] {markerReason}");
+        // Clean exit but no WORKER_RESULT marker: tag it so ImplementPhase can salvage a
+        // committed session that merely omitted the envelope. See TLB-471.
         return new WorkerResult(Status.Failed, "No WORKER_RESULT found in output", Array.Empty<string>(),
-            markerReason, new Dictionary<string, object>());
+            markerReason,
+            new Dictionary<string, object> { [WorkerResultMetadata.EnvelopeStatusKey] = WorkerResultMetadata.EnvelopeMissing });
     }
 
     // Builds the argv passed to the gemini CLI.
