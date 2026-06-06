@@ -149,7 +149,8 @@ public class CodexAgent : IWorkerAgent
             stopwatch.ElapsedMilliseconds,
             modelArg,
             usage.CachedInputTokens,
-            usage.ReasoningOutputTokens);
+            usage.ReasoningOutputTokens,
+            tier?.Effort);
         result = result with { Metadata = mergedMeta };
 
         if (options.DebugCaptureDirectory is not null)
@@ -285,8 +286,12 @@ public class CodexAgent : IWorkerAgent
     // --dangerously-bypass-approvals-and-sandbox puts codex into unattended,
     // unsandboxed execution. Emitted only when options.BypassPermissions is
     // true. ExtraArgs is appended before the resolved model so explicit user
-    // flags can override default ordering. The final "-" tells Codex to read
-    // the brief from stdin instead of a positional command-line argument.
+    // flags can override default ordering. When the resolved tier carries a
+    // non-empty effort, "-c model_reasoning_effort=<effort>" is appended as two
+    // discrete ArgumentList entries (no shell quoting); when effort is null or
+    // empty nothing is emitted and Codex applies its own per-model default
+    // reasoning level. The final "-" tells Codex to read the brief from stdin
+    // instead of a positional command-line argument.
     internal static List<string> BuildArgs(CodexOptions options, WorkerOptions workerOptions)
     {
         var args = new List<string> { "exec", "--json" };
@@ -298,6 +303,9 @@ public class CodexAgent : IWorkerAgent
         var modelArg = NormalizeModel(tier?.Model);
         if (modelArg is not null)
             args.AddRange(new[] { "--model", modelArg });
+        var effort = tier?.Effort;
+        if (!string.IsNullOrEmpty(effort))
+            args.AddRange(new[] { "-c", $"model_reasoning_effort={effort}" });
         args.Add("-");
         return args;
     }
@@ -347,13 +355,17 @@ public class CodexAgent : IWorkerAgent
     // Builds llm_usage metadata for Codex runs. vendor is always "openai".
     // cost_usd is always null (Codex emits tokens, not USD).
     // Token counts are populated from usage when available; null otherwise.
+    // reasoning_effort carries the tier's configured effort so cost/quality can
+    // be attributed to the effort level and not just the model; it is null when
+    // no effort was configured (effort-less tiers stay byte-identical to before).
     internal static Dictionary<string, object> BuildLlmUsageMetadata(
         int? inputTokens,
         int? outputTokens,
         long wallClockMs,
         string? model,
         int? cachedInputTokens = null,
-        int? reasoningOutputTokens = null)
+        int? reasoningOutputTokens = null,
+        string? reasoningEffort = null)
     {
         var metadata = new Dictionary<string, object>
         {
@@ -366,6 +378,7 @@ public class CodexAgent : IWorkerAgent
             { "cache_create_tokens", 0 },
             { "cached_input_tokens", (object)(cachedInputTokens ?? 0) },
             { "reasoning_output_tokens", (object)(reasoningOutputTokens ?? 0) },
+            { "reasoning_effort", (object?)(string.IsNullOrEmpty(reasoningEffort) ? null : reasoningEffort)! },
             { "cost_usd",      (object?)null! },
         };
         return metadata;

@@ -178,6 +178,47 @@ public class CodexAgentTests
     }
 
     [Fact]
+    public void BuildArgs_TierWithEffort_AppendsReasoningEffortFlag()
+    {
+        var options = new CodexOptions
+        {
+            Sizes = new Dictionary<WorkerSize, ModelTier>
+            {
+                { WorkerSize.Medium, new ModelTier("gpt-5.5", "xhigh") },
+            },
+        };
+        // WorkerOptions.Size defaults to Medium.
+        var workerOptions = new WorkerOptions(TimeSpan.FromSeconds(30));
+
+        var args = CodexAgent.BuildArgs(options, workerOptions);
+
+        var idx = args.IndexOf("model_reasoning_effort=xhigh");
+        Assert.True(idx > 0, $"expected model_reasoning_effort=xhigh in argv: {string.Join(" ", args)}");
+        // Passed as two discrete ArgumentList entries: "-c" then the key=value.
+        Assert.Equal("-c", args[idx - 1]);
+        // The effort flag precedes the stdin sentinel.
+        Assert.Equal("-", args[^1]);
+    }
+
+    [Fact]
+    public void BuildArgs_TierWithoutEffort_OmitsReasoningEffortFlag()
+    {
+        var options = new CodexOptions
+        {
+            Sizes = new Dictionary<WorkerSize, ModelTier>
+            {
+                { WorkerSize.Medium, new ModelTier("gpt-5.5") }, // no effort
+            },
+        };
+        var workerOptions = new WorkerOptions(TimeSpan.FromSeconds(30));
+
+        var args = CodexAgent.BuildArgs(options, workerOptions);
+
+        Assert.DoesNotContain("-c", args);
+        Assert.DoesNotContain(args, a => a.StartsWith("model_reasoning_effort="));
+    }
+
+    [Fact]
     public void WriteDebugCapture_RecordsBriefAsStdin()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"codex-capture-{Guid.NewGuid():N}");

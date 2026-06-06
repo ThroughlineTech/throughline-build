@@ -68,6 +68,33 @@ public class CodexModelAuthUsageTests
     }
 
     [Fact]
+    public void BuildLlmUsageMetadata_WithEffort_CarriesReasoningEffort()
+    {
+        var meta = CodexAgent.BuildLlmUsageMetadata(
+            inputTokens: 100,
+            outputTokens: 200,
+            wallClockMs: 5000,
+            model: "gpt-5.5",
+            cachedInputTokens: 25,
+            reasoningOutputTokens: 10,
+            reasoningEffort: "xhigh");
+
+        Assert.Equal("xhigh", meta["reasoning_effort"]);
+    }
+
+    [Fact]
+    public void BuildLlmUsageMetadata_WithoutEffort_ReasoningEffortNull()
+    {
+        var meta = CodexAgent.BuildLlmUsageMetadata(
+            inputTokens: 100,
+            outputTokens: 200,
+            wallClockMs: 5000,
+            model: "gpt-5.5");
+
+        Assert.Null(meta["reasoning_effort"]);
+    }
+
+    [Fact]
     public void CodexOptions_DefaultSizes_IsEmpty()
     {
         // The dead in-code default size map was removed; models come from

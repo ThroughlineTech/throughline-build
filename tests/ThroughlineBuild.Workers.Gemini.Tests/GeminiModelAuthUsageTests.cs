@@ -201,6 +201,6 @@ public class GeminiModelAuthUsageTests
     {
         // The dead in-code default size map was removed; default Sizes is empty.
         var options = new GeminiOptions();
-        Assert.Equal(0, options.Sizes.Count);
+        Assert.Empty(options.Sizes);
     }
 }
