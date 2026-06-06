@@ -27,6 +27,20 @@ Implement the tickets in the exact declared order below. Each ticket after the f
 - Do NOT write outside the worktree
 - Do NOT use git stash or the shared stash stack; the stash stack is repo-global and leaks across worktrees, which can corrupt a later ticket's working tree. If you need a clean state to build, build in place rather than stashing.
 
+## Partial failure
+
+If you hit a blocking issue mid-batch and cannot complete all tickets:
+
+1. Commit all work you have finished for the current ticket before reporting failure.
+   Each completed ticket must be committed before you attempt the next one.
+2. Stop before starting the next ticket.
+3. Set top-level `status` to `Failed` and provide a clear `failure_reason`.
+4. Include only the tickets you committed in the `tickets` array.
+   Do NOT include a ticket you did not commit.
+
+The conductor will advance each committed-and-confirmed ticket to InReview
+and leave the first incomplete ticket InProgress with your failure reason.
+
 ## Golden and snapshot tests
 
 For golden/snapshot tests, use record-then-justify. Write the production code first, then run the code or test harness and capture its actual output as the golden fixture. If the project has a record/update flag or fixture-regeneration command, use that convention; if it does not, capture the real output verbatim and write that captured output to the fixture. Do NOT hand-author the expected string and iterate until it matches.
@@ -56,7 +70,8 @@ WORKER_RESULT
 - Top-level `failure_reason` must be null on success or a clear failure reason.
 - Top-level `metadata.base_commit_sha` must be the current base commit pointer from this brief.
 - Top-level `metadata.head_commit_sha` must be the HEAD SHA after all ticket commits land.
-- `tickets` must contain one object per ticket, in declared order.
+- On success, `tickets` must contain one object per ticket, in declared order.
+- On partial failure (`status` `Failed` with committed work), `tickets` must contain only the tickets you committed; omit any ticket you did not commit.
 - Each ticket object must include `ticket_id`, `commit_sha`, `stack_position`, `files_changed`, and `summary_ref`.
 - Each `commit_sha` must be the local commit created for that ticket.
 - Each `stack_position` must match the declared order above, starting at 1.

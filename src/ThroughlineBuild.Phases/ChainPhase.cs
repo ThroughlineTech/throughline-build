@@ -886,14 +886,119 @@ public class ChainPhase
 
         implSw.Stop();
 
-        // Worker failed: return a StoppedAtImplement result for every ticket in the group.
+        // Worker failed: if some tickets were committed before the failure, advance the
+        // confirmed ones and leave the first incomplete ticket InProgress so the batch
+        // leaves a clean, recoverable boundary. An empty tickets array (or Escalate)
+        // means nothing committed; stop all tickets.
         if (workerResult.Status == Status.Failed || workerResult.Status == Status.Escalate)
         {
+            var failureReason = workerResult.FailureReason ?? workerResult.Summary;
+
+            // Partial failure path: worker committed some tickets before stopping.
+            if (workerResult.Status == Status.Failed &&
+                workerResult.Tickets is not null && workerResult.Tickets.Count > 0)
+            {
+                var partialBase = !string.IsNullOrEmpty(mainSha) ? mainSha : baseRef;
+                var partialVerify = await BatchCommitVerifier
+                    .VerifyAsync(_git, sharedWorktreePath, partialBase, workerResult.Tickets, ct)
+                    .ConfigureAwait(false);
+
+                if (partialVerify.Success)
+                {
+                    var confirmedIds = new HashSet<string>(
+                        partialVerify.ConfirmedTickets.Select(r => r.TicketId),
+                        StringComparer.Ordinal);
+
+                    // Advance each confirmed ticket: post implemented_at marker + InProgress->InReview.
+                    foreach (var confirmedTicket in partialVerify.ConfirmedTickets)
+                    {
+                        var batchTicket = batchTickets.FirstOrDefault(
+                            t => string.Equals(t.Id, confirmedTicket.TicketId, StringComparison.Ordinal));
+                        if (batchTicket is null) continue;
+
+                        string summaryHtml = "";
+                        if (workerResult.Blocks is not null &&
+                            !string.IsNullOrEmpty(confirmedTicket.SummaryRef) &&
+                            workerResult.Blocks.TryGetValue(confirmedTicket.SummaryRef, out var summaryMd) &&
+                            !string.IsNullOrEmpty(summaryMd))
+                        {
+                            summaryHtml = MarkdownRenderer.Render(summaryMd);
+                        }
+
+                        var markerHtml =
+                            $"<p>[implemented_at: {confirmedTicket.CommitSha}] (branch {batchBranchName})" +
+                            $" (batch: stack_position={confirmedTicket.StackPosition})</p>{summaryHtml}";
+                        try
+                        {
+                            await _ticketing.CreateCommentAsync(batchTicket.Id, markerHtml, ct).ConfigureAwait(false);
+                        }
+                        catch { /* non-fatal */ }
+
+                        try
+                        {
+                            await _ticketing.TransitionAsync(batchTicket.Id, TicketState.InReview, ct).ConfigureAwait(false);
+                        }
+                        catch { /* non-fatal */ }
+                    }
+
+                    // Post failure reason to the first incomplete ticket so the operator
+                    // can see why the batch stopped without consulting the event log.
+                    var firstIncomplete = batchTickets.FirstOrDefault(t => !confirmedIds.Contains(t.Id));
+                    if (firstIncomplete is not null)
+                    {
+                        try
+                        {
+                            var failHtml = $"<p>batch implement stopped: {WebUtility.HtmlEncode(failureReason)}</p>";
+                            await _ticketing.CreateCommentAsync(firstIncomplete.Id, failHtml, ct).ConfigureAwait(false);
+                        }
+                        catch { /* non-fatal */ }
+                    }
+
+                    // Return mixed results: confirmed tickets -> BatchImplemented,
+                    // incomplete tickets -> StoppedAtImplement.
+                    batchSw.Stop();
+                    var partialResults = new List<ChainResult>(batchTickets.Count);
+                    for (int i = 0; i < batchTickets.Count; i++)
+                    {
+                        var ticket = batchTickets[i];
+                        var perResult = partialVerify.ConfirmedTickets.FirstOrDefault(
+                            r => string.Equals(r.TicketId, ticket.Id, StringComparison.Ordinal));
+
+                        if (perResult is not null)
+                        {
+                            var implStep = new ChainStep(
+                                PhaseName: "batch-implement",
+                                ReworkRoundNumber: 0,
+                                Status: Status.Ok,
+                                FailureReason: null,
+                                Verdict: null,
+                                Duration: implSw.Elapsed,
+                                PhaseSessionId: batchSessionId);
+                            partialResults.Add(new ChainResult(
+                                TicketId: ticket.Id,
+                                Steps: new[] { implStep },
+                                Outcome: ChainOutcome.BatchImplemented,
+                                TotalDuration: batchSw.Elapsed,
+                                FinalRationale: $"batch implement succeeded; commit {perResult.CommitSha}"));
+                        }
+                        else
+                        {
+                            partialResults.Add(new ChainResult(
+                                ticket.Id, Array.Empty<ChainStep>(),
+                                ChainOutcome.StoppedAtImplement, batchSw.Elapsed,
+                                failureReason));
+                        }
+                    }
+                    return partialResults.AsReadOnly();
+                }
+                // Partial verification failed: fall through to total failure path.
+            }
+
             batchSw.Stop();
             return batchTickets.Select(t => new ChainResult(
                 t.Id, Array.Empty<ChainStep>(),
                 ChainOutcome.StoppedAtImplement, batchSw.Elapsed,
-                workerResult.FailureReason ?? workerResult.Summary)).ToList().AsReadOnly();
+                failureReason)).ToList().AsReadOnly();
         }
 
         // Worker succeeded: confirm the worktree is clean and that each reported SHA

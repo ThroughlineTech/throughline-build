@@ -1890,6 +1890,121 @@ public class ChainPhaseTests
         Assert.All(result.ChildResults!, r => Assert.Contains("TLB-3", r.FinalRationale));
     }
 
+    // Partial failure: worker commits first ticket then fails on second.
+    // AC1: confirmed (committed) ticket gets implemented_at marker and InReview transition.
+    // AC2: first incomplete ticket is left InProgress with a recorded failure reason comment.
+    // AC3: no child past the failure point is transitioned to InReview.
+    [Fact]
+    public async Task RunAsync_BatchGroup_PartialFailure_ConfirmedTicketAdvanced_IncompleteStopsChain()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Ready);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Ready);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+
+        // Worker commits TLB-2 (stack_position=1) then fails before TLB-3.
+        var partialTickets = new List<BatchTicketResult>
+        {
+            new BatchTicketResult("TLB-2", "aaa000", 1, Array.Empty<string>(), "SUMMARY_1"),
+        };
+        var batchWorker = new BatchFakeWorkerAgent(tickets: partialTickets, status: Status.Failed);
+
+        var git = new FakeGitClientChain();
+        // Only TLB-2's commit is in the branch; worktree is clean.
+        git.LogShasResult = new[] { "aaa000" };
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            batchWorker: batchWorker, git: git, forwardGitToChain: true);
+
+        var batchGroup = new ChainBatchImplementGroup(new[] { "TLB-2", "TLB-3" });
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
+            CancellationToken.None);
+
+        Assert.Equal(1, batchWorker.CallCount);
+        // Parent stopped early because TLB-3 is incomplete.
+        Assert.Equal(ChainOutcome.ParentStoppedEarly, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+
+        // TLB-2 was confirmed: BatchImplemented with its commit SHA.
+        var tlb2Result = result.ChildResults!.FirstOrDefault(r => r.TicketId == "TLB-2");
+        Assert.NotNull(tlb2Result);
+        Assert.Equal(ChainOutcome.BatchImplemented, tlb2Result!.Outcome);
+        Assert.Contains("aaa000", tlb2Result.FinalRationale);
+
+        // AC1: TLB-2 gets an implemented_at marker comment.
+        var comments2 = ticketing.PostedComments.Where(c => c.id == "TLB-2").ToList();
+        Assert.NotEmpty(comments2);
+        Assert.Contains("[implemented_at: aaa000]", comments2[0].html);
+
+        // AC1: TLB-2 is transitioned to InReview.
+        Assert.Contains(("TLB-2", TicketState.InReview), ticketing.Transitions);
+
+        // AC3: TLB-3 is NOT transitioned to InReview (stays InProgress from initial transition).
+        Assert.DoesNotContain(("TLB-3", TicketState.InReview), ticketing.Transitions);
+
+        // AC2: TLB-3 gets a failure reason comment.
+        var comments3 = ticketing.PostedComments.Where(c => c.id == "TLB-3").ToList();
+        Assert.NotEmpty(comments3);
+        Assert.Contains("batch implement stopped", comments3[0].html);
+        Assert.Contains("batch error", comments3[0].html);
+    }
+
+    // Partial failure with verification failure: when the partial commits cannot be
+    // confirmed by git, all tickets get StoppedAtImplement (no markers posted).
+    [Fact]
+    public async Task RunAsync_BatchGroup_PartialFailure_VerificationFails_AllStoppedAtImplement()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Ready);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Ready);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+
+        // Worker reports TLB-2 committed but the commit is absent from the branch.
+        var partialTickets = new List<BatchTicketResult>
+        {
+            new BatchTicketResult("TLB-2", "aaa000", 1, Array.Empty<string>(), "SUMMARY_1"),
+        };
+        var batchWorker = new BatchFakeWorkerAgent(tickets: partialTickets, status: Status.Failed);
+
+        var git = new FakeGitClientChain();
+        // Empty log: BatchCommitVerifier cannot confirm reported SHAs.
+        git.LogShasResult = Array.Empty<string>();
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            batchWorker: batchWorker, git: git, forwardGitToChain: true);
+
+        var batchGroup = new ChainBatchImplementGroup(new[] { "TLB-2", "TLB-3" });
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
+            CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentStoppedEarly, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        Assert.NotEmpty(result.ChildResults!);
+        Assert.All(result.ChildResults!, r => Assert.Equal(ChainOutcome.StoppedAtImplement, r.Outcome));
+
+        // No InReview transitions when verification fails.
+        Assert.DoesNotContain(("TLB-2", TicketState.InReview), ticketing.Transitions);
+        Assert.DoesNotContain(("TLB-3", TicketState.InReview), ticketing.Transitions);
+
+        // No implemented_at markers posted when verification fails.
+        var implementedAtComments = ticketing.PostedComments
+            .Where(c => c.html.Contains("[implemented_at:"))
+            .ToList();
+        Assert.Empty(implementedAtComments);
+    }
+
     private sealed class FakeGitClientChain : IGitClient
     {
         private readonly bool _shipFails;
