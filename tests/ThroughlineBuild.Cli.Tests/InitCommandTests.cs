@@ -1,5 +1,6 @@
 using ThroughlineBuild.Cli;
 using ThroughlineBuild.Commands;
+using ThroughlineBuild.Workers.Codex;
 using Xunit;
 
 namespace ThroughlineBuild.Cli.Tests;
@@ -515,5 +516,102 @@ public class InitCommandTests
         var args = new List<string> { "init", "--plane-url" };
         var result = CliArgParser.GetFlagValue(args, "--plane-url");
         Assert.Null(result);
+    }
+
+    // ------------------------------------------------------------------
+    // Execute: Codex tier enrichment (injected probe)
+    // ------------------------------------------------------------------
+
+    private static CodexModelDiscovery SampleDiscovery() => new(new[]
+    {
+        new CodexModelInfo("gpt-5.5", "medium", new[] { "minimal", "low", "medium", "high", "xhigh" }),
+        new CodexModelInfo("gpt-5.4-mini", "low", new[] { "low", "medium", "high" }),
+    });
+
+    [Fact]
+    public void Execute_SuccessfulProbe_RewritesCodexBlock_LeavesClaudeStatic()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new FakeConsole();
+            var result = InitCommand.Execute(dir, force: false, printTemplate: false, console,
+                probeCodex: () => CodexProbeResult.Ok(SampleDiscovery()));
+
+            Assert.Equal(0, result);
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+
+            // Codex block now carries the discovered slugs and a discovered-menu comment.
+            Assert.Contains("gpt-5.4-mini", written);
+            Assert.Contains("gpt-5.5", written);
+            Assert.Contains("# # models: gpt-5.5, gpt-5.4-mini", written);
+
+            // Claude block still reads the static stable aliases.
+            Assert.Contains("small  = { model = \"haiku\" }", written);
+            Assert.Contains("medium = { model = \"sonnet\" }", written);
+            Assert.Contains("large  = { model = \"opus\" }", written);
+
+            // No warning on success.
+            Assert.DoesNotContain("Warning", console.Stderr);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Execute_FailedProbe_WritesStaticDefaults_PrintsOneWarning()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new FakeConsole();
+            var result = InitCommand.Execute(dir, force: false, printTemplate: false, console,
+                probeCodex: () => CodexProbeResult.Fail(CodexProbeFailureKind.CommandFailed, "codex not found"));
+
+            Assert.Equal(0, result);
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+
+            // Static codex defaults remain (template's commented example).
+            Assert.Contains("# small  = { model = \"gpt-5.4-mini\", effort = \"low\" }", written);
+            Assert.Contains("# large  = { model = \"gpt-5.5\", effort = \"high\" }", written);
+
+            // Claude block still static aliases.
+            Assert.Contains("small  = { model = \"haiku\" }", written);
+            Assert.Contains("large  = { model = \"opus\" }", written);
+
+            // Exactly one warning, mentioning the refresh command.
+            Assert.Contains("build models refresh", console.Stderr);
+            var warningCount = console.Stderr
+                .Split('\n')
+                .Count(line => line.Contains("Warning"));
+            Assert.Equal(1, warningCount);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Execute_PrintTemplate_DoesNotInvokeProbe()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new FakeConsole();
+            var result = InitCommand.Execute(dir, force: false, printTemplate: true, console,
+                probeCodex: () => throw new Exception("probe must not run on print"));
+
+            Assert.Equal(0, result);
+            Assert.Contains("[ticketing]", console.Stdout);
+            // No file written.
+            Assert.False(File.Exists(Path.Combine(dir, ".build", "config.toml")));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
     }
 }

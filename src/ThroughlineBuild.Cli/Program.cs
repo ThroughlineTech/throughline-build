@@ -226,7 +226,10 @@ static async Task<int> RunAsync(string[] args)
             workspace: initWorkspace,
             projectId: initProjectId,
             token: initToken,
-            tokenEnv: initTokenEnv);
+            tokenEnv: initTokenEnv,
+            // --print-template returns before this delegate is invoked, so init --print-template
+            // stays offline-safe. Blocking on the async probe is fine in this top-level CLI path.
+            probeCodex: () => new CodexModelProbe().ProbeAsync().GetAwaiter().GetResult());
     }
 
     // 'build settarget' manages config without requiring Plane or worker setup;

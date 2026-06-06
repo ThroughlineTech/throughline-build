@@ -1,4 +1,5 @@
 using ThroughlineBuild.Commands;
+using ThroughlineBuild.Workers.Codex;
 
 namespace ThroughlineBuild.Cli;
 
@@ -20,6 +21,14 @@ public static class InitCommand
     /// <param name="projectId">Optional: replaces REQUIRED_PLANE_PROJECT_ID in the template.</param>
     /// <param name="token">Optional: replaces REQUIRED_PLANE_API_TOKEN in the template (literal token value).</param>
     /// <param name="tokenEnv">Optional: if set, the plane_api_token line is replaced with plane_api_token_env = "VALUE".</param>
+    /// <param name="probeCodex">
+    /// Optional injected Codex probe. When provided AND the target is being written (not
+    /// --print-template, past the clobber guard), init queries Codex and rewrites the
+    /// commented [workers.codex.sizes] block with a best-guess small/medium/large mapping plus
+    /// a discovered-menu comment. On probe failure it leaves the static template block and
+    /// prints one actionable warning, still exiting 0. The Claude block is never touched.
+    /// null (the default) means no enrichment and no warning - keeps unit tests offline.
+    /// </param>
     /// <returns>0 on success, 1 on error.</returns>
     public static int Execute(
         string cwd,
@@ -30,7 +39,8 @@ public static class InitCommand
         string? workspace = null,
         string? projectId = null,
         string? token = null,
-        string? tokenEnv = null)
+        string? tokenEnv = null,
+        Func<CodexProbeResult>? probeCodex = null)
     {
         var template = ConfigTemplateLoader.Load();
 
@@ -39,6 +49,7 @@ public static class InitCommand
 
         var content = ApplyFlags(template, planeUrl, workspace, projectId, token, tokenEnv);
 
+        // --print-template NEVER probes: it stays offline-safe even when a probe is injected.
         if (printTemplate)
         {
             console.Write(content);
@@ -47,10 +58,34 @@ public static class InitCommand
 
         var target = Path.Combine(cwd, ".build", "config.toml");
 
+        // Clobber guard runs BEFORE probing so the no-op path never spawns codex.
         if (File.Exists(target) && !force)
         {
             console.ErrorWriteLine($"Error: {target} already exists. Use --force to overwrite.");
             return 1;
+        }
+
+        // Codex tier discovery: enrich the commented codex-sizes block in place. Only runs
+        // when a probe is injected (production wires the real probe; tests inject stubs or
+        // omit it). The Claude block is never touched.
+        if (probeCodex is not null)
+        {
+            var probe = probeCodex();
+            if (probe.Success && probe.Discovery is not null && probe.Discovery.Models.Count > 0)
+            {
+                var mapping = CodexTierMapper.Map(probe.Discovery);
+                if (mapping is not null)
+                {
+                    var block = CodexSizesBlockRenderer.Render(mapping, probe.Discovery, commented: true);
+                    content = CodexSizesBlockEditor.ReplaceCodexSizesBlock(content, block);
+                }
+            }
+            else
+            {
+                console.ErrorWriteLine(
+                    "Warning: could not discover Codex models (Codex may not be installed or not logged in); "
+                    + "wrote the static Codex defaults. Run 'build models refresh' once Codex is available to update them.");
+            }
         }
 
         var dir = Path.GetDirectoryName(target)!;
