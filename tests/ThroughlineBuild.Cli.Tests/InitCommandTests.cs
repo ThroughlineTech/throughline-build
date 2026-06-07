@@ -902,6 +902,8 @@ public class InitCommandTests
         public string? ReadGitignore() =>
             string.Join("\n", GitignoreManager.RequiredEntries) + "\n";
         public void WriteGitignore(string content) { }
+        public bool HasAnyCommits() => true;
+        public void StageAndCommit(string[] paths, string message) { }
     }
 
     [Fact]
@@ -1210,19 +1212,103 @@ public class InitCommandTests
     private sealed class EmptyLocalRepo : ILocalRepoOps
     {
         private bool _isRepo;
+        private bool _hasCommits;
         public int InitCalls { get; private set; }
         public int WriteCalls { get; private set; }
+        public int CommitCalls { get; private set; }
+        public string? LastCommitMessage { get; private set; }
+        public string[]? LastCommitPaths { get; private set; }
         public string? Gitignore { get; private set; }
 
         public bool IsGitRepository() => _isRepo;
         public void GitInit() { InitCalls++; _isRepo = true; }
         public string? ReadGitignore() => Gitignore;
         public void WriteGitignore(string content) { WriteCalls++; Gitignore = content; }
+        public bool HasAnyCommits() => _hasCommits;
+        public void StageAndCommit(string[] paths, string message)
+        {
+            CommitCalls++;
+            LastCommitPaths = paths;
+            LastCommitMessage = message;
+            _hasCommits = true;
+        }
     }
 
     private sealed class ThrowingResolver : IProjectResolver
     {
         public Task<ProjectResolveResult> ResolveAsync(string name, CancellationToken ct) =>
             throw new InvalidOperationException("resolver must not be called before clobber guard");
+    }
+
+    // ------------------------------------------------------------------
+    // Welcome commit: fresh repo gets an initial commit; existing repo does not
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public async Task ConnectedMode_FreshRepo_CreatesWelcomeCommit()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var resolver = new FakeResolver("proj-id-welcome", ProjectResolveOutcome.Created);
+            var provisioner = new FakeProvisioner();
+            var connectivity = new FakeConnectivity();
+            var freshRepo = new EmptyLocalRepo();
+
+            var console = new FakeConsole();
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
+                planeUrl: "https://api.plane.so",
+                workspace: "acme",
+                token: "tok",
+                projectName: "Fresh Repo Project",
+                resolverOverride: resolver,
+                setupFactory: _ => (provisioner, connectivity),
+                localRepoOverride: freshRepo);
+
+            Assert.Equal(0, result);
+            // A welcome commit must have been made.
+            Assert.Equal(1, freshRepo.CommitCalls);
+            Assert.Contains(".gitignore", freshRepo.LastCommitPaths!);
+            Assert.Equal("welcome to throughline build", freshRepo.LastCommitMessage);
+            // .build/config.toml must NOT be in the staged paths.
+            Assert.DoesNotContain(".build/config.toml", freshRepo.LastCommitPaths!);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ConnectedMode_ExistingRepo_SkipsWelcomeCommit()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var resolver = new FakeResolver("proj-id-existing", ProjectResolveOutcome.Found);
+            var provisioner = new FakeProvisioner();
+            var connectivity = new FakeConnectivity();
+            // ReadyLocalRepo.HasAnyCommits() returns true -> welcome commit must be skipped.
+            var existingRepo = new ReadyLocalRepo();
+
+            var console = new FakeConsole();
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
+                planeUrl: "https://api.plane.so",
+                workspace: "acme",
+                token: "tok",
+                projectName: "Existing Repo Project",
+                resolverOverride: resolver,
+                setupFactory: _ => (provisioner, connectivity),
+                localRepoOverride: existingRepo);
+
+            Assert.Equal(0, result);
+            // No warning and no mention of "Welcome" commit for an already-initialized repo.
+            Assert.DoesNotContain("welcome commit", console.Stdout, StringComparison.OrdinalIgnoreCase);
+            Assert.Empty(console.Stderr);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
     }
 }

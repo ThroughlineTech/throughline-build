@@ -43,6 +43,8 @@ public class SetupCommandTests
         public void GitInit() { InitCalls++; _isRepo = true; }
         public string? ReadGitignore() => Gitignore;
         public void WriteGitignore(string content) { WriteCalls++; Gitignore = content; }
+        public bool HasAnyCommits() => false;
+        public void StageAndCommit(string[] paths, string message) { }
     }
 
     // A local repo that is already initialized and already carries every standard ignore entry,

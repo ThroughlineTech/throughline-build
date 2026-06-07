@@ -87,6 +87,10 @@ public interface ILocalRepoOps
     void GitInit();
     string? ReadGitignore();
     void WriteGitignore(string content);
+    /// <summary>Returns true when the repository has at least one commit (HEAD resolves).</summary>
+    bool HasAnyCommits();
+    /// <summary>Stages <paramref name="paths"/> and creates a commit with <paramref name="message"/>.</summary>
+    void StageAndCommit(string[] paths, string message);
 }
 
 /// <summary>
@@ -131,4 +135,62 @@ public sealed class FileSystemLocalRepoOps : ILocalRepoOps
     // ASCII content, LF line endings - written verbatim so git sees stable bytes across platforms.
     public void WriteGitignore(string content) =>
         File.WriteAllText(GitignorePath, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
+    public bool HasAnyCommits()
+    {
+        var psi = new ProcessStartInfo("git", "rev-parse HEAD")
+        {
+            WorkingDirectory = _cwd,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        using var proc = Process.Start(psi)
+            ?? throw new InvalidOperationException("failed to start 'git rev-parse HEAD' (is git on PATH?)");
+        proc.StandardOutput.ReadToEnd();
+        proc.StandardError.ReadToEnd();
+        proc.WaitForExit();
+        return proc.ExitCode == 0;
+    }
+
+    public void StageAndCommit(string[] paths, string message)
+    {
+        // Stage the specified paths (UseShellExecute=false, ArgumentList handles quoting).
+        var psiAdd = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = _cwd,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        psiAdd.ArgumentList.Add("add");
+        psiAdd.ArgumentList.Add("--");
+        foreach (var p in paths) psiAdd.ArgumentList.Add(p);
+
+        using var addProc = Process.Start(psiAdd)
+            ?? throw new InvalidOperationException("failed to start 'git add' (is git on PATH?)");
+        var addStderr = addProc.StandardError.ReadToEnd();
+        addProc.WaitForExit();
+        if (addProc.ExitCode != 0)
+            throw new InvalidOperationException($"'git add' failed (exit {addProc.ExitCode}): {addStderr.Trim()}");
+
+        // Commit with ArgumentList so the message is quoted correctly on all platforms.
+        var psiCommit = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = _cwd,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        psiCommit.ArgumentList.Add("commit");
+        psiCommit.ArgumentList.Add("-m");
+        psiCommit.ArgumentList.Add(message);
+
+        using var commitProc = Process.Start(psiCommit)
+            ?? throw new InvalidOperationException("failed to start 'git commit' (is git on PATH?)");
+        var commitStderr = commitProc.StandardError.ReadToEnd();
+        commitProc.WaitForExit();
+        if (commitProc.ExitCode != 0)
+            throw new InvalidOperationException($"'git commit' failed (exit {commitProc.ExitCode}): {commitStderr.Trim()}");
+    }
 }
