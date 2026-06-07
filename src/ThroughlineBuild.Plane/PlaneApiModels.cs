@@ -157,6 +157,26 @@ public record CreateLabelRequest(
     [property: JsonPropertyName("color")] string Color
 );
 
+public record PlaneProject(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("identifier")] string Identifier
+);
+
+public record PlaneProjectList(
+    [property: JsonPropertyName("results")] List<PlaneProject> Results
+);
+
+public record CreateProjectRequest(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("identifier")] string Identifier,
+    [property: JsonPropertyName("network")] int Network
+);
+
+public record PlaneCreateProjectResponse(
+    [property: JsonPropertyName("id")] string Id
+);
+
 [JsonSerializable(typeof(PlaneIssue))]
 [JsonSerializable(typeof(PlaneIssueList))]
 [JsonSerializable(typeof(PlaneState))]
@@ -185,6 +205,10 @@ public record CreateLabelRequest(
 [JsonSerializable(typeof(CreateRelationRequest))]
 [JsonSerializable(typeof(CreateStateRequest))]
 [JsonSerializable(typeof(CreateLabelRequest))]
+[JsonSerializable(typeof(PlaneProject))]
+[JsonSerializable(typeof(PlaneProjectList))]
+[JsonSerializable(typeof(CreateProjectRequest))]
+[JsonSerializable(typeof(PlaneCreateProjectResponse))]
 [JsonSerializable(typeof(List<PlaneState>))]
 [JsonSerializable(typeof(List<PlaneLabel>))]
 [JsonSerializable(typeof(List<PlaneRelationItem>))]

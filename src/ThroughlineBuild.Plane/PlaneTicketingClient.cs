@@ -15,7 +15,7 @@ namespace ThroughlineBuild.Plane;
 /// <summary>
 /// ITicketing implementation backed by the Plane REST API.
 /// </summary>
-public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, ITicketingConnectivity
+public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, ITicketingConnectivity, IProjectDiscovery
 {
     private readonly HttpClient _http;
     private readonly PlaneClientOptions _options;
@@ -363,6 +363,52 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
         var body = new CreateLabelRequest(name, DefaultLabelColor);
         await PostJsonAsync(LabelsBase, body, PlaneJsonContext.Default, ct).ConfigureAwait(false);
         _labelsByName = null; // force a re-read so a later lookup sees the new label
+    }
+
+    // ------------------------------------------------------------------ project discovery (IProjectDiscovery)
+
+    // Workspace-level projects URL: routes on slug only, works with an empty ProjectId.
+    private string ProjectsBase =>
+        $"api/v1/workspaces/{_options.WorkspaceSlug}/projects/";
+
+    public async Task<IReadOnlyList<ProjectInfo>> ListProjectsAsync(CancellationToken ct)
+    {
+        var list = await GetJsonAsync<PlaneProjectList>(ProjectsBase, PlaneJsonContext.Default, ct).ConfigureAwait(false);
+        return (list.Results ?? [])
+            .Select(p => new ProjectInfo(p.Id, p.Name, p.Identifier))
+            .ToList();
+    }
+
+    public async Task<string?> FindProjectByNameAsync(string name, CancellationToken ct)
+    {
+        var projects = await ListProjectsAsync(ct).ConfigureAwait(false);
+        return projects
+            .Where(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))
+            .Select(p => p.Id)
+            .FirstOrDefault();
+    }
+
+    public async Task<string> CreateProjectAsync(string name, string identifier, CancellationToken ct)
+    {
+        var body = new CreateProjectRequest(name, identifier, Network: 0);
+        string responseBody;
+        try
+        {
+            responseBody = await PostJsonAsync(ProjectsBase, body, PlaneJsonContext.Default, ct).ConfigureAwait(false);
+        }
+        catch (PlaneApiException ex) when (ex.Status is 401 or 403)
+        {
+            throw new PlaneApiException(
+                ex.Status,
+                $"workspace-admin scope required to create a project in '{_options.WorkspaceSlug}': {ex.Body}",
+                ex.RetryAfter);
+        }
+
+        var response = (PlaneCreateProjectResponse?)JsonSerializer.Deserialize(
+            responseBody, typeof(PlaneCreateProjectResponse), PlaneJsonContext.Default)
+            ?? throw new InvalidOperationException("Plane returned null after project create");
+
+        return response.Id;
     }
 
     // ------------------------------------------------------------------ translation
