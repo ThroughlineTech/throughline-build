@@ -219,6 +219,13 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
         return seq;
     }
 
+    // When ProjectIdentifier is empty (not configured) the naive format string would produce
+    // "-{seq}", creating a leading dash that diverges from the slug used for branch names.
+    private string FormatTicketId(int sequenceId) =>
+        string.IsNullOrEmpty(_options.ProjectIdentifier)
+            ? sequenceId.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : $"{_options.ProjectIdentifier}-{sequenceId}";
+
     /// <summary>
     /// Extracts the <c>Retry-After</c> back-off hint from a response, supporting both
     /// the seconds-delta and HTTP-date forms. Returns null when the header is absent.
@@ -579,7 +586,7 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
         };
 
         return new Ticket(
-            Id: $"{_options.ProjectIdentifier}-{issue.SequenceId}",
+            Id: FormatTicketId(issue.SequenceId),
             Uuid: issue.Id,
             Title: issue.Name,
             Type: issue.Type ?? string.Empty,
@@ -831,7 +838,7 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
             UpdateCachedIssue(parentId, i => i with { StateId = desiredStateId });
 
             // POST comment: [rollup] marker is load-bearing
-            var commentHtml = $"<p>[rollup] {_options.ProjectIdentifier}-{childIssue.SequenceId} -> {childStateName}; parent -> {desired}</p>";
+            var commentHtml = $"<p>[rollup] {FormatTicketId(childIssue.SequenceId)} -> {childStateName}; parent -> {desired}</p>";
             await PostJsonAsync(
                 $"{IssuesBase}{parentId}/comments/",
                 new CreateCommentRequest(commentHtml),
@@ -839,7 +846,7 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
                 ct).ConfigureAwait(false);
 
             if (desired == "Done")
-                await RollupParentAsync($"{_options.ProjectIdentifier}-{parentExpanded.SequenceId}", ct).ConfigureAwait(false);
+                await RollupParentAsync(FormatTicketId(parentExpanded.SequenceId), ct).ConfigureAwait(false);
 
             return new RollupResult(true, desired, null);
         }
@@ -909,7 +916,7 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
                 Type: typeId));
 
             return new NewTicketResult(
-                Id: $"{_options.ProjectIdentifier}-{response.SequenceId}",
+                Id: FormatTicketId(response.SequenceId),
                 Uuid: response.Id,
                 CreatedAt: response.CreatedAt);
         }, ct).ConfigureAwait(false);
@@ -1200,7 +1207,7 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
                     Type: null));
 
                 created.Add(new CreatedChild(
-                    Id: $"{_options.ProjectIdentifier}-{response.SequenceId}",
+                    Id: FormatTicketId(response.SequenceId),
                     Uuid: response.Id));
             }
             catch (Exception ex)

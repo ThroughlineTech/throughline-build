@@ -260,6 +260,31 @@ public class GetAsyncTests
     }
 
     [Fact]
+    public async Task GetAsync_EmptyProjectIdentifier_ReturnsSequenceIdWithoutLeadingDash()
+    {
+        // When plane_project_identifier is not configured (empty string) the naive format
+        // string "{ProjectIdentifier}-{SequenceId}" would produce "-24"; the FormatTicketId
+        // helper must return "24" instead so display IDs match branch slugs.
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
+
+        var options = new PlaneClientOptions
+        {
+            BaseUrl = "https://plane.example.com",
+            ApiToken = "test-token",
+            WorkspaceSlug = "my-workspace",
+            ProjectId = "my-project",
+            ProjectIdentifier = ""
+        };
+        var client = new PlaneTicketingClient(new HttpClient(handler), options);
+        var ticket = await client.GetAsync("24", CancellationToken.None);
+
+        Assert.Equal("24", ticket.Id);
+    }
+
+    [Fact]
     public async Task GetAsync_ThrowsPlaneApiException_On404()
     {
         var handler = new FakeMessageHandler();
