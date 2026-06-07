@@ -28,12 +28,6 @@ public static class ImplementBriefBuilder
             ? string.Join("\n", ticket.Relations.Select(r => $"- {r.Kind}: {r.TargetId}"))
             : "(none)";
 
-        var workerResultJson =
-            $"{{\"status\":\"Ok\",\"summary\":\"Implemented {ticket.Id}\"," +
-            $"\"files_changed\":[\"path/relative/to/worktree\"],\"failure_reason\":null," +
-            $"\"metadata\":{{\"commit_sha\":\"<HEAD SHA of feature branch after all commits>\"," +
-            $"\"files_changed\":[\"path/relative/to/worktree\"]}}}}";
-
         var reviewFeedbackSection = BuildReviewFeedbackSection(reviewFeedback, reworkContext);
         var obsoleteDetectionSection = BuildObsoleteDetectionSection(reviewFeedback);
 
@@ -49,7 +43,6 @@ public static class ImplementBriefBuilder
             ["worktree_path"] = worktreePath,
             ["branch"] = branchName,
             ["main_sha"] = repo.MainSha,
-            ["worker_result_json"] = workerResultJson,
             ["review_feedback_section"] = reviewFeedbackSection,
             ["obsolete_detection_section"] = obsoleteDetectionSection
         };
