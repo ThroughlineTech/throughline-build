@@ -136,6 +136,7 @@ public sealed class ScaffoldPhase
         int plansCreated = 0;
         int briefsCreated = 0;
         var createdIds = new List<string>();
+        var createdEntities = new List<ScaffoldedEntity>();
         var failures = new List<ScaffoldFailure>();
         string opTicketId = string.Empty;
         string opTicketUuid = string.Empty;
@@ -162,6 +163,8 @@ public sealed class ScaffoldPhase
             opTicketId = opResult.Id;
             opTicketUuid = opResult.Uuid;
             createdIds.Add(opTicketId);
+            createdEntities.Add(new ScaffoldedEntity(
+                ScaffoldedEntityKind.Operation, opTicketId, opDoc.Title, PlanId: null, ParentTicketId: null));
 
             await EmitAsync(new Dictionary<string, object>
             {
@@ -203,6 +206,9 @@ public sealed class ScaffoldPhase
                 createdIds.Add(planTicketId);
                 plansCreated++;
                 planIdToTicketId[plan.Id] = planTicketId;
+                createdEntities.Add(new ScaffoldedEntity(
+                    ScaffoldedEntityKind.Plan, planTicketId, plan.Name, plan.Id,
+                    ParentTicketId: string.IsNullOrEmpty(opTicketId) ? null : opTicketId));
 
                 await EmitAsync(new Dictionary<string, object>
                 {
@@ -264,6 +270,9 @@ public sealed class ScaffoldPhase
                     createdIds.Add(briefTicketId);
                     briefsCreated++;
                     briefKeyToTicketId[$"{plan.Id}:{brief.Number}"] = briefTicketId;
+                    createdEntities.Add(new ScaffoldedEntity(
+                        ScaffoldedEntityKind.Brief, briefTicketId, brief.Slug, plan.Id,
+                        ParentTicketId: string.IsNullOrEmpty(planTicketId) ? null : planTicketId));
 
                     await EmitAsync(new Dictionary<string, object>
                     {
@@ -411,7 +420,8 @@ public sealed class ScaffoldPhase
             WasBlockedByWarnings: false,
             WasDryRun: false,
             OpTicketId: !string.IsNullOrEmpty(opTicketId) ? opTicketId : null,
-            DependencyEdges: dependencyEdges);
+            DependencyEdges: dependencyEdges,
+            CreatedEntities: createdEntities);
     }
 
     private Task EmitAsync(IReadOnlyDictionary<string, object> data, CancellationToken ct)

@@ -453,6 +453,64 @@ OOS:
         Assert.DoesNotContain(ScaffoldExitCategory.BackendUnavailable, commandResult.Message);
     }
 
+    // ---- WI-01: full connectivity failure aborts with no creation tree ----
+
+    [Fact]
+    public async Task ConnectivityFailure_AbortsWithNoCreatedLinesAndNoPlaceholders()
+    {
+        var path = WriteOpDoc(ValidOpDoc);
+        var ticketing = new ConnectivityFailTicketing(
+            "Plane project connectivity failed for workspace 'throughline' project 'doode' (Plane API returned 404).");
+        var events = new ScaffoldFakeEventSink();
+        var phase = new ScaffoldPhase(ticketing, events, "test-session");
+        var cmd = new ScaffoldCommand(phase);
+
+        var result = await cmd.ExecuteAsync(MakeCtx(path, acceptWarnings: true), CancellationToken.None);
+
+        Assert.False(result.Success);
+        var msg = result.Message!;
+        // Backend-unavailable exit category (connectivity is a backend-unavailable stage).
+        Assert.StartsWith(ScaffoldExitCategory.BackendUnavailable, msg);
+        // A single clear abort line + the failure detail.
+        Assert.Contains("Scaffold aborted", msg);
+        Assert.Contains("project 'doode'", msg);
+        // No creation tree, no placeholders, no false "complete" summary.
+        Assert.DoesNotContain("Created", msg);
+        Assert.DoesNotContain("?", msg);
+        Assert.DoesNotContain("Scaffold complete", msg);
+        // The probe was the only call; zero creates were attempted.
+        Assert.Equal(0, ticketing.CreateCalls);
+    }
+
+    // ---- WI-01: partial creation lists only real ids + partial summary ----
+
+    [Fact]
+    public async Task PartialCreation_ListsOnlyRealIds_AndPartialSummary()
+    {
+        // Succeeds for op + plan A (2 creates) then throws on every brief create.
+        var path = WriteOpDoc(ValidOpDoc);
+        var ticketing = new PartialCreateTicketing(succeedFirst: 2);
+        var events = new ScaffoldFakeEventSink();
+        var phase = new ScaffoldPhase(ticketing, events, "test-session");
+        var cmd = new ScaffoldCommand(phase);
+
+        var result = await cmd.ExecuteAsync(MakeCtx(path, acceptWarnings: true), CancellationToken.None);
+
+        Assert.False(result.Success); // partial is a non-clean exit
+        var msg = result.Message!;
+        Assert.StartsWith(ScaffoldExitCategory.PartialCreation, msg);
+
+        // The op + plan A are the only real ids; both briefs failed.
+        Assert.Contains("Created operation ticket: TLB-101", msg);
+        Assert.Contains("Created plan A: TLB-102", msg);
+        // No brief "Created" lines and no "?" placeholders for the failed briefs.
+        Assert.DoesNotContain("Created brief", msg);
+        Assert.DoesNotContain("?", msg);
+        // Failures + partial summary.
+        Assert.Contains("Failures:", msg);
+        Assert.Contains("Scaffold partial: 1 plan(s), 0 brief(s) created with 2 failure(s).", msg);
+    }
+
     // ---- Helper ----
 
     private static TicketCommandContext MakeCtx(
@@ -569,6 +627,81 @@ OOS:
         public Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct) => Task.CompletedTask;
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) => Task.CompletedTask;
 
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+            Task.FromResult(new CreateChildTicketsResult(Array.Empty<CreatedChild>(), Array.Empty<string>()));
+    }
+
+    // Fails the connectivity probe before any create is attempted.
+    private sealed class ConnectivityFailTicketing : ITicketing, ITicketingConnectivity
+    {
+        private readonly string _message;
+        public int CreateCalls { get; private set; }
+
+        public ConnectivityFailTicketing(string message) => _message = message;
+
+        public Task<TicketingConnectivityResult> TestConnectivityAsync(CancellationToken ct) =>
+            Task.FromResult(new TicketingConnectivityResult(false, _message));
+
+        public BackendCapabilities Capabilities => new BackendCapabilities(true, true, true, false);
+
+        public Task<NewTicketResult> CreateTicketAsync(string title, string? type, string descriptionHtml, IReadOnlyList<string>? initialLabelNames, CancellationToken ct)
+        {
+            CreateCalls++;
+            throw new InvalidOperationException("create should not be reached after connectivity failure");
+        }
+
+        public Task<Ticket> GetAsync(string id, CancellationToken ct) => throw new NotImplementedException();
+        public Task<IReadOnlyList<Ticket>> GetBatchAsync(IEnumerable<string> ids, CancellationToken ct) => throw new NotImplementedException();
+        public Task TransitionAsync(string id, TicketState newState, CancellationToken ct) => throw new NotImplementedException();
+        public Task AppendDescriptionAsync(string id, string html, CancellationToken ct) => Task.CompletedTask;
+        public Task<string> CreateCommentAsync(string id, string html, CancellationToken ct) => Task.FromResult("comment-1");
+        public Task ApplyLabelsAsync(string id, IEnumerable<string> labels, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<Relation>> GetRelationsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<Relation>>(Array.Empty<Relation>());
+        public Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct) => Task.CompletedTask;
+        public Task<RollupResult> RollupParentAsync(string id, CancellationToken ct) => Task.FromResult(new RollupResult(false, null, null));
+        public Task<IReadOnlyList<TicketComment>> GetCommentsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<TicketComment>>(Array.Empty<TicketComment>());
+        public Task SetParentAsync(string childUuid, string parentUuid, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<Ticket>> QueryAsync(TicketQuery query, CancellationToken ct) => Task.FromResult<IReadOnlyList<Ticket>>(Array.Empty<Ticket>());
+        public Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct) => Task.CompletedTask;
+        public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) => Task.CompletedTask;
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+            Task.FromResult(new CreateChildTicketsResult(Array.Empty<CreatedChild>(), Array.Empty<string>()));
+    }
+
+    // Succeeds for the first N create calls then throws on every subsequent create.
+    private sealed class PartialCreateTicketing : ITicketing
+    {
+        private readonly int _succeedFirst;
+        private int _seqNum;
+
+        public PartialCreateTicketing(int succeedFirst) => _succeedFirst = succeedFirst;
+
+        public BackendCapabilities Capabilities => new BackendCapabilities(true, true, true, false);
+
+        public Task<NewTicketResult> CreateTicketAsync(string title, string? type, string descriptionHtml, IReadOnlyList<string>? initialLabelNames, CancellationToken ct)
+        {
+            if (_seqNum >= _succeedFirst)
+                throw new InvalidOperationException("backend unavailable");
+            _seqNum++;
+            string id = $"TLB-{100 + _seqNum}";
+            string uuid = $"00000000-0000-0000-0000-{_seqNum:D12}";
+            return Task.FromResult(new NewTicketResult(id, uuid, DateTime.UtcNow));
+        }
+
+        public Task<Ticket> GetAsync(string id, CancellationToken ct) => throw new NotImplementedException();
+        public Task<IReadOnlyList<Ticket>> GetBatchAsync(IEnumerable<string> ids, CancellationToken ct) => throw new NotImplementedException();
+        public Task TransitionAsync(string id, TicketState newState, CancellationToken ct) => throw new NotImplementedException();
+        public Task AppendDescriptionAsync(string id, string html, CancellationToken ct) => Task.CompletedTask;
+        public Task<string> CreateCommentAsync(string id, string html, CancellationToken ct) => Task.FromResult("comment-1");
+        public Task ApplyLabelsAsync(string id, IEnumerable<string> labels, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<Relation>> GetRelationsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<Relation>>(Array.Empty<Relation>());
+        public Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct) => Task.CompletedTask;
+        public Task<RollupResult> RollupParentAsync(string id, CancellationToken ct) => Task.FromResult(new RollupResult(false, null, null));
+        public Task<IReadOnlyList<TicketComment>> GetCommentsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<TicketComment>>(Array.Empty<TicketComment>());
+        public Task SetParentAsync(string childUuid, string parentUuid, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<Ticket>> QueryAsync(TicketQuery query, CancellationToken ct) => Task.FromResult<IReadOnlyList<Ticket>>(Array.Empty<Ticket>());
+        public Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct) => Task.CompletedTask;
+        public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) => Task.CompletedTask;
         public Task<CreateChildTicketsResult> CreateChildTicketsAsync(string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
             Task.FromResult(new CreateChildTicketsResult(Array.Empty<CreatedChild>(), Array.Empty<string>()));
     }
