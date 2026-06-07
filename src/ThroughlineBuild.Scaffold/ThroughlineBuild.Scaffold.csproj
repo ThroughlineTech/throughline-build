@@ -13,4 +13,18 @@
     <EmbeddedResource Include="..\..\docs\op-docs\op-doc-spec.md" LogicalName="ThroughlineBuild.Scaffold.Docs.op-doc-spec.md" />
     <EmbeddedResource Include="..\..\docs\op-docs\op-doc-example.md" LogicalName="ThroughlineBuild.Scaffold.Docs.op-doc-example.md" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Templates\op-doc-skeleton.md"
+      LogicalName="ThroughlineBuild.Scaffold.Templates.op-doc-skeleton.md" />
+    <EmbeddedResource Include="Templates\op-doc-skeleton-dispatch-row.md"
+      LogicalName="ThroughlineBuild.Scaffold.Templates.op-doc-skeleton-dispatch-row.md" />
+    <EmbeddedResource Include="Templates\op-doc-skeleton-plan.md"
+      LogicalName="ThroughlineBuild.Scaffold.Templates.op-doc-skeleton-plan.md" />
+    <EmbeddedResource Include="Templates\op-doc-skeleton-brief-row.md"
+      LogicalName="ThroughlineBuild.Scaffold.Templates.op-doc-skeleton-brief-row.md" />
+    <EmbeddedResource Include="Templates\op-doc-skeleton-brief-detail.md"
+      LogicalName="ThroughlineBuild.Scaffold.Templates.op-doc-skeleton-brief-detail.md" />
+    <EmbeddedResource Include="Templates\op-doc-skeleton-notes.md"
+      LogicalName="ThroughlineBuild.Scaffold.Templates.op-doc-skeleton-notes.md" />
+  </ItemGroup>
 </Project>
