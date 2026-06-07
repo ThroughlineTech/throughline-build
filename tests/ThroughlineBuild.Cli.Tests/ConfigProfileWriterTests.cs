@@ -140,6 +140,44 @@ public class ConfigProfileWriterTests
     }
 
     [Fact]
+    public void AlreadyConfiguredSkipReason_CustomizedChecks_ReturnsReason()
+    {
+        // A repo configured for a non-dotnet toolchain: derivation should be skipped before the
+        // worker runs (the gate Apply would hit anyway). See TLB-491.
+        var customized = DotnetConfig.Replace("executable = \"dotnet\"", "executable = \"npm\"");
+        var reason = ConfigProfileWriter.AlreadyConfiguredSkipReason(customized, force: false);
+
+        Assert.NotNull(reason);
+        Assert.Contains("customized", reason);
+        Assert.Contains("npm", reason);
+    }
+
+    [Fact]
+    public void AlreadyConfiguredSkipReason_Force_ReturnsNull()
+    {
+        var customized = DotnetConfig.Replace("executable = \"dotnet\"", "executable = \"npm\"");
+        Assert.Null(ConfigProfileWriter.AlreadyConfiguredSkipReason(customized, force: true));
+    }
+
+    [Fact]
+    public void AlreadyConfiguredSkipReason_PristineDotnetTemplate_ReturnsNull()
+    {
+        // The dotnet template default is a replaceable placeholder, not a configured repo:
+        // derivation must still run (e.g. to put npm checks into a fresh Node project).
+        Assert.Null(ConfigProfileWriter.AlreadyConfiguredSkipReason(DotnetConfig, force: false));
+    }
+
+    [Fact]
+    public void AlreadyConfiguredSkipReason_NoReviewChecks_ReturnsNull()
+    {
+        var noChecks = """
+        [review]
+        verifier_timeout_minutes = 15
+        """;
+        Assert.Null(ConfigProfileWriter.AlreadyConfiguredSkipReason(noChecks, force: false));
+    }
+
+    [Fact]
     public void Idempotent_SecondForcedApplyIsNoChange()
     {
         var first = ConfigProfileWriter.Apply(DotnetConfig, NpmProfile(), force: false);

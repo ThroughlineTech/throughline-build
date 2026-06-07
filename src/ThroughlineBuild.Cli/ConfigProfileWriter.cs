@@ -33,12 +33,9 @@ public static class ConfigProfileWriter
     /// </summary>
     public static WriteOutcome Apply(string configText, ProjectProfile profile, bool force)
     {
-        if (!force)
-        {
-            var (customized, why) = LooksCustomized(configText);
-            if (customized)
-                return new WriteOutcome(false, null, why, null);
-        }
+        var skip = AlreadyConfiguredSkipReason(configText, force);
+        if (skip is not null)
+            return new WriteOutcome(false, null, skip, null);
 
         var (lines, sep) = SplitLines(configText);
         var list = lines.ToList();
@@ -62,6 +59,22 @@ public static class ConfigProfileWriter
     // ------------------------------------------------------------------
     // Clobber-safety gate
     // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Returns a human-readable reason when op-doc profile derivation should be skipped because the
+    /// config's review checks already look configured for this project (any review check whose
+    /// executable is not the dotnet template default) and <paramref name="force"/> is false - i.e.
+    /// exactly when <see cref="Apply"/> would refuse to overwrite them. Callers can check this BEFORE
+    /// running the token-costing, rate-limit-prone worker, instead of deriving a profile only to
+    /// discard it. Returns null when derivation should proceed: no checks, the pristine dotnet
+    /// template, or force. See TLB-491.
+    /// </summary>
+    public static string? AlreadyConfiguredSkipReason(string configText, bool force)
+    {
+        if (force) return null;
+        var (customized, why) = LooksCustomized(configText);
+        return customized ? why : null;
+    }
 
     private static (bool Customized, string? Why) LooksCustomized(string configText)
     {

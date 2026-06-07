@@ -21,14 +21,40 @@ public static class ScaffoldProfileRunner
         bool force,
         CancellationToken ct)
     {
-        Console.WriteLine("[scaffold] deriving review/ship checks from op-doc ...");
-
         if (!workers.Agents.TryGetValue(workers.DefaultAgent, out var agentCfg))
         {
             Warn($"no [workers.{workers.DefaultAgent}] config; cannot derive checks. " +
                  "Fix config and re-run, or set checks in .build/config.toml manually.");
             return;
         }
+
+        var configPath = BuildConfigLoader.FindConfigFile(cwd);
+        if (configPath is null)
+        {
+            Warn(".build/config.toml not found; run 'build init' first, then re-scaffold.");
+            return;
+        }
+
+        string configText;
+        try { configText = await File.ReadAllTextAsync(configPath, ct).ConfigureAwait(false); }
+        catch (Exception ex)
+        {
+            Warn($"could not read {configPath}: {ex.Message}");
+            return;
+        }
+
+        // Skip the (token-costing, rate-limit-prone) op-doc derivation when the repo is already
+        // configured: if the existing review checks look customized, ConfigProfileWriter.Apply would
+        // refuse to overwrite them anyway, so the worker call is pure waste. The pristine dotnet
+        // template - or no checks - still derives. Override with --force-profile. See TLB-491.
+        var skipReason = ConfigProfileWriter.AlreadyConfiguredSkipReason(configText, force);
+        if (skipReason is not null)
+        {
+            Console.WriteLine($"[scaffold] checks already present: {skipReason}");
+            return;
+        }
+
+        Console.WriteLine("[scaffold] deriving review/ship checks from op-doc ...");
 
         string opDocMarkdown;
         try
@@ -68,21 +94,6 @@ public static class ScaffoldProfileRunner
         }
 
         var profile = derivation.Profile;
-
-        var configPath = BuildConfigLoader.FindConfigFile(cwd);
-        if (configPath is null)
-        {
-            Warn(".build/config.toml not found; run 'build init' first, then re-scaffold.");
-            return;
-        }
-
-        string configText;
-        try { configText = await File.ReadAllTextAsync(configPath, ct).ConfigureAwait(false); }
-        catch (Exception ex)
-        {
-            Warn($"could not read {configPath}: {ex.Message}");
-            return;
-        }
 
         var outcome = ConfigProfileWriter.Apply(configText, profile, force);
 
