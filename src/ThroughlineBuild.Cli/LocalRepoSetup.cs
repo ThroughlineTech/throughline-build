@@ -18,7 +18,7 @@ public static class GitignoreManager
     {
         // build tool artifacts
         ".build/config.toml",
-        ".build/brief.md",
+        ".build/*.md",
         ".build/events/",
         ".build/sessions/",
         ".worktrees/",

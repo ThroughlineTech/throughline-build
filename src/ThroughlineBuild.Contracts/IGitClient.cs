@@ -157,4 +157,18 @@ public interface IGitClient
     // Never throws - returns empty on git failure.
     Task<IReadOnlyList<string>> DiffStatFilesAsync(string range, string workingDirectory, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+    // Returns untracked file paths in workingDirectory (git ls-files --others --exclude-standard).
+    // Ignored files (matched by .gitignore) are excluded from the result.
+    // Default returns empty so existing FakeGitClients remain unchanged (TLB-489).
+    // Never throws - returns empty on git failure.
+    Task<IReadOnlyList<string>> GetUntrackedFilesAsync(string workingDirectory, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+    // Returns the subset of paths (relative to repo root) that are tracked (present in the index)
+    // of the git repository rooted at workingDirectory. Empty input returns empty without running git.
+    // Default returns empty so existing FakeGitClients remain unchanged (TLB-489).
+    // Never throws - returns empty on git failure.
+    Task<IReadOnlyList<string>> FilterTrackedPathsAsync(IReadOnlyList<string> paths, string workingDirectory, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
 }

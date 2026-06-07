@@ -276,6 +276,113 @@ public class HygieneGateTests
     }
 
     // -----------------------------------------------------------------------
+    // Untracked-file collision tests (TLB-489)
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task Ship_UntrackedInFeatureCollidesWithMainTracked_StopsAtPreflightNamesFile()
+    {
+        // Feature worktree has an untracked .build/_ticket-foo.md that is tracked in main.
+        // Ship must block at preflight and name the colliding file.
+        var untrackedInFeature = new[] { ".build/_ticket-foo.md" };
+        var trackedInMain = new[] { ".build/_ticket-foo.md" };
+        var git = new FakeGitHygieneForShipWithUntracked(
+            conflictedPaths: Array.Empty<string>(),
+            stashEntries: Array.Empty<string>(),
+            featureUntrackedFiles: untrackedInFeature,
+            mainTrackedSubset: trackedInMain,
+            mainUntrackedFiles: Array.Empty<string>(),
+            featureTrackedSubset: Array.Empty<string>());
+        var ticketing = new FakeTicketingHygiene(MakeInReviewTicket());
+        var events = new FakeEventSinkHygiene();
+        var decrufter = new FakeDecrufterHygiene(git);
+        var phase = new ShipPhase(ticketing, events, MakeOptions(), MakeShipOptions(),
+            git,
+            checksRunner: new FakeChecksRunnerHygiene(Array.Empty<CheckResult>()),
+            markerScanner: (_, _) => Task.FromResult<IReadOnlyList<ConflictMarkerHit>>(Array.Empty<ConflictMarkerHit>()),
+            decrufter: decrufter);
+
+        var result = await phase.RunAsync(TicketId, Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ShipFailureStage.PreFlight, result.FailedAt);
+        Assert.NotNull(result.FailureReason);
+        Assert.Contains(".build/_ticket-foo.md", result.FailureReason);
+        Assert.Contains("ship_blocked", ticketing.Comments[0].html);
+
+        var gateEvents = events.Events.Where(e => e.Kind == EventKind.GateFailure).ToList();
+        Assert.Single(gateEvents);
+        Assert.Equal("pre_flight_hygiene", gateEvents[0].Data["kind"].ToString());
+    }
+
+    [Fact]
+    public async Task Ship_UntrackedInMainCollidesWithFeatureTracked_StopsAtPreflightNamesFile()
+    {
+        // Main worktree has an untracked file that is tracked in the feature branch.
+        // Ship must block at preflight before the FF merge starts.
+        var untrackedInMain = new[] { "src/NewFile.cs" };
+        var trackedInFeature = new[] { "src/NewFile.cs" };
+        var git = new FakeGitHygieneForShipWithUntracked(
+            conflictedPaths: Array.Empty<string>(),
+            stashEntries: Array.Empty<string>(),
+            featureUntrackedFiles: Array.Empty<string>(),
+            mainTrackedSubset: Array.Empty<string>(),
+            mainUntrackedFiles: untrackedInMain,
+            featureTrackedSubset: trackedInFeature);
+        var ticketing = new FakeTicketingHygiene(MakeInReviewTicket());
+        var events = new FakeEventSinkHygiene();
+        var decrufter = new FakeDecrufterHygiene(git);
+        var phase = new ShipPhase(ticketing, events, MakeOptions(), MakeShipOptions(),
+            git,
+            checksRunner: new FakeChecksRunnerHygiene(Array.Empty<CheckResult>()),
+            markerScanner: (_, _) => Task.FromResult<IReadOnlyList<ConflictMarkerHit>>(Array.Empty<ConflictMarkerHit>()),
+            decrufter: decrufter);
+
+        var result = await phase.RunAsync(TicketId, Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ShipFailureStage.PreFlight, result.FailedAt);
+        Assert.NotNull(result.FailureReason);
+        Assert.Contains("src/NewFile.cs", result.FailureReason);
+        Assert.Contains("ship_blocked", ticketing.Comments[0].html);
+
+        var gateEvents = events.Events.Where(e => e.Kind == EventKind.GateFailure).ToList();
+        Assert.Single(gateEvents);
+        Assert.Equal("pre_flight_hygiene", gateEvents[0].Data["kind"].ToString());
+    }
+
+    [Fact]
+    public async Task Ship_UntrackedFileNoCollision_PassesPreflight()
+    {
+        // Feature worktree has an untracked file, but it is NOT tracked in main.
+        // No collision -> preflight passes and ship succeeds.
+        var untrackedInFeature = new[] { ".build/brief.md" };
+        var git = new FakeGitHygieneForShipWithUntracked(
+            conflictedPaths: Array.Empty<string>(),
+            stashEntries: Array.Empty<string>(),
+            featureUntrackedFiles: untrackedInFeature,
+            mainTrackedSubset: Array.Empty<string>(),   // not tracked in main
+            mainUntrackedFiles: Array.Empty<string>(),
+            featureTrackedSubset: Array.Empty<string>());
+        var ticketing = new FakeTicketingHygiene(MakeInReviewTicket());
+        var events = new FakeEventSinkHygiene();
+        var decrufter = new FakeDecrufterHygiene(git);
+        var phase = new ShipPhase(ticketing, events, MakeOptions(), MakeShipOptions(),
+            git,
+            checksRunner: new FakeChecksRunnerHygiene(Array.Empty<CheckResult>()),
+            markerScanner: (_, _) => Task.FromResult<IReadOnlyList<ConflictMarkerHit>>(Array.Empty<ConflictMarkerHit>()),
+            decrufter: decrufter);
+
+        var result = await phase.RunAsync(TicketId, Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.DoesNotContain(events.Events, e =>
+            e.Kind == EventKind.GateFailure &&
+            e.Data.TryGetValue("kind", out var k) &&
+            k.ToString() == "pre_flight_hygiene");
+    }
+
+    // -----------------------------------------------------------------------
     // Fakes
     // -----------------------------------------------------------------------
 
@@ -420,6 +527,113 @@ public class HygieneGateTests
 
         public Task<bool> RemoteExistsAsync(string remote, string workingDirectory, CancellationToken ct) =>
             Task.FromResult(false); // skip fetch to keep the test focused on hygiene
+
+        public Task<int> RevListCountAsync(string range, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(0);
+
+        public Task<IReadOnlyList<string>> LogOnelineAsync(string range, int limit, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+        public Task<bool> IsAncestorAsync(string ancestor, string descendant, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(true);
+    }
+
+    /// <summary>
+    /// Git fake for untracked-file collision tests (TLB-489). Extends FakeGitHygieneForShip
+    /// with controllable untracked-file and filter-tracked responses for both worktrees.
+    /// </summary>
+    private sealed class FakeGitHygieneForShipWithUntracked : IGitClient
+    {
+        private const string BranchName = "ticket/tlb-1-test-ticket";
+        private const string WorktreePath = "/ship/worktree/path";
+
+        private readonly IReadOnlyList<string> _conflictedPaths;
+        private readonly IReadOnlyList<string> _stashEntries;
+        private readonly IReadOnlyList<string> _featureUntrackedFiles;
+        private readonly IReadOnlyList<string> _mainTrackedSubset;
+        private readonly IReadOnlyList<string> _mainUntrackedFiles;
+        private readonly IReadOnlyList<string> _featureTrackedSubset;
+
+        public FakeGitHygieneForShipWithUntracked(
+            IReadOnlyList<string> conflictedPaths,
+            IReadOnlyList<string> stashEntries,
+            IReadOnlyList<string> featureUntrackedFiles,
+            IReadOnlyList<string> mainTrackedSubset,
+            IReadOnlyList<string> mainUntrackedFiles,
+            IReadOnlyList<string> featureTrackedSubset)
+        {
+            _conflictedPaths = conflictedPaths;
+            _stashEntries = stashEntries;
+            _featureUntrackedFiles = featureUntrackedFiles;
+            _mainTrackedSubset = mainTrackedSubset;
+            _mainUntrackedFiles = mainUntrackedFiles;
+            _featureTrackedSubset = featureTrackedSubset;
+        }
+
+        public Task<IReadOnlyList<string>> GetConflictedPathsAsync(string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(_conflictedPaths);
+
+        public Task<IReadOnlyList<string>> ListStashEntriesAsync(string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(_stashEntries);
+
+        public Task<IReadOnlyList<string>> GetUntrackedFilesAsync(string workingDirectory, CancellationToken ct)
+        {
+            // Feature worktree has its own untracked set; main worktree has its own.
+            var result = workingDirectory == WorktreePath ? _featureUntrackedFiles : _mainUntrackedFiles;
+            return Task.FromResult(result);
+        }
+
+        public Task<IReadOnlyList<string>> FilterTrackedPathsAsync(IReadOnlyList<string> paths, string workingDirectory, CancellationToken ct)
+        {
+            // When checking against the main worktree, return mainTrackedSubset filtered to paths asked about.
+            // When checking against the feature worktree, return featureTrackedSubset filtered to paths asked about.
+            var source = workingDirectory == WorktreePath ? _featureTrackedSubset : _mainTrackedSubset;
+            var pathSet = new HashSet<string>(paths, StringComparer.OrdinalIgnoreCase);
+            IReadOnlyList<string> filtered = source.Where(p => pathSet.Contains(p)).ToList();
+            return Task.FromResult(filtered);
+        }
+
+        public Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<WorktreeInfo>>(new[]
+            {
+                new WorktreeInfo(WorktreePath, BranchName, "deadbeef", false, false)
+            });
+
+        public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(MainSha);
+
+        public Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct) =>
+            Task.FromResult(new WorktreeRemoveResult(true, null));
+
+        public Task<IReadOnlyList<string>> GetBranchesNotMergedAsync(string pattern, string baseBranch, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+        public Task<WorktreeCreateResult> CreateWorktreeAsync(string worktreePath, string newBranch, string fromRef, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
+
+        public Task<string> HeadShaAsync(string worktreePath, CancellationToken ct) =>
+            Task.FromResult(MainSha);
+
+        public Task<GitDiff> DiffAsync(string fromRef, string toRef, string mainWorktreePath, bool includePatchContent, CancellationToken ct) =>
+            Task.FromResult(new GitDiff(fromRef, toRef, Array.Empty<DiffEntry>()));
+
+        public Task<GitOpResult> FetchAsync(string remote, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+
+        public Task<RebaseResult> RebaseAsync(string ontoRef, string featureWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new RebaseResult(true, false, Array.Empty<string>(), null));
+
+        public Task<GitOpResult> RebaseAbortAsync(string featureWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+
+        public Task<GitOpResult> FastForwardMergeAsync(string mergeRef, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+
+        public Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+
+        public Task<bool> RemoteExistsAsync(string remote, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(false); // skip fetch to keep test focused on hygiene
 
         public Task<int> RevListCountAsync(string range, string workingDirectory, CancellationToken ct) =>
             Task.FromResult(0);

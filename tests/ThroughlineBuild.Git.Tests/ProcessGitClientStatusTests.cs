@@ -72,6 +72,96 @@ public class ProcessGitClientStatusTests : IDisposable
         Assert.Empty(changes);
     }
 
+    [Fact]
+    public async Task GetUntrackedFilesAsync_UntrackedFilePresent_ReturnsIt()
+    {
+        var repoDir = CreateTempGitRepo();
+        File.WriteAllText(Path.Combine(repoDir, "untracked.txt"), "untracked content");
+        var client = new ProcessGitClient(repoDir);
+
+        var untracked = await client.GetUntrackedFilesAsync(repoDir, CancellationToken.None);
+
+        Assert.Single(untracked);
+        Assert.Equal("untracked.txt", untracked[0]);
+    }
+
+    [Fact]
+    public async Task GetUntrackedFilesAsync_IgnoredFile_NotReturned()
+    {
+        var repoDir = CreateTempGitRepo();
+        // Write .gitignore to ignore "ignored.txt"
+        File.WriteAllText(Path.Combine(repoDir, ".gitignore"), "ignored.txt\n");
+        File.WriteAllText(Path.Combine(repoDir, "ignored.txt"), "should not appear");
+        var client = new ProcessGitClient(repoDir);
+
+        var untracked = await client.GetUntrackedFilesAsync(repoDir, CancellationToken.None);
+
+        // .gitignore itself is untracked (not yet committed), ignored.txt is excluded
+        Assert.DoesNotContain("ignored.txt", untracked);
+    }
+
+    [Fact]
+    public async Task GetUntrackedFilesAsync_CleanRepo_ReturnsEmpty()
+    {
+        var repoDir = CreateTempGitRepo();
+        var client = new ProcessGitClient(repoDir);
+
+        var untracked = await client.GetUntrackedFilesAsync(repoDir, CancellationToken.None);
+
+        Assert.Empty(untracked);
+    }
+
+    [Fact]
+    public async Task FilterTrackedPathsAsync_TrackedPathGiven_ReturnsIt()
+    {
+        var repoDir = CreateTempGitRepo();
+        // "file.txt" was committed in CreateTempGitRepo, so it's tracked
+        var client = new ProcessGitClient(repoDir);
+
+        var tracked = await client.FilterTrackedPathsAsync(new[] { "file.txt" }, repoDir, CancellationToken.None);
+
+        Assert.Single(tracked);
+        Assert.Equal("file.txt", tracked[0]);
+    }
+
+    [Fact]
+    public async Task FilterTrackedPathsAsync_UntrackedPathGiven_ReturnsEmpty()
+    {
+        var repoDir = CreateTempGitRepo();
+        // "no-such-file.txt" does not exist in the index
+        var client = new ProcessGitClient(repoDir);
+
+        var tracked = await client.FilterTrackedPathsAsync(new[] { "no-such-file.txt" }, repoDir, CancellationToken.None);
+
+        Assert.Empty(tracked);
+    }
+
+    [Fact]
+    public async Task FilterTrackedPathsAsync_EmptyInput_ReturnsEmpty()
+    {
+        var repoDir = CreateTempGitRepo();
+        var client = new ProcessGitClient(repoDir);
+
+        var tracked = await client.FilterTrackedPathsAsync(Array.Empty<string>(), repoDir, CancellationToken.None);
+
+        Assert.Empty(tracked);
+    }
+
+    [Fact]
+    public async Task FilterTrackedPathsAsync_MixedPaths_ReturnsOnlyTracked()
+    {
+        var repoDir = CreateTempGitRepo();
+        // "file.txt" is tracked; "untracked.txt" is not
+        File.WriteAllText(Path.Combine(repoDir, "untracked.txt"), "untracked");
+        var client = new ProcessGitClient(repoDir);
+
+        var tracked = await client.FilterTrackedPathsAsync(
+            new[] { "file.txt", "untracked.txt" }, repoDir, CancellationToken.None);
+
+        Assert.Single(tracked);
+        Assert.Equal("file.txt", tracked[0]);
+    }
+
     public void Dispose()
     {
         foreach (var dir in _tempDirs)

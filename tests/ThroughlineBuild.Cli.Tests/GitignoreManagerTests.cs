@@ -41,12 +41,22 @@ public class GitignoreManagerTests
     [Fact]
     public void Merge_AppendsOnlyMissingEntries()
     {
-        var existing = ".build/brief.md\n.worktrees/\n";
+        var existing = ".build/*.md\n.worktrees/\n";
         var missing = GitignoreManager.MissingEntries(existing);
 
-        Assert.DoesNotContain(".build/brief.md", missing);
+        Assert.DoesNotContain(".build/*.md", missing);
         Assert.DoesNotContain(".worktrees/", missing);
         Assert.Contains("secrets/", missing);
+    }
+
+    [Fact]
+    public void RequiredEntries_ContainsBuildMdWildcard()
+    {
+        // The wildcard .build/*.md covers tool-generated markdown files (brief, ticket stubs, etc.)
+        // and is the fix for the recurring untracked-file collision at ship (TLB-489).
+        Assert.Contains(".build/*.md", GitignoreManager.RequiredEntries);
+        // The narrower .build/brief.md entry is superseded by the wildcard.
+        Assert.DoesNotContain(".build/brief.md", GitignoreManager.RequiredEntries);
     }
 
     [Fact]

@@ -119,6 +119,36 @@ internal static class WorkingTreeHygieneGate
             parts.Add($"stash from unrelated ticket/branch: {stashList}");
         }
 
+        // Check for untracked files in the feature worktree that are tracked in main.
+        // When git rebases the feature branch onto main, it would try to create those
+        // files in the worktree and fail with "would be overwritten by merge/rebase".
+        var featureUntracked = await git.GetUntrackedFilesAsync(featureWorktreePath, ct).ConfigureAwait(false);
+        if (featureUntracked.Count > 0)
+        {
+            var featureColliders = await git.FilterTrackedPathsAsync(featureUntracked, mainWorktreePath, ct).ConfigureAwait(false);
+            if (featureColliders.Count > 0)
+            {
+                var fileList = string.Join(", ", featureColliders);
+                parts.Add($"untracked file(s) in feature worktree would be overwritten by rebase: {fileList}; " +
+                          "move or remove them, or add to .gitignore if they are build artifacts");
+            }
+        }
+
+        // Check for untracked files in the main worktree that are tracked in the feature branch.
+        // When git fast-forward merges the feature branch into main, it would try to create those
+        // files in the main worktree and fail with "would be overwritten by merge".
+        var mainUntracked = await git.GetUntrackedFilesAsync(mainWorktreePath, ct).ConfigureAwait(false);
+        if (mainUntracked.Count > 0)
+        {
+            var mainColliders = await git.FilterTrackedPathsAsync(mainUntracked, featureWorktreePath, ct).ConfigureAwait(false);
+            if (mainColliders.Count > 0)
+            {
+                var fileList = string.Join(", ", mainColliders);
+                parts.Add($"untracked file(s) in main worktree would be overwritten by merge: {fileList}; " +
+                          "move or remove them, or add to .gitignore if they are build artifacts");
+            }
+        }
+
         if (parts.Count == 0)
             return null;
 

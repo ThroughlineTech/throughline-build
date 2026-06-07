@@ -1255,6 +1255,86 @@ public sealed class ProcessGitClient : IGitClient
         }
     }
 
+    public async Task<IReadOnlyList<string>> GetUntrackedFilesAsync(string workingDirectory, CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = workingDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("ls-files");
+            psi.ArgumentList.Add("--others");
+            psi.ArgumentList.Add("--exclude-standard");
+
+            using var proc = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start git process");
+            var stdout = await proc.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+            if (proc.ExitCode != 0)
+                return Array.Empty<string>();
+
+            var lines = new List<string>();
+            foreach (var rawLine in stdout.Split('\n'))
+            {
+                var line = rawLine.TrimEnd('\r');
+                if (line.Length > 0)
+                    lines.Add(line);
+            }
+            return lines;
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+    public async Task<IReadOnlyList<string>> FilterTrackedPathsAsync(IReadOnlyList<string> paths, string workingDirectory, CancellationToken ct)
+    {
+        if (paths.Count == 0)
+            return Array.Empty<string>();
+
+        try
+        {
+            var psi = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = workingDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("ls-files");
+            psi.ArgumentList.Add("--");
+            foreach (var path in paths)
+                psi.ArgumentList.Add(path);
+
+            using var proc = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start git process");
+            var stdout = await proc.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+            if (proc.ExitCode != 0)
+                return Array.Empty<string>();
+
+            var lines = new List<string>();
+            foreach (var rawLine in stdout.Split('\n'))
+            {
+                var line = rawLine.TrimEnd('\r');
+                if (line.Length > 0)
+                    lines.Add(line);
+            }
+            return lines;
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
+    }
+
     private static async Task<string> RunGitAsync(
         string workingDirectory,
         string[] args,

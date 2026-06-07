@@ -189,7 +189,7 @@ public class SetupCommandTests
         Assert.Equal(1, repo.InitCalls);
         Assert.Equal(1, repo.WriteCalls);
         Assert.NotNull(repo.Gitignore);
-        Assert.Contains(".build/brief.md", repo.Gitignore!);
+        Assert.Contains(".build/*.md", repo.Gitignore!);
         Assert.Contains("initialized empty repository", console.Stdout);
     }
 
@@ -207,7 +207,7 @@ public class SetupCommandTests
     [Fact]
     public async Task PartialGitignore_AppendsOnlyMissing_PreservesExisting()
     {
-        var repo = new FakeLocalRepo(isRepo: true, gitignore: "node_modules/\n.build/brief.md\n");
+        var repo = new FakeLocalRepo(isRepo: true, gitignore: "node_modules/\n.build/*.md\n");
         var console = new FakeConsole();
 
         await new SetupCommand(FullyProvisioned(), repo).ExecuteAsync(checkOnly: false, console, CancellationToken.None);
@@ -215,7 +215,7 @@ public class SetupCommandTests
         Assert.Equal(1, repo.WriteCalls);
         Assert.Contains("node_modules/", repo.Gitignore!);      // existing content preserved
         Assert.Contains(".worktrees/", repo.Gitignore!);        // a missing entry appended
-        Assert.DoesNotContain("added 0 entr", console.Stdout);  // brief.md was already present
+        Assert.DoesNotContain("added 0 entr", console.Stdout);  // .build/*.md was already present, others missing
     }
 
     [Fact]
