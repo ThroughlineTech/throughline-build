@@ -263,6 +263,27 @@ public class PlaneConnectivityTests
     }
 
     [Fact]
+    public async Task TestConnectivityAsync_ProjectNotFoundReportsActionableMessage()
+    {
+        // A 404 on the first project-scoped GET means the project id does not resolve.
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.ErrorJson(404, """{"error":"Page not found."}"""));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var result = await client.TestConnectivityAsync(CancellationToken.None);
+
+        Assert.False(result.Success);
+        // Names the project id and workspace.
+        Assert.Contains("my-project", result.Message);
+        Assert.Contains("my-workspace", result.Message);
+        // States the likely cause and a remedy.
+        Assert.Contains("wrong or the project was never created", result.Message);
+        Assert.Contains("build init", result.Message);
+        Assert.Contains("plane_project_id", result.Message);
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
     public async Task TestConnectivityAsync_CreateForbiddenAfterSuccessfulReadsReportsAuthorizationFailure()
     {
         var handler = new FakeMessageHandler();

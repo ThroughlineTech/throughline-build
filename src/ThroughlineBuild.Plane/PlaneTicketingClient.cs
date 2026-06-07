@@ -136,6 +136,10 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
                 false,
                 $"Plane project connectivity failed: API token is not authorized to create issues in workspace '{_options.WorkspaceSlug}' project '{_options.ProjectId}' ({ex.Message}).");
         }
+        catch (PlaneApiException ex) when (ex.Status == 404)
+        {
+            return new TicketingConnectivityResult(false, ProjectNotFoundMessage(ex));
+        }
         catch (PlaneApiException ex)
         {
             return new TicketingConnectivityResult(
@@ -149,6 +153,20 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
                 $"Plane project connectivity failed for workspace '{_options.WorkspaceSlug}' project '{_options.ProjectId}': {ex.Message}");
         }
     }
+
+    private string ProjectNotFoundMessage(PlaneApiException ex) =>
+        BuildProjectNotFoundMessage(_options.WorkspaceSlug, _options.ProjectId, ex);
+
+    /// <summary>
+    /// Actionable message for a 404 on a project-scoped Plane route: the configured
+    /// project id does not resolve to a project in this workspace, so it is either
+    /// wrong or the project was never created. Shared by connectivity probing and by
+    /// 'build setup' so both report the same remedy instead of a raw "Page not found.".
+    /// </summary>
+    public static string BuildProjectNotFoundMessage(string workspaceSlug, string projectId, PlaneApiException ex) =>
+        $"Plane project not found: plane_project_id '{projectId}' does not resolve to a project in workspace "
+        + $"'{workspaceSlug}'. The id is wrong or the project was never created. Re-run 'build init' connected mode "
+        + $"(or fix plane_project_id in .build/config.toml) and retry. ({ex.Message})";
 
     private async Task ProbeIssueCreatePermissionAsync(CancellationToken ct)
     {

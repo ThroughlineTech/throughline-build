@@ -518,6 +518,14 @@ static async Task<int> RunAsync(string[] args)
             Console.Error.WriteLine("Cancelled.");
             return 1;
         }
+        catch (PlaneApiException ex) when (ex.Status == 404)
+        {
+            // A 404 on a project-scoped route means the configured project id does not
+            // resolve - surface the actionable "project not found" remedy, not the raw body.
+            Console.Error.WriteLine("Command 'setup' failed: " + PlaneTicketingClient.BuildProjectNotFoundMessage(
+                config2.Ticketing.PlaneWorkspaceSlug, config2.Ticketing.PlaneProjectId, ex));
+            return 1;
+        }
         catch (PlaneApiException ex)
         {
             Console.Error.WriteLine($"Command 'setup' failed: Plane API {ex.Status}: {ex.Body}");
