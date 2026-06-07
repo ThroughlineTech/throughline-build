@@ -229,7 +229,9 @@ public sealed class ChainCommand : ITicketCommand
                 $"[{ticketId}] parent chain complete: all eligible children completed ({durationStr})",
 
             ChainOutcome.ParentStoppedEarly =>
-                $"[{ticketId}] parent chain stopped early: one or more children did not complete ({durationStr})",
+                AllChildrenSucceeded(result)
+                    ? $"[{ticketId}] parent chain stopped: all children completed but landing onto the target failed ({durationStr})"
+                    : $"[{ticketId}] parent chain stopped early: one or more children did not complete ({durationStr})",
 
             ChainOutcome.ParentHasGrandchildren =>
                 $"[{ticketId}] chain stopped: tree is deeper than one level - chain the intermediate ticket(s) directly",
@@ -384,9 +386,32 @@ public sealed class ChainCommand : ITicketCommand
             $"Operator triage: chain cannot run from {ticketId}'s current state ({state}). The chain handles Backlog, Ready, InReview, Planning, and InProgress; only Done/Cancelled are refused. Check the ticket state on Plane and transition if needed.",
     };
 
+    // True when the parent ran children and every one of them succeeded. When this holds but the
+    // outcome is still ParentStoppedEarly, the stop came from the root landing (rebase/ff/push),
+    // not from a child - so the triage and summary must say so instead of blaming the children.
+    private static bool AllChildrenSucceeded(ChainResult result) =>
+        result.ChildResults is { Count: > 0 } children
+        && children.All(c => c.Outcome is ChainOutcome.Completed
+            or ChainOutcome.RatifiedObsolete
+            or ChainOutcome.ParentCompleted);
+
     private static string GetParentStoppedEarlyTriage(string ticketId, ChainResult result)
     {
         var output = new StringBuilder();
+
+        // Landing failure: children all completed, but the accumulated integration branch could
+        // not be landed onto the target. Surface the real reason (result.FinalRationale) rather
+        // than the misleading "children did not complete" - re-running does not re-land already
+        // completed children, so the operator must clear the landing blocker directly.
+        if (AllChildrenSucceeded(result))
+        {
+            output.AppendLine($"Operator triage: chain {ticketId} completed every child but could not land the accumulated integration branch onto the target.");
+            if (!string.IsNullOrEmpty(result.FinalRationale))
+                output.AppendLine(result.FinalRationale);
+            output.Append($"The accumulated work is safe on the integration branch. Resolve the landing (rebase the integration branch onto the target and fast-forward, or clear what blocks the push), then re-run: build chain {ticketId}");
+            return output.ToString();
+        }
+
         output.AppendLine($"Operator triage: parent chain {ticketId} stopped because one or more children did not complete.");
         if (result.ChildResults is { Count: > 0 })
         {

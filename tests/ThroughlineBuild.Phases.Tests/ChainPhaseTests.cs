@@ -1149,6 +1149,73 @@ public class ChainPhaseTests
     }
 
     [Fact]
+    public async Task RunAsync_RootChain_RebasesIntegrationBranchOntoTarget_BeforeLanding()
+    {
+        // TLB-493: the root landing rebases the accumulated integration branch onto the current
+        // target before fast-forwarding, so a target that advanced since the integration branch
+        // forked (long run, concurrent push, or a reused branch from a prior run) still lands
+        // instead of failing the fast-forward.
+        var parent = MakeTicket(TicketState.Backlog);
+        var child = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var git = new FakeGitClientChain();
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, git: git);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        // The landing rebased chain/tlb-1 onto main in the integration worktree, then FF'd main.
+        var integ = git.CreatedWorktrees.First(c => c.branch == "chain/tlb-1");
+        Assert.Contains(git.Rebases, r => r.ontoRef == "main" && r.worktreePath == integ.path);
+        Assert.Contains(git.FastForwardMerges, m => m.mergeRef == "chain/tlb-1");
+    }
+
+    [Fact]
+    public async Task RunAsync_RootChain_LandingRebaseConflicts_StopsWithLandingRationale_NotChildBlame()
+    {
+        // TLB-493: when the landing rebase cannot apply, the chain stops with a landing-specific
+        // rationale (work safe on the integration branch) and never advances the target. Every
+        // child completed, so this is a landing failure - not a child failure.
+        var parent = MakeTicket(TicketState.Backlog);
+        var child = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var git = new FakeGitClientChain
+        {
+            // call 1: leaf ship rebase succeeds; call 2: landing rebase hits conflicts.
+            RebaseResponses = new Queue<RebaseResult>(new[]
+            {
+                new RebaseResult(true, false, Array.Empty<string>(), null),
+                new RebaseResult(false, true, new[] { "src/Conflict.cs" }, "conflict"),
+            })
+        };
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, git: git);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentStoppedEarly, result.Outcome);
+        Assert.All(result.ChildResults!, c => Assert.Equal(ChainOutcome.Completed, c.Outcome));
+        Assert.NotNull(result.FinalRationale);
+        Assert.Contains("chain/tlb-1", result.FinalRationale);
+        Assert.Contains("rebas", result.FinalRationale);
+        Assert.True(git.RebaseAbortCallCount >= 1);
+        Assert.DoesNotContain(git.FastForwardMerges, m => m.mergeRef == "chain/tlb-1");
+    }
+
+    [Fact]
     public async Task RunAsync_ParentWithUnorderedChildren_DispatchesLowestTicketNumberFirst()
     {
         // Two unordered children (no blocked_by edge) seeded highest-number-first.
@@ -2420,6 +2487,7 @@ public class ChainPhaseTests
         public List<(string path, string branch, string fromRef)> CreatedWorktrees { get; } = new();
         public List<(string branch, string fromRef, string worktreePath)> CreatedBranches { get; } = new();
         public List<(string mergeRef, string worktreePath)> FastForwardMerges { get; } = new();
+        public List<(string ontoRef, string worktreePath)> Rebases { get; } = new();
         public List<string> WorkingDirectoriesSeenForTrackedChanges { get; } = new();
         public int GetTrackedChangesCallCount => WorkingDirectoriesSeenForTrackedChanges.Count;
         public int GetTrackedChangesCallsOnMainWorktree { get; private set; }
@@ -2547,6 +2615,7 @@ public class ChainPhaseTests
 
         public Task<RebaseResult> RebaseAsync(string ontoRef, string featureWorktreePath, CancellationToken ct)
         {
+            Rebases.Add((ontoRef, featureWorktreePath));
             if (RebaseResponses != null && RebaseResponses.Count > 0)
                 return Task.FromResult(RebaseResponses.Dequeue());
             if (_shipFails)
