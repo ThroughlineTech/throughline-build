@@ -294,8 +294,11 @@ public class ClaudeCodeAgent : IWorkerAgent
 
         if (envelope.IsError)
         {
+            // The human-readable failure (e.g. "Claude AI usage limit reached|<ts>") lives in the
+            // envelope's result field; include it so the reason is not just a subtype + blank stderr. See TLB-490.
+            var message = string.IsNullOrWhiteSpace(envelope.Result) ? "" : $" Message: {envelope.Result}.";
             return new WorkerResult(Status.Escalate, "Claude Code reported is_error=true", Array.Empty<string>(),
-                $"Claude Code envelope has is_error=true. Subtype: {envelope.Subtype}. Stderr: {stderr}", new Dictionary<string, object>());
+                $"Claude Code envelope has is_error=true. Subtype: {envelope.Subtype}.{message} Stderr: {stderr}", new Dictionary<string, object>());
         }
 
         if (envelope.Result is null)

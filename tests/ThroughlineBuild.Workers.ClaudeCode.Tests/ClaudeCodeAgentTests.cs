@@ -390,6 +390,22 @@ public class ClaudeCodeAgentEnvelopeParserTests
     }
 
     [Fact]
+    public void EnvelopeParser_IsErrorTrue_IncludesResultMessage()
+    {
+        // On is_error=true the human-readable cause (e.g. a usage limit) lives in the result
+        // field; it must reach the failure reason, not be dropped in favour of subtype + blank
+        // stderr. See TLB-490.
+        var stdout = "{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,"
+            + "\"result\":\"Claude AI usage limit reached|1717800000\"}";
+
+        var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 1, stderr: "");
+
+        Assert.Equal(Status.Escalate, result.Status);
+        Assert.Contains("is_error=true", result.FailureReason);
+        Assert.Contains("Claude AI usage limit reached", result.FailureReason);
+    }
+
+    [Fact]
     public void EnvelopeParser_ValidEnvelope_NoWorkerResultMarker_ReturnsFailed()
     {
         // Valid envelope but inner result has no WORKER_RESULT block

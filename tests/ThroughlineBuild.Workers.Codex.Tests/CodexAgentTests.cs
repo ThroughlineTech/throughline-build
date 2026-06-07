@@ -133,6 +133,63 @@ public class CodexAgentTests
     }
 
     [Fact]
+    public void ParseStdoutForWorkerResult_UsageLimitJsonl_SurfacesCodexError()
+    {
+        // Codex reports the usage limit in-band on stdout (stderr empty) and exits 1.
+        // The real message must reach FailureReason, not be lost as "Stderr: .". See TLB-490.
+        var stdout = """
+            {"type":"thread.started","thread_id":"019e9f7f-0cc8-74d2-8f28-df15200b92e6"}
+            {"type":"turn.started"}
+            {"type":"error","message":"You've hit your usage limit. Upgrade to Pro or try again at 7:20 PM."}
+            {"type":"turn.failed","error":{"message":"You've hit your usage limit. Upgrade to Pro or try again at 7:20 PM."}}
+            """;
+
+        var result = CodexAgent.ParseStdoutForWorkerResult(stdout, 1, "");
+
+        Assert.Equal(Status.Failed, result.Status);
+        Assert.NotNull(result.FailureReason);
+        Assert.Contains("Codex error:", result.FailureReason);
+        Assert.Contains("usage limit", result.FailureReason);
+        Assert.DoesNotContain("Stderr: .", result.FailureReason);
+    }
+
+    [Fact]
+    public void ParseStdoutForWorkerResult_InBandErrorOnZeroExit_StillFails()
+    {
+        // A turn.failed with a 0 exit code is still a failure - the worker produced no result.
+        var stdout = """
+            {"type":"turn.failed","error":{"message":"model refused the request"}}
+            """;
+
+        var result = CodexAgent.ParseStdoutForWorkerResult(stdout, 0, "");
+
+        Assert.Equal(Status.Failed, result.Status);
+        Assert.Contains("model refused the request", result.FailureReason);
+    }
+
+    [Fact]
+    public void ExtractCodexErrorFromJsonl_TurnFailed_ReturnsMessage()
+    {
+        var stdout = """
+            {"type":"error","message":"first signal"}
+            {"type":"turn.failed","error":{"message":"terminal failure"}}
+            """;
+
+        Assert.Equal("terminal failure", CodexAgent.ExtractCodexErrorFromJsonl(stdout));
+    }
+
+    [Fact]
+    public void ExtractCodexErrorFromJsonl_NoError_ReturnsNull()
+    {
+        var stdout = """
+            {"type":"item.completed","item":{"id":"i0","type":"agent_message","text":"all good"}}
+            {"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}
+            """;
+
+        Assert.Null(CodexAgent.ExtractCodexErrorFromJsonl(stdout));
+    }
+
+    [Fact]
     public void BuildArgs_BypassPermissionsTrue_IncludesFullBypassFlag()
     {
         var options = new CodexOptions { BypassPermissions = true };

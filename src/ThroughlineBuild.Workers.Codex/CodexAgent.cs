@@ -187,9 +187,18 @@ public class CodexAgent : IWorkerAgent
                 reason, metadata);
         }
 
-        if (exitCode != 0)
+        // Codex reports in-band failures (usage limits, model errors, refusals) as JSONL events on
+        // STDOUT - {"type":"error","message":...} / {"type":"turn.failed","error":{"message":...}} -
+        // and leaves stderr empty. Surface that message so the failure reason is not a blank
+        // "Stderr: ." that hides the real cause. An in-band error is a failure even on a 0 exit. See TLB-490.
+        var codexError = ExtractCodexErrorFromJsonl(stdout);
+
+        if (exitCode != 0 || codexError is not null)
+        {
+            var detail = codexError is not null ? $"Codex error: {codexError}" : $"Stderr: {stderr}";
             return new WorkerResult(Status.Failed, "Process exited with non-zero code", Array.Empty<string>(),
-                $"Exit code {exitCode}. Stderr: {stderr}", new Dictionary<string, object>());
+                $"Exit code {exitCode}. {detail}", new Dictionary<string, object>());
+        }
 
         var markerReason = $"No WORKER_RESULT block found in stdout. Stderr: {stderr}";
         Console.Error.WriteLine($"[CodexAgent] {markerReason}");
@@ -235,6 +244,45 @@ public class CodexAgent : IWorkerAgent
             }
         }
         return sb.ToString();
+    }
+
+    // Codex surfaces failures in-band as JSONL on stdout (stderr stays empty): a
+    // {"type":"error","message":"..."} event and/or a terminal
+    // {"type":"turn.failed","error":{"message":"..."}}. Returns the last such message
+    // (turn.failed is terminal, so last-wins prefers it), or null when none is present.
+    internal static string? ExtractCodexErrorFromJsonl(string stdout)
+    {
+        string? message = null;
+        foreach (var rawLine in stdout.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0 || line[0] != '{')
+                continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                var root = doc.RootElement;
+                if (!root.TryGetProperty("type", out var typeEl) || typeEl.ValueKind != JsonValueKind.String)
+                    continue;
+                switch (typeEl.GetString())
+                {
+                    case "error":
+                        if (root.TryGetProperty("message", out var msgEl) && msgEl.ValueKind == JsonValueKind.String)
+                            message = msgEl.GetString();
+                        break;
+                    case "turn.failed":
+                        if (root.TryGetProperty("error", out var errEl) && errEl.ValueKind == JsonValueKind.Object
+                            && errEl.TryGetProperty("message", out var tmEl) && tmEl.ValueKind == JsonValueKind.String)
+                            message = tmEl.GetString();
+                        break;
+                }
+            }
+            catch (JsonException)
+            {
+                continue;
+            }
+        }
+        return string.IsNullOrWhiteSpace(message) ? null : message;
     }
 
     internal static (int? InputTokens, int? OutputTokens, int? CachedInputTokens, int? ReasoningOutputTokens)
