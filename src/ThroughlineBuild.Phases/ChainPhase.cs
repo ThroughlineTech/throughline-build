@@ -1811,84 +1811,136 @@ public class ChainPhase
             && sharedWorktreePath is not null
             && !anyStoppedEarly)
         {
-            IReadOnlyList<Ticket> batchTickets;
+            // Candidate set for the batch. Ready children batch directly; Backlog children are
+            // planned first (below) so --batch-implement engages on a freshly scaffolded op - whose
+            // children are all Backlog - instead of silently selecting none and running the
+            // per-ticket chain. Mid-flight states (Planning/InProgress/InReview) are not batched and
+            // fall through to the per-ticket level loop.
+            IReadOnlyList<Ticket> batchCandidates;
             if (options.BatchImplementGroup is ChainBatchImplementGroup.AllEligibleChildren)
             {
-                batchTickets = levels
+                batchCandidates = levels
                     .SelectMany(level => level
                         .Select(id => eligible.First(c => string.Equals(c.Id, id, StringComparison.Ordinal))))
-                    .Where(t => t.State == TicketState.Ready)
+                    .Where(t => t.State == TicketState.Ready || t.State == TicketState.Backlog)
                     .ToList();
             }
             else if (options.BatchImplementGroup is ChainBatchImplementGroup.ExplicitList explicitGroup)
             {
-                batchTickets = explicitGroup.TicketIds
+                batchCandidates = explicitGroup.TicketIds
                     .Where(id => eligible.Any(e => string.Equals(e.Id, id, StringComparison.Ordinal)))
                     .Select(id => eligible.First(e => string.Equals(e.Id, id, StringComparison.Ordinal)))
-                    .Where(t => t.State == TicketState.Ready)
+                    .Where(t => t.State == TicketState.Ready || t.State == TicketState.Backlog)
                     .ToList();
             }
             else
             {
-                batchTickets = Array.Empty<Ticket>();
+                batchCandidates = Array.Empty<Ticket>();
             }
 
-            if (batchTickets.Count > 0)
+            if (batchCandidates.Count > 0)
             {
-                var capViolation = CheckBatchSizeCaps(batchTickets, _baseOptions);
-                if (capViolation is not null)
+                // Plan any Backlog candidates up front so the batch implement session has a Ready
+                // plan for each (the implement brief reads each ticket's description as its plan).
+                // Only the implement->review->ship is batched; planning stays per-ticket. A plan
+                // failure stops the chain, mirroring the per-ticket StoppedAtPlan.
+                var batchTicketList = new List<Ticket>(batchCandidates.Count);
+                bool planStopped = false;
+                foreach (var candidate in batchCandidates)
                 {
-                    Console.Error.WriteLine(
-                        $"[{parentTicket.Id}] batch-size-fallback: cap exceeded ({capViolation}); " +
-                        $"running per-ticket chain for all {batchTickets.Count} ticket(s) instead.");
-                    await _events.EmitAsync(new WorkflowEvent(
-                        SessionId: _sessionIdGenerator(),
-                        Timestamp: DateTimeOffset.UtcNow,
-                        Kind: EventKind.GateFailure,
-                        TicketId: parentTicket.Id,
-                        Phase: Phase.Chain,
-                        Data: new Dictionary<string, object>
-                        {
-                            ["kind"] = "batch_size_cap_exceeded",
-                            ["cap"] = capViolation,
-                            ["ticket_count"] = batchTickets.Count
-                        }), ct).ConfigureAwait(false);
-                }
-                else
-                {
-                    batchedTicketIds = new HashSet<string>(
-                        batchTickets.Select(t => t.Id), StringComparer.Ordinal);
-
-                    var batchOutcome = await RunBatchImplementSessionAsync(
-                        options, batchTickets, sharedWorktreePath, integrationBranch, chainStartSha, ct)
-                        .ConfigureAwait(false);
-
-                    foreach (var br in batchOutcome.Results)
+                    if (candidate.State == TicketState.Backlog)
                     {
-                        allChildResults.Add(br);
-                        if (!IsChainSuccess(br.Outcome))
+                        var planReason = await PlanForBatchAsync(options, candidate.Id, ct).ConfigureAwait(false);
+                        if (planReason is not null)
                         {
+                            allChildResults.Add(new ChainResult(candidate.Id, Array.Empty<ChainStep>(),
+                                ChainOutcome.StoppedAtPlan, TimeSpan.Zero, planReason));
                             anyStoppedEarly = true;
+                            planStopped = true;
                             break;
                         }
                     }
+                    // Re-fetch so the batch implement brief sees the planned description and Ready state.
+                    batchTicketList.Add(await _ticketing.GetAsync(candidate.Id, ct).ConfigureAwait(false));
+                }
 
-                    if (!anyStoppedEarly
-                        && _batchWorker is not null
-                        && batchOutcome.ConfirmedTickets is not null
-                        && batchOutcome.ConfirmedTickets.Count > 0)
+                IReadOnlyList<Ticket> batchTickets = batchTicketList;
+
+                if (!planStopped && batchTickets.Count > 0)
+                {
+                    var capViolation = CheckBatchSizeCaps(batchTickets, _baseOptions);
+                    if (capViolation is not null)
                     {
-                        var batchReviewPassed = await RunBatchReviewAndReworkAsync(
-                            batchTickets,
-                            batchOutcome.ConfirmedTickets,
-                            batchOutcome.BranchName,
-                            batchOutcome.BaseRef,
-                            sharedWorktreePath,
-                            chainStartSha,
-                            ct).ConfigureAwait(false);
+                        Console.Error.WriteLine(
+                            $"[{parentTicket.Id}] batch-size-fallback: cap exceeded ({capViolation}); " +
+                            $"running per-ticket chain for all {batchTickets.Count} ticket(s) instead.");
+                        await _events.EmitAsync(new WorkflowEvent(
+                            SessionId: _sessionIdGenerator(),
+                            Timestamp: DateTimeOffset.UtcNow,
+                            Kind: EventKind.GateFailure,
+                            TicketId: parentTicket.Id,
+                            Phase: Phase.Chain,
+                            Data: new Dictionary<string, object>
+                            {
+                                ["kind"] = "batch_size_cap_exceeded",
+                                ["cap"] = capViolation,
+                                ["ticket_count"] = batchTickets.Count
+                            }), ct).ConfigureAwait(false);
+                        // batchedTicketIds stays null: the now-Ready planned tickets fall through to
+                        // the per-ticket level loop and resume at implement (no re-plan).
+                    }
+                    else
+                    {
+                        batchedTicketIds = new HashSet<string>(
+                            batchTickets.Select(t => t.Id), StringComparer.Ordinal);
 
-                        if (!batchReviewPassed)
-                            anyStoppedEarly = true;
+                        var batchOutcome = await RunBatchImplementSessionAsync(
+                            options, batchTickets, sharedWorktreePath, integrationBranch, chainStartSha, ct)
+                            .ConfigureAwait(false);
+
+                        foreach (var br in batchOutcome.Results)
+                        {
+                            allChildResults.Add(br);
+                            if (!IsChainSuccess(br.Outcome))
+                            {
+                                anyStoppedEarly = true;
+                                break;
+                            }
+                        }
+
+                        if (!anyStoppedEarly
+                            && _batchWorker is not null
+                            && batchOutcome.ConfirmedTickets is not null
+                            && batchOutcome.ConfirmedTickets.Count > 0)
+                        {
+                            var batchReviewPassed = await RunBatchReviewAndReworkAsync(
+                                batchTickets,
+                                batchOutcome.ConfirmedTickets,
+                                batchOutcome.BranchName,
+                                batchOutcome.BaseRef,
+                                sharedWorktreePath,
+                                chainStartSha,
+                                ct).ConfigureAwait(false);
+
+                            if (!batchReviewPassed)
+                            {
+                                anyStoppedEarly = true;
+                            }
+                            else
+                            {
+                                // Ship the reviewed batch stack into the integration branch: advance
+                                // chain/<parent> to the batch tip and mark each ticket Done. The root
+                                // landing then carries it to the target, exactly like a leaf ship.
+                                var shipReason = await ShipBatchStackAsync(
+                                    batchTickets, batchOutcome.BranchName, integrationBranch,
+                                    sharedWorktreePath, ct).ConfigureAwait(false);
+                                if (shipReason is not null)
+                                {
+                                    Console.Error.WriteLine($"[{parentTicket.Id}] batch ship failed: {shipReason}");
+                                    anyStoppedEarly = true;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2033,6 +2085,108 @@ public class ChainPhase
     }
 
     /// <summary>
+    /// Plans a single Backlog candidate for a batch group. Planning stays per-ticket (only the
+    /// implement/review/ship is batched). Returns null on success, or a failure reason on failure.
+    /// Emits plan START/done through the OnStep stream under the candidate's id so the operator sees
+    /// the per-ticket planning the same way the per-ticket chain shows it.
+    /// </summary>
+    private async Task<string?> PlanForBatchAsync(ChainPhaseOptions options, string ticketId, CancellationToken ct)
+    {
+        var sessionId = _sessionIdGenerator();
+        var buildOpts = BuildPhaseOptions(sessionId, ticketId, "plan", targetBranch: options.ChainTargetBranch);
+        var childOptions = options with { TicketId = ticketId };
+        EmitPhaseStart(childOptions, "plan", -1, sessionId);
+        var sw = Stopwatch.StartNew();
+        var planResult = await _planFactory(buildOpts).RunAsync(ticketId, _workingDirectory, ct).ConfigureAwait(false);
+        sw.Stop();
+        childOptions.OnStep?.Invoke(ticketId, new ChainStep(
+            PhaseName: "plan",
+            ReworkRoundNumber: -1,
+            Status: planResult.Success ? Status.Ok : Status.Failed,
+            FailureReason: planResult.FailureReason,
+            Verdict: null,
+            Duration: sw.Elapsed,
+            PhaseSessionId: sessionId));
+        return planResult.Success ? null : (planResult.FailureReason ?? "planning failed");
+    }
+
+    /// <summary>
+    /// Ships a reviewed batch stack into the parent integration branch. The warm batch session left
+    /// the integration worktree checked out on the batch branch, so this switches it back to the
+    /// integration branch and fast-forwards that branch onto the batch stack tip (the leaf-ship
+    /// equivalent for the whole stack), then marks each batched ticket Done with a shipped_at marker
+    /// so downstream state matches a per-ticket ship. Returns null on success, or a human-readable
+    /// reason on failure (the batch work stays safe on the batch branch for a re-run).
+    /// </summary>
+    private async Task<string?> ShipBatchStackAsync(
+        IReadOnlyList<Ticket> batchTickets,
+        string batchBranch,
+        string integrationBranch,
+        string integrationWorktreePath,
+        CancellationToken ct)
+    {
+        var switchResult = await _git.SwitchBranchAsync(integrationBranch, integrationWorktreePath, ct)
+            .ConfigureAwait(false);
+        if (!switchResult.Success)
+        {
+            await EmitChainGateFailureAsync(batchTickets[0].Id, "batch_ship_switch_failed", new Dictionary<string, object>
+            {
+                ["integration_branch"] = integrationBranch,
+                ["batch_branch"] = batchBranch,
+                ["detail"] = switchResult.FailureReason ?? "unknown"
+            }, ct).ConfigureAwait(false);
+            return $"batch implemented and reviewed but could not switch the integration worktree onto " +
+                $"{integrationBranch} to ship: {switchResult.FailureReason}. The work is safe on {batchBranch}.";
+        }
+
+        var ffResult = await _git.FastForwardMergeAsync(batchBranch, integrationWorktreePath, ct)
+            .ConfigureAwait(false);
+        if (!ffResult.Success)
+        {
+            await EmitChainGateFailureAsync(batchTickets[0].Id, "batch_ship_merge_failed", new Dictionary<string, object>
+            {
+                ["integration_branch"] = integrationBranch,
+                ["batch_branch"] = batchBranch,
+                ["detail"] = ffResult.FailureReason ?? "unknown"
+            }, ct).ConfigureAwait(false);
+            return $"batch implemented and reviewed but fast-forwarding {integrationBranch} onto " +
+                $"{batchBranch} failed: {ffResult.FailureReason}. The work is safe on {batchBranch}.";
+        }
+
+        string shippedSha;
+        try { shippedSha = await _git.HeadShaAsync(integrationWorktreePath, ct).ConfigureAwait(false); }
+        catch { shippedSha = "(unknown)"; }
+
+        foreach (var ticket in batchTickets)
+        {
+            try
+            {
+                await _ticketing.CreateCommentAsync(ticket.Id,
+                    $"<p>[shipped_at: {shippedSha}] (batch into {integrationBranch})</p>", ct).ConfigureAwait(false);
+            }
+            catch { /* non-fatal: marker posting must not unwind the ship */ }
+            try
+            {
+                await _ticketing.TransitionAsync(ticket.Id, TicketState.Done, ct).ConfigureAwait(false);
+            }
+            catch { /* non-fatal: transition failure must not unwind the ship */ }
+            await _events.EmitAsync(new WorkflowEvent(
+                SessionId: _sessionIdGenerator(),
+                Timestamp: DateTimeOffset.UtcNow,
+                Kind: EventKind.StateTransition,
+                TicketId: ticket.Id,
+                Phase: Phase.Chain,
+                Data: new Dictionary<string, object>
+                {
+                    ["from"] = "InReview",
+                    ["to"] = "Done",
+                    ["reason"] = "batch_ship"
+                }), ct).ConfigureAwait(false);
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Lands the outermost chain's accumulated integration branch onto the configured target
     /// branch in the main worktree and pushes (when a remote and push are configured). Returns
     /// null on success, or a human-readable rationale describing why the landing stopped. The
@@ -2114,6 +2268,34 @@ public class ChainPhase
 
         if (_landingPushEnabled && !string.IsNullOrEmpty(_landingRemote))
         {
+            // No-remote guard, symmetric with the per-ticket ShipPhase (which skips fetch/push and
+            // emits a no_remote marker when the remote is absent). The local fast-forward above
+            // already advanced the target branch, so a missing remote is a clean local land - not a
+            // landing failure. Pushing unconditionally would hard-fail a remote-less repo (a fresh
+            // `git init`, a smoke-test fixture) even though every child's work is fully integrated.
+            var remoteConfigured = await _git.RemoteExistsAsync(_landingRemote!, _workingDirectory, ct)
+                .ConfigureAwait(false);
+            if (!remoteConfigured)
+            {
+                await _events.EmitAsync(new WorkflowEvent(
+                    SessionId: _sessionIdGenerator(),
+                    Timestamp: DateTimeOffset.UtcNow,
+                    Kind: EventKind.TicketWrite,
+                    TicketId: ticketId,
+                    Phase: Phase.Chain,
+                    Data: new Dictionary<string, object>
+                    {
+                        ["action"] = "chain_landing_push_skipped",
+                        ["reason"] = "no_remote",
+                        ["remote"] = _landingRemote!,
+                        ["target_branch"] = _baseOptions.TargetBranch
+                    }), ct).ConfigureAwait(false);
+                Console.WriteLine(
+                    $"[{ticketId}] chain landed {integrationBranch} onto {_baseOptions.TargetBranch} " +
+                    $"locally; push skipped (no '{_landingRemote}' remote configured).");
+                return null;
+            }
+
             var pushResult = await _git.PushAsync(_landingRemote!, _baseOptions.TargetBranch, _workingDirectory, ct)
                 .ConfigureAwait(false);
             if (!pushResult.Success)

@@ -478,6 +478,17 @@ common, fully-recursive path described in Parts 1-2.
 
 ## Part 5 - The `--batch-implement` variant: `build chain TLB-123 --batch-implement`
 
+> **RESOLVED.** The gaps documented below were fixed. `--batch-implement` now
+> (a) engages on Backlog children by planning them first - honoring
+> `[plan] mode = "promote"` as a cheap in-place promote, no plan worker;
+> (b) ships the reviewed batch stack into the integration branch (switch + ff)
+> and marks each ticket Done; and (c) lands the root onto the target, skipping
+> the push when no remote is configured (symmetric with the per-ticket ship).
+> See `ChainPhase.RunParentChainAsync` (batch block), `ShipBatchStackAsync`,
+> `PlanForBatchAsync`, and `LandRootIntegrationBranchAsync`, plus the
+> `RunAsync_BatchGroup_*` tests. The analysis below is retained as the original
+> investigation that motivated the fix.
+
 > What this section is really about: whether `--batch-implement` is wired into
 > the accumulate-and-land model from Parts 1-4, or whether it implements work
 > that then never reaches the target branch. Short answer: **batch covers
