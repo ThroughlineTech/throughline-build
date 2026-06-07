@@ -78,6 +78,11 @@ public class CopilotAgent : IWorkerAgent
             }
         };
 
+        if (options.ProgressDigestSink is not null)
+        {
+            var startPayload = string.IsNullOrEmpty(modelArg) ? Name : $"{Name} model {modelArg}";
+            options.ProgressDigestSink.WriteLine($"[0:00] {"agent".PadRight(10)} {startPayload}");
+        }
         try
         {
             process.Start();

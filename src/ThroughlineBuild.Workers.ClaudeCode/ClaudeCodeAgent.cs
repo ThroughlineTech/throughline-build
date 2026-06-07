@@ -55,6 +55,12 @@ public class ClaudeCodeAgent : IWorkerAgent
 
         var process = new Process { StartInfo = psi };
         _digester.ResetStart();
+        if (options.ProgressDigestSink is not null)
+        {
+            var startModel = NormalizeModel(tier?.Model);
+            var startPayload = string.IsNullOrEmpty(startModel) ? Name : $"{Name} model {startModel}";
+            options.ProgressDigestSink.WriteLine($"[0:00] {"agent".PadRight(10)} {startPayload}");
+        }
         process.OutputDataReceived += (_, e) =>
         {
             if (e.Data != null)

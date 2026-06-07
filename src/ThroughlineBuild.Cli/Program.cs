@@ -1782,7 +1782,7 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             BaselineCache: skipBaseline ? null : chainBaselineCache);
         var gitClient = new ProcessGitClient(cwd);
         var checksRunner = new AutomatedChecksRunner();
-        return new ShipPhase(ticketing, eventSink, buildOpts, shipOptions, gitClient: gitClient, checksRunner: checksRunner);
+        return new ShipPhase(ticketing, eventSink, buildOpts, shipOptions, gitClient: gitClient, checksRunner: checksRunner, progressWriter: buildOpts.ProgressDigestSink, verbose: debugMode);
     };
 
     var ratifierFactory = (BuildOptions _) =>
@@ -1823,7 +1823,7 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             BaselineCache: skipBaseline ? null : chainBaselineCache);
         var gitClient = new ProcessGitClient(cwd);
         var checksRunner = new AutomatedChecksRunner();
-        return new ShipPhase(ticketing, eventSink, buildOpts, chainShipOptions, gitClient: gitClient, checksRunner: checksRunner);
+        return new ShipPhase(ticketing, eventSink, buildOpts, chainShipOptions, gitClient: gitClient, checksRunner: checksRunner, progressWriter: buildOpts.ProgressDigestSink, verbose: debugMode);
     };
 
     var chainPhase = new ChainPhase(
