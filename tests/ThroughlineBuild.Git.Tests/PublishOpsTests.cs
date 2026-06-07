@@ -508,17 +508,21 @@ public class PublishOpsTests : IDisposable
 
         // git merge --ff-only writes its diffstat (one line per changed file) to STDOUT. Before the
         // fix this method drained only stderr, so a diffstat larger than the OS pipe buffer (~4-64 KB)
-        // blocked git's stdout write while we blocked on stderr -> permanent deadlock. ~2500 files
-        // with long paths produce well over 100 KB of stdout, comfortably past any pipe buffer.
+        // blocked git's stdout write while we blocked on stderr -> permanent deadlock. 1500 files with
+        // long paths produce ~100 KB of stdout, comfortably past any pipe buffer while keeping setup fast.
         var bigDir = Path.Combine(repoDir, "bulk");
         Directory.CreateDirectory(bigDir);
-        for (int i = 0; i < 2500; i++)
+        for (int i = 0; i < 1500; i++)
         {
             var name = $"file_{i:D5}_padding_padding_padding_padding_padding.txt";
             File.WriteAllText(Path.Combine(bigDir, name), "x");
         }
         RunGit(repoDir, "add", "--all");
-        RunGit(repoDir, "commit", "-m", "bulk add");
+        // -q suppresses the per-file "create mode" summary git commit otherwise writes to stdout.
+        // The test's own RunGit helper does not drain stdout, so without -q the *setup* commit would
+        // itself deadlock on a full stdout pipe - the very failure this test exists to guard against,
+        // but in scaffolding rather than the code under test. The merge below is left noisy on purpose.
+        RunGit(repoDir, "commit", "-q", "-m", "bulk add");
         var featureSha = RunGitOutput(repoDir, "rev-parse", "HEAD");
 
         RunGit(repoDir, "checkout", mainBranch);
