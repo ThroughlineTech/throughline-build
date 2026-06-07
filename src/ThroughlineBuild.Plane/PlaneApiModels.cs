@@ -160,7 +160,10 @@ public record CreateLabelRequest(
 public record PlaneProject(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("name")] string Name,
-    [property: JsonPropertyName("identifier")] string Identifier
+    [property: JsonPropertyName("identifier")] string Identifier,
+    // updated_at is the pragmatic "most recently used" signal for the interactive picker's
+    // ordering. Nullable so a response that omits it still deserializes.
+    [property: JsonPropertyName("updated_at")] DateTimeOffset? UpdatedAt = null
 );
 
 // The workspace-projects list endpoint is the same cursor-paginated Plane shape as the issues

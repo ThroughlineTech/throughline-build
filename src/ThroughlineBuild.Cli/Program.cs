@@ -233,7 +233,7 @@ static async Task<int> RunAsync(string[] args)
         // Reject misspelled/unknown flags up front so a typo (e.g. --workplace for
         // --workspace) fails loudly instead of being silently dropped and falling through
         // to a prompt for a raw project id.
-        var initBoolFlags = new HashSet<string>(StringComparer.Ordinal) { "--force", "--print-template" };
+        var initBoolFlags = new HashSet<string>(StringComparer.Ordinal) { "--force", "--print-template", "--no-interactive" };
         var initValueFlags = new HashSet<string>(StringComparer.Ordinal)
         {
             "--plane-url", "--workspace", "--project-id", "--project-name",
@@ -244,13 +244,14 @@ static async Task<int> RunAsync(string[] args)
         {
             Console.Error.WriteLine($"Error: unknown flag for 'build init': {unknownInitFlag}");
             Console.Error.WriteLine(
-                "Recognized: --force --print-template --plane-url --workspace --project-id --project-name --token --token-env --from");
+                "Recognized: --force --print-template --no-interactive --plane-url --workspace --project-id --project-name --token --token-env --from");
             Console.Error.WriteLine("See 'build --help' for details.");
             return 2;
         }
 
         var force = filteredArgs.Contains("--force");
         var printTemplate = filteredArgs.Contains("--print-template");
+        var noInteractive = filteredArgs.Contains("--no-interactive");
         var initPlaneUrl    = CliArgParser.GetFlagValue(filteredArgs, "--plane-url");
         var initWorkspace   = CliArgParser.GetFlagValue(filteredArgs, "--workspace");
         var initProjectId   = CliArgParser.GetFlagValue(filteredArgs, "--project-id");
@@ -273,6 +274,7 @@ static async Task<int> RunAsync(string[] args)
                 // --print-template returns before this delegate is invoked, so init --print-template
                 // stays offline-safe. Blocking on the async probe is fine in this top-level CLI path.
                 probeCodex: () => new CodexModelProbe().ProbeAsync().GetAwaiter().GetResult(),
+                noInteractive: noInteractive,
                 ct: initCts.Token);
         }
         catch (OperationCanceledException)

@@ -393,7 +393,7 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
     {
         var projects = await FetchAllProjectsAsync($"{ProjectsBase}?per_page=100", ct).ConfigureAwait(false);
         return projects
-            .Select(p => new ProjectInfo(p.Id, p.Name, p.Identifier))
+            .Select(p => new ProjectInfo(p.Id, p.Name, p.Identifier, p.UpdatedAt))
             .ToList();
     }
 
