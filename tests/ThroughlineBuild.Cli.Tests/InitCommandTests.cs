@@ -203,6 +203,83 @@ public class InitCommandTests
     }
 
     // ------------------------------------------------------------------
+    // WI-04: offline init prints accurate, complete next steps
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public async Task Execute_Offline_NextSteps_NameSetupAndConnectedMode()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new FakeConsole();
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console);
+
+            Assert.Equal(0, result);
+            // Points at the required provisioning step.
+            Assert.Contains("build setup", console.Stdout);
+            // Surfaces the one-shot connected path.
+            Assert.Contains("--project-name", console.Stdout);
+            // Names the still-unresolved REQUIRED fields (none supplied here -> all four).
+            Assert.Contains("Still REQUIRED", console.Stdout);
+            Assert.Contains("plane_project_id", console.Stdout);
+            Assert.Contains("plane_api_token", console.Stdout);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Execute_Offline_AllFieldsSupplied_DoesNotClaimStillRequired()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new FakeConsole();
+            var result = await InitCommand.ExecuteAsync(
+                dir, force: false, printTemplate: false, console,
+                planeUrl: "https://plane.example.com",
+                workspace: "my-workspace",
+                projectId: "abc-uuid",
+                token: "tok-1");
+
+            Assert.Equal(0, result);
+            // Every REQUIRED placeholder was filled, so the message must not claim fields remain.
+            Assert.DoesNotContain("Still REQUIRED", console.Stdout);
+            // But the next-step pointers still appear.
+            Assert.Contains("build setup", console.Stdout);
+            Assert.Contains("--project-name", console.Stdout);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Execute_PrintTemplate_DoesNotEmitNextStepHints()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new FakeConsole();
+            await InitCommand.ExecuteAsync(dir, force: false, printTemplate: true, console);
+
+            // --print-template is pure template output: none of the offline hints leak in.
+            Assert.DoesNotContain("build setup", console.Stdout);
+            Assert.DoesNotContain("Still REQUIRED", console.Stdout);
+            Assert.DoesNotContain("Next:", console.Stdout);
+            Assert.DoesNotContain("user-guide", console.Stdout);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Execute: flag-based value injection
     // ------------------------------------------------------------------
 
@@ -1101,7 +1178,10 @@ public class InitCommandTests
             var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
             // ID placeholder is still in config (no resolution without projectName).
             Assert.Contains("REQUIRED_PLANE_PROJECT_ID", written);
-            Assert.Contains("Fill in the REQUIRED fields", console.Stdout);
+            // url/workspace/token were supplied, so only plane_project_id remains REQUIRED.
+            Assert.Contains("Still REQUIRED", console.Stdout);
+            Assert.Contains("plane_project_id", console.Stdout);
+            Assert.DoesNotContain("plane_base_url", console.Stdout);
         }
         finally
         {

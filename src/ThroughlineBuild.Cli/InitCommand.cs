@@ -174,7 +174,24 @@ public static class InitCommand
         File.WriteAllText(target, content, System.Text.Encoding.UTF8);
 
         console.WriteLine($"Created {target}");
-        console.WriteLine("Fill in the REQUIRED fields before running other build commands.");
+
+        // Tailor the next-step guidance: name the specific config fields that are still
+        // unresolved (so the operator does not have to diff the template), point at
+        // 'build setup' as the required provisioning step, and surface connected mode as
+        // the one-shot path that avoids pasting a project UUID.
+        var stillRequired = new List<string>();
+        if (content.Contains("REQUIRED_PLANE_BASE_URL")) stillRequired.Add("plane_base_url");
+        if (content.Contains("REQUIRED_PLANE_WORKSPACE_SLUG")) stillRequired.Add("plane_workspace_slug");
+        if (content.Contains("REQUIRED_PLANE_PROJECT_ID")) stillRequired.Add("plane_project_id");
+        if (content.Contains("REQUIRED_PLANE_API_TOKEN")) stillRequired.Add("plane_api_token");
+
+        if (stillRequired.Count > 0)
+            console.WriteLine($"Still REQUIRED in {Path.GetFileName(target)}: {string.Join(", ", stillRequired)} - fill these in before running other build commands.");
+        else
+            console.WriteLine("Review the config values before running other build commands.");
+
+        console.WriteLine("Next: run 'build setup' to provision the Plane project (states + labels) and initialize the local repo.");
+        console.WriteLine("One-shot: re-run 'build init --project-name <name> --plane-url <url> --workspace <slug> --token <token>' (or interactive mode) to resolve or create the project and provision in one step - no UUID to paste.");
         console.WriteLine("Run 'build user-guide' to write the operator setup guide to docs/.");
         return 0;
     }
