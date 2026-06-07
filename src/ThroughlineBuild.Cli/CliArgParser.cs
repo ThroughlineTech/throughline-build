@@ -178,6 +178,43 @@ public static class CliArgParser
     }
 
     /// <summary>
+    /// Returns the first token in <paramref name="args"/> that starts with "--" but is
+    /// neither a recognized bool flag nor a recognized value flag, or null when every flag
+    /// is recognized. A value flag also consumes the following token as its value, so a
+    /// value that happens to look like a word (or even a flag) is never misreported as
+    /// unknown. Scanning begins at index 1 because <paramref name="args"/> starts with the
+    /// verb token. Tokens that do not start with "--" (positional values) are ignored.
+    /// </summary>
+    public static string? FindUnknownFlag(
+        IReadOnlyList<string> args,
+        IReadOnlySet<string> boolFlags,
+        IReadOnlySet<string> valueFlags)
+    {
+        int i = 1; // skip the verb token
+        while (i < args.Count)
+        {
+            var a = args[i];
+            if (!a.StartsWith("--", StringComparison.Ordinal))
+            {
+                i++;
+                continue;
+            }
+            if (valueFlags.Contains(a))
+            {
+                i += 2; // consume the flag and its value (value is never treated as a flag)
+                continue;
+            }
+            if (boolFlags.Contains(a))
+            {
+                i++;
+                continue;
+            }
+            return a; // unrecognized
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Extracts ticket IDs from the argument list for multi-ticket dispatch.
     /// Scans from args[1] forward (args[0] is the verb). Any token that does NOT
     /// start with '--' is considered a ticket ID. Scanning stops at the first '--'-prefixed token.

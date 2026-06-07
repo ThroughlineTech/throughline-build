@@ -230,6 +230,25 @@ static async Task<int> RunAsync(string[] args)
     // 'build init' must run before config load - it bootstraps the config file.
     if (verb == "init")
     {
+        // Reject misspelled/unknown flags up front so a typo (e.g. --workplace for
+        // --workspace) fails loudly instead of being silently dropped and falling through
+        // to a prompt for a raw project id.
+        var initBoolFlags = new HashSet<string>(StringComparer.Ordinal) { "--force", "--print-template" };
+        var initValueFlags = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "--plane-url", "--workspace", "--project-id", "--project-name",
+            "--token", "--token-env", "--from",
+        };
+        var unknownInitFlag = CliArgParser.FindUnknownFlag(filteredArgs, initBoolFlags, initValueFlags);
+        if (unknownInitFlag != null)
+        {
+            Console.Error.WriteLine($"Error: unknown flag for 'build init': {unknownInitFlag}");
+            Console.Error.WriteLine(
+                "Recognized: --force --print-template --plane-url --workspace --project-id --project-name --token --token-env --from");
+            Console.Error.WriteLine("See 'build --help' for details.");
+            return 2;
+        }
+
         var force = filteredArgs.Contains("--force");
         var printTemplate = filteredArgs.Contains("--print-template");
         var initPlaneUrl    = CliArgParser.GetFlagValue(filteredArgs, "--plane-url");
