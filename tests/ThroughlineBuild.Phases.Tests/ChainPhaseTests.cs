@@ -116,14 +116,37 @@ public class ChainPhaseTests
                 decrufter: new FakeDecrufterChain(git),
                 processPathProvider: () => null);
 
+        // Mirror the production chainShipPhaseFactory: honor the phase target branch (so a leaf
+        // ships into its parent's integration branch), skip decruft, keep the feature branch,
+        // and never push (integration branches are local). Without this the chain integration
+        // ship path is never exercised and the wrong-worktree regression stays invisible.
+        Func<BuildOptions, ShipPhase> chainShipFactory = opts =>
+            new ShipPhase(ticketing, events, opts,
+                new ShipOptions(
+                    RegressionChecks: Array.Empty<CheckSpec>(),
+                    Remote: "origin",
+                    BaseBranch: "main",
+                    DeleteFeatureBranch: false,
+                    TargetBranch: opts.TargetBranch,
+                    SkipDecruft: true,
+                    NoPush: true),
+                git,
+                checksRunner: new FakeChecksRunnerChain(Array.Empty<CheckResult>()),
+                markerScanner: (_, _) => Task.FromResult<IReadOnlyList<ConflictMarkerHit>>(Array.Empty<ConflictMarkerHit>()),
+                decrufter: new FakeDecrufterChain(git),
+                processPathProvider: () => null);
+
         return new ChainPhase(
             ticketing, events, baseOpts,
             planFactory, implFactory, reviewFactory, shipFactory,
             sessionIdGenerator: NextSessionId,
             workingDirectory: WorkDir,
             ratifierFactory: ratifierFactory,
+            chainShipFactory: chainShipFactory,
             gitClient: git,
-            batchWorker: batchWorker);
+            batchWorker: batchWorker,
+            landingRemote: "origin",
+            landingPushEnabled: true);
     }
 
     [Fact]
@@ -1084,6 +1107,45 @@ public class ChainPhaseTests
         Assert.Contains(git.CreatedWorktrees, c => c.branch == "chain/tlb-1" && c.fromRef == "main");
         Assert.Contains(git.CreatedWorktrees, c => c.branch == "ticket/tlb-2" && c.fromRef == "chain/tlb-1");
         Assert.Contains(git.CreatedWorktrees, c => c.branch == "ticket/tlb-3" && c.fromRef == "chain/tlb-1");
+        // The root lands its accumulated integration branch onto the configured target.
+        Assert.Contains(git.FastForwardMerges, m => m.mergeRef == "chain/tlb-1");
+    }
+
+    [Fact]
+    public async Task RunAsync_LeafChild_ShipsIntoIntegrationWorktree_NotMainWorktree_ThenRootLands()
+    {
+        // Regression guard for TLB-492. A chain leaf must ship into its parent's integration
+        // worktree (checked out on chain/{parent}), not the main worktree (parked on the root
+        // target). FakeGitClientChain resolves CurrentBranch per worktree, so a leaf ship run
+        // against the main worktree would fail ShipPhase's on-target pre-check (main !=
+        // chain/tlb-1) and stop the chain - a green ParentCompleted proves it ran in the right
+        // worktree.
+        var parent = MakeTicket(TicketState.Backlog);
+        var child = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var git = new FakeGitClientChain();
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, git: git);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        var childResult = Assert.Single(result.ChildResults!);
+        Assert.Equal(ChainOutcome.Completed, childResult.Outcome);
+
+        // The leaf fast-forwarded ticket/tlb-2 in the chain/tlb-1 integration worktree...
+        var leafMerge = git.FastForwardMerges.First(m => m.mergeRef == "ticket/tlb-2");
+        Assert.Contains(git.CreatedWorktrees, c => c.branch == "chain/tlb-1" && c.path == leafMerge.worktreePath);
+
+        // ...and the root landed chain/tlb-1 in a DIFFERENT worktree (the main worktree).
+        var landMerge = git.FastForwardMerges.First(m => m.mergeRef == "chain/tlb-1");
+        Assert.NotEqual(leafMerge.worktreePath, landMerge.worktreePath);
     }
 
     [Fact]
@@ -1149,7 +1211,10 @@ public class ChainPhaseTests
         Assert.Contains(git.CreatedWorktrees, c => c.branch == "chain/tlb-1" && c.fromRef == "main");
         Assert.Contains(git.CreatedWorktrees, c => c.branch == "chain/tlb-2" && c.fromRef == "chain/tlb-1");
         Assert.Contains(git.CreatedWorktrees, c => c.branch == "ticket/tlb-3" && c.fromRef == "chain/tlb-2");
+        // Grandchild integration merges up into the parent's integration branch...
         Assert.Contains(git.FastForwardMerges, m => m.mergeRef == "chain/tlb-2");
+        // ...and the root finally lands its integration branch onto the configured target.
+        Assert.Contains(git.FastForwardMerges, m => m.mergeRef == "chain/tlb-1");
     }
 
     [Fact]
@@ -1702,14 +1767,15 @@ public class ChainPhaseTests
     // -------------------------------------------------------------------------
 
     [Fact]
-    public async Task RunAsync_ParentChain_B02FailsForFirstChild_AbortsAndStopsBeforeSecondChild()
+    public async Task RunAsync_ParentChain_FirstChildShipFails_StopsBeforeSecondChild_AndDoesNotLand()
     {
-        // Regression for TLB-402: when B02 auto-rebase fails without conflict markers
-        // (e.g., hook rejection), the conditional abort was skipped (HadConflicts=false),
-        // leaving the main worktree's HEAD detached. The second child's ship then operated
-        // on a detached HEAD, causing silent data corruption.
-        // Fix (TLB-402): abort is now unconditional. Parent-chain stacking also means child 2
-        // is not dispatched after child 1 fails to ship.
+        // Chain stacking: when the first child fails to ship, the second child must not be
+        // dispatched and the parent chain stops early. A leaf chain ship is local-only - it
+        // fast-forwards the parent's integration branch and never reconciles against a remote -
+        // so the TLB-402 B02 remote-divergence detached-HEAD regression is covered at the
+        // single-ship level by ShipPhaseTests.RunAsync_B02Fails_NonConflict_AbortsMainRebase,
+        // not here. Here we also assert the root never lands its integration branch onto the
+        // target after a failed child (TLB-492 landing is gated on full success).
         var parent = MakeTicket(TicketState.Backlog);
         var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
         var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Backlog);
@@ -1720,16 +1786,12 @@ public class ChainPhaseTests
         var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var verifiers = new Queue<IVerifier>();
-        // child1 passes review, then fails at ship (B02 abort); child2 must not reach review.
+        // child1 passes review, then fails at ship; child2 must not reach review.
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
 
-        var git = new FakeGitClientChain()
+        var git = new FakeGitClientChain
         {
-            // Make both ancestry checks return false -> diverged path -> B02 triggered
-            TriggerDivergence = true,
-            DivergenceStateResult = DivergenceState.DivergedNoConflict,
-            // Response queue:
-            //   call 1: child1 B02 auto-rebase fails without conflict markers (hook rejection)
+            // child1's ship rebase onto the integration branch fails (e.g. hook rejection).
             RebaseResponses = new Queue<RebaseResult>(new[]
             {
                 new RebaseResult(false, false, Array.Empty<string>(), "hook-rejected"),
@@ -1746,8 +1808,9 @@ public class ChainPhaseTests
         Assert.Equal("TLB-2", child1Result.TicketId);
         Assert.NotEqual(ChainOutcome.Completed, child1Result.Outcome);
 
-        // Abort was called after the non-conflict B02 failure (Fix 1)
-        Assert.Equal(1, git.RebaseAbortCallCount);
+        // Landing is gated on full success: a failed child means chain/tlb-1 is never merged
+        // onto the configured target.
+        Assert.DoesNotContain(git.FastForwardMerges, m => m.mergeRef == "chain/tlb-1");
     }
 
     // -------------------------------------------------------------------------
@@ -2403,8 +2466,16 @@ public class ChainPhaseTests
             _worktrees.Add(new WorktreeInfo("/fake/worktree", BranchName, CommitSha, false, false));
         }
 
-        public Task<string> CurrentBranchAsync(string workingDirectory, CancellationToken ct) =>
-            Task.FromResult(_currentBranch);
+        // Per-worktree branch resolution: returns the branch of the worktree whose path matches
+        // workingDirectory, so a phase that runs in the wrong worktree (e.g. a chain leaf ship
+        // against the main worktree instead of the integration worktree) is observable. Falls
+        // back to _currentBranch for the main worktree, which is not tracked in _worktrees.
+        public Task<string> CurrentBranchAsync(string workingDirectory, CancellationToken ct)
+        {
+            var match = _worktrees.FirstOrDefault(
+                w => string.Equals(w.Path, workingDirectory, StringComparison.OrdinalIgnoreCase));
+            return Task.FromResult(match?.Branch ?? _currentBranch);
+        }
 
         public Task<IReadOnlyList<string>> ListStashEntriesAsync(string workingDirectory, CancellationToken ct) =>
             Task.FromResult(_stashEntries);

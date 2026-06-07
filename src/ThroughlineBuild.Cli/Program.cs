@@ -1764,7 +1764,11 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             NoAutoMerge: noAutoMerge,
             TargetBranch: buildOpts.TargetBranch,
             SkipDecruft: true,
-            NoPush: noPush || !config2.Ship.Push,
+            // Integration-branch ships are local scaffolding: their target (chain/{parent})
+            // only exists locally, so they must never touch the remote. The accumulated work
+            // is pushed once, when the root chain lands its integration branch onto the
+            // configured target (see ChainPhase landing remote/push wiring below).
+            NoPush: true,
             TargetBranchOverridden: config2.TargetBranchOverridden,
             SkipBaseline: skipBaseline,
             BaselineCache: skipBaseline ? null : chainBaselineCache);
@@ -1783,7 +1787,13 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
         shipPhaseFactory,
         workingDirectory: cwd,
         ratifierFactory: ratifierFactory,
-        chainShipFactory: chainShipPhaseFactory);
+        chainShipFactory: chainShipPhaseFactory,
+        // Root-chain landing: after the outermost chain accumulates onto chain/{root}, that
+        // branch is fast-forwarded into the configured target in the main worktree and pushed
+        // here (intermediate chain ships run NoPush above). Push honors the same --no-push /
+        // [ship] push toggle the per-ticket ship uses.
+        landingRemote: config2.Ship.Remote,
+        landingPushEnabled: !(noPush || !config2.Ship.Push));
 
     ChainBatchImplementGroup? batchImplementGroup = null;
     if (batchImplementAllChildren)

@@ -42,7 +42,13 @@ public record ChainPhaseOptions(
     int MaxDepth = 16,
     int Depth = 0,
     IReadOnlySet<string>? VisitedTicketUuids = null,
-    string? ChainTargetBranch = null);
+    string? ChainTargetBranch = null,
+    // Absolute path of the parent's integration worktree (the one checked out on
+    // ChainTargetBranch). A leaf child's ship advances that branch, so the ship must run
+    // here - NOT in the main worktree, which stays parked on the configured root branch.
+    // Distinct from SharedWorktreePath, which ImplementPhase reads as "build the ticket
+    // inside this worktree"; the integration worktree must not be reused for that.
+    string? ChainIntegrationWorktreePath = null);
 
 public class ChainPhase
 {
@@ -70,6 +76,12 @@ public class ChainPhase
     // Optional: when set, batch implement groups in the parent chain dispatch one session here
     // instead of running a per-ticket implement+review+ship loop for each group member.
     private readonly IWorkerAgent? _batchWorker;
+    // Root-chain landing: the remote and push toggle used when the OUTERMOST chain
+    // fast-forwards its accumulated integration branch onto the configured target branch.
+    // A null remote or PushEnabled=false lands locally only (no push) - safe, but the
+    // operator must push the target manually.
+    private readonly string? _landingRemote;
+    private readonly bool _landingPushEnabled;
 
     public ChainPhase(
         ITicketing ticketing,
@@ -85,7 +97,9 @@ public class ChainPhase
         Func<BuildOptions, ShipPhase>? chainShipFactory = null,
         IGitClient? gitClient = null,
         IReviewFeedbackRetriever? feedbackRetriever = null,
-        IWorkerAgent? batchWorker = null)
+        IWorkerAgent? batchWorker = null,
+        string? landingRemote = null,
+        bool landingPushEnabled = false)
     {
         _ticketing = ticketing;
         _events = events;
@@ -101,6 +115,8 @@ public class ChainPhase
         _git = gitClient ?? new ProcessGitClient();
         _feedbackRetriever = feedbackRetriever;
         _batchWorker = batchWorker;
+        _landingRemote = landingRemote;
+        _landingPushEnabled = landingPushEnabled;
     }
 
     public async Task<ChainResult> RunAsync(ChainPhaseOptions options, CancellationToken ct)
@@ -405,13 +421,22 @@ public class ChainPhase
         var shipBuildOpts = BuildPhaseOptions(shipSessionId, options.TicketId, "ship", targetBranch: options.ChainTargetBranch);
         EmitPhaseStart(options, "ship", -1, shipSessionId);
         var shipSw = Stopwatch.StartNew();
-        // When running inside a parent-chain integration branch, use the chain ship
-        // factory when supplied. The factory honors BuildOptions.TargetBranch, so the
-        // leaf ships into the current integration branch rather than the configured root.
-        var activeShipFactory = (options.ChainTargetBranch is not null && _chainShipFactory is not null)
-            ? _chainShipFactory
-            : _shipFactory;
-        var shipResult = await activeShipFactory(shipBuildOpts).RunAsync(options.TicketId, _workingDirectory, ct)
+        // When running inside a parent-chain integration branch, use the chain ship factory
+        // when supplied. The factory honors BuildOptions.TargetBranch, so the leaf ships into
+        // the current integration branch rather than the configured root.
+        var useChainShip = options.ChainTargetBranch is not null && _chainShipFactory is not null;
+        var activeShipFactory = useChainShip ? _chainShipFactory! : _shipFactory;
+        // A leaf in a parent chain ships into its parent's integration branch, which is
+        // checked out in the integration worktree - not the main worktree, which stays on
+        // the configured root branch. ShipPhase fast-forwards whatever branch is checked out
+        // in the directory it is handed and refuses if that is not the target, so the ship
+        // must run in the integration worktree. The worktree choice is tied to useChainShip so
+        // the ship's target branch and its worktree never disagree. Outside a chain it falls
+        // back to the main worktree, where the configured target IS checked out.
+        var shipWorkingDirectory = (useChainShip && options.ChainIntegrationWorktreePath is not null)
+            ? options.ChainIntegrationWorktreePath
+            : _workingDirectory;
+        var shipResult = await activeShipFactory(shipBuildOpts).RunAsync(options.TicketId, shipWorkingDirectory, ct)
             .ConfigureAwait(false);
         shipSw.Stop();
 
@@ -1922,7 +1947,8 @@ public class ChainPhase
                     ChainCommitRange = childCommitRange,
                     Depth = options.Depth + 1,
                     VisitedTicketUuids = AddVisited(options.VisitedTicketUuids, parentTicket.Uuid),
-                    ChainTargetBranch = integrationBranch
+                    ChainTargetBranch = integrationBranch,
+                    ChainIntegrationWorktreePath = sharedWorktreePath ?? integrationWorktreePath
                 };
                 var childResult = await RunAsync(childOptions, ct).ConfigureAwait(false);
 
@@ -1968,15 +1994,34 @@ public class ChainPhase
 
         var childResults = allChildResults;
 
+        // Root-chain landing (TLB-492): a nested parent merges its integration branch up into
+        // its own parent's integration branch (the ParentCompleted merge above). The OUTERMOST
+        // chain (ChainTargetBranch is null) has no parent to merge into, so it lands the
+        // accumulated integration branch onto the configured target branch in the main worktree
+        // - which the chain preflight pinned to that target and nothing since has moved - and
+        // pushes. Without this every leaf ships locally and the whole chain's work strands on a
+        // local chain/{root} branch, never reaching the target.
+        string? landingRationale = null;
+        if (!anyStoppedEarly
+            && options.ChainTargetBranch is null
+            && sharedWorktreePath is not null)
+        {
+            landingRationale = await LandRootIntegrationBranchAsync(
+                options.TicketId, integrationBranch, ct).ConfigureAwait(false);
+            if (landingRationale is not null)
+                anyStoppedEarly = true;
+        }
+
         // Attempt parent rollup (fail-soft)
         try { await _ticketing.RollupParentAsync(options.TicketId, ct).ConfigureAwait(false); }
         catch { /* non-fatal */ }
 
         totalSw.Stop();
         var outcome = anyStoppedEarly ? ChainOutcome.ParentStoppedEarly : ChainOutcome.ParentCompleted;
-        var finalRationale = anyStoppedEarly
-            ? $"One or more children did not complete: {string.Join(", ", childResults.Where(r => !IsChainSuccess(r.Outcome)).Select(r => r.TicketId))}"
-            : $"All {eligible.Count} eligible children completed.";
+        var finalRationale = landingRationale
+            ?? (anyStoppedEarly
+                ? $"One or more children did not complete: {string.Join(", ", childResults.Where(r => !IsChainSuccess(r.Outcome)).Select(r => r.TicketId))}"
+                : $"All {eligible.Count} eligible children completed.");
 
         return new ChainResult(
             TicketId: options.TicketId,
@@ -1985,6 +2030,87 @@ public class ChainPhase
             TotalDuration: totalSw.Elapsed,
             FinalRationale: finalRationale,
             ChildResults: childResults.AsReadOnly());
+    }
+
+    /// <summary>
+    /// Lands the outermost chain's accumulated integration branch onto the configured target
+    /// branch in the main worktree and pushes (when a remote and push are configured). Returns
+    /// null on success, or a human-readable rationale describing why the landing stopped. The
+    /// accumulated work is never lost on failure - it remains on the integration branch (and,
+    /// for a push failure, on the local target) for the operator to reconcile.
+    /// </summary>
+    private async Task<string?> LandRootIntegrationBranchAsync(
+        string ticketId,
+        string integrationBranch,
+        CancellationToken ct)
+    {
+        // The landing fast-forwards whatever HEAD the main worktree points at, so refuse if it
+        // is not on the target - mirrors ShipPhase's pre-merge guard and prevents advancing the
+        // wrong branch if the preflight invariant was somehow broken mid-run.
+        var mainBranch = await _git.CurrentBranchAsync(_workingDirectory, ct).ConfigureAwait(false);
+        if (!string.Equals(mainBranch, _baseOptions.TargetBranch, StringComparison.Ordinal))
+        {
+            await EmitChainGateFailureAsync(ticketId, "chain_landing_wrong_branch", new Dictionary<string, object>
+            {
+                ["expected"] = _baseOptions.TargetBranch,
+                ["actual"] = mainBranch,
+                ["integration_branch"] = integrationBranch
+            }, ct).ConfigureAwait(false);
+            return $"chain accumulated onto {integrationBranch} but the main worktree is on " +
+                $"'{mainBranch}', not '{_baseOptions.TargetBranch}'; could not land. The work is " +
+                $"safe on {integrationBranch}; switch to {_baseOptions.TargetBranch} and merge it manually.";
+        }
+
+        var landResult = await _git.FastForwardMergeAsync(integrationBranch, _workingDirectory, ct)
+            .ConfigureAwait(false);
+        if (!landResult.Success)
+        {
+            await EmitChainGateFailureAsync(ticketId, "chain_landing_merge_failed", new Dictionary<string, object>
+            {
+                ["integration_branch"] = integrationBranch,
+                ["target_branch"] = _baseOptions.TargetBranch,
+                ["detail"] = landResult.FailureReason ?? "unknown"
+            }, ct).ConfigureAwait(false);
+            return $"chain accumulated onto {integrationBranch} but landing it onto " +
+                $"{_baseOptions.TargetBranch} failed: {landResult.FailureReason}. The work is safe " +
+                $"on {integrationBranch}; merge it manually.";
+        }
+
+        if (_landingPushEnabled && !string.IsNullOrEmpty(_landingRemote))
+        {
+            var pushResult = await _git.PushAsync(_landingRemote!, _baseOptions.TargetBranch, _workingDirectory, ct)
+                .ConfigureAwait(false);
+            if (!pushResult.Success)
+            {
+                await EmitChainGateFailureAsync(ticketId, "chain_landing_push_failed", new Dictionary<string, object>
+                {
+                    ["target_branch"] = _baseOptions.TargetBranch,
+                    ["remote"] = _landingRemote!,
+                    ["detail"] = pushResult.FailureReason ?? "unknown"
+                }, ct).ConfigureAwait(false);
+                return $"landed {integrationBranch} onto {_baseOptions.TargetBranch} locally but push " +
+                    $"to {_landingRemote} failed: {pushResult.FailureReason}. Reconcile and push " +
+                    $"{_baseOptions.TargetBranch} manually.";
+            }
+        }
+
+        // Landed cleanly. The chain/{...} integration branches and the per-leaf ticket/{...}
+        // branches/worktrees are intentionally retained (not torn down) so a failed or retried
+        // chain can resume from the accumulated topology - see SequentialChainTests
+        // ParentChain_RetainsIntegrationBranch_AtChainEnd.
+        return null;
+    }
+
+    private async Task EmitChainGateFailureAsync(string ticketId, string kind, Dictionary<string, object> data, CancellationToken ct)
+    {
+        data["kind"] = kind;
+        await _events.EmitAsync(new WorkflowEvent(
+            SessionId: _sessionIdGenerator(),
+            Timestamp: DateTimeOffset.UtcNow,
+            Kind: EventKind.GateFailure,
+            TicketId: ticketId,
+            Phase: Phase.Chain,
+            Data: data), ct).ConfigureAwait(false);
     }
 
     private static IReadOnlySet<string> AddVisited(IReadOnlySet<string>? visited, string uuid)
@@ -1996,11 +2122,9 @@ public class ChainPhase
         return next;
     }
 
-    private static string ChainIntegrationBranch(Ticket ticket)
-    {
-        var slug = SlugBuilder.BuildTicketSlug(ticket.Id);
-        return $"chain/{slug}";
-    }
+    private static string ChainIntegrationBranch(Ticket ticket) => ChainIntegrationBranchFromId(ticket.Id);
+
+    private static string ChainIntegrationBranchFromId(string ticketId) => $"chain/{SlugBuilder.BuildTicketSlug(ticketId)}";
 
     private async Task<WorktreeCreateResult> EnsureIntegrationWorktreeAsync(
         string branch,
