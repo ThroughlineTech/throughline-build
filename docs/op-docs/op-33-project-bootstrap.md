@@ -83,6 +83,7 @@ Notes: `build init` runs before config load by design - it is the command that w
 OOS:
 - Parsing the credentials file (Brief 03)
 - Writing config or provisioning (Brief 04)
+- Verifying connectivity or printing the bootstrap summary (Brief 04)
 
 ## Plan B: One-shot name-based bootstrap
 
@@ -94,7 +95,7 @@ After this plan, an operator runs `build init` with workspace credentials and a 
 
 | # | Slug | Intent | Deps | Files |
 |---|------|--------|------|-------|
-| 03 | credentials-input-file | Parse a key=value creds file (or stdin) with a project name, feeding init | A | src/ThroughlineBuild.Cli/InitCommand.cs, src/ThroughlineBuild.Cli/Program.cs, src/ThroughlineBuild.Cli/CliArgParser.cs |
+| 03 | credentials-input-file | Parse a key=value creds file (or stdin) with a project name, feeding init | - | src/ThroughlineBuild.Cli/InitCommand.cs, src/ThroughlineBuild.Cli/Program.cs, src/ThroughlineBuild.Cli/CliArgParser.cs |
 | 04 | connected-init-orchestration | Connected init: resolve/create project, write config, provision, summarize | 03 | src/ThroughlineBuild.Cli/InitCommand.cs, src/ThroughlineBuild.Cli/SetupCommand.cs, src/ThroughlineBuild.Cli/Program.cs |
 | 05 | welcome-initial-commit | Make a first commit on a fresh repo so the first ship works | 04 | src/ThroughlineBuild.Cli/LocalRepoSetup.cs, src/ThroughlineBuild.Cli/InitCommand.cs |
 | 06 | app-doc-scaffold-handoff | Detect a plan doc post-bootstrap and point at the scaffold command | 04 | src/ThroughlineBuild.Cli/InitCommand.cs |
@@ -124,6 +125,7 @@ Notes: The operator's stated workflow is to keep one file with the stable worksp
 OOS:
 - Resolving the name to an id (Plan A)
 - The orchestration that consumes these inputs (Brief 04)
+- Validating that the credentials authenticate against Plane (connectivity is Brief 04)
 
 #### Brief 04: connected-init-orchestration
 
@@ -174,6 +176,7 @@ Notes: `build setup` creates a repo with zero commits, and ship and worktree res
 OOS:
 - Committing project source (the operator's job)
 - The untracked-file ship hardening (Plan C)
+- Pushing the welcome commit to any remote (the commit is local only)
 
 #### Brief 06: app-doc-scaffold-handoff
 
@@ -195,6 +198,7 @@ Notes: The operator framed the end state as "you have an app doc, boom it scaffo
 OOS:
 - Auto-running the scaffold without an explicit operator request
 - Defining a new app-doc format (the existing op-doc and plan-doc specs are reused)
+- Searching arbitrary repo paths for docs (detection is bounded to docs/op-docs and docs/proposals)
 
 ## Plan C: Ship robust to untracked files
 
@@ -232,6 +236,7 @@ Notes: The pre-flight's dirty check intentionally ignores untracked files - `Get
 OOS:
 - Redesigning ship to run from an isolated worktree (a larger change, a separate op)
 - Auto-deleting untracked files (destructive, never)
+- Tracked-but-uncommitted changes (the existing dirty-tracked pre-flight already covers those)
 
 ## What done looks like
 
