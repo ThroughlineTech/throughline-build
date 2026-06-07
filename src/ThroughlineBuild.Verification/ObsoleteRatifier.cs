@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ThroughlineBuild.Briefs;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 
@@ -125,35 +126,17 @@ public sealed class ObsoleteRatifier : IObsoleteRatifier
 
     private static Brief BuildRatificationBrief(Ticket ticket, SubsumedByEvidence evidence)
     {
-        var fileList = string.Join(", ", evidence.Files);
-        var instruction =
-            $"You are performing obsolete-claim ratification for ticket {ticket.Id}: \"{ticket.Title}\".\n\n" +
-            $"Prior work claims this ticket has already been completed. Your job is to verify whether " +
-            $"the prior work genuinely satisfies this ticket's acceptance criteria.\n\n" +
-            $"## Ticket description (acceptance criteria)\n\n" +
-            $"{ticket.DescriptionHtml}\n\n" +
-            $"## Claimed evidence\n\n" +
-            $"Commit: {evidence.Commit}\n" +
-            $"Files: {fileList}\n" +
-            $"Rationale: {evidence.Rationale}\n\n" +
-            $"## Your task\n\n" +
-            $"Review the ticket's acceptance criteria above. Determine whether the cited prior work " +
-            $"satisfies every acceptance criterion.\n\n" +
-            $"Respond with a WORKER_RESULT block:\n\n" +
-            "WORKER_RESULT\n" +
-            "{\n" +
-            "  \"status\": \"Ok\",\n" +
-            "  \"summary\": \"<one-line summary of your verdict>\",\n" +
-            "  \"files_changed\": [],\n" +
-            "  \"failure_reason\": null,\n" +
-            "  \"metadata\": {\n" +
-            "    \"verdict\": \"Pass|Fail\",\n" +
-            "    \"rationale\": \"<explanation>\",\n" +
-            "    \"checks_failed\": []\n" +
-            "  }\n" +
-            "}\n\n" +
-            "Use verdict=Pass if the prior work satisfies all acceptance criteria. " +
-            "Use verdict=Fail if one or more acceptance criteria are not met.";
+        var vars = new Dictionary<string, string>
+        {
+            ["ticket_id"] = ticket.Id,
+            ["ticket_title"] = ticket.Title,
+            ["ticket_description_html"] = ticket.DescriptionHtml,
+            ["evidence_commit"] = evidence.Commit,
+            ["evidence_files"] = string.Join(", ", evidence.Files),
+            ["evidence_rationale"] = evidence.Rationale,
+        };
+
+        var instruction = RatificationPromptLoader.Load().Substitute(vars);
 
         return new Brief(
             ticket.Id,
