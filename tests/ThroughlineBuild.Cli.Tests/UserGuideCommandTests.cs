@@ -218,13 +218,13 @@ public class UserGuideCommandTests
     // ------------------------------------------------------------------
 
     [Fact]
-    public void InitCommand_SuccessOutput_MentionsUserGuideVerb()
+    public async Task InitCommand_SuccessOutput_MentionsUserGuideVerb()
     {
         var dir = MakeTempDir();
         try
         {
             var console = new FakeConsole();
-            var result = InitCommand.Execute(dir, force: false, printTemplate: false, console);
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console);
 
             Assert.Equal(0, result);
             Assert.Contains("user-guide", console.Stdout);
