@@ -584,15 +584,19 @@ public static class InitCommand
     }
 
     /// <summary>
-    /// Scans the two canonical doc directories (docs/op-docs and docs/proposals) for
-    /// markdown files. Returns paths relative to <paramref name="cwd"/> using forward
-    /// slashes, suitable for use as arguments to 'build scaffold'.
-    /// Detection is bounded to these two directories; arbitrary repo markdown is not scanned.
+    /// Scans the canonical op-doc directories for markdown files: the conventional
+    /// docs/op-docs and docs/proposals, plus their top-level op-docs and proposals
+    /// equivalents (where operators commonly drop a doc). Returns paths relative to
+    /// <paramref name="cwd"/> using forward slashes, suitable for use as arguments to
+    /// 'build scaffold'. Detection stays bounded to this fixed allow-list; arbitrary repo
+    /// markdown is never scanned. Each file is reported at most once even if two scanned
+    /// directories resolve to the same path.
     /// </summary>
     public static IReadOnlyList<string> FindDocPaths(string cwd)
     {
         var results = new List<string>();
-        string[] relDirs = ["docs/op-docs", "docs/proposals"];
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        string[] relDirs = ["docs/op-docs", "docs/proposals", "op-docs", "proposals"];
         foreach (var relDir in relDirs)
         {
             var absDir = Path.Combine(cwd, relDir.Replace('/', Path.DirectorySeparatorChar));
@@ -601,7 +605,8 @@ public static class InitCommand
             foreach (var file in Directory.GetFiles(absDir, "*.md").OrderBy(f => f))
             {
                 var rel = Path.GetRelativePath(cwd, file).Replace(Path.DirectorySeparatorChar, '/');
-                results.Add(rel);
+                if (seen.Add(rel))
+                    results.Add(rel);
             }
         }
         return results;

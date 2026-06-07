@@ -1573,6 +1573,50 @@ public class InitCommandTests
     }
 
     [Fact]
+    public void FindDocPaths_TopLevelOpDocsDir_IsDetected()
+    {
+        // WI-08: the operator dropped their doc at top-level op-docs/, not docs/op-docs/.
+        var dir = MakeTempDir();
+        try
+        {
+            var topLevel = Path.Combine(dir, "op-docs");
+            Directory.CreateDirectory(topLevel);
+            File.WriteAllText(Path.Combine(topLevel, "01-survey-site.md"), "");
+
+            var paths = InitCommand.FindDocPaths(dir);
+
+            Assert.Contains("op-docs/01-survey-site.md", paths);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FindDocPaths_StaysBoundedToAllowList_IgnoresArbitraryMarkdown()
+    {
+        // Detection must NOT scan arbitrary repo markdown (an explicit op-33 non-goal).
+        var dir = MakeTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "README.md"), "");
+            Directory.CreateDirectory(Path.Combine(dir, "src"));
+            File.WriteAllText(Path.Combine(dir, "src", "notes.md"), "");
+            Directory.CreateDirectory(Path.Combine(dir, "docs"));
+            File.WriteAllText(Path.Combine(dir, "docs", "guide.md"), "");
+
+            var paths = InitCommand.FindDocPaths(dir);
+
+            Assert.Empty(paths);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void FindDocPaths_NoDirs_ReturnsEmpty()
     {
         var dir = MakeTempDir();
