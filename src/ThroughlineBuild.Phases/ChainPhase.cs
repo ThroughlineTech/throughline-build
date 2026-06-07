@@ -2535,6 +2535,12 @@ public class ChainPhase
         var dash = id.LastIndexOf('-');
         if (dash >= 0 && dash < id.Length - 1 && int.TryParse(id.AsSpan(dash + 1), out var n))
             return n;
+        // No project-identifier prefix (identifier not configured): the whole id is a
+        // bare number (e.g. "10"). Parse it directly so unordered siblings still sort
+        // numerically instead of falling through to a lexicographic id tiebreaker
+        // (where "10" < "8"). See TLB-496 for the negative-id sibling of this bug.
+        if (dash < 0 && int.TryParse(id, out var bare))
+            return bare;
         return int.MaxValue;
     }
 

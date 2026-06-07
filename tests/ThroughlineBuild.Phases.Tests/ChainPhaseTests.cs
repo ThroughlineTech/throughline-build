@@ -1247,6 +1247,37 @@ public class ChainPhaseTests
     }
 
     [Fact]
+    public async Task RunAsync_ParentWithUnorderedChildren_BareNumericIds_DispatchesLowestTicketNumberFirst()
+    {
+        // Same as above but ids are bare numbers (project identifier not configured), so
+        // there is no "PREFIX-" to strip. TicketNumber must parse the whole id; otherwise
+        // every sibling collapses to int.MaxValue and the lexicographic id tiebreaker takes
+        // over ("10" < "8"), which is exactly the "10, 11, 8, 9" dispatch-order regression.
+        var parent = MakeTicket(TicketState.Backlog);
+        var high = MakeChildTicket("10", "child-uuid-high", TicketState.Backlog);
+        var low = MakeChildTicket("8", "child-uuid-low", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { high, low });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        Assert.Equal(2, result.ChildResults!.Count);
+        // Numeric order, not lexicographic: 8 before 10 despite reverse seed order.
+        Assert.Equal("8", result.ChildResults![0].TicketId);
+        Assert.Equal("10", result.ChildResults![1].TicketId);
+    }
+
+    [Fact]
     public async Task RunAsync_ParentWhoseChildHasItsOwnChildren_RunsGrandchildThenRollsUpParents()
     {
         // Operation -> plan -> brief: a 3-level tree. Chaining the operation now
