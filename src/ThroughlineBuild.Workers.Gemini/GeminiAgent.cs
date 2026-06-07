@@ -91,7 +91,7 @@ public class GeminiAgent : IWorkerAgent
         {
             var reason = $"Worker executable not found: '{_options.ExecutablePath}'. " +
                          $"Verify it is on PATH or set workers.gemini.executable in config.toml. Win32: {ex.Message}";
-            Console.Error.WriteLine($"[GeminiAgent] {reason}");
+            WorkerDiagnostics.Write($"[GeminiAgent] {reason}");
             return new WorkerResult(Status.Failed, $"Worker executable not found: '{_options.ExecutablePath}'",
                 Array.Empty<string>(), reason, new Dictionary<string, object>());
         }
@@ -186,7 +186,7 @@ public class GeminiAgent : IWorkerAgent
             if (inner.DeserializeErrorType != null)
             {
                 var reason = $"Failed to deserialize WORKER_RESULT JSON: {inner.DeserializeErrorType}: {inner.DeserializeErrorMessage}";
-                Console.Error.WriteLine($"[GeminiAgent] {reason}");
+                WorkerDiagnostics.Write($"[GeminiAgent] {reason}");
                 // A valid JSON object missing only the required 'status' field is a committed
                 // session worth salvaging; tag it so ImplementPhase can recover it. See TLB-476.
                 var metadata = inner.MissingStatusField
@@ -211,7 +211,7 @@ public class GeminiAgent : IWorkerAgent
             if (outcome.DeserializeErrorType != null)
             {
                 var reason = $"Failed to deserialize WORKER_RESULT JSON: {outcome.DeserializeErrorType}: {outcome.DeserializeErrorMessage}";
-                Console.Error.WriteLine($"[GeminiAgent] {reason}");
+                WorkerDiagnostics.Write($"[GeminiAgent] {reason}");
                 // A valid JSON object missing only the required 'status' field is a committed
                 // session worth salvaging; tag it so ImplementPhase can recover it. See TLB-476.
                 var metadata = outcome.MissingStatusField
@@ -227,7 +227,7 @@ public class GeminiAgent : IWorkerAgent
                 $"Exit code {exitCode}. Stderr: {stderr}", new Dictionary<string, object>());
 
         var markerReason = $"No WORKER_RESULT block found in stdout. Stderr: {stderr}";
-        Console.Error.WriteLine($"[GeminiAgent] {markerReason}");
+        WorkerDiagnostics.Write($"[GeminiAgent] {markerReason}");
         // Clean exit but no WORKER_RESULT marker: tag it so ImplementPhase can salvage a
         // committed session that merely omitted the envelope. See TLB-471.
         return new WorkerResult(Status.Failed, "No WORKER_RESULT found in output", Array.Empty<string>(),

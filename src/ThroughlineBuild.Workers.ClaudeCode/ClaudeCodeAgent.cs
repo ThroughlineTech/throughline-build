@@ -97,7 +97,7 @@ public class ClaudeCodeAgent : IWorkerAgent
         {
             var reason = $"Worker executable not found: '{_options.ExecutablePath}'. " +
                          $"Verify it is on PATH or set workers.claude-code.executable in config.toml. Win32: {ex.Message}";
-            Console.Error.WriteLine($"[ClaudeCodeAgent] {reason}");
+            WorkerDiagnostics.Write($"[ClaudeCodeAgent] {reason}");
             return new WorkerResult(Status.Failed, $"Worker executable not found: '{_options.ExecutablePath}'",
                 Array.Empty<string>(), reason, new Dictionary<string, object>());
         }
@@ -288,12 +288,12 @@ public class ClaudeCodeAgent : IWorkerAgent
             if (parseError is not null)
             {
                 var failureReason = $"Failed to parse Claude Code JSON envelope: {parseError}. Stdout head: {head}. Stderr: {stderr}";
-                Console.Error.WriteLine($"[WorkerResultParser] {failureReason}");
+                WorkerDiagnostics.Write($"[WorkerResultParser] {failureReason}");
                 return new WorkerResult(Status.Failed, "Failed to parse Claude Code JSON envelope", Array.Empty<string>(),
                     failureReason, new Dictionary<string, object>());
             }
             var nullFailureReason = $"Deserialized envelope was null. Stdout head: {head}. Stderr: {stderr}";
-            Console.Error.WriteLine($"[WorkerResultParser] {nullFailureReason}");
+            WorkerDiagnostics.Write($"[WorkerResultParser] {nullFailureReason}");
             return new WorkerResult(Status.Failed, "Claude Code JSON envelope was null after deserialization", Array.Empty<string>(),
                 nullFailureReason, new Dictionary<string, object>());
         }
@@ -310,7 +310,7 @@ public class ClaudeCodeAgent : IWorkerAgent
         if (envelope.Result is null)
         {
             var failureReason = $"Envelope result field is null. Subtype: {envelope.Subtype}. Stderr: {stderr}";
-            Console.Error.WriteLine($"[WorkerResultParser] {failureReason}");
+            WorkerDiagnostics.Write($"[WorkerResultParser] {failureReason}");
             return new WorkerResult(Status.Failed, "Claude Code JSON envelope missing result field", Array.Empty<string>(),
                 failureReason, new Dictionary<string, object>());
         }
@@ -331,7 +331,7 @@ public class ClaudeCodeAgent : IWorkerAgent
         if (outcome.DeserializeErrorType != null)
         {
             var failureReason = $"Failed to deserialize WORKER_RESULT JSON: {outcome.DeserializeErrorType}: {outcome.DeserializeErrorMessage}";
-            Console.Error.WriteLine($"[WorkerResultParser] {failureReason}");
+            WorkerDiagnostics.Write($"[WorkerResultParser] {failureReason}");
             // A valid JSON object that merely omitted the required 'status' field is a committed
             // session worth salvaging (clean tree + HEAD advanced); tag it so ImplementPhase can
             // recover it instead of discarding the branch. Any other deserialize error stays
@@ -348,7 +348,7 @@ public class ClaudeCodeAgent : IWorkerAgent
                 $"Exit code {exitCode}. Stderr: {stderr}", new Dictionary<string, object>());
 
         var markerFailureReason = $"Envelope result did not contain a WORKER_RESULT block. Stderr: {stderr}";
-        Console.Error.WriteLine($"[WorkerResultParser] {markerFailureReason}");
+        WorkerDiagnostics.Write($"[WorkerResultParser] {markerFailureReason}");
         // Clean exit (code 0, parseable envelope) but no WORKER_RESULT marker: tag it so
         // ImplementPhase can salvage a committed session that merely omitted the envelope. See TLB-471.
         return new WorkerResult(Status.Failed, "No WORKER_RESULT found in output", Array.Empty<string>(),
