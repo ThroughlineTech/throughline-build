@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+  <!--
+    Default console-logger verbosity for `dotnet test`. At "minimal" the runner
+    buffers each passing test's captured stdout/stderr and only surfaces output
+    for FAILING tests - quiet on green, full diagnostics on red. Wired as the
+    repo default via RunSettingsFilePath in Directory.Build.props so a bare
+    `dotnet test` (the common local invocation) gets it without extra flags; the
+    canonical README logger command sets the same console verbosity explicitly.
+    This is belt and suspenders with WorkerDiagnostics, which already silences the
+    worker-agent failure diagnostics inside the test assemblies.
+  -->
+  <LoggerRunSettings>
+    <Loggers>
+      <Logger friendlyName="console" enabled="true">
+        <Configuration>
+          <Verbosity>minimal</Verbosity>
+        </Configuration>
+      </Logger>
+    </Loggers>
+  </LoggerRunSettings>
+</RunSettings>

@@ -1,0 +1,25 @@
+<Project>
+  <!--
+    Chain to the machine-local root Directory.Build.props when it exists. That
+    file is gitignored (it carries this machine's AOT/MSVC linker paths), so it
+    is present locally but ABSENT on CI - the Exists guard makes CI simply skip
+    it. Without this explicit import, MSBuild would stop at this nearest
+    Directory.Build.props and the root one would not be imported for test builds.
+  -->
+  <Import Project="$(MSBuildThisFileDirectory)..\Directory.Build.props"
+          Condition="Exists('$(MSBuildThisFileDirectory)..\Directory.Build.props')" />
+
+  <!--
+    Default `dotnet test` to console verbosity=minimal (quiet on green, full
+    output on FAILING tests) without requiring the explicit logger flag. Lives
+    here - tracked, scoped to tests/ - rather than in the gitignored root
+    Directory.Build.props, so it applies on every checkout and on CI. The
+    Condition lets an explicit RunSettingsFilePath / settings switch on the
+    command line win. See ../test.runsettings. This is belt and suspenders with
+    WorkerDiagnostics, which already silences the worker-agent failure
+    diagnostics inside the test assemblies.
+  -->
+  <PropertyGroup>
+    <RunSettingsFilePath Condition="'$(RunSettingsFilePath)' == ''">$(MSBuildThisFileDirectory)..\test.runsettings</RunSettingsFilePath>
+  </PropertyGroup>
+</Project>
