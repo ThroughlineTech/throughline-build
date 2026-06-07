@@ -47,19 +47,19 @@ build help config
 
 [plan] schema:
   [plan]
-  mode = "investigate"
+  mode = "promote"
 
 Keys:
-  mode  Optional string. Defaults to "investigate" when [plan] or mode is absent.
+  mode  Optional string. Defaults to "promote" when [plan] or mode is absent.
 
 Allowed mode values:
-  investigate  Spawn the plan worker to investigate the ticket and produce the plan.
   promote      Bypass worker investigation and promote the existing ticket description as the plan.
+  investigate  Spawn the plan worker to investigate the ticket and produce the plan.
 
 Precedence:
   build plan --from-brief and build chain --from-brief override [plan].mode for that invocation.
   Without --from-brief, [plan].mode controls plan behavior.
-  If neither --from-brief nor [plan].mode is set, the default is "investigate".
+  If neither --from-brief nor [plan].mode is set, the default is "promote".
 
 Validation:
   mode is case-insensitive.

@@ -47,11 +47,11 @@ public record ShipConfig(
 public record WorkConfig(string? TargetBranch);
 
 // [plan] section: controls whether PlanPhase runs a worker investigation or promotes in place.
-// mode = "investigate" (default) - spawn worker to produce plan; mode = "promote" - bypass worker.
+// mode = "promote" (default) - bypass worker and promote plan in place; mode = "investigate" - spawn worker.
 public record PlanConfig(string Mode)
 {
     public bool IsPromote => string.Equals(Mode, "promote", StringComparison.OrdinalIgnoreCase);
-    public static PlanConfig Default => new PlanConfig("investigate");
+    public static PlanConfig Default => new PlanConfig("promote");
 }
 
 // [batch] section: caps that gate the batch-implement path. When any cap is exceeded the
@@ -731,7 +731,7 @@ public static class BuildConfigLoader
         if (!root.TryGetValue("plan", out var val) || val is not TomlTable t)
             return PlanConfig.Default;
 
-        var mode = OptionalString(t, "mode", "investigate");
+        var mode = OptionalString(t, "mode", "promote");
         if (!string.Equals(mode, "investigate", StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(mode, "promote", StringComparison.OrdinalIgnoreCase))
             throw new ConfigException(

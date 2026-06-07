@@ -42,8 +42,8 @@ public class HelpTopicTests
         var output = HelpTopicRenderer.Render(Registry.TryGet("config")!);
 
         Assert.Contains("[plan] schema:", output);
-        Assert.Contains("mode = \"investigate\"", output);
-        Assert.Contains("promote", output);
+        Assert.Contains("mode = \"promote\"", output);
+        Assert.Contains("investigate", output);
         Assert.Contains("build plan --from-brief and build chain --from-brief override [plan].mode", output);
         Assert.Contains("Any value other than \"investigate\" or \"promote\" is a config error and exits 2.", output);
     }

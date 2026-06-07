@@ -162,11 +162,11 @@ Same `CheckSpec` shape and default rules as `review.checks` ([src/ThroughlineBui
 
 ### `[plan]` (optional section) - Functional
 
-`ReadPlanSection` ([src/ThroughlineBuild.Cli/Config.cs:654-666](../../src/ThroughlineBuild.Cli/Config.cs#L654-L666)). Parsed into `PlanConfig(string Mode)`; missing section returns `PlanConfig.Default` (`investigate`) ([src/ThroughlineBuild.Cli/Config.cs:51-55](../../src/ThroughlineBuild.Cli/Config.cs#L51-L55)).
+`ReadPlanSection` ([src/ThroughlineBuild.Cli/Config.cs:654-666](../../src/ThroughlineBuild.Cli/Config.cs#L654-L666)). Parsed into `PlanConfig(string Mode)`; missing section returns `PlanConfig.Default` (`promote`) ([src/ThroughlineBuild.Cli/Config.cs:51-55](../../src/ThroughlineBuild.Cli/Config.cs#L51-L55)).
 
 | Key | Default | Notes |
 |---|---|---|
-| `mode` | `"investigate"` | Must be `"investigate"` or `"promote"` (case-insensitive); any other value throws `key 'mode' in [plan] must be either "investigate" or "promote", got "<v>"`, exit 2 ([src/ThroughlineBuild.Cli/Config.cs:659-663](../../src/ThroughlineBuild.Cli/Config.cs#L659-L663)). |
+| `mode` | `"promote"` | Must be `"investigate"` or `"promote"` (case-insensitive); any other value throws `key 'mode' in [plan] must be either "investigate" or "promote", got "<v>"`, exit 2 ([src/ThroughlineBuild.Cli/Config.cs:659-663](../../src/ThroughlineBuild.Cli/Config.cs#L659-L663)). |
 
 `investigate` spawns a worker to investigate the ticket and write the plan; `promote` bypasses the worker and promotes the ticket plan in place (no LLM/worker). The effective promote decision is `fromBrief || config.Plan.IsPromote`, so either the `--from-brief` CLI flag or `mode = "promote"` enables it ([src/ThroughlineBuild.Cli/Program.cs:1081](../../src/ThroughlineBuild.Cli/Program.cs#L1081)). The live config sets `mode = "promote"` ([.build/config.toml:132-133](../../.build/config.toml#L132-L133)).
 

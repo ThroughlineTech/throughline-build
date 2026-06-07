@@ -147,6 +147,13 @@ plane_project_url = "https://plane.example.com/workspace/browse/PROJ/"
 # Missing files emit a stderr warning but do not fail the run.
 # notes_file = ".build/project.md"
 
+# [plan] mode controls the plan phase:
+# "investigate" - spawn a worker to investigate the ticket and write the plan.
+# "promote"     - bypass the investigation worker and promote the ticket plan in place.
+[plan]
+mode = "promote"
+# mode = "investigate"  # uncomment to re-enable worker investigation
+
 # [work] is optional - omit entirely to use [ship] base_branch as the worktree base.
 # Set target_branch to override which branch new worktrees are cut from and
 # what diffs are computed against. Useful when working on a long-running feature

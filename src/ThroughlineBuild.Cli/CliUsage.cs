@@ -80,10 +80,10 @@ Flags:
 
 Config keys (in .build/config.toml):
   [plan]
-  mode = "investigate"  (default) Spawn a worker to produce the plan from the ticket description.
-  mode = "promote"                Bypass the worker and promote the Backlog ticket to Ready in place.
+  mode = "promote"      (default) Bypass the worker and promote the Backlog ticket to Ready in place.
                                   Equivalent to passing --from-brief on the command line. The CLI
                                   flag overrides this key when both are present.
+  mode = "investigate"            Spawn a worker to produce the plan from the ticket description.
 
 Exit codes:
   0  Success
