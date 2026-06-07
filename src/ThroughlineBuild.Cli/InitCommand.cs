@@ -21,6 +21,12 @@ public static class InitCommand
     /// <param name="projectId">Optional: replaces REQUIRED_PLANE_PROJECT_ID in the template.</param>
     /// <param name="token">Optional: replaces REQUIRED_PLANE_API_TOKEN in the template (literal token value).</param>
     /// <param name="tokenEnv">Optional: if set, the plane_api_token line is replaced with plane_api_token_env = "VALUE".</param>
+    /// <param name="fromFile">
+    /// Optional path to a credentials input file. Lines have the form key = "value" or
+    /// key = value with the same key names as the config [ticketing] section. Comment lines
+    /// and blank lines are tolerated. Explicit flag values take precedence over file values.
+    /// When null and stdin is redirected, stdin is read as a credentials file instead.
+    /// </param>
     /// <param name="probeCodex">
     /// Optional injected Codex probe. When provided AND the target is being written (not
     /// --print-template, past the clobber guard), init queries Codex and rewrites the
@@ -40,11 +46,32 @@ public static class InitCommand
         string? projectId = null,
         string? token = null,
         string? tokenEnv = null,
+        string? fromFile = null,
         Func<CodexProbeResult>? probeCodex = null)
     {
         var template = ConfigTemplateLoader.Load();
 
-        if (!console.IsInputRedirected)
+        // Load creds from --from file or from redirected stdin; explicit flags take precedence.
+        if (fromFile is not null)
+        {
+            if (!File.Exists(fromFile))
+            {
+                console.ErrorWriteLine($"Error: credentials file not found: {fromFile}");
+                return 1;
+            }
+            var fileContent = File.ReadAllText(fromFile, System.Text.Encoding.UTF8);
+            ApplyCredsToParams(CredsFileParser.Parse(fileContent), ref planeUrl, ref workspace, ref projectId, ref token);
+        }
+        else if (console.IsInputRedirected)
+        {
+            var stdinContent = ReadAllLines(console);
+            if (stdinContent.Length > 0)
+                ApplyCredsToParams(CredsFileParser.Parse(stdinContent), ref planeUrl, ref workspace, ref projectId, ref token);
+        }
+
+        // Prompt for any remaining null values only when stdin is a TTY and no creds file path
+        // was given (even a partial file is a signal that the operator is in non-interactive mode).
+        if (!console.IsInputRedirected && fromFile is null)
             PromptForMissingValues(console, ref planeUrl, ref workspace, ref projectId, ref token);
 
         var content = ApplyFlags(template, planeUrl, workspace, projectId, token, tokenEnv);
@@ -132,6 +159,38 @@ public static class InitCommand
             var response = console.ReadLine()?.Trim();
             if (!string.IsNullOrEmpty(response)) token = response;
         }
+    }
+
+    /// <summary>
+    /// Applies non-null fields from <paramref name="creds"/> to any parameter that is still null.
+    /// Explicit flag values (already set before this call) are never overwritten.
+    /// </summary>
+    private static void ApplyCredsToParams(
+        CredsFileValues creds,
+        ref string? planeUrl,
+        ref string? workspace,
+        ref string? projectId,
+        ref string? token)
+    {
+        planeUrl ??= creds.PlaneBaseUrl;
+        workspace ??= creds.PlaneWorkspaceSlug;
+        projectId ??= creds.PlaneProjectId;
+        token ??= creds.PlaneApiToken;
+        // creds.PlaneProjectName is available for downstream use (e.g. name-to-id resolution)
+        // but is not substituted into the template in this release.
+    }
+
+    /// <summary>
+    /// Reads all remaining lines from <paramref name="console"/> until EOF (ReadLine returns null)
+    /// and returns the joined result. Used to consume redirected stdin as a creds file.
+    /// </summary>
+    private static string ReadAllLines(IConsole console)
+    {
+        var sb = new System.Text.StringBuilder();
+        string? line;
+        while ((line = console.ReadLine()) is not null)
+            sb.AppendLine(line);
+        return sb.ToString();
     }
 
     /// <summary>

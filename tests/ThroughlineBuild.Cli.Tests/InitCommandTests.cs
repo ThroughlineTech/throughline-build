@@ -614,4 +614,224 @@ public class InitCommandTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    // ------------------------------------------------------------------
+    // Execute: --from file (credentials input file)
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void Execute_FromFile_AllFields_FillsAllPlaceholders()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var credsPath = Path.Combine(dir, "creds.txt");
+            File.WriteAllText(credsPath, """
+                plane_base_url = "https://api.plane.so"
+                plane_workspace_slug = "acme"
+                plane_api_token = "tok-secret"
+                plane_project_id = "uuid-abcd"
+                """);
+
+            var console = new FakeConsole();
+            var result = InitCommand.Execute(dir, force: false, printTemplate: false, console,
+                fromFile: credsPath);
+
+            Assert.Equal(0, result);
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+            Assert.Contains("https://api.plane.so", written);
+            Assert.Contains("acme", written);
+            Assert.Contains("tok-secret", written);
+            Assert.Contains("uuid-abcd", written);
+            Assert.DoesNotContain("REQUIRED_PLANE_BASE_URL", written);
+            Assert.DoesNotContain("REQUIRED_PLANE_WORKSPACE_SLUG", written);
+            Assert.DoesNotContain("REQUIRED_PLANE_API_TOKEN", written);
+            Assert.DoesNotContain("REQUIRED_PLANE_PROJECT_ID", written);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Execute_FromFile_ExplicitFlagOverridesFileValue()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var credsPath = Path.Combine(dir, "creds.txt");
+            File.WriteAllText(credsPath, """
+                plane_base_url = "https://from-file.example.com"
+                plane_workspace_slug = "file-workspace"
+                """);
+
+            var console = new FakeConsole();
+            InitCommand.Execute(dir, force: false, printTemplate: false, console,
+                planeUrl: "https://from-flag.example.com",  // explicit flag wins
+                fromFile: credsPath);
+
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+            // Flag value takes precedence over file value.
+            Assert.Contains("https://from-flag.example.com", written);
+            Assert.DoesNotContain("https://from-file.example.com", written);
+            // File fills in the workspace slug that was not supplied as a flag.
+            Assert.Contains("file-workspace", written);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Execute_FromFile_NotFound_ReturnsOneAndWritesError()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new FakeConsole();
+            var result = InitCommand.Execute(dir, force: false, printTemplate: false, console,
+                fromFile: Path.Combine(dir, "nonexistent.txt"));
+
+            Assert.Equal(1, result);
+            Assert.Contains("not found", console.Stderr);
+            Assert.False(File.Exists(Path.Combine(dir, ".build", "config.toml")));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Execute_FromFile_CommentsAndBlankLines_AreIgnored()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var credsPath = Path.Combine(dir, "creds.txt");
+            File.WriteAllText(credsPath, """
+                # Workspace creds
+                plane_base_url = "https://api.plane.so"
+
+                # Per-project
+                plane_project_id = "uuid-proj"
+                """);
+
+            var console = new FakeConsole();
+            var result = InitCommand.Execute(dir, force: false, printTemplate: false, console,
+                fromFile: credsPath);
+
+            Assert.Equal(0, result);
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+            Assert.Contains("https://api.plane.so", written);
+            Assert.Contains("uuid-proj", written);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Execute_StdinAsCredsFile_FillsPlaceholders()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            // FakeConsole has IsInputRedirected=true and returns lines from Responses.
+            var console = new FakeConsole();
+            // Override FakeConsole to supply stdin lines (creds file via stdin).
+            var stdinConsole = new FakeStdinCredsConsole(
+                "plane_base_url = \"https://stdin.example.com\"",
+                "plane_workspace_slug = \"stdin-ws\"",
+                "plane_project_id = \"stdin-uuid\"",
+                "plane_api_token = \"stdin-tok\"");
+
+            var result = InitCommand.Execute(dir, force: false, printTemplate: false, stdinConsole);
+
+            Assert.Equal(0, result);
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+            Assert.Contains("https://stdin.example.com", written);
+            Assert.Contains("stdin-ws", written);
+            Assert.Contains("stdin-uuid", written);
+            Assert.Contains("stdin-tok", written);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Execute_FromFileWithProjectName_ProjectIdFillsPlaceholder()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var credsPath = Path.Combine(dir, "creds.txt");
+            File.WriteAllText(credsPath, """
+                plane_base_url = "https://api.plane.so"
+                plane_workspace_slug = "acme"
+                plane_api_token = "tok"
+                plane_project_name = "My App"
+                plane_project_id = "bypass-uuid"
+                """);
+
+            var console = new FakeConsole();
+            var result = InitCommand.Execute(dir, force: false, printTemplate: false, console,
+                fromFile: credsPath);
+
+            Assert.Equal(0, result);
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+            // project_id from file is used to replace the placeholder.
+            Assert.Contains("bypass-uuid", written);
+            Assert.DoesNotContain("REQUIRED_PLANE_PROJECT_ID", written);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Usage text: --from flag
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void UsageText_InitVerb_ContainsFromFlag()
+    {
+        Assert.Contains("--from", CliUsage.UsageText);
+    }
+
+    // ------------------------------------------------------------------
+    // Helpers for stdin-as-creds tests
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Fake console that simulates redirected stdin delivering creds file lines.
+    /// </summary>
+    private sealed class FakeStdinCredsConsole : IConsole
+    {
+        private readonly System.Text.StringBuilder _stdout = new();
+        private readonly System.Text.StringBuilder _stderr = new();
+        private readonly Queue<string?> _lines;
+
+        public FakeStdinCredsConsole(params string[] lines)
+        {
+            _lines = new Queue<string?>(lines);
+            _lines.Enqueue(null); // EOF sentinel
+        }
+
+        public string Stdout => _stdout.ToString();
+        public string Stderr => _stderr.ToString();
+
+        public bool IsInputRedirected => true;
+        public void WriteLine(string value) => _stdout.AppendLine(value);
+        public void Write(string value) => _stdout.Append(value);
+        public void ErrorWriteLine(string value) => _stderr.AppendLine(value);
+        public string? ReadLine() => _lines.Count > 0 ? _lines.Dequeue() : null;
+        public char? ReadKeyChar() => null;
+    }
 }

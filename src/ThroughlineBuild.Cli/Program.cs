@@ -237,12 +237,14 @@ static async Task<int> RunAsync(string[] args)
         var initProjectId = CliArgParser.GetFlagValue(filteredArgs, "--project-id");
         var initToken     = CliArgParser.GetFlagValue(filteredArgs, "--token");
         var initTokenEnv  = CliArgParser.GetFlagValue(filteredArgs, "--token-env");
+        var initFromFile  = CliArgParser.GetFlagValue(filteredArgs, "--from");
         return InitCommand.Execute(rawCwd, force, printTemplate, SystemConsole.Instance,
             planeUrl: initPlaneUrl,
             workspace: initWorkspace,
             projectId: initProjectId,
             token: initToken,
             tokenEnv: initTokenEnv,
+            fromFile: initFromFile,
             // --print-template returns before this delegate is invoked, so init --print-template
             // stays offline-safe. Blocking on the async probe is fine in this top-level CLI path.
             probeCodex: () => new CodexModelProbe().ProbeAsync().GetAwaiter().GetResult());
