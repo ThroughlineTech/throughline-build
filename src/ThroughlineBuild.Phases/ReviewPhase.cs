@@ -211,6 +211,16 @@ public class ReviewPhase : IWorkflowPhase
             ["role"] = "verifier"
         }, ct).ConfigureAwait(false);
 
+        // Step 9b: Snapshot the repo-global git state the verifier must not mutate. codex and
+        // gemini ignore verifier_allowed_tools and run unsandboxed (read-only enforcement is not
+        // available on Windows - see TLB-478), so this before/after delta is the only backstop
+        // against a verifier that runs git stash or moves HEAD. The stash stack is shared across
+        // worktrees (a leaked stash corrupts a later ticket); a HEAD move corrupts what ships.
+        // Step 10b catches uncommitted writes, but a stash or reset leaves a CLEAN tree and would
+        // slip past it.
+        var stashCountBeforeReview = (await _git.ListStashEntriesAsync(canonicalWorktreePath, ct).ConfigureAwait(false)).Count;
+        string? headShaBeforeReview = await TryHeadShaAsync(canonicalWorktreePath, ct).ConfigureAwait(false);
+
         // Step 10: Run verifier
         var verdict = await verifier.VerifyAsync(implementerBrief, diff, implementerResult, ct).ConfigureAwait(false);
 
@@ -233,6 +243,47 @@ public class ReviewPhase : IWorkflowPhase
                 ["dirty_paths"] = reviewDirtyPaths
             }, ct).ConfigureAwait(false);
             return new ReviewResult(false, ticketId, null, null, Array.Empty<string>(), dirtyReason);
+        }
+
+        // Step 10c: Shared-git-state guard. The verifier must not touch the stash stack or move
+        // HEAD; on violation, drop any stash entries it pushed and hard-fail so mutated shared
+        // state never reaches ship. See TLB-478 and the Step 9b snapshot.
+        var stashCountAfterReview = (await _git.ListStashEntriesAsync(canonicalWorktreePath, ct).ConfigureAwait(false)).Count;
+        string? headShaAfterReview = await TryHeadShaAsync(canonicalWorktreePath, ct).ConfigureAwait(false);
+        int stashDelta = stashCountAfterReview - stashCountBeforeReview;
+        bool headMoved = headShaBeforeReview is not null && headShaAfterReview is not null
+            && !string.Equals(headShaBeforeReview, headShaAfterReview, StringComparison.Ordinal);
+        if (stashDelta != 0 || headMoved)
+        {
+            // Surface the verdict the verifier produced before failing on the guard.
+            await EmitAsync(EventKind.VerifierVerdict, ticketId, new Dictionary<string, object>
+            {
+                ["kind"] = verdict.Kind.ToString(),
+                ["checks_failed_count"] = verdict.ChecksFailed.Count,
+                ["rationale"] = verdict.Rationale,
+                ["checks_failed"] = verdict.ChecksFailed
+            }, ct).ConfigureAwait(false);
+
+            // Drop the stash entries the verifier pushed. Dispatch is serial, so the top
+            // stashDelta entries are exactly the verifier's. Best-effort.
+            int stashDropped = 0;
+            for (int i = 0; i < stashDelta; i++)
+            {
+                var drop = await _git.StashDropAsync("stash@{0}", canonicalWorktreePath, ct).ConfigureAwait(false);
+                if (!drop.Success) break;
+                stashDropped++;
+            }
+
+            var guardReason = FormatSharedStateReason(headMoved, headShaBeforeReview, headShaAfterReview, stashDelta, stashDropped);
+            await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+            {
+                ["kind"] = "shared_git_state_mutated_after_review",
+                ["head_before"] = headShaBeforeReview ?? "",
+                ["head_after"] = headShaAfterReview ?? "",
+                ["stash_delta"] = stashDelta,
+                ["stash_dropped"] = stashDropped
+            }, ct).ConfigureAwait(false);
+            return new ReviewResult(false, ticketId, null, null, Array.Empty<string>(), guardReason);
         }
 
         // Step 11: Emit VerifierVerdict
@@ -370,6 +421,26 @@ public class ReviewPhase : IWorkflowPhase
         }
 
         return new ReviewResult(true, ticketId, kind, rationale, Array.Empty<string>(), null);
+    }
+
+    // Best-effort HEAD read: the shared-state guard treats an unreadable HEAD as "unknown"
+    // and skips the comparison rather than false-failing the review.
+    private async Task<string?> TryHeadShaAsync(string worktreePath, CancellationToken ct)
+    {
+        try { return await _git.HeadShaAsync(worktreePath, ct).ConfigureAwait(false); }
+        catch { return null; }
+    }
+
+    private static string FormatSharedStateReason(bool headMoved, string? headBefore, string? headAfter, int stashDelta, int stashDropped)
+    {
+        var parts = new List<string>();
+        if (headMoved)
+            parts.Add($"feature branch HEAD moved during review ({headBefore} -> {headAfter})");
+        if (stashDelta > 0)
+            parts.Add($"verifier pushed {stashDelta} stash entr{(stashDelta == 1 ? "y" : "ies")} onto the repo-global stack (dropped {stashDropped})");
+        else if (stashDelta < 0)
+            parts.Add($"verifier consumed {-stashDelta} pre-existing stash entr{(stashDelta == -1 ? "y" : "ies")}");
+        return "Review: verifier mutated shared git state - " + string.Join("; ", parts);
     }
 
     private static string FormatDirtyWorktreeReason(string phase, IReadOnlyList<string> dirtyPaths, int sampleLimit = 5)

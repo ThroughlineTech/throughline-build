@@ -81,7 +81,11 @@ log_directory = ".build/events"
 [review]
 # Maximum time the verifier worker may run per review session.
 verifier_timeout_minutes = 15
-# Tools the verifier worker is permitted to use when reading the codebase.
+# Tools the verifier worker may use when reading the codebase.
+# NOTE: only enforced for claude-code/copilot verifiers. codex and gemini ignore this
+# (codex has no per-tool allowlist and its sandbox is unusable on Windows), so they run
+# the verifier unsandboxed; review safety then relies on the prompt plus the post-review
+# git-state guard. See TLB-478.
 verifier_allowed_tools = ["Read", "Grep", "Glob"]
 
 # Each [[review.checks]] entry defines an automated check run before the verifier.

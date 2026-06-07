@@ -133,6 +133,14 @@ public interface IGitClient
     Task<IReadOnlyList<string>> ListStashEntriesAsync(string workingDirectory, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
 
+    // Drops a single stash entry (git stash drop <stashRef>) from the repo-global stack.
+    // Used by ReviewPhase to remove stash entries a verifier pushed, since the stash stack
+    // leaks across worktrees and would otherwise corrupt a later ticket (TLB-478).
+    // Default returns failure so existing FakeGitClients remain unchanged.
+    // Never throws - failure is returned as GitOpResult(false, ...).
+    Task<GitOpResult> StashDropAsync(string stashRef, string workingDirectory, CancellationToken ct) =>
+        Task.FromResult(new GitOpResult(false, "not implemented"));
+
     // Creates a detached-HEAD worktree at a specific commit (git worktree add --detach <path> <sha>).
     // No branch is created; cleanup is a plain worktree remove.
     // Default returns failure so existing fakes remain unchanged (TLB-401).

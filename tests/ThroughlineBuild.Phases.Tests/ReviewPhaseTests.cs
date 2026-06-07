@@ -773,7 +773,12 @@ public class ReviewPhaseTests
         private readonly string _mainSha;
         private readonly bool _includeWorktreeMatching;
         private readonly bool _branchExistsForRecovery;
-        private readonly string _headSha;
+
+        // Mutable so a verifier test double can simulate moving HEAD mid-review (TLB-478 guard).
+        public string CurrentHeadSha;
+        // Mutable repo-global stash stack; StashDropAsync pops the top (index 0).
+        public List<string> StashEntries { get; } = new();
+        public int StashDropCount { get; private set; }
 
         public bool CheckoutWorktreeCalled { get; private set; }
 
@@ -785,7 +790,7 @@ public class ReviewPhaseTests
             _mainSha = mainSha;
             _includeWorktreeMatching = includeWorktreeMatching;
             _branchExistsForRecovery = branchExistsForRecovery;
-            _headSha = headSha ?? ImplementedSha;
+            CurrentHeadSha = headSha ?? ImplementedSha;
         }
 
         public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
@@ -821,7 +826,18 @@ public class ReviewPhaseTests
             Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
 
         public Task<string> HeadShaAsync(string worktreePath, CancellationToken ct) =>
-            Task.FromResult(_headSha);
+            Task.FromResult(CurrentHeadSha);
+
+        public Task<IReadOnlyList<string>> ListStashEntriesAsync(string workingDirectory, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>(StashEntries.ToList());
+
+        public Task<GitOpResult> StashDropAsync(string stashRef, string workingDirectory, CancellationToken ct)
+        {
+            if (StashEntries.Count > 0)
+                StashEntries.RemoveAt(0); // drop the top (stash@{0})
+            StashDropCount++;
+            return Task.FromResult(new GitOpResult(true, null));
+        }
 
         public Task<GitDiff> DiffAsync(string fromRef, string toRef, string mainWorktreePath, bool includePatchContent, CancellationToken ct) =>
             Task.FromResult(new GitDiff(fromRef, toRef, new[]
@@ -891,6 +907,85 @@ public class ReviewPhaseTests
         Assert.True(gateFailures[0].Data.ContainsKey("dirty_paths"));
 
         // No ticket transitions or comments - hard-fail stops before verdict processing
+        Assert.Empty(ticketing.Transitions);
+        Assert.Empty(ticketing.Comments);
+    }
+
+    // A verifier override that mutates shared git state mid-review, simulating an unsandboxed
+    // codex verifier that runs `git stash` or `git reset` despite the prompt ban (TLB-478).
+    private sealed class MutatingVerifier : IVerifier
+    {
+        private readonly Verdict _verdict;
+        private readonly Action _onVerify;
+        public MutatingVerifier(Verdict verdict, Action onVerify) { _verdict = verdict; _onVerify = onVerify; }
+        public Task<Verdict> VerifyAsync(Brief brief, GitDiff diff, WorkerResult workerResult, CancellationToken ct)
+        {
+            _onVerify();
+            return Task.FromResult(_verdict);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_VerifierPushesStash_HardFailsAndDropsIt()
+    {
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        ticketing.SeedComment($"<p>[implemented_at: {ImplementedSha}]</p>");
+        var worker = new FakeWorkerAgent();
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, includeWorktreeMatching: true);
+        // The verifier runs `git stash` mid-review: an entry lands on the repo-global stack while
+        // the worktree itself stays clean, so the Step 10b dirty check does not catch it.
+        var verifier = new MutatingVerifier(
+            new Verdict(VerdictKind.Pass, "looks good", Array.Empty<string>()),
+            () => git.StashEntries.Insert(0, "stash@{0}: On ticket/tlb-1: WIP"));
+        var phase = new ReviewPhase(ticketing, worker, events, MakeBuildOptions(), MakeReviewOptions(),
+            git, verifierOverride: verifier);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("shared git state", result.FailureReason!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("stash", result.FailureReason!, StringComparison.OrdinalIgnoreCase);
+        // The leaked stash entry was dropped and the stack restored.
+        Assert.Equal(1, git.StashDropCount);
+        Assert.Empty(git.StashEntries);
+        // Verdict surfaced first, then a GateFailure carrying the delta/dropped counts.
+        Assert.Single(events.Events.Where(e => e.Kind == EventKind.VerifierVerdict));
+        var gate = events.Events.Single(e => e.Kind == EventKind.GateFailure
+            && e.Data.TryGetValue("kind", out var k) && k?.ToString() == "shared_git_state_mutated_after_review");
+        Assert.Equal(1, Convert.ToInt32(gate.Data["stash_delta"]));
+        Assert.Equal(1, Convert.ToInt32(gate.Data["stash_dropped"]));
+        // Hard-fail stops before verdict processing: no transition, no comment.
+        Assert.Empty(ticketing.Transitions);
+        Assert.Empty(ticketing.Comments);
+    }
+
+    [Fact]
+    public async Task RunAsync_VerifierMovesHead_HardFails()
+    {
+        const string movedSha = "9999999999999999999999999999999999999999";
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        ticketing.SeedComment($"<p>[implemented_at: {ImplementedSha}]</p>");
+        var worker = new FakeWorkerAgent();
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, includeWorktreeMatching: true);
+        // The verifier runs `git reset`/`checkout` mid-review: HEAD moves off the reviewed commit
+        // while leaving a clean tree, again evading the Step 10b dirty check.
+        var verifier = new MutatingVerifier(
+            new Verdict(VerdictKind.Pass, "ok", Array.Empty<string>()),
+            () => git.CurrentHeadSha = movedSha);
+        var phase = new ReviewPhase(ticketing, worker, events, MakeBuildOptions(), MakeReviewOptions(),
+            git, verifierOverride: verifier);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("HEAD moved", result.FailureReason!, StringComparison.OrdinalIgnoreCase);
+        var gate = events.Events.Single(e => e.Kind == EventKind.GateFailure
+            && e.Data.TryGetValue("kind", out var k) && k?.ToString() == "shared_git_state_mutated_after_review");
+        Assert.Equal(ImplementedSha, gate.Data["head_before"].ToString());
+        Assert.Equal(movedSha, gate.Data["head_after"].ToString());
+        Assert.Equal(0, Convert.ToInt32(gate.Data["stash_delta"]));
         Assert.Empty(ticketing.Transitions);
         Assert.Empty(ticketing.Comments);
     }

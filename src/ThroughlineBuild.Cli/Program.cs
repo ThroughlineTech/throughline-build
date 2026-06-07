@@ -1448,6 +1448,8 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
             LiveStdoutSink: debugMode ? Console.Out : null,
             LiveStderrSink: debugMode ? Console.Error : null,
             ProgressDigestSink: enableDigest ? Console.Error : null);
+        var reviewToolWarning = VerifierToolEnforcement.UnenforcedWarning(effectiveAgentFor("review"), config2.Review.VerifierAllowedTools);
+        if (reviewToolWarning is not null) Console.Error.WriteLine($"[build] {reviewToolWarning}");
         var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
         var phase = new ReviewPhase(ticketing, workerFactory.Create(effectiveAgentFor("review")), eventSink, buildOptions, reviewOptions, project: config2.Project);
         ReviewResult result;
@@ -1654,6 +1656,9 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
         var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
         return new ReviewPhase(ticketing, workerFactory.Create(effectiveAgentFor("review")), eventSink, buildOpts, reviewOptions, project: config2.Project);
     };
+    // Once-per-chain honesty warning when the review worker won't enforce verifier_allowed_tools.
+    var chainReviewToolWarning = VerifierToolEnforcement.UnenforcedWarning(effectiveAgentFor("review"), config2.Review.VerifierAllowedTools);
+    if (chainReviewToolWarning is not null) Console.Error.WriteLine($"[build] {chainReviewToolWarning}");
 
     // Shared baseline cache for all ship invocations within this chain: pays once per chain
     // invocation and reuses across all tickets in the chain as long as the SHA matches.

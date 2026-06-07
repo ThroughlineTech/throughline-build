@@ -302,6 +302,12 @@ public class CodexAgent : IWorkerAgent
     // instead of a positional command-line argument.
     internal static List<string> BuildArgs(CodexOptions options, WorkerOptions workerOptions)
     {
+        // NOTE: workerOptions.AllowedTools is deliberately NOT applied here. codex has no
+        // per-tool allowlist flag (unlike claude-code's --allowedTools), and its sandbox
+        // (-s read-only) is non-functional on Windows - it rejects every command, including
+        // reads, so it cannot be used to make the verifier read-only without breaking it.
+        // The review phase therefore enforces read-only via prompt + a post-review git-state
+        // guard rather than the tool list. See TLB-478.
         var args = new List<string> { "exec", "--json" };
         if (options.BypassPermissions)
             args.Add("--dangerously-bypass-approvals-and-sandbox");

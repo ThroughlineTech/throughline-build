@@ -935,6 +935,37 @@ public sealed class ProcessGitClient : IGitClient
         }
     }
 
+    public async Task<GitOpResult> StashDropAsync(string stashRef, string workingDirectory, CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = workingDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("stash");
+            psi.ArgumentList.Add("drop");
+            psi.ArgumentList.Add(stashRef);
+
+            using var proc = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start git process");
+            var stderr = await proc.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
+            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+
+            return proc.ExitCode == 0
+                ? new GitOpResult(true, null)
+                : new GitOpResult(false, stderr.Trim());
+        }
+        catch (Exception ex)
+        {
+            return new GitOpResult(false, ex.Message);
+        }
+    }
+
     public async Task<bool> RemoteExistsAsync(string remote, string workingDirectory, CancellationToken ct)
     {
         try
