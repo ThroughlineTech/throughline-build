@@ -1973,17 +1973,26 @@ public class ChainPhase
 
                 if (childResult.Outcome == ChainOutcome.ParentCompleted)
                 {
+                    // Accumulate the finished sub-chain into this parent's integration branch.
+                    // Rebase the sub-chain branch onto the parent's branch before the fast-forward
+                    // (same hazard and fix as the root landing, TLB-494): in a fresh run each
+                    // sub-chain forks from the parent's current tip so a plain ff works, but a
+                    // reused sub-chain branch from a prior run can have diverged. Rebasing first
+                    // makes the ff valid again; a conflict stops the chain with the work left safe
+                    // on the sub-chain branch.
                     var childIntegrationBranch = ChainIntegrationBranch(child);
-                    var mergeResult = await _git.FastForwardMergeAsync(
-                        childIntegrationBranch,
-                        sharedWorktreePath ?? integrationWorktreePath,
-                        ct).ConfigureAwait(false);
-                    if (!mergeResult.Success)
+                    var childWorktreePath = await ResolveWorktreePathAsync(childIntegrationBranch, child, ct)
+                        .ConfigureAwait(false);
+                    var accumulateFailure = await RebaseThenFastForwardAsync(
+                        child.Id, childIntegrationBranch, childWorktreePath,
+                        integrationBranch, sharedWorktreePath ?? integrationWorktreePath,
+                        "chain_accumulate", ct).ConfigureAwait(false);
+                    if (accumulateFailure is not null)
                     {
                         allChildResults[^1] = childResult with
                         {
                             Outcome = ChainOutcome.ParentStoppedEarly,
-                            FinalRationale = $"failed to merge {childIntegrationBranch} into {integrationBranch}: {mergeResult.FailureReason}"
+                            FinalRationale = accumulateFailure
                         };
                         anyStoppedEarly = true;
                         break;
@@ -2062,55 +2071,17 @@ public class ChainPhase
                 $"safe on {integrationBranch}; switch to {_baseOptions.TargetBranch} and merge it manually.";
         }
 
-        // Rebase the integration branch onto the current target before the fast-forward. The
-        // integration branch forks from the target at chain start; if the target then advances -
-        // a long chain racing a concurrent push, or (commonly) a reused integration branch from
-        // a prior run after the target moved - the branches diverge and a plain fast-forward is
-        // impossible. Replaying the accumulated commits onto the current target tip makes the
-        // target an ancestor again, so the fast-forward below succeeds. Mirrors ShipPhase Step 5.
-        var rebase = await _git.RebaseAsync(_baseOptions.TargetBranch, integrationWorktreePath, ct)
-            .ConfigureAwait(false);
-        if (rebase.HadConflicts)
-        {
-            await _git.RebaseAbortAsync(integrationWorktreePath, ct).ConfigureAwait(false);
-            var paths = string.Join(", ", rebase.ConflictingPaths);
-            await EmitChainGateFailureAsync(ticketId, "chain_landing_rebase_conflicts", new Dictionary<string, object>
-            {
-                ["integration_branch"] = integrationBranch,
-                ["target_branch"] = _baseOptions.TargetBranch,
-                ["conflicting_paths"] = rebase.ConflictingPaths
-            }, ct).ConfigureAwait(false);
-            return $"chain accumulated onto {integrationBranch} but rebasing it onto " +
-                $"{_baseOptions.TargetBranch} to land hit conflicts in: {paths}. The work is safe on " +
-                $"{integrationBranch}; rebase it onto {_baseOptions.TargetBranch} and resolve, then re-run.";
-        }
-        if (!rebase.Success)
-        {
-            await EmitChainGateFailureAsync(ticketId, "chain_landing_rebase_failed", new Dictionary<string, object>
-            {
-                ["integration_branch"] = integrationBranch,
-                ["target_branch"] = _baseOptions.TargetBranch,
-                ["detail"] = rebase.FailureReason ?? "unknown"
-            }, ct).ConfigureAwait(false);
-            return $"chain accumulated onto {integrationBranch} but rebasing it onto " +
-                $"{_baseOptions.TargetBranch} to land failed: {rebase.FailureReason}. The work is safe " +
-                $"on {integrationBranch}; rebase it onto {_baseOptions.TargetBranch} manually, then re-run.";
-        }
-
-        var landResult = await _git.FastForwardMergeAsync(integrationBranch, _workingDirectory, ct)
-            .ConfigureAwait(false);
-        if (!landResult.Success)
-        {
-            await EmitChainGateFailureAsync(ticketId, "chain_landing_merge_failed", new Dictionary<string, object>
-            {
-                ["integration_branch"] = integrationBranch,
-                ["target_branch"] = _baseOptions.TargetBranch,
-                ["detail"] = landResult.FailureReason ?? "unknown"
-            }, ct).ConfigureAwait(false);
-            return $"chain accumulated onto {integrationBranch} but landing it onto " +
-                $"{_baseOptions.TargetBranch} failed: {landResult.FailureReason}. The work is safe " +
-                $"on {integrationBranch}; merge it manually.";
-        }
+        // Rebase the integration branch onto the current target before the fast-forward, then
+        // fast-forward the target up to it. The integration branch forks from the target at chain
+        // start; if the target then advances - a long chain racing a concurrent push, or a reused
+        // integration branch from a prior run after the target moved - the branches diverge and a
+        // plain fast-forward is impossible. Replaying onto the current tip makes the target an
+        // ancestor again. Shared with the intermediate accumulation merge so the two never diverge.
+        var landFailure = await RebaseThenFastForwardAsync(
+            ticketId, integrationBranch, integrationWorktreePath,
+            _baseOptions.TargetBranch, _workingDirectory, "chain_landing", ct).ConfigureAwait(false);
+        if (landFailure is not null)
+            return landFailure;
 
         if (_landingPushEnabled && !string.IsNullOrEmpty(_landingRemote))
         {
@@ -2135,6 +2106,79 @@ public class ChainPhase
         // chain can resume from the accumulated topology - see SequentialChainTests
         // ParentChain_RetainsIntegrationBranch_AtChainEnd.
         return null;
+    }
+
+    /// <summary>
+    /// Rebases <paramref name="branch"/> (checked out at <paramref name="branchWorktreePath"/>) onto
+    /// <paramref name="targetRef"/>, then fast-forwards <paramref name="targetRef"/> (checked out at
+    /// <paramref name="mergeWorktreePath"/>) up to it. Returns null on success, or a human-readable
+    /// rationale on failure - the rebase is aborted on conflict and the accumulated work is left
+    /// intact on <paramref name="branch"/>. Shared by the intermediate sub-chain accumulation merge
+    /// and the root landing so neither breaks when the target advanced after the branch forked.
+    /// </summary>
+    private async Task<string?> RebaseThenFastForwardAsync(
+        string ticketId,
+        string branch,
+        string branchWorktreePath,
+        string targetRef,
+        string mergeWorktreePath,
+        string failureKindPrefix,
+        CancellationToken ct)
+    {
+        var rebase = await _git.RebaseAsync(targetRef, branchWorktreePath, ct).ConfigureAwait(false);
+        if (rebase.HadConflicts)
+        {
+            await _git.RebaseAbortAsync(branchWorktreePath, ct).ConfigureAwait(false);
+            var paths = string.Join(", ", rebase.ConflictingPaths);
+            await EmitChainGateFailureAsync(ticketId, $"{failureKindPrefix}_rebase_conflicts", new Dictionary<string, object>
+            {
+                ["integration_branch"] = branch,
+                ["target_branch"] = targetRef,
+                ["conflicting_paths"] = rebase.ConflictingPaths
+            }, ct).ConfigureAwait(false);
+            return $"rebasing {branch} onto {targetRef} hit conflicts in: {paths}. The work is safe on " +
+                $"{branch}; rebase it onto {targetRef} and resolve, then re-run.";
+        }
+        if (!rebase.Success)
+        {
+            await EmitChainGateFailureAsync(ticketId, $"{failureKindPrefix}_rebase_failed", new Dictionary<string, object>
+            {
+                ["integration_branch"] = branch,
+                ["target_branch"] = targetRef,
+                ["detail"] = rebase.FailureReason ?? "unknown"
+            }, ct).ConfigureAwait(false);
+            return $"rebasing {branch} onto {targetRef} failed: {rebase.FailureReason}. The work is safe " +
+                $"on {branch}; rebase it onto {targetRef} manually, then re-run.";
+        }
+
+        var ff = await _git.FastForwardMergeAsync(branch, mergeWorktreePath, ct).ConfigureAwait(false);
+        if (!ff.Success)
+        {
+            await EmitChainGateFailureAsync(ticketId, $"{failureKindPrefix}_merge_failed", new Dictionary<string, object>
+            {
+                ["integration_branch"] = branch,
+                ["target_branch"] = targetRef,
+                ["detail"] = ff.FailureReason ?? "unknown"
+            }, ct).ConfigureAwait(false);
+            return $"landing {branch} onto {targetRef} failed: {ff.FailureReason}. The work is safe on " +
+                $"{branch}; merge it manually.";
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Resolves the worktree path that has <paramref name="branch"/> checked out, falling back to
+    /// the computed integration worktree path for <paramref name="ticket"/> when git reports no
+    /// matching worktree.
+    /// </summary>
+    private async Task<string> ResolveWorktreePathAsync(string branch, Ticket ticket, CancellationToken ct)
+    {
+        var worktrees = await _git.ListWorktreesAsync(ct).ConfigureAwait(false);
+        var match = worktrees.FirstOrDefault(
+            w => string.Equals(w.Branch, branch, StringComparison.OrdinalIgnoreCase));
+        return match?.Path
+            ?? PhaseWorktreeLayout.Compute(ticket.Id, ticket.Title, _workingDirectory).WorktreePath;
     }
 
     private async Task EmitChainGateFailureAsync(string ticketId, string kind, Dictionary<string, object> data, CancellationToken ct)

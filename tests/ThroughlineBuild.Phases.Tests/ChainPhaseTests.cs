@@ -1282,6 +1282,54 @@ public class ChainPhaseTests
         Assert.Contains(git.FastForwardMerges, m => m.mergeRef == "chain/tlb-2");
         // ...and the root finally lands its integration branch onto the configured target.
         Assert.Contains(git.FastForwardMerges, m => m.mergeRef == "chain/tlb-1");
+        // TLB-494: the sub-chain is rebased onto the parent's integration branch (in the
+        // sub-chain's worktree) before that accumulation fast-forward.
+        var subWt = git.CreatedWorktrees.First(c => c.branch == "chain/tlb-2");
+        Assert.Contains(git.Rebases, r => r.ontoRef == "chain/tlb-1" && r.worktreePath == subWt.path);
+    }
+
+    [Fact]
+    public async Task RunAsync_GrandparentChain_SubChainAccumulateRebaseConflicts_StopsWithWorkSafe()
+    {
+        // TLB-494: when a finished sub-chain cannot rebase onto the parent's integration branch,
+        // accumulation stops with the work left safe on the sub-chain branch, the parent is never
+        // landed, and the failure is attributed to the sub-chain (which genuinely did not land).
+        var parent = MakeTicket(TicketState.Backlog);                              // TLB-1
+        var sub = MakeChildTicket("TLB-2", "sub-uuid", TicketState.Backlog);       // child of parent
+        var leaf = MakeChildTicket("TLB-3", "leaf-uuid", TicketState.Backlog);     // child of sub
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { sub });
+        ticketing.SeedChildren("sub-uuid", new[] { leaf });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var git = new FakeGitClientChain
+        {
+            // call 1: leaf (TLB-3) ship rebase succeeds; call 2: sub-chain accumulate rebase conflicts.
+            RebaseResponses = new Queue<RebaseResult>(new[]
+            {
+                new RebaseResult(true, false, Array.Empty<string>(), null),
+                new RebaseResult(false, true, new[] { "src/X.cs" }, "conflict"),
+            })
+        };
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, git: git);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentStoppedEarly, result.Outcome);
+        var subResult = Assert.Single(result.ChildResults!);
+        Assert.Equal("TLB-2", subResult.TicketId);
+        Assert.Equal(ChainOutcome.ParentStoppedEarly, subResult.Outcome);
+        Assert.NotNull(subResult.FinalRationale);
+        Assert.Contains("chain/tlb-2", subResult.FinalRationale);
+        Assert.Contains("rebas", subResult.FinalRationale);
+        // Rebase aborted; sub-chain was never accumulated and the root was never landed.
+        Assert.True(git.RebaseAbortCallCount >= 1);
+        Assert.DoesNotContain(git.FastForwardMerges, m => m.mergeRef == "chain/tlb-2");
+        Assert.DoesNotContain(git.FastForwardMerges, m => m.mergeRef == "chain/tlb-1");
     }
 
     [Fact]
