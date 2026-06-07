@@ -83,6 +83,8 @@ if (fileCount > 1)
     Console.WriteLine($"  estimated cost:      {costStr,14}");
     if (grand.UnknownModelCost)
         Console.WriteLine("\n* cost is partial; update pricing for unrecognized models");
+    if (grand.SkippedLines > 0)
+        Console.WriteLine($"\n!! WARNING: skipped {grand.SkippedLines} malformed/truncated line(s) across all files; some totals are incomplete.");
 }
 
 return 0;
@@ -105,12 +107,31 @@ static Bucket AnalyzeAndReport(
     var subsumedEvents = new List<(string ticketId, string commit)>();
     var reworkByTicket = new SortedDictionary<string, long>(StringComparer.Ordinal);
 
+    int lineNo = 0;
+    int skipped = 0;
+    var skippedLines = new List<int>();
+
     foreach (var raw in File.ReadLines(path))
     {
+        lineNo++;
         var line = raw.Trim();
         if (line.Length == 0) continue;
 
-        using var doc = JsonDocument.Parse(line);
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(line);
+        }
+        catch (JsonException)
+        {
+            // Truncated or invalid JSON -- common when a run dies mid-write.
+            skipped++;
+            skippedLines.Add(lineNo);
+            continue;
+        }
+
+        try
+        {
         var root = doc.RootElement;
 
         int kind = root.GetProperty("Kind").GetInt32();
@@ -180,6 +201,17 @@ static Bucket AnalyzeAndReport(
                 else bucket.CostUsd += cost.Value;
             }
         }
+        }
+        catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException)
+        {
+            // Structurally valid JSON but missing/ill-typed required fields.
+            skipped++;
+            skippedLines.Add(lineNo);
+        }
+        finally
+        {
+            doc.Dispose();
+        }
     }
 
     Console.WriteLine();
@@ -248,6 +280,15 @@ static Bucket AnalyzeAndReport(
 
     if (totals.UnknownModelCost)
         Console.WriteLine("\n* cost is partial; one or more LlmCalls used a model not in the pricing table");
+
+    totals.SkippedLines = skipped;
+    if (skipped > 0)
+    {
+        var which = string.Join(", ", skippedLines);
+        var noun = skipped == 1 ? "line" : "lines";
+        Console.WriteLine($"\n!! WARNING: skipped {skipped} malformed/truncated {noun} ({which}); "
+            + "the run likely ended abnormally and the totals above are incomplete.");
+    }
 
     return totals;
 }
@@ -371,6 +412,7 @@ sealed class Bucket
     public long WallClockMs;
     public decimal CostUsd;
     public bool UnknownModelCost;
+    public int SkippedLines;
     public HashSet<string> Models = new();
 
     public void Add(Bucket other)
@@ -384,6 +426,7 @@ sealed class Bucket
         ReasoningOutputTokens += other.ReasoningOutputTokens;
         WallClockMs       += other.WallClockMs;
         CostUsd           += other.CostUsd;
+        SkippedLines      += other.SkippedLines;
         if (other.UnknownModelCost) UnknownModelCost = true;
         foreach (var m in other.Models) Models.Add(m);
     }
