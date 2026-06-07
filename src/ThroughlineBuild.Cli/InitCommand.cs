@@ -83,9 +83,15 @@ public static class InitCommand
         ILocalRepoOps? localRepoOverride = null,
         bool noInteractive = false,
         IProjectDiscovery? discoveryOverride = null,
+        Func<HttpClient>? httpClientFactory = null,
         CancellationToken ct = default)
     {
         var template = ConfigTemplateLoader.Load();
+        // Each PlaneTicketingClient owns its own HttpClient: the client's constructor sets
+        // BaseAddress and a default header, which throw once an HttpClient has sent a request,
+        // so a single HttpClient can never back two clients. The factory is also the test seam
+        // for driving the real connected/interactive path against a fake transport.
+        var newHttpClient = httpClientFactory ?? (() => new HttpClient());
 
         // Load creds from --from file or from redirected stdin; explicit flags take precedence.
         if (fromFile is not null)
@@ -150,7 +156,7 @@ public static class InitCommand
             return await RunInteractiveConnectedAsync(
                 cwd, content, target, console, probeCodex,
                 planeUrl!, workspace!, effectiveToken!,
-                discoveryOverride, setupFactory, localRepoOverride, ct)
+                discoveryOverride, setupFactory, localRepoOverride, newHttpClient, ct)
                 .ConfigureAwait(false);
         }
 
@@ -168,7 +174,7 @@ public static class InitCommand
             return await RunConnectedAsync(
                 cwd, content, target, console, probeCodex,
                 planeUrl!, workspace!, effectiveToken!, projectName!,
-                resolverOverride, setupFactory, localRepoOverride, ct)
+                resolverOverride, setupFactory, localRepoOverride, newHttpClient, ct)
                 .ConfigureAwait(false);
         }
 
@@ -259,36 +265,42 @@ public static class InitCommand
         IProjectResolver? resolverOverride,
         Func<string, (ITicketingProvisioner, ITicketingConnectivity)>? setupFactory,
         ILocalRepoOps? localRepoOverride,
+        Func<HttpClient> newHttpClient,
         CancellationToken ct)
     {
-        // Phase 1: resolve or create the Plane project by name (find-or-create).
-        HttpClient? http = null;
-        IProjectResolver resolver;
-        if (resolverOverride is not null)
-        {
-            resolver = resolverOverride;
-        }
-        else
-        {
-            http = new HttpClient();
-            resolver = new ProjectResolver(http, planeUrl, workspace, effectiveToken);
-        }
-
+        // Phase 1: resolve or create the Plane project by name (find-or-create). The resolver's
+        // HttpClient is owned and disposed here; the pipeline creates its own (one client per
+        // HttpClient - see ExecuteAsync).
+        HttpClient? resolveHttp = null;
         ProjectResolveResult resolveResult;
         try
         {
+            IProjectResolver resolver;
+            if (resolverOverride is not null)
+            {
+                resolver = resolverOverride;
+            }
+            else
+            {
+                resolveHttp = newHttpClient();
+                resolver = new ProjectResolver(resolveHttp, planeUrl, workspace, effectiveToken);
+            }
+
             resolveResult = await resolver.ResolveAsync(projectName, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             console.ErrorWriteLine($"Error: failed to resolve project '{projectName}': {ex.Message}");
-            http?.Dispose();
             return 1;
+        }
+        finally
+        {
+            resolveHttp?.Dispose();
         }
 
         return await RunConnectedPipelineAsync(
             cwd, content, target, console, probeCodex, planeUrl, workspace, effectiveToken,
-            projectName, resolveResult, setupFactory, localRepoOverride, http, ct)
+            projectName, resolveResult, setupFactory, localRepoOverride, newHttpClient, ct)
             .ConfigureAwait(false);
     }
 
@@ -310,56 +322,62 @@ public static class InitCommand
         IProjectDiscovery? discoveryOverride,
         Func<string, (ITicketingProvisioner, ITicketingConnectivity)>? setupFactory,
         ILocalRepoOps? localRepoOverride,
+        Func<HttpClient> newHttpClient,
         CancellationToken ct)
     {
-        HttpClient? http = null;
-        IProjectDiscovery discovery;
-        if (discoveryOverride is not null)
-        {
-            discovery = discoveryOverride;
-        }
-        else
-        {
-            http = new HttpClient();
-            discovery = new PlaneTicketingClient(http, new PlaneClientOptions
-            {
-                BaseUrl = planeUrl,
-                WorkspaceSlug = workspace,
-                ApiToken = effectiveToken,
-            });
-        }
-
+        // The discovery client's HttpClient is owned and disposed here, before the pipeline builds
+        // its own provisioning client on a fresh HttpClient (one client per HttpClient - see
+        // ExecuteAsync). Sharing one HttpClient across both would throw on the second construction.
+        HttpClient? discoveryHttp = null;
         (ProjectResolveResult Resolved, string DisplayName)? picked;
         try
         {
+            IProjectDiscovery discovery;
+            if (discoveryOverride is not null)
+            {
+                discovery = discoveryOverride;
+            }
+            else
+            {
+                discoveryHttp = newHttpClient();
+                discovery = new PlaneTicketingClient(discoveryHttp, new PlaneClientOptions
+                {
+                    BaseUrl = planeUrl,
+                    WorkspaceSlug = workspace,
+                    ApiToken = effectiveToken,
+                });
+            }
+
             picked = await PromptCreateOrPickAsync(discovery, console, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             console.ErrorWriteLine($"Error: interactive project setup failed: {ex.Message}");
-            http?.Dispose();
             return 1;
+        }
+        finally
+        {
+            discoveryHttp?.Dispose();
         }
 
         if (picked is null)
         {
             // Operator declined to connect at the create-or-pick prompt: write the offline template.
-            http?.Dispose();
             return WriteOfflineConfig(content, target, probeCodex, console);
         }
 
         return await RunConnectedPipelineAsync(
             cwd, content, target, console, probeCodex, planeUrl, workspace, effectiveToken,
-            picked.Value.DisplayName, picked.Value.Resolved, setupFactory, localRepoOverride, http, ct)
+            picked.Value.DisplayName, picked.Value.Resolved, setupFactory, localRepoOverride, newHttpClient, ct)
             .ConfigureAwait(false);
     }
 
     /// <summary>
     /// Shared phases 2-5 of connected init given an already-resolved project id: substitute the id
     /// into the config and write it, run setup provisioning, make the welcome commit, verify
-    /// connectivity, and print the summary. <paramref name="http"/> is the client the caller may
-    /// have already created (for the resolver/discovery); it is reused for provisioning and disposed
-    /// here. Reused by both name-based connected init and the interactive create-or-pick flow.
+    /// connectivity, and print the summary. Creates its own provisioning HttpClient from
+    /// <paramref name="newHttpClient"/> (one client per HttpClient) and disposes it. Reused by both
+    /// name-based connected init and the interactive create-or-pick flow.
     /// </summary>
     private static async Task<int> RunConnectedPipelineAsync(
         string cwd,
@@ -374,7 +392,7 @@ public static class InitCommand
         ProjectResolveResult resolveResult,
         Func<string, (ITicketingProvisioner, ITicketingConnectivity)>? setupFactory,
         ILocalRepoOps? localRepoOverride,
-        HttpClient? http,
+        Func<HttpClient> newHttpClient,
         CancellationToken ct)
     {
         // Phase 2: substitute resolved id into config content (after the id is known) and write it.
@@ -385,16 +403,19 @@ public static class InitCommand
         Directory.CreateDirectory(configDir);
         File.WriteAllText(target, content, System.Text.Encoding.UTF8);
 
-        // Phase 3: setup provisioning (git init, .gitignore, states, labels).
+        // Phase 3: setup provisioning (git init, .gitignore, states, labels). The provisioning
+        // client gets its own fresh HttpClient (never the discovery/resolver one - that already
+        // sent requests, so reusing it would throw when this client sets BaseAddress).
         ITicketingProvisioner provisioner;
         ITicketingConnectivity connectivity;
+        HttpClient? http = null;
         if (setupFactory is not null)
         {
             (provisioner, connectivity) = setupFactory(resolveResult.ProjectId);
         }
         else
         {
-            http ??= new HttpClient();
+            http = newHttpClient();
             var client = new PlaneTicketingClient(http, new PlaneClientOptions
             {
                 BaseUrl = planeUrl,

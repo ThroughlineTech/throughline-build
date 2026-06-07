@@ -1,3 +1,5 @@
+using System.Net;
+using System.Text;
 using ThroughlineBuild.Cli;
 using ThroughlineBuild.Commands;
 using ThroughlineBuild.Contracts;
@@ -1681,6 +1683,118 @@ public class InitCommandTests
             LastCreatedName = name;
             LastCreatedIdentifier = identifier;
             return Task.FromResult(CreatedId);
+        }
+    }
+
+    // Routes every Plane REST call to a canned response so the REAL connected/interactive path
+    // (two PlaneTicketingClients: discovery + provisioning) can run without a live server. The
+    // project is reported fully provisioned so setup creates nothing; the create-permission probe
+    // returns 400, which the client treats as "create allowed". Order-independent.
+    private sealed class RoutingPlaneHandler : HttpMessageHandler
+    {
+        private readonly string _statesJson;
+        private readonly string _labelsJson;
+        private readonly object _lock = new();
+        public List<string> Requests { get; } = new();
+
+        public RoutingPlaneHandler(string statesJson, string labelsJson)
+        {
+            _statesJson = statesJson;
+            _labelsJson = labelsJson;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            var method = request.Method;
+            lock (_lock) Requests.Add($"{method} {path}");
+
+            static HttpResponseMessage Resp(int status, string body) =>
+                new((HttpStatusCode)status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+
+            if (method == HttpMethod.Post && path.EndsWith("/projects/", StringComparison.Ordinal))
+                return Task.FromResult(Resp(201, "{\"id\":\"created-uuid\"}"));
+            if (method == HttpMethod.Get && path.EndsWith("/projects/", StringComparison.Ordinal))
+                return Task.FromResult(Resp(200, "{\"results\":[]}"));
+            if (method == HttpMethod.Get && path.EndsWith("/states/", StringComparison.Ordinal))
+                return Task.FromResult(Resp(200, _statesJson));
+            if (method == HttpMethod.Get && path.EndsWith("/labels/", StringComparison.Ordinal))
+                return Task.FromResult(Resp(200, _labelsJson));
+            if (method == HttpMethod.Post && path.EndsWith("/issues/", StringComparison.Ordinal))
+                return Task.FromResult(Resp(400, "{\"name\":[\"create-permission probe\"]}")); // 400 => probe OK
+            return Task.FromResult(Resp(200, "{}")); // any provisioning create
+        }
+    }
+
+    private static string FullyProvisionedStatesJson() =>
+        "{\"results\":[" + string.Join(",", WorkspaceSchema.States.Select((s, i) =>
+            $"{{\"id\":\"st{i}\",\"name\":\"{s.Name}\",\"group\":\"{s.Group}\",\"sequence\":{i}}}")) + "]}";
+
+    private static string FullyProvisionedLabelsJson() =>
+        "{\"results\":[" + string.Join(",", WorkspaceSchema.Labels.Select((l, i) =>
+            $"{{\"id\":\"lb{i}\",\"name\":\"{l}\"}}")) + "]}";
+
+    // Regression for the operator crash: "This instance has already started one or more requests"
+    // - the interactive flow built a second PlaneTicketingClient on the discovery client's already-
+    // used HttpClient. This drives the REAL two-client path (discovery + provisioning) end to end.
+    [Fact]
+    public async Task Interactive_CreateNew_RealClients_DoesNotReuseHttpClient()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var handler = new RoutingPlaneHandler(FullyProvisionedStatesJson(), FullyProvisionedLabelsJson());
+            var console = new FakeInteractiveConsole();
+            console.Responses.Enqueue("c");                // create new
+            console.Responses.Enqueue("survey-smoketest4"); // name
+            console.Responses.Enqueue("ST");               // identifier
+
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
+                planeUrl: "https://plane.example.net", workspace: "throughline", token: "plane_api_x",
+                // No discoveryOverride / setupFactory: exercise the real PlaneTicketingClient
+                // construction for BOTH discovery and provisioning, each on its own HttpClient.
+                localRepoOverride: new EmptyLocalRepo(),
+                httpClientFactory: () => new HttpClient(handler));
+
+            Assert.Equal(0, result);
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+            Assert.Contains("created-uuid", written);
+            Assert.DoesNotContain("REQUIRED_PLANE_PROJECT_ID", written);
+            // Both clients actually ran: discovery created the project, provisioning read states.
+            Assert.Contains(handler.Requests, r => r.StartsWith("POST", StringComparison.Ordinal) && r.EndsWith("/projects/", StringComparison.Ordinal));
+            Assert.Contains(handler.Requests, r => r.StartsWith("GET", StringComparison.Ordinal) && r.EndsWith("/states/", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // The same fix covers the non-interactive --project-name path (resolver client + provisioning
+    // client also previously shared one HttpClient).
+    [Fact]
+    public async Task ConnectedByName_RealClients_DoesNotReuseHttpClient()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var handler = new RoutingPlaneHandler(FullyProvisionedStatesJson(), FullyProvisionedLabelsJson());
+            var console = new FakeConsole(); // redirected stdin: non-interactive
+
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
+                planeUrl: "https://plane.example.net", workspace: "throughline", token: "plane_api_x",
+                projectName: "survey-smoketest4",
+                localRepoOverride: new EmptyLocalRepo(),
+                httpClientFactory: () => new HttpClient(handler));
+
+            Assert.Equal(0, result);
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+            Assert.Contains("created-uuid", written);
+            Assert.DoesNotContain("REQUIRED_PLANE_PROJECT_ID", written);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
         }
     }
 

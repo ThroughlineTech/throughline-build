@@ -1563,4 +1563,21 @@ public class ProjectDiscoveryPaginationTests
         Assert.Single(projects);
         Assert.Single(handler.Requests);
     }
+
+    [Fact]
+    public async Task SecondClientOnSameHttpClient_AfterFirstRequest_Throws()
+    {
+        // Root-cause guard for the interactive-init crash: the constructor sets BaseAddress and a
+        // default header, which throw once the HttpClient has sent a request. So two
+        // PlaneTicketingClients can never share one HttpClient - each must get its own (the caller
+        // in InitCommand was fixed to do exactly that).
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson("""{ "results": [] }"""));
+
+        var http = new HttpClient(handler);
+        var first = new PlaneTicketingClient(http, TestData.Options());
+        await first.ListProjectsAsync(CancellationToken.None); // first request "starts" the HttpClient
+
+        Assert.Throws<InvalidOperationException>(() => new PlaneTicketingClient(http, TestData.Options()));
+    }
 }
