@@ -301,27 +301,10 @@ public static class InitCommand
             return 1;
         }
 
-        // Phase 3.5: welcome commit (fresh repo only).
-        // A brand-new repo has no commits, so the first 'build ship' would fail when resolving the
-        // base ref. Committing .gitignore here closes that gap at the exact moment the repo is
-        // created. Repos that already have commits are left untouched. .build/config.toml is
-        // gitignored and is never included.
-        if (!localRepo.HasAnyCommits())
-        {
-            try
-            {
-                localRepo.StageAndCommit(new[] { ".gitignore" }, "welcome to throughline build");
-                console.WriteLine("Welcome:      committed .gitignore as initial commit");
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                // Non-fatal: the operator can commit manually. Warn clearly so they know why
-                // 'build ship' might still fail (likely missing git user.name / user.email).
-                console.ErrorWriteLine(
-                    $"Warning: welcome commit skipped ({ex.Message}). "
-                    + "Commit at least one file before running 'build ship'.");
-            }
-        }
+        // Phase 3.5: welcome commit (fresh repo only). SetupCommand (phase 3) already runs this
+        // for the fresh-repo path; the shared helper's HasAnyCommits guard makes this redundant
+        // call a no-op so connected init still produces exactly one welcome commit.
+        WelcomeCommit.EnsureInitialCommit(localRepo, console);
 
         // Phase 4: verify connectivity.
         TicketingConnectivityResult connectResult;
