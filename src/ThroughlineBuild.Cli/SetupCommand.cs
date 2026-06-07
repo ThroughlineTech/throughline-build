@@ -33,6 +33,13 @@ public sealed class SetupCommand
     public async Task<int> ExecuteAsync(bool checkOnly, IConsole console, CancellationToken ct)
     {
         var localGap = RunLocalRepo(checkOnly, console);
+
+        // After provisioning the local repo (git init + .gitignore), give a brand-new repo its
+        // welcome commit so the first 'build ship' has a base ref. --check mutates nothing, so it
+        // never commits. The shared helper is idempotent (skips repos that already have commits).
+        if (!checkOnly)
+            WelcomeCommit.EnsureInitialCommit(_localRepo, console);
+
         var planeGap = await RunPlaneAsync(checkOnly, console, ct).ConfigureAwait(false);
 
         if (checkOnly)

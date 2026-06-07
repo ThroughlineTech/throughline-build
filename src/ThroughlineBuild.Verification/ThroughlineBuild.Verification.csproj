@@ -11,4 +11,7 @@
     <ProjectReference Include="..\ThroughlineBuild.Briefs\ThroughlineBuild.Briefs.csproj" />
     <ProjectReference Include="..\ThroughlineBuild.Workers.Common\ThroughlineBuild.Workers.Common.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Templates\ratify-obsolete-prompt.md" LogicalName="ThroughlineBuild.Verification.Templates.ratify-obsolete-prompt.md" />
+  </ItemGroup>
 </Project>

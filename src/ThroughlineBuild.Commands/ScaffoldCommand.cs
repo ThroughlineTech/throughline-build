@@ -202,53 +202,66 @@ public sealed class ScaffoldCommand : ITicketCommand
     }
 
     // --- real creation output ---
+    // Output is driven by what was ACTUALLY created (result.CreatedEntities), never by
+    // re-walking the parsed op-doc. This guarantees we can never print a "Created ..." line
+    // for a ticket the backend did not return (no "?" placeholders), and that a full
+    // failure (e.g. connectivity) prints a clear abort line with no creation tree at all.
     private static CommandResult BuildCreateOutput(string opDocPath, ScaffoldResult result)
     {
-        // Re-parse to correlate ticket IDs with plan/brief names.
-        var parseResult = OpDocParser.Parse(opDocPath);
+        bool isPartial = result.Failures.Count > 0 && (result.PlansCreated > 0 || result.BriefsCreated > 0);
+        bool isFullFailure = result.Failures.Count > 0 && result.PlansCreated == 0 && result.BriefsCreated == 0;
+        bool isBackendUnavailableFullFailure = isFullFailure
+            && result.Failures.All(IsBackendUnavailableFailure);
+
         var sb = new System.Text.StringBuilder();
         sb.AppendLine($"Scaffolding {opDocPath} ...");
 
-        if (parseResult.Parsed != null)
+        if (isFullFailure)
         {
-            var opDoc = parseResult.Parsed;
+            // Nothing was created: print one clear abort line naming the cause, then the
+            // failure detail and a remedy. No creation tree, no "?" placeholders.
+            bool connectivity = result.Failures.Any(f =>
+                string.Equals(f.Stage, "connectivity_check", StringComparison.OrdinalIgnoreCase));
 
-            // CreatedTicketIds is [op, plan, briefs..., plan, briefs...]. The op id lives
-            // at index 0 whenever the op was created (OpTicketId set), and it is printed
-            // separately below - so plan/brief consumption must start *after* it. Starting
-            // at 0 reprinted the op id as the first plan and shifted every id down one,
-            // dropping the last brief.
-            int idIndex = string.IsNullOrEmpty(result.OpTicketId) ? 0 : 1;
+            if (connectivity)
+                sb.AppendLine("Scaffold aborted: could not reach the Plane project. Nothing was created.");
+            else if (isBackendUnavailableFullFailure)
+                sb.AppendLine("Scaffold aborted: the ticketing backend was unavailable. Nothing was created.");
+            else
+                sb.AppendLine("Scaffold aborted: nothing was created.");
 
-            // Emit operation ticket
-            if (!string.IsNullOrEmpty(result.OpTicketId))
-            {
-                sb.AppendLine($"Created operation ticket: {result.OpTicketId} \"{opDoc.Title}\"");
-            }
+            sb.AppendLine("Failures:");
+            foreach (var f in result.Failures)
+                sb.AppendLine($"  [{f.Stage}] {f.Detail}");
 
-            foreach (var entry in opDoc.DispatchOrder)
-            {
-                var plan = opDoc.Plans.FirstOrDefault(p => p.Id == entry.PlanId);
-                if (plan == null) continue;
+            if (isBackendUnavailableFullFailure)
+                sb.AppendLine("Fix the connection/config above (e.g. plane_project_id in .build/config.toml) and retry.");
+            else
+                AppendOpDocSpecHint(sb);
 
-                string planId = idIndex < result.CreatedTicketIds.Count
-                    ? result.CreatedTicketIds[idIndex++]
-                    : "?";
-                sb.AppendLine($"Created plan {plan.Id}: {planId} \"Plan {plan.Id}: {plan.Name}\"");
-
-                foreach (var brief in plan.Briefs)
-                {
-                    string briefId = idIndex < result.CreatedTicketIds.Count
-                        ? result.CreatedTicketIds[idIndex++]
-                        : "?";
-                    sb.AppendLine($"  Created brief: {briefId} \"{brief.Slug}\" (parent: {planId})");
-                }
-            }
+            string abortTag = isBackendUnavailableFullFailure
+                ? ScaffoldExitCategory.BackendUnavailable
+                : ScaffoldExitCategory.ValidationError;
+            return new CommandResult(false, $"{abortTag}\n{sb.ToString().TrimEnd()}");
         }
-        else
+
+        // Success or partial: list only the tickets that were actually created.
+        var entities = result.CreatedEntities ?? Array.Empty<ScaffoldedEntity>();
+        foreach (var e in entities)
         {
-            // Fallback if re-parse fails: just print counts.
-            sb.AppendLine($"Created {result.PlansCreated} plan(s) and {result.BriefsCreated} brief(s).");
+            switch (e.Kind)
+            {
+                case ScaffoldedEntityKind.Operation:
+                    sb.AppendLine($"Created operation ticket: {e.TicketId} \"{e.DisplayName}\"");
+                    break;
+                case ScaffoldedEntityKind.Plan:
+                    sb.AppendLine($"Created plan {e.PlanId}: {e.TicketId} \"Plan {e.PlanId}: {e.DisplayName}\"");
+                    break;
+                case ScaffoldedEntityKind.Brief:
+                    string parent = string.IsNullOrEmpty(e.ParentTicketId) ? "unlinked" : e.ParentTicketId;
+                    sb.AppendLine($"  Created brief: {e.TicketId} \"{e.DisplayName}\" (parent: {parent})");
+                    break;
+            }
         }
 
         if (result.Failures.Count > 0)
@@ -260,28 +273,17 @@ public sealed class ScaffoldCommand : ITicketCommand
             }
         }
 
-        bool isPartial = result.Failures.Count > 0 && (result.PlansCreated > 0 || result.BriefsCreated > 0);
-        bool isFullFailure = result.Failures.Count > 0 && result.PlansCreated == 0 && result.BriefsCreated == 0;
-        bool isBackendUnavailableFullFailure = isFullFailure
-            && result.Failures.All(IsBackendUnavailableFailure);
-
-        if (!isPartial && !isFullFailure)
-        {
-            sb.AppendLine($"Scaffold complete: {result.PlansCreated} plan(s), {result.BriefsCreated} brief(s) created.");
-        }
-        else if (isPartial)
+        if (isPartial)
         {
             sb.AppendLine($"Scaffold partial: {result.PlansCreated} plan(s), {result.BriefsCreated} brief(s) created with {result.Failures.Count} failure(s).");
         }
+        else
+        {
+            sb.AppendLine($"Scaffold complete: {result.PlansCreated} plan(s), {result.BriefsCreated} brief(s) created.");
+        }
 
-        string tag = isPartial
-            ? ScaffoldExitCategory.PartialCreation
-            : isBackendUnavailableFullFailure
-                ? ScaffoldExitCategory.BackendUnavailable
-                : isFullFailure
-                    ? ScaffoldExitCategory.ValidationError
-                    : ScaffoldExitCategory.Clean;
-        bool success = !isPartial && !isFullFailure;
+        string tag = isPartial ? ScaffoldExitCategory.PartialCreation : ScaffoldExitCategory.Clean;
+        bool success = !isPartial;
         return new CommandResult(success, $"{tag}\n{sb.ToString().TrimEnd()}");
     }
 

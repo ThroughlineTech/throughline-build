@@ -57,9 +57,10 @@ public sealed class ProjectResolver : IProjectResolver
     /// <summary>
     /// Derives a short uppercase Plane identifier (2-10 chars) from a project name.
     /// Uses first-letter initials for multi-word names and the first six letters for single-word
-    /// names. Plane requires identifiers to be uppercase letters only.
+    /// names. Plane requires identifiers to be uppercase letters only. Public so the interactive
+    /// init flow can offer this as the default identifier the operator can accept or override.
     /// </summary>
-    internal static string DeriveIdentifier(string name)
+    public static string DeriveIdentifier(string name)
     {
         var words = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
 

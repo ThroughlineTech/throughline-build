@@ -1,3 +1,5 @@
+using System.Net;
+using System.Text;
 using ThroughlineBuild.Cli;
 using ThroughlineBuild.Commands;
 using ThroughlineBuild.Contracts;
@@ -195,6 +197,83 @@ public class InitCommandTests
             Assert.Contains("[ticketing]", console.Stdout);
             // No file should be created.
             Assert.False(File.Exists(Path.Combine(dir, ".build", "config.toml")));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // WI-04: offline init prints accurate, complete next steps
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public async Task Execute_Offline_NextSteps_NameSetupAndConnectedMode()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new FakeConsole();
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console);
+
+            Assert.Equal(0, result);
+            // Points at the required provisioning step.
+            Assert.Contains("build setup", console.Stdout);
+            // Surfaces the one-shot connected path.
+            Assert.Contains("--project-name", console.Stdout);
+            // Names the still-unresolved REQUIRED fields (none supplied here -> all four).
+            Assert.Contains("Still REQUIRED", console.Stdout);
+            Assert.Contains("plane_project_id", console.Stdout);
+            Assert.Contains("plane_api_token", console.Stdout);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Execute_Offline_AllFieldsSupplied_DoesNotClaimStillRequired()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new FakeConsole();
+            var result = await InitCommand.ExecuteAsync(
+                dir, force: false, printTemplate: false, console,
+                planeUrl: "https://plane.example.com",
+                workspace: "my-workspace",
+                projectId: "abc-uuid",
+                token: "tok-1");
+
+            Assert.Equal(0, result);
+            // Every REQUIRED placeholder was filled, so the message must not claim fields remain.
+            Assert.DoesNotContain("Still REQUIRED", console.Stdout);
+            // But the next-step pointers still appear.
+            Assert.Contains("build setup", console.Stdout);
+            Assert.Contains("--project-name", console.Stdout);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Execute_PrintTemplate_DoesNotEmitNextStepHints()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new FakeConsole();
+            await InitCommand.ExecuteAsync(dir, force: false, printTemplate: true, console);
+
+            // --print-template is pure template output: none of the offline hints leak in.
+            Assert.DoesNotContain("build setup", console.Stdout);
+            Assert.DoesNotContain("Still REQUIRED", console.Stdout);
+            Assert.DoesNotContain("Next:", console.Stdout);
+            Assert.DoesNotContain("user-guide", console.Stdout);
         }
         finally
         {
@@ -435,18 +514,27 @@ public class InitCommandTests
     // ------------------------------------------------------------------
 
     [Fact]
-    public async Task Execute_InteractiveAllPrompts_FillsAllPlaceholders()
+    public async Task Execute_InteractiveAllPrompts_FillConnectionValuesThenPickProject()
     {
         var dir = MakeTempDir();
         try
         {
+            // url -> workspace -> token are prompted (no GUID prompt), then create-or-pick.
+            var discovery = new StubProjectDiscovery
+            {
+                Projects = [new ProjectInfo("picked-uuid", "My Project", "MP", DateTimeOffset.Parse("2026-06-01T00:00:00Z"))],
+            };
             var console = new FakeInteractiveConsole();
-            console.Responses.Enqueue("https://plane.example.com");
-            console.Responses.Enqueue("my-workspace");
-            console.Responses.Enqueue("my-project-id");
-            console.Responses.Enqueue("my-api-token");
+            console.Responses.Enqueue("https://plane.example.com"); // base URL
+            console.Responses.Enqueue("my-workspace");              // workspace slug
+            console.Responses.Enqueue("my-api-token");              // API token
+            console.Responses.Enqueue("e");                         // use existing
+            console.Responses.Enqueue("1");                         // pick #1
 
-            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console);
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
+                discoveryOverride: discovery,
+                setupFactory: _ => (new FakeProvisioner(), new FakeConnectivity()),
+                localRepoOverride: new EmptyLocalRepo());
 
             Assert.Equal(0, result);
             var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
@@ -456,8 +544,10 @@ public class InitCommandTests
             Assert.DoesNotContain("REQUIRED_PLANE_API_TOKEN", written);
             Assert.Contains("https://plane.example.com", written);
             Assert.Contains("my-workspace", written);
-            Assert.Contains("my-project-id", written);
             Assert.Contains("my-api-token", written);
+            Assert.Contains("picked-uuid", written);
+            // The raw GUID-paste prompt is gone.
+            Assert.DoesNotContain("Plane project ID", console.Stdout);
         }
         finally
         {
@@ -466,18 +556,25 @@ public class InitCommandTests
     }
 
     [Fact]
-    public async Task Execute_InteractivePartialFlags_OnlyPromptsMissing()
+    public async Task Execute_InteractivePartialFlags_OnlyPromptsMissingConnectionValues()
     {
         var dir = MakeTempDir();
         try
         {
+            // planeUrl supplied as a flag -> only workspace + token are prompted, then create-or-pick.
+            var discovery = new StubProjectDiscovery { Projects = [], CreatedId = "made-uuid" };
             var console = new FakeInteractiveConsole();
-            console.Responses.Enqueue("my-workspace");
-            console.Responses.Enqueue("my-project-id");
-            console.Responses.Enqueue("my-api-token");
+            console.Responses.Enqueue("my-workspace");  // workspace slug
+            console.Responses.Enqueue("my-api-token");  // API token
+            console.Responses.Enqueue("c");             // create new (no existing projects)
+            console.Responses.Enqueue("My App");        // project name
+            console.Responses.Enqueue("MA");            // identifier
 
             var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
-                planeUrl: "https://api.plane.so");
+                planeUrl: "https://api.plane.so",
+                discoveryOverride: discovery,
+                setupFactory: _ => (new FakeProvisioner(), new FakeConnectivity()),
+                localRepoOverride: new EmptyLocalRepo());
 
             Assert.Equal(0, result);
             var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
@@ -487,8 +584,10 @@ public class InitCommandTests
             Assert.DoesNotContain("REQUIRED_PLANE_PROJECT_ID", written);
             Assert.DoesNotContain("REQUIRED_PLANE_API_TOKEN", written);
             Assert.Contains("my-workspace", written);
-            Assert.Contains("my-project-id", written);
             Assert.Contains("my-api-token", written);
+            Assert.Contains("made-uuid", written);
+            Assert.Equal("My App", discovery.LastCreatedName);
+            Assert.Equal("MA", discovery.LastCreatedIdentifier);
         }
         finally
         {
@@ -1101,7 +1200,10 @@ public class InitCommandTests
             var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
             // ID placeholder is still in config (no resolution without projectName).
             Assert.Contains("REQUIRED_PLANE_PROJECT_ID", written);
-            Assert.Contains("Fill in the REQUIRED fields", console.Stdout);
+            // url/workspace/token were supplied, so only plane_project_id remains REQUIRED.
+            Assert.Contains("Still REQUIRED", console.Stdout);
+            Assert.Contains("plane_project_id", console.Stdout);
+            Assert.DoesNotContain("plane_base_url", console.Stdout);
         }
         finally
         {
@@ -1473,6 +1575,50 @@ public class InitCommandTests
     }
 
     [Fact]
+    public void FindDocPaths_TopLevelOpDocsDir_IsDetected()
+    {
+        // WI-08: the operator dropped their doc at top-level op-docs/, not docs/op-docs/.
+        var dir = MakeTempDir();
+        try
+        {
+            var topLevel = Path.Combine(dir, "op-docs");
+            Directory.CreateDirectory(topLevel);
+            File.WriteAllText(Path.Combine(topLevel, "01-survey-site.md"), "");
+
+            var paths = InitCommand.FindDocPaths(dir);
+
+            Assert.Contains("op-docs/01-survey-site.md", paths);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FindDocPaths_StaysBoundedToAllowList_IgnoresArbitraryMarkdown()
+    {
+        // Detection must NOT scan arbitrary repo markdown (an explicit op-33 non-goal).
+        var dir = MakeTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "README.md"), "");
+            Directory.CreateDirectory(Path.Combine(dir, "src"));
+            File.WriteAllText(Path.Combine(dir, "src", "notes.md"), "");
+            Directory.CreateDirectory(Path.Combine(dir, "docs"));
+            File.WriteAllText(Path.Combine(dir, "docs", "guide.md"), "");
+
+            var paths = InitCommand.FindDocPaths(dir);
+
+            Assert.Empty(paths);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void FindDocPaths_NoDirs_ReturnsEmpty()
     {
         var dir = MakeTempDir();
@@ -1503,6 +1649,355 @@ public class InitCommandTests
 
             Assert.Single(paths);
             Assert.Equal("docs/op-docs/op-01.md", paths[0]);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // WI-07: interactive guided connected init (create-or-pick, no GUID)
+    // ------------------------------------------------------------------
+
+    private sealed class StubProjectDiscovery : IProjectDiscovery
+    {
+        public IReadOnlyList<ProjectInfo> Projects { get; set; } = [];
+        public string CreatedId { get; set; } = "created-uuid";
+        public string? LastCreatedName { get; private set; }
+        public string? LastCreatedIdentifier { get; private set; }
+        public int CreateCalls { get; private set; }
+
+        public Task<IReadOnlyList<ProjectInfo>> ListProjectsAsync(CancellationToken ct) =>
+            Task.FromResult(Projects);
+
+        public Task<string?> FindProjectByNameAsync(string name, CancellationToken ct) =>
+            Task.FromResult(Projects
+                .Where(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))
+                .Select(p => (string?)p.Id)
+                .FirstOrDefault());
+
+        public Task<string> CreateProjectAsync(string name, string identifier, CancellationToken ct)
+        {
+            CreateCalls++;
+            LastCreatedName = name;
+            LastCreatedIdentifier = identifier;
+            return Task.FromResult(CreatedId);
+        }
+    }
+
+    // Routes every Plane REST call to a canned response so the REAL connected/interactive path
+    // (two PlaneTicketingClients: discovery + provisioning) can run without a live server. The
+    // project is reported fully provisioned so setup creates nothing; the create-permission probe
+    // returns 400, which the client treats as "create allowed". Order-independent.
+    private sealed class RoutingPlaneHandler : HttpMessageHandler
+    {
+        private readonly string _statesJson;
+        private readonly string _labelsJson;
+        private readonly object _lock = new();
+        public List<string> Requests { get; } = new();
+
+        public RoutingPlaneHandler(string statesJson, string labelsJson)
+        {
+            _statesJson = statesJson;
+            _labelsJson = labelsJson;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            var method = request.Method;
+            lock (_lock) Requests.Add($"{method} {path}");
+
+            static HttpResponseMessage Resp(int status, string body) =>
+                new((HttpStatusCode)status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+
+            if (method == HttpMethod.Post && path.EndsWith("/projects/", StringComparison.Ordinal))
+                return Task.FromResult(Resp(201, "{\"id\":\"created-uuid\"}"));
+            if (method == HttpMethod.Get && path.EndsWith("/projects/", StringComparison.Ordinal))
+                return Task.FromResult(Resp(200, "{\"results\":[]}"));
+            if (method == HttpMethod.Get && path.EndsWith("/states/", StringComparison.Ordinal))
+                return Task.FromResult(Resp(200, _statesJson));
+            if (method == HttpMethod.Get && path.EndsWith("/labels/", StringComparison.Ordinal))
+                return Task.FromResult(Resp(200, _labelsJson));
+            if (method == HttpMethod.Post && path.EndsWith("/issues/", StringComparison.Ordinal))
+                return Task.FromResult(Resp(400, "{\"name\":[\"create-permission probe\"]}")); // 400 => probe OK
+            return Task.FromResult(Resp(200, "{}")); // any provisioning create
+        }
+    }
+
+    private static string FullyProvisionedStatesJson() =>
+        "{\"results\":[" + string.Join(",", WorkspaceSchema.States.Select((s, i) =>
+            $"{{\"id\":\"st{i}\",\"name\":\"{s.Name}\",\"group\":\"{s.Group}\",\"sequence\":{i}}}")) + "]}";
+
+    private static string FullyProvisionedLabelsJson() =>
+        "{\"results\":[" + string.Join(",", WorkspaceSchema.Labels.Select((l, i) =>
+            $"{{\"id\":\"lb{i}\",\"name\":\"{l}\"}}")) + "]}";
+
+    // Regression for the operator crash: "This instance has already started one or more requests"
+    // - the interactive flow built a second PlaneTicketingClient on the discovery client's already-
+    // used HttpClient. This drives the REAL two-client path (discovery + provisioning) end to end.
+    [Fact]
+    public async Task Interactive_CreateNew_RealClients_DoesNotReuseHttpClient()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var handler = new RoutingPlaneHandler(FullyProvisionedStatesJson(), FullyProvisionedLabelsJson());
+            var console = new FakeInteractiveConsole();
+            console.Responses.Enqueue("c");                // create new
+            console.Responses.Enqueue("survey-smoketest4"); // name
+            console.Responses.Enqueue("ST");               // identifier
+
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
+                planeUrl: "https://plane.example.net", workspace: "throughline", token: "plane_api_x",
+                // No discoveryOverride / setupFactory: exercise the real PlaneTicketingClient
+                // construction for BOTH discovery and provisioning, each on its own HttpClient.
+                localRepoOverride: new EmptyLocalRepo(),
+                httpClientFactory: () => new HttpClient(handler));
+
+            Assert.Equal(0, result);
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+            Assert.Contains("created-uuid", written);
+            Assert.DoesNotContain("REQUIRED_PLANE_PROJECT_ID", written);
+            // Both clients actually ran: discovery created the project, provisioning read states.
+            Assert.Contains(handler.Requests, r => r.StartsWith("POST", StringComparison.Ordinal) && r.EndsWith("/projects/", StringComparison.Ordinal));
+            Assert.Contains(handler.Requests, r => r.StartsWith("GET", StringComparison.Ordinal) && r.EndsWith("/states/", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // The same fix covers the non-interactive --project-name path (resolver client + provisioning
+    // client also previously shared one HttpClient).
+    [Fact]
+    public async Task ConnectedByName_RealClients_DoesNotReuseHttpClient()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var handler = new RoutingPlaneHandler(FullyProvisionedStatesJson(), FullyProvisionedLabelsJson());
+            var console = new FakeConsole(); // redirected stdin: non-interactive
+
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
+                planeUrl: "https://plane.example.net", workspace: "throughline", token: "plane_api_x",
+                projectName: "survey-smoketest4",
+                localRepoOverride: new EmptyLocalRepo(),
+                httpClientFactory: () => new HttpClient(handler));
+
+            Assert.Equal(0, result);
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+            Assert.Contains("created-uuid", written);
+            Assert.DoesNotContain("REQUIRED_PLANE_PROJECT_ID", written);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Interactive_PickExisting_WritesChosenId_MruFirst_NoUuidPrompt()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var discovery = new StubProjectDiscovery
+            {
+                Projects =
+                [
+                    new ProjectInfo("uuid-older", "Throughline Build", "TLB", DateTimeOffset.Parse("2026-06-01T00:00:00Z")),
+                    new ProjectInfo("uuid-newer", "Survey Smoketest", "ST", DateTimeOffset.Parse("2026-06-05T00:00:00Z")),
+                ],
+            };
+            var console = new FakeInteractiveConsole();
+            console.Responses.Enqueue("e");  // use existing
+            console.Responses.Enqueue("1");  // pick #1 (most-recently-used)
+
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
+                planeUrl: "https://api.plane.so", workspace: "acme", token: "tok",
+                discoveryOverride: discovery,
+                setupFactory: _ => (new FakeProvisioner(), new FakeConnectivity()),
+                localRepoOverride: new EmptyLocalRepo());
+
+            Assert.Equal(0, result);
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+            // #1 is the most recently updated -> Survey Smoketest (uuid-newer).
+            Assert.Contains("uuid-newer", written);
+            Assert.DoesNotContain("REQUIRED_PLANE_PROJECT_ID", written);
+            // No project was created (existing was picked).
+            Assert.Equal(0, discovery.CreateCalls);
+            // The GUID-paste prompt is gone, and the menu is MRU-first.
+            Assert.DoesNotContain("Plane project ID", console.Stdout);
+            var idxNewer = console.Stdout.IndexOf("Survey Smoketest", StringComparison.Ordinal);
+            var idxOlder = console.Stdout.IndexOf("Throughline Build", StringComparison.Ordinal);
+            Assert.True(idxNewer >= 0 && idxOlder >= 0 && idxNewer < idxOlder);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Interactive_CreateNew_CreatesWithEnteredNameAndIdentifier()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var discovery = new StubProjectDiscovery { Projects = [], CreatedId = "new-proj-uuid" };
+            var console = new FakeInteractiveConsole();
+            console.Responses.Enqueue("c");                 // create new
+            console.Responses.Enqueue("Survey Smoketest");  // project name
+            console.Responses.Enqueue("ST");                // identifier
+
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
+                planeUrl: "https://api.plane.so", workspace: "acme", token: "tok",
+                discoveryOverride: discovery,
+                setupFactory: _ => (new FakeProvisioner(), new FakeConnectivity()),
+                localRepoOverride: new EmptyLocalRepo());
+
+            Assert.Equal(0, result);
+            Assert.Equal(1, discovery.CreateCalls);
+            Assert.Equal("Survey Smoketest", discovery.LastCreatedName);
+            Assert.Equal("ST", discovery.LastCreatedIdentifier);
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+            Assert.Contains("new-proj-uuid", written);
+            Assert.DoesNotContain("REQUIRED_PLANE_PROJECT_ID", written);
+            Assert.DoesNotContain("Plane project ID", console.Stdout);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Interactive_CreateNew_BlankIdentifier_UsesDerivedDefault()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var discovery = new StubProjectDiscovery { Projects = [] };
+            var console = new FakeInteractiveConsole();
+            console.Responses.Enqueue("c");                 // create new
+            console.Responses.Enqueue("Survey Smoketest");  // name
+            console.Responses.Enqueue("");                  // identifier blank -> accept derived default
+
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
+                planeUrl: "https://api.plane.so", workspace: "acme", token: "tok",
+                discoveryOverride: discovery,
+                setupFactory: _ => (new FakeProvisioner(), new FakeConnectivity()),
+                localRepoOverride: new EmptyLocalRepo());
+
+            Assert.Equal(0, result);
+            // "Survey Smoketest" -> initials "SS".
+            Assert.Equal("SS", discovery.LastCreatedIdentifier);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Interactive_BlankToken_FallsBackToOfflineTemplate()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new FakeInteractiveConsole();
+            console.Responses.Enqueue("");  // token prompt -> blank (decline to connect)
+
+            // url + workspace supplied as flags; token omitted so it is prompted (and left blank).
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
+                planeUrl: "https://api.plane.so", workspace: "acme",
+                discoveryOverride: new StubProjectDiscovery { Projects = [new ProjectInfo("x", "X", "XX")] });
+
+            Assert.Equal(0, result);
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+            Assert.Contains("REQUIRED_PLANE_PROJECT_ID", written);
+            Assert.Contains("REQUIRED_PLANE_API_TOKEN", written);
+            // Offline next-steps hints appear; no create-or-pick prompt was shown.
+            Assert.Contains("build setup", console.Stdout);
+            Assert.DoesNotContain("Create a new project", console.Stdout);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Interactive_DeclineAtCreateOrPick_FallsBackToOfflineTemplate()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var discovery = new StubProjectDiscovery { Projects = [new ProjectInfo("x", "X", "XX")] };
+            var console = new FakeInteractiveConsole();
+            console.Responses.Enqueue("");  // blank at create-or-pick -> decline -> offline
+
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
+                planeUrl: "https://api.plane.so", workspace: "acme", token: "tok",
+                discoveryOverride: discovery,
+                setupFactory: _ => (new FakeProvisioner(), new FakeConnectivity()),
+                localRepoOverride: new EmptyLocalRepo());
+
+            Assert.Equal(0, result);
+            Assert.Equal(0, discovery.CreateCalls);
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+            Assert.Contains("REQUIRED_PLANE_PROJECT_ID", written);
+            Assert.Contains("build setup", console.Stdout);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task NoInteractiveFlag_AtTty_NeverPrompts_WritesOfflineTemplate()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new FakeInteractiveConsole(); // TTY (IsInputRedirected == false)
+            // No responses enqueued: any prompt would be a bug.
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
+                planeUrl: "https://api.plane.so", workspace: "acme", token: "tok",
+                noInteractive: true,
+                discoveryOverride: new StubProjectDiscovery { Projects = [new ProjectInfo("x", "X", "XX")] });
+
+            Assert.Equal(0, result);
+            Assert.DoesNotContain("Create a new project", console.Stdout);
+            Assert.DoesNotContain("Plane project ID", console.Stdout);
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+            Assert.Contains("REQUIRED_PLANE_PROJECT_ID", written);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RedirectedStdin_NeverEntersInteractive()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new FakeConsole(); // IsInputRedirected == true (automation)
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
+                planeUrl: "https://api.plane.so", workspace: "acme", token: "tok",
+                discoveryOverride: new StubProjectDiscovery { Projects = [new ProjectInfo("x", "X", "XX")] });
+
+            Assert.Equal(0, result);
+            Assert.DoesNotContain("Create a new project", console.Stdout);
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+            Assert.Contains("REQUIRED_PLANE_PROJECT_ID", written);
         }
         finally
         {

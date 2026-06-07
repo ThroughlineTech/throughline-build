@@ -136,6 +136,10 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
                 false,
                 $"Plane project connectivity failed: API token is not authorized to create issues in workspace '{_options.WorkspaceSlug}' project '{_options.ProjectId}' ({ex.Message}).");
         }
+        catch (PlaneApiException ex) when (ex.Status == 404)
+        {
+            return new TicketingConnectivityResult(false, ProjectNotFoundMessage(ex));
+        }
         catch (PlaneApiException ex)
         {
             return new TicketingConnectivityResult(
@@ -149,6 +153,20 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
                 $"Plane project connectivity failed for workspace '{_options.WorkspaceSlug}' project '{_options.ProjectId}': {ex.Message}");
         }
     }
+
+    private string ProjectNotFoundMessage(PlaneApiException ex) =>
+        BuildProjectNotFoundMessage(_options.WorkspaceSlug, _options.ProjectId, ex);
+
+    /// <summary>
+    /// Actionable message for a 404 on a project-scoped Plane route: the configured
+    /// project id does not resolve to a project in this workspace, so it is either
+    /// wrong or the project was never created. Shared by connectivity probing and by
+    /// 'build setup' so both report the same remedy instead of a raw "Page not found.".
+    /// </summary>
+    public static string BuildProjectNotFoundMessage(string workspaceSlug, string projectId, PlaneApiException ex) =>
+        $"Plane project not found: plane_project_id '{projectId}' does not resolve to a project in workspace "
+        + $"'{workspaceSlug}'. The id is wrong or the project was never created. Re-run 'build init' connected mode "
+        + $"(or fix plane_project_id in .build/config.toml) and retry. ({ex.Message})";
 
     private async Task ProbeIssueCreatePermissionAsync(CancellationToken ct)
     {
@@ -373,10 +391,45 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
 
     public async Task<IReadOnlyList<ProjectInfo>> ListProjectsAsync(CancellationToken ct)
     {
-        var list = await GetJsonAsync<PlaneProjectList>(ProjectsBase, PlaneJsonContext.Default, ct).ConfigureAwait(false);
-        return (list.Results ?? [])
-            .Select(p => new ProjectInfo(p.Id, p.Name, p.Identifier))
+        var projects = await FetchAllProjectsAsync($"{ProjectsBase}?per_page=100", ct).ConfigureAwait(false);
+        return projects
+            .Select(p => new ProjectInfo(p.Id, p.Name, p.Identifier, p.UpdatedAt))
             .ToList();
+    }
+
+    /// <summary>
+    /// Walks every cursor page of the workspace-projects endpoint and returns the flattened
+    /// results, so find-or-create sees the whole workspace and never creates a duplicate of a
+    /// project that lives beyond the first page. Mirrors <see cref="FetchAllIssuesAsync"/>:
+    /// next_page_results is the authoritative end signal, with empty/repeated cursor and an empty
+    /// page as defensive fallbacks, capped at <see cref="MaxListPages"/>.
+    /// </summary>
+    private async Task<List<PlaneProject>> FetchAllProjectsAsync(string baseUrl, CancellationToken ct)
+    {
+        var all = new List<PlaneProject>();
+        string? cursor = null;
+        for (var page = 0; page < MaxListPages; page++)
+        {
+            var url = string.IsNullOrEmpty(cursor)
+                ? baseUrl
+                : $"{baseUrl}&cursor={Uri.EscapeDataString(cursor)}";
+            var list = await GetJsonAsync<PlaneProjectList>(url, PlaneJsonContext.Default, ct).ConfigureAwait(false);
+            var batch = list.Results ?? [];
+            all.AddRange(batch);
+
+            if (list.NextPageResults == false
+                || batch.Count == 0
+                || string.IsNullOrEmpty(list.NextCursor)
+                || string.Equals(list.NextCursor, cursor, StringComparison.Ordinal))
+                return all;
+            cursor = list.NextCursor;
+        }
+
+        Console.Error.WriteLine(
+            $"[plane] WARNING: project-list pagination hit the {MaxListPages}-page cap " +
+            "with more pages available - some workspace projects are NOT listed for this run, " +
+            "so find-or-create may miss an existing project. Raise MaxListPages or narrow the workspace.");
+        return all;
     }
 
     public async Task<string?> FindProjectByNameAsync(string name, CancellationToken ct)

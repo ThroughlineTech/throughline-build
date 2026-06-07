@@ -230,8 +230,28 @@ static async Task<int> RunAsync(string[] args)
     // 'build init' must run before config load - it bootstraps the config file.
     if (verb == "init")
     {
+        // Reject misspelled/unknown flags up front so a typo (e.g. --workplace for
+        // --workspace) fails loudly instead of being silently dropped and falling through
+        // to a prompt for a raw project id.
+        var initBoolFlags = new HashSet<string>(StringComparer.Ordinal) { "--force", "--print-template", "--no-interactive" };
+        var initValueFlags = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "--plane-url", "--workspace", "--project-id", "--project-name",
+            "--token", "--token-env", "--from",
+        };
+        var unknownInitFlag = CliArgParser.FindUnknownFlag(filteredArgs, initBoolFlags, initValueFlags);
+        if (unknownInitFlag != null)
+        {
+            Console.Error.WriteLine($"Error: unknown flag for 'build init': {unknownInitFlag}");
+            Console.Error.WriteLine(
+                "Recognized: --force --print-template --no-interactive --plane-url --workspace --project-id --project-name --token --token-env --from");
+            Console.Error.WriteLine("See 'build --help' for details.");
+            return 2;
+        }
+
         var force = filteredArgs.Contains("--force");
         var printTemplate = filteredArgs.Contains("--print-template");
+        var noInteractive = filteredArgs.Contains("--no-interactive");
         var initPlaneUrl    = CliArgParser.GetFlagValue(filteredArgs, "--plane-url");
         var initWorkspace   = CliArgParser.GetFlagValue(filteredArgs, "--workspace");
         var initProjectId   = CliArgParser.GetFlagValue(filteredArgs, "--project-id");
@@ -254,6 +274,7 @@ static async Task<int> RunAsync(string[] args)
                 // --print-template returns before this delegate is invoked, so init --print-template
                 // stays offline-safe. Blocking on the async probe is fine in this top-level CLI path.
                 probeCodex: () => new CodexModelProbe().ProbeAsync().GetAwaiter().GetResult(),
+                noInteractive: noInteractive,
                 ct: initCts.Token);
         }
         catch (OperationCanceledException)
@@ -516,6 +537,14 @@ static async Task<int> RunAsync(string[] args)
         catch (OperationCanceledException)
         {
             Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+        catch (PlaneApiException ex) when (ex.Status == 404)
+        {
+            // A 404 on a project-scoped route means the configured project id does not
+            // resolve - surface the actionable "project not found" remedy, not the raw body.
+            Console.Error.WriteLine("Command 'setup' failed: " + PlaneTicketingClient.BuildProjectNotFoundMessage(
+                config2.Ticketing.PlaneWorkspaceSlug, config2.Ticketing.PlaneProjectId, ex));
             return 1;
         }
         catch (PlaneApiException ex)

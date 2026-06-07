@@ -332,20 +332,31 @@ public static class HelpRegistryFactory
     private static CommandHelp Init() => new(
         Name:    "init",
         Group:   CommandGroup.Configure,
-        Summary: "Write .build/config.toml from the built-in template",
-        Usage:   "init [--force] [--print-template] [--plane-url URL] [--workspace SLUG] [--project-id UUID] [--token TOKEN | --token-env VAR]",
+        Summary: "Write .build/config.toml; at a TTY, interactively create or pick a Plane project (no UUID to paste)",
+        Usage:   "init [--force] [--print-template] [--no-interactive] [--from FILE] [--plane-url URL] [--workspace SLUG] [--project-id UUID] [--project-name NAME] [--token TOKEN | --token-env VAR]",
         Options:
         [
             new("--force",            "Overwrite an existing config file",                               false),
             new("--print-template",   "Print the template to stdout without writing a file",             false),
+            new("--no-interactive",   "Never prompt; write the template from flags only (for automation)", false),
+            new("--from FILE",        "Read credentials from a key=value file instead of prompting",     false),
             new("--plane-url URL",    "Set the Plane base URL",                                          false),
             new("--workspace SLUG",   "Set the workspace slug",                                          false),
-            new("--project-id UUID",  "Set the project UUID",                                            false),
+            new("--project-id UUID",  "Use this project UUID directly (bypasses interactive create-or-pick)", false),
+            new("--project-name NAME","Resolve or create the project by name non-interactively",         false),
             new("--token TOKEN",      "Set the Plane API token value directly",                          false),
             new("--token-env VAR",    "Set the env-var name that holds the Plane API token",             false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2],
-        Examples:  []
+        Examples:
+        [
+            new("init",
+                "At a TTY: prompts for base URL, workspace, and token, then offers to create a new project or pick an existing one from a most-recently-used menu (you never paste a UUID), then provisions and commits."),
+            new("init --project-name \"Survey Smoketest\" --plane-url URL --workspace SLUG --token TOKEN",
+                "Non-interactive one-shot: resolve or create the project by name, provision, and verify."),
+            new("init --no-interactive --plane-url URL --workspace SLUG --token TOKEN",
+                "Automation: write the config from flags with no prompts."),
+        ]
     );
 
     private static CommandHelp SetTarget() => new(

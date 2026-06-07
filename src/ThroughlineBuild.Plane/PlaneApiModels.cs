@@ -160,11 +160,21 @@ public record CreateLabelRequest(
 public record PlaneProject(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("name")] string Name,
-    [property: JsonPropertyName("identifier")] string Identifier
+    [property: JsonPropertyName("identifier")] string Identifier,
+    // updated_at is the pragmatic "most recently used" signal for the interactive picker's
+    // ordering. Nullable so a response that omits it still deserializes.
+    [property: JsonPropertyName("updated_at")] DateTimeOffset? UpdatedAt = null
 );
 
+// The workspace-projects list endpoint is the same cursor-paginated Plane shape as the issues
+// list endpoint (a {results, next_cursor, next_page_results} wrapper, NOT a bare array). Without
+// walking the cursor, a workspace with more than one page hides projects from
+// FindProjectByNameAsync and ResolveAsync would then create a duplicate. next_page_results is the
+// authoritative end-of-pages signal (Plane echoes an advancing next_cursor even past the last page).
 public record PlaneProjectList(
-    [property: JsonPropertyName("results")] List<PlaneProject> Results
+    [property: JsonPropertyName("results")] List<PlaneProject> Results,
+    [property: JsonPropertyName("next_cursor")] string? NextCursor = null,
+    [property: JsonPropertyName("next_page_results")] bool? NextPageResults = null
 );
 
 public record CreateProjectRequest(

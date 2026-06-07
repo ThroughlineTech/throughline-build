@@ -81,9 +81,17 @@ public static class InitCommand
         IProjectResolver? resolverOverride = null,
         Func<string, (ITicketingProvisioner, ITicketingConnectivity)>? setupFactory = null,
         ILocalRepoOps? localRepoOverride = null,
+        bool noInteractive = false,
+        IProjectDiscovery? discoveryOverride = null,
+        Func<HttpClient>? httpClientFactory = null,
         CancellationToken ct = default)
     {
         var template = ConfigTemplateLoader.Load();
+        // Each PlaneTicketingClient owns its own HttpClient: the client's constructor sets
+        // BaseAddress and a default header, which throw once an HttpClient has sent a request,
+        // so a single HttpClient can never back two clients. The factory is also the test seam
+        // for driving the real connected/interactive path against a fake transport.
+        var newHttpClient = httpClientFactory ?? (() => new HttpClient());
 
         // Load creds from --from file or from redirected stdin; explicit flags take precedence.
         if (fromFile is not null)
@@ -103,10 +111,13 @@ public static class InitCommand
                 ApplyCredsToParams(CredsFileParser.Parse(stdinContent), ref planeUrl, ref workspace, ref projectId, ref projectName, ref token);
         }
 
-        // Prompt for any remaining null values only when stdin is a TTY and no creds file path
-        // was given (even a partial file is a signal that the operator is in non-interactive mode).
-        if (!console.IsInputRedirected && fromFile is null)
-            PromptForMissingValues(console, ref planeUrl, ref workspace, ref projectId, ref token);
+        // Interactive guided onboarding is available only at a real TTY, with no creds file and
+        // no --no-interactive (so redirected stdin / automation never blocks on a prompt). When
+        // eligible, prompt for the CONNECTION values (URL -> workspace -> token); the raw
+        // "Plane project ID" GUID prompt is gone - the project id comes from create-or-pick.
+        bool canPrompt = !console.IsInputRedirected && fromFile is null && !noInteractive;
+        if (canPrompt)
+            PromptForConnectionValues(console, ref planeUrl, ref workspace, ref token);
 
         var content = ApplyFlags(template, planeUrl, workspace, projectId, token, tokenEnv);
 
@@ -126,13 +137,32 @@ public static class InitCommand
             return 1;
         }
 
-        // Detect connected mode: project name provided, no explicit project id, and full credentials
-        // are available. An explicit projectId (from --project-id or the creds file's plane_project_id
-        // key) takes precedence over resolution by name: if the caller already knows the id, we skip
-        // the network round-trip and stay offline.
         // The effective token is the literal token flag value; if only --token-env is given,
         // we read that env var so the resolver can make actual API calls.
         var effectiveToken = token ?? (tokenEnv is not null ? Environment.GetEnvironmentVariable(tokenEnv) : null);
+
+        // Interactive guided connect: a TTY operator who gave neither an explicit project id nor a
+        // --project-name, but did supply (or enter) url + workspace + token, gets the create-or-pick
+        // flow. A blank token means "I can't/won't connect" -> fall through to the offline template.
+        bool canInteract = canPrompt
+            && string.IsNullOrEmpty(projectId)
+            && string.IsNullOrEmpty(projectName)
+            && !string.IsNullOrEmpty(planeUrl)
+            && !string.IsNullOrEmpty(workspace)
+            && !string.IsNullOrEmpty(effectiveToken);
+
+        if (canInteract)
+        {
+            return await RunInteractiveConnectedAsync(
+                cwd, content, target, console, probeCodex,
+                planeUrl!, workspace!, effectiveToken!,
+                discoveryOverride, setupFactory, localRepoOverride, newHttpClient, ct)
+                .ConfigureAwait(false);
+        }
+
+        // Non-interactive connected mode: --project-name provided, no explicit project id, and full
+        // credentials available. An explicit projectId (from --project-id or the creds file's
+        // plane_project_id key) takes precedence over resolution by name and stays offline.
         var isConnected = !string.IsNullOrEmpty(projectName)
             && string.IsNullOrEmpty(projectId)
             && !string.IsNullOrEmpty(planeUrl)
@@ -144,39 +174,78 @@ public static class InitCommand
             return await RunConnectedAsync(
                 cwd, content, target, console, probeCodex,
                 planeUrl!, workspace!, effectiveToken!, projectName!,
-                resolverOverride, setupFactory, localRepoOverride, ct)
+                resolverOverride, setupFactory, localRepoOverride, newHttpClient, ct)
                 .ConfigureAwait(false);
         }
 
-        // Offline mode: Codex tier discovery, write config, prompt operator.
-        if (probeCodex is not null)
-        {
-            var probe = probeCodex();
-            if (probe.Success && probe.Discovery is not null && probe.Discovery.Models.Count > 0)
-            {
-                var mapping = CodexTierMapper.Map(probe.Discovery);
-                if (mapping is not null)
-                {
-                    var block = CodexSizesBlockRenderer.Render(mapping, probe.Discovery, commented: true);
-                    content = CodexSizesBlockEditor.ReplaceCodexSizesBlock(content, block);
-                }
-            }
-            else
-            {
-                console.ErrorWriteLine(
-                    "Warning: could not discover Codex models (Codex may not be installed or not logged in); "
-                    + "wrote the static Codex defaults. Run 'build models refresh' once Codex is available to update them.");
-            }
-        }
+        // Offline mode: Codex tier discovery, write config, print next steps.
+        return WriteOfflineConfig(content, target, probeCodex, console);
+    }
+
+    /// <summary>
+    /// Offline path: optionally enrich the Codex sizes block, write the config, and print the
+    /// "what's still REQUIRED + next steps" guidance. Reused by the plain offline branch and by
+    /// the interactive flow when the operator declines to connect.
+    /// </summary>
+    private static int WriteOfflineConfig(
+        string content, string target, Func<CodexProbeResult>? probeCodex, IConsole console)
+    {
+        content = ApplyCodexProbe(content, probeCodex, console);
 
         var configDir = Path.GetDirectoryName(target)!;
         Directory.CreateDirectory(configDir);
         File.WriteAllText(target, content, System.Text.Encoding.UTF8);
 
         console.WriteLine($"Created {target}");
-        console.WriteLine("Fill in the REQUIRED fields before running other build commands.");
+
+        // Tailor the next-step guidance: name the specific config fields that are still
+        // unresolved (so the operator does not have to diff the template), point at
+        // 'build setup' as the required provisioning step, and surface connected mode as
+        // the one-shot path that avoids pasting a project UUID.
+        var stillRequired = new List<string>();
+        if (content.Contains("REQUIRED_PLANE_BASE_URL")) stillRequired.Add("plane_base_url");
+        if (content.Contains("REQUIRED_PLANE_WORKSPACE_SLUG")) stillRequired.Add("plane_workspace_slug");
+        if (content.Contains("REQUIRED_PLANE_PROJECT_ID")) stillRequired.Add("plane_project_id");
+        if (content.Contains("REQUIRED_PLANE_API_TOKEN")) stillRequired.Add("plane_api_token");
+
+        if (stillRequired.Count > 0)
+            console.WriteLine($"Still REQUIRED in {Path.GetFileName(target)}: {string.Join(", ", stillRequired)} - fill these in before running other build commands.");
+        else
+            console.WriteLine("Review the config values before running other build commands.");
+
+        console.WriteLine("Next: run 'build setup' to provision the Plane project (states + labels) and initialize the local repo.");
+        console.WriteLine("One-shot: re-run 'build init --project-name <name> --plane-url <url> --workspace <slug> --token <token>' (or interactive mode) to resolve or create the project and provision in one step - no UUID to paste.");
         console.WriteLine("Run 'build user-guide' to write the operator setup guide to docs/.");
         return 0;
+    }
+
+    /// <summary>
+    /// If a Codex probe is injected, discover models and rewrite the commented [workers.codex.sizes]
+    /// block; on probe failure leave the static defaults and print one actionable warning. Returns
+    /// the (possibly updated) config content. Shared by the offline and connected write paths.
+    /// </summary>
+    private static string ApplyCodexProbe(string content, Func<CodexProbeResult>? probeCodex, IConsole console)
+    {
+        if (probeCodex is null)
+            return content;
+
+        var probe = probeCodex();
+        if (probe.Success && probe.Discovery is not null && probe.Discovery.Models.Count > 0)
+        {
+            var mapping = CodexTierMapper.Map(probe.Discovery);
+            if (mapping is not null)
+            {
+                var block = CodexSizesBlockRenderer.Render(mapping, probe.Discovery, commented: true);
+                content = CodexSizesBlockEditor.ReplaceCodexSizesBlock(content, block);
+            }
+        }
+        else
+        {
+            console.ErrorWriteLine(
+                "Warning: could not discover Codex models (Codex may not be installed or not logged in); "
+                + "wrote the static Codex defaults. Run 'build models refresh' once Codex is available to update them.");
+        }
+        return content;
     }
 
     /// <summary>
@@ -196,70 +265,157 @@ public static class InitCommand
         IProjectResolver? resolverOverride,
         Func<string, (ITicketingProvisioner, ITicketingConnectivity)>? setupFactory,
         ILocalRepoOps? localRepoOverride,
+        Func<HttpClient> newHttpClient,
         CancellationToken ct)
     {
-        // Phase 1: resolve or create the Plane project.
-        HttpClient? http = null;
-        IProjectResolver resolver;
-        if (resolverOverride is not null)
-        {
-            resolver = resolverOverride;
-        }
-        else
-        {
-            http = new HttpClient();
-            resolver = new ProjectResolver(http, planeUrl, workspace, effectiveToken);
-        }
-
+        // Phase 1: resolve or create the Plane project by name (find-or-create). The resolver's
+        // HttpClient is owned and disposed here; the pipeline creates its own (one client per
+        // HttpClient - see ExecuteAsync).
+        HttpClient? resolveHttp = null;
         ProjectResolveResult resolveResult;
         try
         {
+            IProjectResolver resolver;
+            if (resolverOverride is not null)
+            {
+                resolver = resolverOverride;
+            }
+            else
+            {
+                resolveHttp = newHttpClient();
+                resolver = new ProjectResolver(resolveHttp, planeUrl, workspace, effectiveToken);
+            }
+
             resolveResult = await resolver.ResolveAsync(projectName, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             console.ErrorWriteLine($"Error: failed to resolve project '{projectName}': {ex.Message}");
-            http?.Dispose();
             return 1;
         }
-
-        // Phase 2: substitute resolved id into config content and write it.
-        content = content.Replace("REQUIRED_PLANE_PROJECT_ID", resolveResult.ProjectId);
-
-        if (probeCodex is not null)
+        finally
         {
-            var probe = probeCodex();
-            if (probe.Success && probe.Discovery is not null && probe.Discovery.Models.Count > 0)
+            resolveHttp?.Dispose();
+        }
+
+        return await RunConnectedPipelineAsync(
+            cwd, content, target, console, probeCodex, planeUrl, workspace, effectiveToken,
+            projectName, resolveResult, setupFactory, localRepoOverride, newHttpClient, ct)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Interactive guided connect (the WI-07 flow): given an open connection, lets the operator
+    /// create a new project or pick an existing one from a most-recently-used menu - no project
+    /// UUID is ever typed or shown to copy - then runs the same connected pipeline. If the operator
+    /// declines to connect, falls back to writing the offline template.
+    /// </summary>
+    private static async Task<int> RunInteractiveConnectedAsync(
+        string cwd,
+        string content,
+        string target,
+        IConsole console,
+        Func<CodexProbeResult>? probeCodex,
+        string planeUrl,
+        string workspace,
+        string effectiveToken,
+        IProjectDiscovery? discoveryOverride,
+        Func<string, (ITicketingProvisioner, ITicketingConnectivity)>? setupFactory,
+        ILocalRepoOps? localRepoOverride,
+        Func<HttpClient> newHttpClient,
+        CancellationToken ct)
+    {
+        // The discovery client's HttpClient is owned and disposed here, before the pipeline builds
+        // its own provisioning client on a fresh HttpClient (one client per HttpClient - see
+        // ExecuteAsync). Sharing one HttpClient across both would throw on the second construction.
+        HttpClient? discoveryHttp = null;
+        (ProjectResolveResult Resolved, string DisplayName)? picked;
+        try
+        {
+            IProjectDiscovery discovery;
+            if (discoveryOverride is not null)
             {
-                var mapping = CodexTierMapper.Map(probe.Discovery);
-                if (mapping is not null)
-                {
-                    var block = CodexSizesBlockRenderer.Render(mapping, probe.Discovery, commented: true);
-                    content = CodexSizesBlockEditor.ReplaceCodexSizesBlock(content, block);
-                }
+                discovery = discoveryOverride;
             }
             else
             {
-                console.ErrorWriteLine(
-                    "Warning: could not discover Codex models (Codex may not be installed or not logged in); "
-                    + "wrote the static Codex defaults. Run 'build models refresh' once Codex is available to update them.");
+                discoveryHttp = newHttpClient();
+                discovery = new PlaneTicketingClient(discoveryHttp, new PlaneClientOptions
+                {
+                    BaseUrl = planeUrl,
+                    WorkspaceSlug = workspace,
+                    ApiToken = effectiveToken,
+                });
             }
+
+            picked = await PromptCreateOrPickAsync(discovery, console, ct).ConfigureAwait(false);
         }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            console.ErrorWriteLine($"Error: interactive project setup failed: {ex.Message}");
+            return 1;
+        }
+        finally
+        {
+            discoveryHttp?.Dispose();
+        }
+
+        if (picked is null)
+        {
+            // Operator declined to connect at the create-or-pick prompt: write the offline template.
+            return WriteOfflineConfig(content, target, probeCodex, console);
+        }
+
+        return await RunConnectedPipelineAsync(
+            cwd, content, target, console, probeCodex, planeUrl, workspace, effectiveToken,
+            picked.Value.DisplayName, picked.Value.Resolved, setupFactory, localRepoOverride, newHttpClient, ct)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Shared phases 2-5 of connected init given an already-resolved project id: substitute the id
+    /// into the config and write it, run setup provisioning, make the welcome commit, verify
+    /// connectivity, and print the summary. Creates its own provisioning HttpClient from
+    /// <paramref name="newHttpClient"/> (one client per HttpClient) and disposes it. Reused by both
+    /// name-based connected init and the interactive create-or-pick flow.
+    /// </summary>
+    private static async Task<int> RunConnectedPipelineAsync(
+        string cwd,
+        string content,
+        string target,
+        IConsole console,
+        Func<CodexProbeResult>? probeCodex,
+        string planeUrl,
+        string workspace,
+        string effectiveToken,
+        string projectName,
+        ProjectResolveResult resolveResult,
+        Func<string, (ITicketingProvisioner, ITicketingConnectivity)>? setupFactory,
+        ILocalRepoOps? localRepoOverride,
+        Func<HttpClient> newHttpClient,
+        CancellationToken ct)
+    {
+        // Phase 2: substitute resolved id into config content (after the id is known) and write it.
+        content = content.Replace("REQUIRED_PLANE_PROJECT_ID", resolveResult.ProjectId);
+        content = ApplyCodexProbe(content, probeCodex, console);
 
         var configDir = Path.GetDirectoryName(target)!;
         Directory.CreateDirectory(configDir);
         File.WriteAllText(target, content, System.Text.Encoding.UTF8);
 
-        // Phase 3: setup provisioning (git init, .gitignore, states, labels).
+        // Phase 3: setup provisioning (git init, .gitignore, states, labels). The provisioning
+        // client gets its own fresh HttpClient (never the discovery/resolver one - that already
+        // sent requests, so reusing it would throw when this client sets BaseAddress).
         ITicketingProvisioner provisioner;
         ITicketingConnectivity connectivity;
+        HttpClient? http = null;
         if (setupFactory is not null)
         {
             (provisioner, connectivity) = setupFactory(resolveResult.ProjectId);
         }
         else
         {
-            http ??= new HttpClient();
+            http = newHttpClient();
             var client = new PlaneTicketingClient(http, new PlaneClientOptions
             {
                 BaseUrl = planeUrl,
@@ -284,27 +440,10 @@ public static class InitCommand
             return 1;
         }
 
-        // Phase 3.5: welcome commit (fresh repo only).
-        // A brand-new repo has no commits, so the first 'build ship' would fail when resolving the
-        // base ref. Committing .gitignore here closes that gap at the exact moment the repo is
-        // created. Repos that already have commits are left untouched. .build/config.toml is
-        // gitignored and is never included.
-        if (!localRepo.HasAnyCommits())
-        {
-            try
-            {
-                localRepo.StageAndCommit(new[] { ".gitignore" }, "welcome to throughline build");
-                console.WriteLine("Welcome:      committed .gitignore as initial commit");
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                // Non-fatal: the operator can commit manually. Warn clearly so they know why
-                // 'build ship' might still fail (likely missing git user.name / user.email).
-                console.ErrorWriteLine(
-                    $"Warning: welcome commit skipped ({ex.Message}). "
-                    + "Commit at least one file before running 'build ship'.");
-            }
-        }
+        // Phase 3.5: welcome commit (fresh repo only). SetupCommand (phase 3) already runs this
+        // for the fresh-repo path; the shared helper's HasAnyCommits guard makes this redundant
+        // call a no-op so connected init still produces exactly one welcome commit.
+        WelcomeCommit.EnsureInitialCommit(localRepo, console);
 
         // Phase 4: verify connectivity.
         TicketingConnectivityResult connectResult;
@@ -345,15 +484,140 @@ public static class InitCommand
     }
 
     /// <summary>
-    /// Scans the two canonical doc directories (docs/op-docs and docs/proposals) for
-    /// markdown files. Returns paths relative to <paramref name="cwd"/> using forward
-    /// slashes, suitable for use as arguments to 'build scaffold'.
-    /// Detection is bounded to these two directories; arbitrary repo markdown is not scanned.
+    /// Asks "create a new project or use an existing one?" and returns the resolved id + a display
+    /// name, or null when the operator declines (blank) so the caller can fall back to offline.
+    /// Choosing "existing" with no projects in the workspace (or pressing 'n' at the menu) falls
+    /// through to the create path.
+    /// </summary>
+    private static async Task<(ProjectResolveResult Resolved, string DisplayName)?> PromptCreateOrPickAsync(
+        IProjectDiscovery discovery, IConsole console, CancellationToken ct)
+    {
+        while (true)
+        {
+            console.Write("Create a new project or use an existing one? [c/e] (blank to skip and write offline template): ");
+            var choice = console.ReadLine()?.Trim().ToLowerInvariant();
+
+            if (string.IsNullOrEmpty(choice))
+                return null; // decline -> offline template
+
+            if (choice is "e" or "existing")
+            {
+                var existing = await PickExistingProjectAsync(discovery, console, ct).ConfigureAwait(false);
+                if (existing is not null)
+                    return (new ProjectResolveResult(existing.Value.Id, ProjectResolveOutcome.Found), existing.Value.Name);
+                // No projects, or operator chose 'n' at the menu -> create instead.
+                return await CreateNewProjectAsync(discovery, console, ct).ConfigureAwait(false);
+            }
+
+            if (choice is "c" or "n" or "new" or "create")
+                return await CreateNewProjectAsync(discovery, console, ct).ConfigureAwait(false);
+
+            console.WriteLine("Please enter 'c' (create) or 'e' (existing).");
+        }
+    }
+
+    /// <summary>
+    /// Lists workspace projects most-recently-used first and lets the operator pick one by number.
+    /// Returns the chosen project's id + name, or null when there are no projects or the operator
+    /// pressed 'n' to create a new one instead. The project UUID is never shown as something to copy.
+    /// </summary>
+    private static async Task<(string Id, string Name)?> PickExistingProjectAsync(
+        IProjectDiscovery discovery, IConsole console, CancellationToken ct)
+    {
+        var projects = (await discovery.ListProjectsAsync(ct).ConfigureAwait(false))
+            .OrderByDescending(p => p.UpdatedAt ?? DateTimeOffset.MinValue)
+            .ToList();
+
+        if (projects.Count == 0)
+        {
+            console.WriteLine("No existing projects in this workspace - let's create one.");
+            return null;
+        }
+
+        console.WriteLine("Select a project:");
+        for (int i = 0; i < projects.Count; i++)
+        {
+            var p = projects[i];
+            var updated = p.UpdatedAt is { } u ? u.ToString("yyyy-MM-dd") : "unknown";
+            console.WriteLine($"  {i + 1}) {p.Name}  ({p.Identifier})  updated {updated}");
+        }
+
+        while (true)
+        {
+            console.Write("Enter number (or 'n' to create new): ");
+            var input = console.ReadLine()?.Trim();
+            if (string.IsNullOrEmpty(input))
+            {
+                console.WriteLine("Please enter a number or 'n'.");
+                continue;
+            }
+            if (input.Equals("n", StringComparison.OrdinalIgnoreCase) || input.Equals("new", StringComparison.OrdinalIgnoreCase))
+                return null; // -> create new
+            if (int.TryParse(input, out var n) && n >= 1 && n <= projects.Count)
+            {
+                var chosen = projects[n - 1];
+                return (chosen.Id, chosen.Name);
+            }
+            console.WriteLine($"Please enter a number between 1 and {projects.Count}, or 'n'.");
+        }
+    }
+
+    /// <summary>
+    /// Prompts for a project name and a Plane identifier (offering a derived default the operator can
+    /// accept or override), validates the identifier, creates the project, and returns its new id.
+    /// </summary>
+    private static async Task<(ProjectResolveResult Resolved, string DisplayName)?> CreateNewProjectAsync(
+        IProjectDiscovery discovery, IConsole console, CancellationToken ct)
+    {
+        string name;
+        while (true)
+        {
+            console.Write("Project name: ");
+            var n = console.ReadLine()?.Trim();
+            if (!string.IsNullOrEmpty(n)) { name = n; break; }
+            console.WriteLine("A project name is required.");
+        }
+
+        var defaultId = ProjectResolver.DeriveIdentifier(name);
+        string identifier;
+        while (true)
+        {
+            console.Write($"Project identifier [{defaultId}]: ");
+            var raw = console.ReadLine()?.Trim();
+            if (string.IsNullOrEmpty(raw)) { identifier = defaultId; break; }
+            var normalized = raw.ToUpperInvariant();
+            if (IsValidIdentifier(normalized)) { identifier = normalized; break; }
+            console.WriteLine("Identifier must be 2-10 letters/digits starting with a letter (e.g. ST).");
+        }
+
+        var newId = await discovery.CreateProjectAsync(name, identifier, ct).ConfigureAwait(false);
+        return (new ProjectResolveResult(newId, ProjectResolveOutcome.Created), name);
+    }
+
+    /// <summary>Plane identifier rules used to validate operator input: 2-10 ASCII letters/digits, starting with a letter.</summary>
+    private static bool IsValidIdentifier(string id)
+    {
+        if (id.Length is < 2 or > 10) return false;
+        if (!char.IsAsciiLetter(id[0])) return false;
+        foreach (var c in id)
+            if (!char.IsAsciiLetterOrDigit(c)) return false;
+        return true;
+    }
+
+    /// <summary>
+    /// Scans the canonical op-doc directories for markdown files: the conventional
+    /// docs/op-docs and docs/proposals, plus their top-level op-docs and proposals
+    /// equivalents (where operators commonly drop a doc). Returns paths relative to
+    /// <paramref name="cwd"/> using forward slashes, suitable for use as arguments to
+    /// 'build scaffold'. Detection stays bounded to this fixed allow-list; arbitrary repo
+    /// markdown is never scanned. Each file is reported at most once even if two scanned
+    /// directories resolve to the same path.
     /// </summary>
     public static IReadOnlyList<string> FindDocPaths(string cwd)
     {
         var results = new List<string>();
-        string[] relDirs = ["docs/op-docs", "docs/proposals"];
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        string[] relDirs = ["docs/op-docs", "docs/proposals", "op-docs", "proposals"];
         foreach (var relDir in relDirs)
         {
             var absDir = Path.Combine(cwd, relDir.Replace('/', Path.DirectorySeparatorChar));
@@ -362,17 +626,21 @@ public static class InitCommand
             foreach (var file in Directory.GetFiles(absDir, "*.md").OrderBy(f => f))
             {
                 var rel = Path.GetRelativePath(cwd, file).Replace(Path.DirectorySeparatorChar, '/');
-                results.Add(rel);
+                if (seen.Add(rel))
+                    results.Add(rel);
             }
         }
         return results;
     }
 
-    private static void PromptForMissingValues(
+    // Prompts for the CONNECTION values only - base URL, workspace slug, API token - in the order
+    // the operator expects. The raw "Plane project ID" GUID prompt is intentionally gone (WI-07):
+    // the project id is obtained via the interactive create-or-pick flow, never by pasting a UUID.
+    // A blank token is left null so the caller falls back to writing the offline template.
+    private static void PromptForConnectionValues(
         IConsole console,
         ref string? planeUrl,
         ref string? workspace,
-        ref string? projectId,
         ref string? token)
     {
         if (planeUrl is null)
@@ -387,13 +655,6 @@ public static class InitCommand
             console.Write("Plane workspace slug: ");
             var response = console.ReadLine()?.Trim();
             if (!string.IsNullOrEmpty(response)) workspace = response;
-        }
-
-        if (projectId is null)
-        {
-            console.Write("Plane project ID: ");
-            var response = console.ReadLine()?.Trim();
-            if (!string.IsNullOrEmpty(response)) projectId = response;
         }
 
         if (token is null)

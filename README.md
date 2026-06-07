@@ -1,14 +1,14 @@
 To Test:
-dotnet test
+dotnet test --nologo -v q --logger "console;verbosity=minimal"
 
 To build the native cli:
-dotnet publish src/ThroughlineBuild.Cli -r win-x64 -c Release
+dotnet publish src/ThroughlineBuild.Cli -r win-x64 -c Release --nologo -v q
 
 That produces the build.exe native binary (project has <PublishAot>true</PublishAot> and <AssemblyName>build</AssemblyName> in ThroughlineBuild.Cli.csproj).
 
 Swap the RID for other platforms: -r osx-arm64, -r linux-x64.
 
-If you just want to compile-check without producing a native binary: dotnet build throughline-build.sln.
+If you just want to compile-check without producing a native binary: dotnet build throughline-build.sln --nologo -v q.
 
 ## Creating tickets
 

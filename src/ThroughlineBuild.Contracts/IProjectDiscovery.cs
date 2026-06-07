@@ -2,8 +2,10 @@ namespace ThroughlineBuild.Contracts;
 
 /// <summary>
 /// Summarizes one workspace project as returned by <see cref="IProjectDiscovery.ListProjectsAsync"/>.
+/// <paramref name="UpdatedAt"/> is the project's last-updated timestamp (Plane's updated_at), used
+/// as a pragmatic "most recently used" sort key for the interactive picker; null when unknown.
 /// </summary>
-public readonly record struct ProjectInfo(string Id, string Name, string Identifier);
+public readonly record struct ProjectInfo(string Id, string Name, string Identifier, DateTimeOffset? UpdatedAt = null);
 
 /// <summary>
 /// Workspace-level project discovery and creation. These operations route on the workspace

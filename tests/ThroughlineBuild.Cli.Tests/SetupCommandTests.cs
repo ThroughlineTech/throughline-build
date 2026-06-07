@@ -29,22 +29,33 @@ public class SetupCommandTests
     private sealed class FakeLocalRepo : ILocalRepoOps
     {
         private bool _isRepo;
+        private bool _hasCommits;
         public string? Gitignore;
         public int InitCalls { get; private set; }
         public int WriteCalls { get; private set; }
+        public int CommitCalls { get; private set; }
+        public string[]? LastCommitPaths { get; private set; }
+        public string? LastCommitMessage { get; private set; }
 
-        public FakeLocalRepo(bool isRepo, string? gitignore)
+        public FakeLocalRepo(bool isRepo, string? gitignore, bool hasCommits = false)
         {
             _isRepo = isRepo;
             Gitignore = gitignore;
+            _hasCommits = hasCommits;
         }
 
         public bool IsGitRepository() => _isRepo;
         public void GitInit() { InitCalls++; _isRepo = true; }
         public string? ReadGitignore() => Gitignore;
         public void WriteGitignore(string content) { WriteCalls++; Gitignore = content; }
-        public bool HasAnyCommits() => false;
-        public void StageAndCommit(string[] paths, string message) { }
+        public bool HasAnyCommits() => _hasCommits;
+        public void StageAndCommit(string[] paths, string message)
+        {
+            CommitCalls++;
+            LastCommitPaths = paths;
+            LastCommitMessage = message;
+            _hasCommits = true;
+        }
     }
 
     // A local repo that is already initialized and already carries every standard ignore entry,
@@ -231,5 +242,50 @@ public class SetupCommandTests
         Assert.Equal(0, repo.WriteCalls);
         Assert.Contains("not a git repository", console.Stderr);
         Assert.Contains(".gitignore", console.Stderr);
+    }
+
+    // ------------------------------------------------------------------ WI-05: welcome commit
+
+    [Fact]
+    public async Task FreshRepo_GetsWelcomeCommitOfGitignoreOnly()
+    {
+        var repo = new FakeLocalRepo(isRepo: false, gitignore: null, hasCommits: false);
+        var console = new FakeConsole();
+
+        var code = await new SetupCommand(FullyProvisioned(), repo).ExecuteAsync(checkOnly: false, console, CancellationToken.None);
+
+        Assert.Equal(0, code);
+        Assert.Equal(1, repo.CommitCalls);
+        Assert.Equal(WelcomeCommit.Message, repo.LastCommitMessage);
+        Assert.Contains(".gitignore", repo.LastCommitPaths!);
+        Assert.DoesNotContain(".build/config.toml", repo.LastCommitPaths!);
+        Assert.Contains("committed .gitignore", console.Stdout);
+    }
+
+    [Fact]
+    public async Task ExistingRepoWithCommits_GetsNoSecondBootstrapCommit()
+    {
+        var repo = new FakeLocalRepo(isRepo: true,
+            gitignore: string.Join("\n", GitignoreManager.RequiredEntries) + "\n",
+            hasCommits: true);
+        var console = new FakeConsole();
+
+        var code = await new SetupCommand(FullyProvisioned(), repo).ExecuteAsync(checkOnly: false, console, CancellationToken.None);
+
+        Assert.Equal(0, code);
+        Assert.Equal(0, repo.CommitCalls);
+    }
+
+    [Fact]
+    public async Task CheckOnly_MakesNoWelcomeCommit()
+    {
+        var repo = new FakeLocalRepo(isRepo: false, gitignore: null, hasCommits: false);
+        var console = new FakeConsole();
+
+        // --check on a fresh repo reports gaps (returns 1) but must mutate nothing - no commit.
+        var code = await new SetupCommand(FullyProvisioned(), repo).ExecuteAsync(checkOnly: true, console, CancellationToken.None);
+
+        Assert.Equal(1, code);
+        Assert.Equal(0, repo.CommitCalls);
     }
 }
