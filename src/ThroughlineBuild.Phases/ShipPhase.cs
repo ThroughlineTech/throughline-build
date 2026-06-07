@@ -487,9 +487,6 @@ public class ShipPhase : IWorkflowPhase
         }
 
         // Step 7: Regression checks
-        if (_shipOptions.RegressionChecks.Count > 0)
-            ReportProgress($"[ship] running {_shipOptions.RegressionChecks.Count} regression check(s)...");
-
         bool regressionGateHandled = false;
 
         if (_shipOptions.SkipBaseline)
@@ -501,10 +498,14 @@ public class ShipPhase : IWorkflowPhase
         }
         else if (_shipOptions.BaselineCache is not null)
         {
+            if (_shipOptions.RegressionChecks.Count > 0)
+                ReportProgress("[ship] computing baseline check results...");
             var baselineFailures = await ComputeBaselineAsync(ticketId, ontoRef, workingDirectory, ct).ConfigureAwait(false);
             if (baselineFailures is not null)
             {
                 regressionGateHandled = true;
+                if (_shipOptions.RegressionChecks.Count > 0)
+                    ReportProgress($"[ship] running {_shipOptions.RegressionChecks.Count} regression check(s) on feature branch...");
                 var featureResults = await _checksRunner.RunAsync(_shipOptions.RegressionChecks, canonicalWorktreePath, ct).ConfigureAwait(false);
                 if (_verbose)
                 {
@@ -592,6 +593,8 @@ public class ShipPhase : IWorkflowPhase
         if (!regressionGateHandled)
         {
             // Legacy regression check: any failing test blocks ship
+            if (_shipOptions.RegressionChecks.Count > 0)
+                ReportProgress($"[ship] running {_shipOptions.RegressionChecks.Count} regression check(s)...");
             var checkResults = await _checksRunner.RunAsync(_shipOptions.RegressionChecks, canonicalWorktreePath, ct).ConfigureAwait(false);
             if (_verbose)
             {
