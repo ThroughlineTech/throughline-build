@@ -322,12 +322,18 @@ public static class InitCommand
         http?.Dispose();
 
         // Phase 5: print summary.
+        var docPaths = FindDocPaths(cwd);
         var outcomeWord = resolveResult.Outcome == ProjectResolveOutcome.Created ? "created" : "found";
         console.WriteLine(string.Empty);
         console.WriteLine($"Project:      {projectName}");
         console.WriteLine($"Project id:   {resolveResult.ProjectId} ({outcomeWord})");
         console.WriteLine($"Connectivity: {(connectResult.Success ? "OK" : "FAILED")} - {connectResult.Message}");
         console.WriteLine($"Config:       {target}");
+        foreach (var docPath in docPaths)
+        {
+            console.WriteLine($"Op doc:       {docPath}");
+            console.WriteLine($"Scaffold:     run 'build scaffold {docPath}'");
+        }
 
         if (!connectResult.Success)
         {
@@ -336,6 +342,30 @@ public static class InitCommand
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// Scans the two canonical doc directories (docs/op-docs and docs/proposals) for
+    /// markdown files. Returns paths relative to <paramref name="cwd"/> using forward
+    /// slashes, suitable for use as arguments to 'build scaffold'.
+    /// Detection is bounded to these two directories; arbitrary repo markdown is not scanned.
+    /// </summary>
+    public static IReadOnlyList<string> FindDocPaths(string cwd)
+    {
+        var results = new List<string>();
+        string[] relDirs = ["docs/op-docs", "docs/proposals"];
+        foreach (var relDir in relDirs)
+        {
+            var absDir = Path.Combine(cwd, relDir.Replace('/', Path.DirectorySeparatorChar));
+            if (!Directory.Exists(absDir))
+                continue;
+            foreach (var file in Directory.GetFiles(absDir, "*.md").OrderBy(f => f))
+            {
+                var rel = Path.GetRelativePath(cwd, file).Replace(Path.DirectorySeparatorChar, '/');
+                results.Add(rel);
+            }
+        }
+        return results;
     }
 
     private static void PromptForMissingValues(

@@ -1311,4 +1311,202 @@ public class InitCommandTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    // ------------------------------------------------------------------
+    // App-doc scaffold handoff: post-bootstrap doc detection (TLB-487)
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public async Task ConnectedMode_WithOpDoc_SummaryShowsScaffoldPointer()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            // Seed a doc in the canonical op-docs location.
+            var opDocsDir = Path.Combine(dir, "docs", "op-docs");
+            Directory.CreateDirectory(opDocsDir);
+            File.WriteAllText(Path.Combine(opDocsDir, "op-01-my-operation.md"), "# Operation: my-operation\n");
+
+            var resolver = new FakeResolver("doc-proj-id", ProjectResolveOutcome.Found);
+            var provisioner = new FakeProvisioner();
+            var connectivity = new FakeConnectivity();
+            var localRepo = new ReadyLocalRepo();
+
+            var console = new FakeConsole();
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
+                planeUrl: "https://api.plane.so",
+                workspace: "acme",
+                token: "tok",
+                projectName: "Doc Project",
+                resolverOverride: resolver,
+                setupFactory: _ => (provisioner, connectivity),
+                localRepoOverride: localRepo);
+
+            Assert.Equal(0, result);
+            // Summary must name the detected doc.
+            Assert.Contains("op-01-my-operation.md", console.Stdout);
+            // Summary must show the exact scaffold command.
+            Assert.Contains("build scaffold", console.Stdout);
+            Assert.Contains("docs/op-docs/op-01-my-operation.md", console.Stdout);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ConnectedMode_WithProposalDoc_SummaryShowsScaffoldPointer()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            // Seed a doc in the canonical proposals location.
+            var proposalsDir = Path.Combine(dir, "docs", "proposals");
+            Directory.CreateDirectory(proposalsDir);
+            File.WriteAllText(Path.Combine(proposalsDir, "my-proposal.md"), "# Proposal\n");
+
+            var resolver = new FakeResolver("prop-proj-id", ProjectResolveOutcome.Found);
+            var provisioner = new FakeProvisioner();
+            var connectivity = new FakeConnectivity();
+            var localRepo = new ReadyLocalRepo();
+
+            var console = new FakeConsole();
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
+                planeUrl: "https://api.plane.so",
+                workspace: "acme",
+                token: "tok",
+                projectName: "Proposal Project",
+                resolverOverride: resolver,
+                setupFactory: _ => (provisioner, connectivity),
+                localRepoOverride: localRepo);
+
+            Assert.Equal(0, result);
+            Assert.Contains("my-proposal.md", console.Stdout);
+            Assert.Contains("build scaffold", console.Stdout);
+            Assert.Contains("docs/proposals/my-proposal.md", console.Stdout);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ConnectedMode_WithNoDoc_SummaryOmitsScaffoldPointer()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            // No docs/op-docs or docs/proposals directory exists.
+            var resolver = new FakeResolver("no-doc-proj-id", ProjectResolveOutcome.Found);
+            var provisioner = new FakeProvisioner();
+            var connectivity = new FakeConnectivity();
+            var localRepo = new ReadyLocalRepo();
+
+            var console = new FakeConsole();
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
+                planeUrl: "https://api.plane.so",
+                workspace: "acme",
+                token: "tok",
+                projectName: "Clean Project",
+                resolverOverride: resolver,
+                setupFactory: _ => (provisioner, connectivity),
+                localRepoOverride: localRepo);
+
+            Assert.Equal(0, result);
+            Assert.DoesNotContain("Scaffold:", console.Stdout);
+            Assert.DoesNotContain("build scaffold", console.Stdout);
+            Assert.DoesNotContain("Op doc:", console.Stdout);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FindDocPaths_OpDocsDir_ReturnsRelativeForwardSlashPaths()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var opDocsDir = Path.Combine(dir, "docs", "op-docs");
+            Directory.CreateDirectory(opDocsDir);
+            File.WriteAllText(Path.Combine(opDocsDir, "op-01.md"), "");
+            File.WriteAllText(Path.Combine(opDocsDir, "op-02.md"), "");
+
+            var paths = InitCommand.FindDocPaths(dir);
+
+            Assert.Equal(2, paths.Count);
+            // Paths must use forward slashes and be relative to cwd.
+            Assert.All(paths, p => Assert.StartsWith("docs/op-docs/", p));
+            Assert.All(paths, p => Assert.DoesNotContain('\\', p));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FindDocPaths_BothDirs_ReturnsBothSets()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(dir, "docs", "op-docs"));
+            Directory.CreateDirectory(Path.Combine(dir, "docs", "proposals"));
+            File.WriteAllText(Path.Combine(dir, "docs", "op-docs", "op-01.md"), "");
+            File.WriteAllText(Path.Combine(dir, "docs", "proposals", "plan-a.md"), "");
+
+            var paths = InitCommand.FindDocPaths(dir);
+
+            Assert.Equal(2, paths.Count);
+            Assert.Contains("docs/op-docs/op-01.md", paths);
+            Assert.Contains("docs/proposals/plan-a.md", paths);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FindDocPaths_NoDirs_ReturnsEmpty()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var paths = InitCommand.FindDocPaths(dir);
+            Assert.Empty(paths);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FindDocPaths_NonMdFilesIgnored()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var opDocsDir = Path.Combine(dir, "docs", "op-docs");
+            Directory.CreateDirectory(opDocsDir);
+            File.WriteAllText(Path.Combine(opDocsDir, "op-01.md"), "");
+            File.WriteAllText(Path.Combine(opDocsDir, "notes.txt"), "");
+            File.WriteAllText(Path.Combine(opDocsDir, "schema.json"), "");
+
+            var paths = InitCommand.FindDocPaths(dir);
+
+            Assert.Single(paths);
+            Assert.Equal("docs/op-docs/op-01.md", paths[0]);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }
