@@ -207,22 +207,18 @@ public static class BatchReviewBriefBuilder
     }
 
     // Emits the "read the diff yourself" block: the reason, the exact read-only command
-    // to view each file's diff in the worktree, and a read-only reminder.
+    // to view each file's diff in the worktree, and a read-only reminder. The prose lives in
+    // a shared template; the reason line and diff refs are the dynamic bits. The template ends
+    // with a single newline; the trailing blank line is appended here in C#.
     private static void AppendFetchDirective(StringBuilder sb, GitDiff diff, string reason)
     {
-        sb.Append(reason);
-        sb.Append('\n');
-        sb.Append('\n');
-        sb.Append("The batch branch is checked out in your working directory. You MUST read the\n");
-        sb.Append("changes yourself before judging - for each file in the list above, view its diff:\n");
-        sb.Append('\n');
-        sb.Append("```\n");
-        sb.Append($"git diff {diff.FromRef}...{diff.ToRef} -- <path>\n");
-        sb.Append("```\n");
-        sb.Append('\n');
-        sb.Append("Use the per-ticket commit ranges above to scope each ticket. You may also\n");
-        sb.Append("`git show`, `git log`, or read files directly. Do not run any git command that\n");
-        sb.Append("writes (no stash/checkout/reset/rebase).\n");
+        sb.Append(TemplateLoader.LoadShared("patch-fetch-directive-batch.md").Substitute(
+            new Dictionary<string, string>
+            {
+                ["reason"] = reason,
+                ["from_ref"] = diff.FromRef,
+                ["to_ref"] = diff.ToRef
+            }));
         sb.Append('\n');
     }
 
@@ -259,9 +255,5 @@ public static class BatchReviewBriefBuilder
     }
 
     private static string BuildWorkerResultJson() =>
-        "{\"status\":\"Ok\",\"summary\":\"Batch review complete\"," +
-        "\"files_changed\":[],\"failure_reason\":null," +
-        "\"metadata\":{\"verdict\":\"Pass|Rework|Fail\"," +
-        "\"rationale_ref\":\"REVIEW_CRITIQUE\"," +
-        "\"checks_failed\":[\"check_name_if_applicable\"]}}";
+        TemplateLoader.LoadShared("batch-review-worker-result.md");
 }

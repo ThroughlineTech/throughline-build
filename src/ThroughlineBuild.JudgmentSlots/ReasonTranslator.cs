@@ -7,10 +7,10 @@ public sealed class ReasonTranslator
     private readonly ILlmClient _llm;
     private readonly string _modelId;
 
-    public const string SystemPrompt =
-        "Translate the following text to English if it is not already in English. " +
-        "If it is already in English, return it unchanged. " +
-        "Return only the translated text with no preamble or explanation.";
+    // Backed by an embedded template (translate-reason-prompt.md) rather than a compile-time
+    // literal so the prompt text lives in exactly one place. `const` cannot be backed by a
+    // runtime resource, so this is a cached static with the identical value and accessibility.
+    public static string SystemPrompt { get; } = TranslateReasonPromptLoader.Load();
 
     public const string ModelId = "claude-haiku-4-5-20251001";
 

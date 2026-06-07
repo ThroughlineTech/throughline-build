@@ -32,12 +32,8 @@ public static class ReviewBriefBuilder
         var patchContentSection = BuildPatchContentSection(diff);
         var automatedChecksSection = BuildAutomatedChecksSection(checkResults);
 
-        var workerResultJson =
-            "{\"status\":\"Ok\",\"summary\":\"Review for " + ticket.Id + "\"," +
-            "\"files_changed\":[],\"failure_reason\":null," +
-            "\"metadata\":{\"verdict\":\"Pass|Rework|Fail\"," +
-            "\"rationale_ref\":\"REVIEW_CRITIQUE\"," +
-            "\"checks_failed\":[\"check_name_if_applicable\"]}}";
+        var workerResultJson = TemplateLoader.LoadShared("review-worker-result.md")
+            .Substitute(new Dictionary<string, string> { ["ticket_id"] = ticket.Id });
 
         var template = TemplateLoader.Load(agentName, "review.md");
 
@@ -176,20 +172,18 @@ public static class ReviewBriefBuilder
 
     // Emits the "read the diff yourself" block: a one-line reason, the exact read-only
     // command to view each file's diff from the worktree, and a reminder to stay read-only.
+    // The prose lives in a shared template; the reason line and diff refs are the dynamic bits.
+    // The template ends with a single newline; the trailing blank line that separates this
+    // block from the next section is appended here in C#.
     private static void AppendFetchDirective(StringBuilder sb, GitDiff diff, string reason)
     {
-        sb.Append(reason);
-        sb.Append('\n');
-        sb.Append('\n');
-        sb.Append("The feature branch is checked out in your working directory. You MUST read the\n");
-        sb.Append("changes yourself before judging - for each file in the list above, view its diff:\n");
-        sb.Append('\n');
-        sb.Append("```\n");
-        sb.Append($"git diff {diff.FromRef}...{diff.ToRef} -- <path>\n");
-        sb.Append("```\n");
-        sb.Append('\n');
-        sb.Append("You may also `git show`, `git log`, or read the file directly for surrounding\n");
-        sb.Append("context. Do not run any git command that writes (no stash/checkout/reset/rebase).\n");
+        sb.Append(TemplateLoader.LoadShared("patch-fetch-directive-single.md").Substitute(
+            new Dictionary<string, string>
+            {
+                ["reason"] = reason,
+                ["from_ref"] = diff.FromRef,
+                ["to_ref"] = diff.ToRef
+            }));
         sb.Append('\n');
     }
 

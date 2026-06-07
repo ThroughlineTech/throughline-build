@@ -8,4 +8,8 @@
   <ItemGroup>
     <ProjectReference Include="..\ThroughlineBuild.Contracts\ThroughlineBuild.Contracts.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Templates\translate-reason-prompt.md"
+      LogicalName="ThroughlineBuild.JudgmentSlots.Templates.translate-reason-prompt.md" />
+  </ItemGroup>
 </Project>

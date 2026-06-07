@@ -1,0 +1,1 @@
+{"ticket_id":"{{ticket_id}}","commit_sha":"<commit SHA after {{ticket_id}}>","stack_position":{{stack_position}},"files_changed":["path/relative/to/worktree"],"summary_ref":"IMPLEMENT_SUMMARY_{{stack_position}}"}

@@ -164,38 +164,10 @@ public static class ImplementBriefBuilder
     // obsolete detection on rework rounds and redirect the agent to the feedback instead.
     private static string BuildObsoleteDetectionSection(ReviewFeedback? reviewFeedback)
     {
-        if (reviewFeedback is not null)
-        {
-            return
-                "## Obsolete detection (suppressed on rework)\n\n" +
-                "This is a rework round. Commits already on this branch are your own prior-round work - " +
-                "do NOT raise an obsolete escalation against them. Apply the reviewer feedback above. " +
-                "If the feedback is genuinely already satisfied by the current tree, re-affirm with " +
-                "`Status=Ok` and report the current HEAD SHA; never emit `Status=Escalate` with reason " +
-                "`obsolete` in a rework round.";
-        }
-
-        return
-            "## Obsolete detection\n\n" +
-            "Before making any changes, check whether the plan's acceptance criteria are already satisfied by a prior commit. If the acceptance criteria's artifacts already exist AND their content meets the acceptance criteria, the ticket is obsolete.\n\n" +
-            "**Detection bar:** \"the file exists AND its content meets the acceptance criteria\" qualifies. \"a file with the same name exists\" does not.\n\n" +
-            "Emit `Status=Escalate` with a populated `metadata.escalation` block. Do not make any changes.\n\n" +
-            "WORKER_RESULT\n" +
-            "{\n" +
-            "  \"status\": \"Escalate\",\n" +
-            "  \"summary\": \"Ticket obsolete: decompose.md already delivered in commit 80ccafa\",\n" +
-            "  \"files_changed\": [],\n" +
-            "  \"failure_reason\": null,\n" +
-            "  \"metadata\": {\n" +
-            "    \"escalation\": {\n" +
-            "      \"reason\": \"obsolete\",\n" +
-            "      \"subsumed_by\": {\n" +
-            "        \"commit\": \"80ccafa\",\n" +
-            "        \"files\": [\"src/ThroughlineBuild.Briefs/Templates/claude-code/decompose.md\"],\n" +
-            "        \"rationale\": \"decompose.md delivered in commit 80ccafa; file meets this brief's acceptance criteria\"\n" +
-            "      }\n" +
-            "    }\n" +
-            "  }\n" +
-            "}";
+        // Both variants are agent-agnostic static prose (the rework case also embeds a full
+        // escalate WORKER_RESULT example), so they live in shared templates with no placeholders.
+        return reviewFeedback is not null
+            ? TemplateLoader.LoadShared("implement-obsolete-rework.md")
+            : TemplateLoader.LoadShared("implement-obsolete-initial.md");
     }
 }

@@ -1,0 +1,1 @@
+{"status":"Ok","summary":"Implemented batch {{batch_ids}}","files_changed":["path/relative/to/worktree"],"failure_reason":null,"metadata":{"base_commit_sha":"<base commit pointer from brief>","head_commit_sha":"<HEAD SHA after all ticket commits>","files_changed":["path/relative/to/worktree"]},"tickets":[{{ticket_results}}]}

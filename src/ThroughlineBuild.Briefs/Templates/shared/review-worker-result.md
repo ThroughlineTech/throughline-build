@@ -1,0 +1,1 @@
+{"status":"Ok","summary":"Review for {{ticket_id}}","files_changed":[],"failure_reason":null,"metadata":{"verdict":"Pass|Rework|Fail","rationale_ref":"REVIEW_CRITIQUE","checks_failed":["check_name_if_applicable"]}}

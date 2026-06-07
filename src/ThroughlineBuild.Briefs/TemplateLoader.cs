@@ -31,4 +31,27 @@ public static class TemplateLoader
             return reader.ReadToEnd();
         });
     }
+
+    // Loads an agent-agnostic section template from Templates/shared/. These hold the reusable
+    // prose blocks and WORKER_RESULT envelope shapes that the per-agent builders share, so each
+    // piece of prompt text lives in exactly one file. The "shared" subdir has no hyphens; file
+    // names may contain hyphens, which MSBuild preserves in the resource name (only subdirectory
+    // segments are converted to underscores - see Load above).
+    public static string LoadShared(string name)
+    {
+        var cacheKey = $"shared.{name}";
+        return _cache.GetOrAdd(cacheKey, _ =>
+        {
+            var resourceName = $"{_assemblyName}.Templates.shared.{name}";
+            using var stream = _assembly.GetManifestResourceStream(resourceName);
+            if (stream is null)
+            {
+                var available = string.Join(", ", _allNames.Value.Order());
+                throw new InvalidOperationException(
+                    $"Shared template '{name}' not found. Available resources: {available}");
+            }
+            using var reader = new StreamReader(stream);
+            return reader.ReadToEnd();
+        });
+    }
 }

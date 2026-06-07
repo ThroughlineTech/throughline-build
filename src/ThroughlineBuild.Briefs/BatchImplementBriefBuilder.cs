@@ -127,21 +127,24 @@ public static class BatchImplementBriefBuilder
 
     private static string BuildWorkerResultJson(IReadOnlyList<Ticket> tickets)
     {
+        // Envelope shape + per-ticket array element live in shared templates. C# still owns the
+        // per-ticket loop and the id list (dynamic data); the templates own the JSON shape.
+        var ticketElement = TemplateLoader.LoadShared("batch-implement-worker-result-ticket.md");
         var ticketResults = string.Join(
             ",",
-            tickets.Select((ticket, index) =>
-                $"{{\"ticket_id\":\"{ticket.Id}\",\"commit_sha\":\"<commit SHA after {ticket.Id}>\"," +
-                $"\"stack_position\":{index + 1},\"files_changed\":[\"path/relative/to/worktree\"]," +
-                $"\"summary_ref\":\"IMPLEMENT_SUMMARY_{index + 1}\"}}"));
+            tickets.Select((ticket, index) => ticketElement.Substitute(
+                new Dictionary<string, string>
+                {
+                    ["ticket_id"] = ticket.Id,
+                    ["stack_position"] = (index + 1).ToString()
+                })));
 
-        return
-            "{\"status\":\"Ok\",\"summary\":\"Implemented batch " +
-            string.Join(", ", tickets.Select(t => t.Id)) +
-            "\",\"files_changed\":[\"path/relative/to/worktree\"],\"failure_reason\":null," +
-            "\"metadata\":{\"base_commit_sha\":\"<base commit pointer from brief>\"," +
-            "\"head_commit_sha\":\"<HEAD SHA after all ticket commits>\"," +
-            "\"files_changed\":[\"path/relative/to/worktree\"]}," +
-            $"\"tickets\":[{ticketResults}]}}";
+        return TemplateLoader.LoadShared("batch-implement-worker-result.md").Substitute(
+            new Dictionary<string, string>
+            {
+                ["batch_ids"] = string.Join(", ", tickets.Select(t => t.Id)),
+                ["ticket_results"] = ticketResults
+            });
     }
 
     private static string BuildReworkSection(ReviewFeedback? feedback)
@@ -152,9 +155,10 @@ public static class BatchImplementBriefBuilder
         var sb = new StringBuilder();
         sb.Append('\n');
         sb.Append($"## Rework feedback (round {feedback.ReworkRoundNumber})\n\n");
-        sb.Append("A previous batch implementation was reviewed and the following issues were identified. ");
-        sb.Append("Address these issues before committing. ");
-        sb.Append("Do NOT amend or rewrite commits that already carry an `[implemented_at:]` marker; add new commits on top of the existing stack.\n\n");
+        // Static instructional paragraph lives in a shared template (ends with one newline; the
+        // blank line before the rationale is appended here).
+        sb.Append(TemplateLoader.LoadShared("batch-implement-rework-guidance.md"));
+        sb.Append('\n');
         sb.Append(feedback.Rationale);
         sb.Append('\n');
         if (feedback.ChecksFailed.Count > 0)

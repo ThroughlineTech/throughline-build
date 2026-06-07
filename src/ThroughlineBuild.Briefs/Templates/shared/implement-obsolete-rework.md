@@ -1,0 +1,3 @@
+## Obsolete detection (suppressed on rework)
+
+This is a rework round. Commits already on this branch are your own prior-round work - do NOT raise an obsolete escalation against them. Apply the reviewer feedback above. If the feedback is genuinely already satisfied by the current tree, re-affirm with `Status=Ok` and report the current HEAD SHA; never emit `Status=Escalate` with reason `obsolete` in a rework round.
