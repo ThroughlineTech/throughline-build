@@ -391,10 +391,45 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
 
     public async Task<IReadOnlyList<ProjectInfo>> ListProjectsAsync(CancellationToken ct)
     {
-        var list = await GetJsonAsync<PlaneProjectList>(ProjectsBase, PlaneJsonContext.Default, ct).ConfigureAwait(false);
-        return (list.Results ?? [])
+        var projects = await FetchAllProjectsAsync($"{ProjectsBase}?per_page=100", ct).ConfigureAwait(false);
+        return projects
             .Select(p => new ProjectInfo(p.Id, p.Name, p.Identifier))
             .ToList();
+    }
+
+    /// <summary>
+    /// Walks every cursor page of the workspace-projects endpoint and returns the flattened
+    /// results, so find-or-create sees the whole workspace and never creates a duplicate of a
+    /// project that lives beyond the first page. Mirrors <see cref="FetchAllIssuesAsync"/>:
+    /// next_page_results is the authoritative end signal, with empty/repeated cursor and an empty
+    /// page as defensive fallbacks, capped at <see cref="MaxListPages"/>.
+    /// </summary>
+    private async Task<List<PlaneProject>> FetchAllProjectsAsync(string baseUrl, CancellationToken ct)
+    {
+        var all = new List<PlaneProject>();
+        string? cursor = null;
+        for (var page = 0; page < MaxListPages; page++)
+        {
+            var url = string.IsNullOrEmpty(cursor)
+                ? baseUrl
+                : $"{baseUrl}&cursor={Uri.EscapeDataString(cursor)}";
+            var list = await GetJsonAsync<PlaneProjectList>(url, PlaneJsonContext.Default, ct).ConfigureAwait(false);
+            var batch = list.Results ?? [];
+            all.AddRange(batch);
+
+            if (list.NextPageResults == false
+                || batch.Count == 0
+                || string.IsNullOrEmpty(list.NextCursor)
+                || string.Equals(list.NextCursor, cursor, StringComparison.Ordinal))
+                return all;
+            cursor = list.NextCursor;
+        }
+
+        Console.Error.WriteLine(
+            $"[plane] WARNING: project-list pagination hit the {MaxListPages}-page cap " +
+            "with more pages available - some workspace projects are NOT listed for this run, " +
+            "so find-or-create may miss an existing project. Raise MaxListPages or narrow the workspace.");
+        return all;
     }
 
     public async Task<string?> FindProjectByNameAsync(string name, CancellationToken ct)

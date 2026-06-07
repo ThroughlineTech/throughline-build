@@ -1503,3 +1503,64 @@ public class AddRelationAsyncTests
         Assert.DoesNotContain("related_issue", postReq.Body);
     }
 }
+
+// WI-06: ListProjectsAsync must walk every cursor page so find-or-create sees the whole
+// workspace and never creates a duplicate of a project living beyond the first page.
+public class ProjectDiscoveryPaginationTests
+{
+    private const string Page1 =
+        """{ "results": [ {"id":"id-1","name":"Alpha","identifier":"AL"} ], "next_cursor": "100:1:0", "next_page_results": true }""";
+    private const string Page2 =
+        """{ "results": [ {"id":"id-2","name":"Survey Smoketest","identifier":"ST"} ], "next_cursor": "100:2:0", "next_page_results": false }""";
+
+    [Fact]
+    public async Task ListProjectsAsync_ReturnsProjectsAcrossAllPages()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(Page1));
+        handler.Enqueue(FakeMessageHandler.OkJson(Page2));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var projects = await client.ListProjectsAsync(CancellationToken.None);
+
+        Assert.Equal(2, projects.Count);
+        Assert.Contains(projects, p => p.Id == "id-1" && p.Name == "Alpha");
+        Assert.Contains(projects, p => p.Id == "id-2" && p.Name == "Survey Smoketest");
+
+        // Exactly two project-list GETs; page 2 carried page 1's cursor encoded once.
+        var gets = handler.Requests.Where(r => r.Method == HttpMethod.Get).ToList();
+        Assert.Equal(2, gets.Count);
+        Assert.Contains("/projects/", gets[0].RequestUri!.AbsolutePath);
+        Assert.Contains("cursor=100%3A1%3A0", gets[1].RequestUri!.ToString());
+        Assert.DoesNotContain("%25", gets[1].RequestUri!.ToString());
+    }
+
+    [Fact]
+    public async Task FindProjectByNameAsync_FindsProjectBeyondFirstPage_CaseInsensitive()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(Page1));
+        handler.Enqueue(FakeMessageHandler.OkJson(Page2));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        // Target lives on page 2 and is matched case-insensitively.
+        var id = await client.FindProjectByNameAsync("survey smoketest", CancellationToken.None);
+
+        Assert.Equal("id-2", id);
+    }
+
+    [Fact]
+    public async Task ListProjectsAsync_SinglePage_NoCursorFields_ReturnsAll()
+    {
+        // A single-page response that omits next_cursor/next_page_results must not loop.
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(
+            """{ "results": [ {"id":"only","name":"Solo","identifier":"SO"} ] }"""));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var projects = await client.ListProjectsAsync(CancellationToken.None);
+
+        Assert.Single(projects);
+        Assert.Single(handler.Requests);
+    }
+}
