@@ -127,6 +127,16 @@ public interface IGitClient
     Task<GitOpResult> CreateBranchAsync(string branch, string fromRef, string worktreePath, CancellationToken ct) =>
         Task.FromResult(new GitOpResult(false, "not implemented"));
 
+    // Switches an existing worktree onto an already-existing local branch (git switch <branch>).
+    // Differs from CreateBranchAsync (checkout -b, new branch) and CheckoutWorktreeAsync (new
+    // worktree). Used by the batch chain ship: a warm batch session leaves the integration worktree
+    // on the batch branch, so the ship switches it back to the integration branch before
+    // fast-forwarding that branch onto the batch stack tip.
+    // Default returns success (no-op) so FakeGitClients that do not model branch HEADs keep working.
+    // Never throws - failure is returned as GitOpResult(false, ...).
+    Task<GitOpResult> SwitchBranchAsync(string branch, string worktreePath, CancellationToken ct) =>
+        Task.FromResult(new GitOpResult(true, null));
+
     // Returns raw stash list lines from "git stash list" (e.g. "stash@{0}: On ticket/tlb-1-foo: WIP").
     // Default returns empty so existing FakeGitClients remain unchanged (TLB-374).
     // Never throws - returns empty on git failure.

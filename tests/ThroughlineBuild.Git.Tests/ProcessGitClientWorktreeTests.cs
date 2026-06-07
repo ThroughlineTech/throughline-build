@@ -128,6 +128,35 @@ public class ProcessGitClientWorktreeTests : IDisposable
         Assert.Matches("^[0-9a-f]{40}$", sha);
     }
 
+    [Fact]
+    public async Task SwitchBranchAsync_SwitchesWorktreeToExistingBranch()
+    {
+        var repoDir = CreateTempGitRepo();
+        // Create a second branch at HEAD without switching to it.
+        RunGit(repoDir, "branch", "feature");
+
+        var client = new ProcessGitClient(repoDir);
+        var result = await client.SwitchBranchAsync("feature", repoDir, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Null(result.FailureReason);
+        var current = await client.CurrentBranchAsync(repoDir, CancellationToken.None);
+        Assert.Equal("feature", current);
+    }
+
+    [Fact]
+    public async Task SwitchBranchAsync_FailsCleanlyForMissingBranch()
+    {
+        var repoDir = CreateTempGitRepo();
+        var client = new ProcessGitClient(repoDir);
+
+        var result = await client.SwitchBranchAsync("does-not-exist", repoDir, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.FailureReason);
+        Assert.True(result.FailureReason!.Length > 0);
+    }
+
     public void Dispose()
     {
         foreach (var dir in _tempDirs)

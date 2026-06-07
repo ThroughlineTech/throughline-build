@@ -1,6 +1,8 @@
 using System.Text.Json;
+using System.Diagnostics;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Git;
 using ThroughlineBuild.Helpers;
 using ThroughlineBuild.Phases;
 using ThroughlineBuild.Verification;
@@ -2033,9 +2035,16 @@ public class ChainPhaseTests
         Assert.NotEmpty(comments3);
         Assert.Contains("[implemented_at: bbb111]", comments3[0].html);
         Assert.Contains("(branch ", comments3[0].html);
-        // Each child ended in InReview.
+        // Each child passes through InReview (after batch implement) and then Done (after the
+        // reviewed batch stack is shipped into the integration branch).
         Assert.Contains(("TLB-2", TicketState.InReview), ticketing.Transitions);
         Assert.Contains(("TLB-3", TicketState.InReview), ticketing.Transitions);
+        Assert.Contains(("TLB-2", TicketState.Done), ticketing.Transitions);
+        Assert.Contains(("TLB-3", TicketState.Done), ticketing.Transitions);
+
+        // The reviewed batch stack is shipped: a shipped_at marker is posted for each ticket.
+        Assert.Contains(ticketing.PostedComments, c => c.id == "TLB-2" && c.html.Contains("[shipped_at:"));
+        Assert.Contains(ticketing.PostedComments, c => c.id == "TLB-3" && c.html.Contains("[shipped_at:"));
     }
 
     // AC3: when no BatchImplementGroup is declared the batch worker is never called;
@@ -2474,6 +2483,343 @@ public class ChainPhaseTests
         Assert.All(result.ChildResults, r => Assert.Equal(ChainOutcome.Completed, r.Outcome));
     }
 
+    // -------------------------------------------------------------------------
+    // Batch ship + landing + plan-then-batch (batch-implement fixes)
+    // -------------------------------------------------------------------------
+
+    // A passing batch is shipped into the integration branch, not left in InReview. After the
+    // combined review passes the integration worktree is switched back to the integration branch and
+    // fast-forwarded onto the batch stack, and each ticket transitions to Done with a shipped_at marker.
+    [Fact]
+    public async Task RunAsync_BatchGroup_ReviewPasses_ShipsStackAndMarksChildrenDone()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Ready);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Ready);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+
+        var perTicketResults = new List<BatchTicketResult>
+        {
+            new BatchTicketResult("TLB-2", "aaa000", 0, Array.Empty<string>(), "SUMMARY_2"),
+            new BatchTicketResult("TLB-3", "bbb111", 1, Array.Empty<string>(), "SUMMARY_3"),
+        };
+        var batchWorker = new BatchFakeWorkerAgent(tickets: perTicketResults);
+
+        var git = new FakeGitClientChain();
+        git.LogShasResult = new[] { "bbb111", "aaa000" };
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            batchWorker: batchWorker, git: git, forwardGitToChain: true);
+
+        var batchGroup = new ChainBatchImplementGroup.ExplicitList(new[] { "TLB-2", "TLB-3" });
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
+            CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+
+        // Ship choreography: switch the integration worktree back to the integration branch, then
+        // fast-forward it onto the batch stack (the ticket/* batch branch).
+        Assert.Contains(git.SwitchedBranches, s => s.branch.StartsWith("chain/", StringComparison.Ordinal));
+        Assert.Contains(git.FastForwardMerges, m => m.mergeRef.StartsWith("ticket/", StringComparison.Ordinal));
+
+        // Both children end Done with a shipped_at marker.
+        Assert.Contains(("TLB-2", TicketState.Done), ticketing.Transitions);
+        Assert.Contains(("TLB-3", TicketState.Done), ticketing.Transitions);
+        Assert.Contains(ticketing.PostedComments, c => c.id == "TLB-2" && c.html.Contains("[shipped_at:"));
+        Assert.Contains(ticketing.PostedComments, c => c.id == "TLB-3" && c.html.Contains("[shipped_at:"));
+    }
+
+    // A chain in a repo with no configured remote lands locally and succeeds; the landing push is
+    // skipped (no_remote) - mirroring the per-ticket ship phase - instead of hard-failing the chain.
+    [Fact]
+    public async Task RunAsync_BatchGroup_NoRemote_LandsLocally_PushSkipped_ParentCompleted()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Ready);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Ready);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+
+        var perTicketResults = new List<BatchTicketResult>
+        {
+            new BatchTicketResult("TLB-2", "aaa000", 0, Array.Empty<string>(), "SUMMARY_2"),
+            new BatchTicketResult("TLB-3", "bbb111", 1, Array.Empty<string>(), "SUMMARY_3"),
+        };
+        var batchWorker = new BatchFakeWorkerAgent(tickets: perTicketResults);
+
+        var git = new FakeGitClientChain { RemoteConfigured = false };
+        git.LogShasResult = new[] { "bbb111", "aaa000" };
+        var eventSink = new FakeEventSinkChain();
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            batchWorker: batchWorker, git: git, forwardGitToChain: true, eventSink: eventSink);
+
+        var batchGroup = new ChainBatchImplementGroup.ExplicitList(new[] { "TLB-2", "TLB-3" });
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
+            CancellationToken.None);
+
+        // The missing remote does not fail the chain: the local fast-forward already landed the work.
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+
+        // The landing push is skipped with a no_remote marker, not a chain_landing_push_failed gate.
+        Assert.Contains(eventSink.Events, e =>
+            e.Data.TryGetValue("action", out var a) && a is string s && s == "chain_landing_push_skipped");
+        Assert.DoesNotContain(eventSink.Events, e =>
+            e.Data.TryGetValue("kind", out var k) && k is string ks && ks == "chain_landing_push_failed");
+    }
+
+    // --batch-implement engages on a freshly scaffolded op (Backlog children): each candidate is
+    // planned per-ticket first, then a single warm batch session implements/reviews/ships them -
+    // instead of silently selecting none and running the per-ticket chain.
+    [Fact]
+    public async Task RunAsync_BatchGroup_BacklogChildren_ArePlannedThenBatchedAndShipped()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+
+        var perTicketResults = new List<BatchTicketResult>
+        {
+            new BatchTicketResult("TLB-2", "aaa000", 0, Array.Empty<string>(), "SUMMARY_2"),
+            new BatchTicketResult("TLB-3", "bbb111", 1, Array.Empty<string>(), "SUMMARY_3"),
+        };
+        var batchWorker = new BatchFakeWorkerAgent(tickets: perTicketResults);
+
+        var git = new FakeGitClientChain();
+        git.LogShasResult = new[] { "bbb111", "aaa000" };
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            batchWorker: batchWorker, git: git, forwardGitToChain: true);
+
+        var batchGroup = new ChainBatchImplementGroup.AllEligibleChildren();
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
+            CancellationToken.None);
+
+        // Each Backlog candidate was planned (Backlog -> Planning -> Ready) before the batch.
+        Assert.Contains(("TLB-2", TicketState.Planning), ticketing.Transitions);
+        Assert.Contains(("TLB-2", TicketState.Ready), ticketing.Transitions);
+        Assert.Contains(("TLB-3", TicketState.Planning), ticketing.Transitions);
+        Assert.Contains(("TLB-3", TicketState.Ready), ticketing.Transitions);
+
+        // The batch then engaged (implement + combined review = 2 calls) and shipped.
+        Assert.Equal(2, batchWorker.CallCount);
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        Assert.Contains(("TLB-2", TicketState.Done), ticketing.Transitions);
+        Assert.Contains(("TLB-3", TicketState.Done), ticketing.Transitions);
+    }
+
+    // With [plan] mode = "promote" (BuildOptions.PromotePlan), the per-ticket planning of Backlog
+    // batch candidates is an in-place promote - no plan worker is spawned - then the batch runs.
+    // This is the lean path for a scaffolded op whose ticket descriptions already carry the brief.
+    [Fact]
+    public async Task RunAsync_BatchGroup_BacklogChildren_PromoteMode_NoPlanWorker_StillBatchesAndShips()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+
+        var perTicketResults = new List<BatchTicketResult>
+        {
+            new BatchTicketResult("TLB-2", "aaa000", 0, Array.Empty<string>(), "SUMMARY_2"),
+            new BatchTicketResult("TLB-3", "bbb111", 1, Array.Empty<string>(), "SUMMARY_3"),
+        };
+        var batchWorker = new BatchFakeWorkerAgent(tickets: perTicketResults);
+
+        var git = new FakeGitClientChain();
+        git.LogShasResult = new[] { "bbb111", "aaa000" };
+
+        // [plan] mode = "promote" maps to BuildOptions.PromotePlan = true (Program.cs).
+        var promoteOpts = new BuildOptions(
+            SessionId: "base-session",
+            WorkerName: "claude-code",
+            WorkerTimeout: TimeSpan.FromMinutes(5),
+            WorkerAllowedTools: null,
+            PromotePlan: true);
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            batchWorker: batchWorker, git: git, forwardGitToChain: true, baseOptions: promoteOpts);
+
+        var batchGroup = new ChainBatchImplementGroup.AllEligibleChildren();
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
+            CancellationToken.None);
+
+        // Promote mode: the plan worker is never invoked...
+        Assert.Empty(planWorker.SeenOptions);
+        // ...yet Backlog children are still promoted to Ready, then batched and shipped.
+        Assert.Contains(("TLB-2", TicketState.Ready), ticketing.Transitions);
+        Assert.Contains(("TLB-3", TicketState.Ready), ticketing.Transitions);
+        Assert.Equal(2, batchWorker.CallCount);
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        Assert.Contains(("TLB-2", TicketState.Done), ticketing.Transitions);
+        Assert.Contains(("TLB-3", TicketState.Done), ticketing.Transitions);
+    }
+
+    // End-to-end with a REAL git repo and a real ProcessGitClient: proves the batch stack
+    // physically reaches the target branch (the concern the fakes cannot model - they do not track
+    // branch HEADs). Covers all three fixes at once: plan-then-batch is skipped here (children are
+    // Ready), the reviewed stack is shipped onto the integration branch, and the root lands onto
+    // main with the push skipped because the temp repo has no remote.
+    [Fact]
+    public async Task RunAsync_BatchGroup_RealGit_ShipsAndLandsOntoMain_NoRemote()
+    {
+        string repoDir = CreateTempGitRepo();
+        try
+        {
+            var main0 = RunGitOut(repoDir, "rev-parse", "HEAD");
+
+            var parent = MakeTicket(TicketState.Backlog);
+            var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Ready);
+            var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Ready);
+
+            var ticketing = new ChainFakeTicketing(parent);
+            ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+            var events = new FakeEventSinkChain();
+            _sessionCounter = 0;
+            Func<BuildOptions, PlanPhase> planFactory = _ => throw new InvalidOperationException("plan not expected for Ready batch");
+            Func<BuildOptions, ImplementPhaseOptions, ImplementPhase> implFactory = (_, _) => throw new InvalidOperationException("implement not expected for batch");
+            Func<BuildOptions, ReviewPhase> reviewFactory = _ => throw new InvalidOperationException("per-ticket review not expected for batch");
+            Func<BuildOptions, ShipPhase> shipFactory = _ => throw new InvalidOperationException("per-ticket ship not expected for batch");
+
+            var chain = new ChainPhase(
+                ticketing, events, MakeBaseOptions(),
+                planFactory, implFactory, reviewFactory, shipFactory,
+                sessionIdGenerator: NextSessionId,
+                workingDirectory: repoDir,
+                gitClient: new ProcessGitClient(repoDir),
+                batchWorker: new RealCommitBatchWorker(new[] { "TLB-2", "TLB-3" }),
+                landingRemote: "origin",
+                landingPushEnabled: true);
+
+            var batchGroup = new ChainBatchImplementGroup.ExplicitList(new[] { "TLB-2", "TLB-3" });
+            var result = await chain.RunAsync(
+                new ChainPhaseOptions("TLB-1", false, BatchImplementGroup: batchGroup),
+                CancellationToken.None);
+
+            Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+
+            // The decisive assertion: main physically advanced and now contains the two batch commits.
+            var mainAfter = RunGitOut(repoDir, "rev-parse", "HEAD");
+            Assert.NotEqual(main0, mainAfter);
+            var landed = RunGitOut(repoDir, "rev-list", "--count", $"{main0}..HEAD");
+            Assert.Equal("2", landed);
+
+            // Both tickets shipped to Done.
+            Assert.Contains(("TLB-2", TicketState.Done), ticketing.Transitions);
+            Assert.Contains(("TLB-3", TicketState.Done), ticketing.Transitions);
+
+            // Push skipped (no remote), not a hard landing failure.
+            Assert.Contains(events.Events, e =>
+                e.Data.TryGetValue("action", out var a) && a is string s && s == "chain_landing_push_skipped");
+        }
+        finally
+        {
+            TryDeleteTree(repoDir);
+        }
+    }
+
+    private static string CreateTempGitRepo()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "tlbchain-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        RunGit(dir, "init", "-b", "main");
+        RunGit(dir, "config", "user.email", "test@test.com");
+        RunGit(dir, "config", "user.name", "Test");
+        RunGit(dir, "commit", "--allow-empty", "-m", "welcome to throughline build");
+        return dir;
+    }
+
+    private static void RunGit(string workingDirectory, params string[] args) => RunGitOut(workingDirectory, args);
+
+    private static string RunGitOut(string workingDirectory, params string[] args)
+    {
+        var psi = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var proc = Process.Start(psi) ?? throw new InvalidOperationException("failed to start git");
+        var stdout = proc.StandardOutput.ReadToEnd();
+        var stderr = proc.StandardError.ReadToEnd();
+        proc.WaitForExit();
+        if (proc.ExitCode != 0)
+            throw new InvalidOperationException($"git {string.Join(" ", args)} failed: {stderr}");
+        return stdout.Trim();
+    }
+
+    private static void TryDeleteTree(string dir)
+    {
+        try { Directory.Delete(dir, recursive: true); } catch { /* best-effort temp cleanup */ }
+    }
+
+    // Batch worker that makes one REAL git commit per ticket (in declared order) on the checked-out
+    // batch branch and reports the actual SHAs, so BatchCommitVerifier and the ship/land path run
+    // against real git state. Returns a passing verdict for the combined-review brief.
+    private sealed class RealCommitBatchWorker : IWorkerAgent
+    {
+        private readonly IReadOnlyList<string> _ticketIds;
+        public int CallCount { get; private set; }
+        public string Name => "claude-code";
+        public IWorkerProgressDigester? Digester => null;
+
+        public RealCommitBatchWorker(IReadOnlyList<string> ticketIds) { _ticketIds = ticketIds; }
+
+        public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
+        {
+            CallCount++;
+            if (brief.Phase == Phase.Review)
+            {
+                return Task.FromResult(new WorkerResult(
+                    Status.Ok, "review ok", Array.Empty<string>(), null,
+                    new Dictionary<string, object> { ["verdict"] = "Pass", ["rationale"] = "lgtm" }));
+            }
+
+            var results = new List<BatchTicketResult>();
+            for (int i = 0; i < _ticketIds.Count; i++)
+            {
+                var id = _ticketIds[i];
+                File.WriteAllText(Path.Combine(workingDirectory, $"{id}.txt"), $"work for {id}\n");
+                RunGitOut(workingDirectory, "add", "-A");
+                RunGitOut(workingDirectory, "commit", "-m", $"{id}: batch work");
+                var sha = RunGitOut(workingDirectory, "rev-parse", "HEAD");
+                results.Add(new BatchTicketResult(id, sha, i, Array.Empty<string>(), $"SUMMARY_{i}"));
+            }
+            return Task.FromResult(new WorkerResult(
+                Status.Ok, "batch ok", _ticketIds.Select(id => $"{id}.txt").ToArray(), null,
+                new Dictionary<string, object>(), Tickets: results));
+        }
+    }
+
     private sealed class FakeGitClientChain : IGitClient
     {
         private readonly bool _shipFails;
@@ -2487,7 +2833,12 @@ public class ChainPhaseTests
         public List<(string path, string branch, string fromRef)> CreatedWorktrees { get; } = new();
         public List<(string branch, string fromRef, string worktreePath)> CreatedBranches { get; } = new();
         public List<(string mergeRef, string worktreePath)> FastForwardMerges { get; } = new();
+        public List<(string branch, string worktreePath)> SwitchedBranches { get; } = new();
         public List<(string ontoRef, string worktreePath)> Rebases { get; } = new();
+
+        // When false, RemoteExistsAsync reports the remote is not configured, exercising the
+        // no-remote landing-push guard (the per-ticket ship phase already short-circuits the same way).
+        public bool RemoteConfigured { get; set; } = true;
         public List<string> WorkingDirectoriesSeenForTrackedChanges { get; } = new();
         public int GetTrackedChangesCallCount => WorkingDirectoriesSeenForTrackedChanges.Count;
         public int GetTrackedChangesCallsOnMainWorktree { get; private set; }
@@ -2634,6 +2985,18 @@ public class ChainPhaseTests
             FastForwardMerges.Add((mergeRef, mainWorktreePath));
             return Task.FromResult(new GitOpResult(true, null));
         }
+
+        public Task<GitOpResult> SwitchBranchAsync(string branch, string worktreePath, CancellationToken ct)
+        {
+            SwitchedBranches.Add((branch, worktreePath));
+            // Model the switch so a later CurrentBranchAsync on this worktree sees the new branch.
+            _worktrees.RemoveAll(w => string.Equals(w.Path, worktreePath, StringComparison.OrdinalIgnoreCase));
+            _worktrees.Add(new WorktreeInfo(worktreePath, branch, CommitSha, false, false));
+            return Task.FromResult(new GitOpResult(true, null));
+        }
+
+        public Task<bool> RemoteExistsAsync(string remote, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(RemoteConfigured);
 
         public Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct)
         {
