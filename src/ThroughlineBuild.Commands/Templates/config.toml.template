@@ -96,14 +96,14 @@ name = "build"
 # Executable to invoke (must be on PATH or an absolute path).
 executable = "dotnet"
 # Arguments passed to the executable.
-arguments = ["build", "--no-restore", "-c", "Release"]
+arguments = ["build", "--no-restore", "-c", "Release", "--nologo", "-v", "q"]
 # Maximum time this check may run before it is killed and treated as failed.
 timeout_minutes = 5
 
 [[review.checks]]
 name = "test"
 executable = "dotnet"
-arguments = ["test", "--no-build", "-c", "Release"]
+arguments = ["test", "--no-build", "-c", "Release", "--nologo", "-v", "q", "--logger", "console;verbosity=minimal"]
 timeout_minutes = 10
 
 # [ship] is optional - omit entirely to use defaults (remote="origin", base_branch="main",
@@ -117,13 +117,13 @@ delete_feature_branch = true
 [[ship.regression_checks]]
 name = "build"
 executable = "dotnet"
-arguments = ["build", "--nologo", "--configuration", "Release"]
+arguments = ["build", "--nologo", "--configuration", "Release", "-v", "q"]
 timeout_minutes = 5
 
 [[ship.regression_checks]]
 name = "test"
 executable = "dotnet"
-arguments = ["test", "--nologo", "--configuration", "Release", "--no-build"]
+arguments = ["test", "--nologo", "--configuration", "Release", "--no-build", "-v", "q", "--logger", "console;verbosity=minimal"]
 timeout_minutes = 10
 
 # [project] is optional - omit entirely to skip project-aware brief enrichment.
