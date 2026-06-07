@@ -462,6 +462,82 @@ public class PublishOpsTests : IDisposable
         Assert.Null(result.FailureReason);
     }
 
+    // ---------------------------------------------------------------------------
+    // FastForwardMergeAsync - no-op short-circuit (ref already contained in HEAD)
+    // ---------------------------------------------------------------------------
+
+    [Fact]
+    public async Task FastForwardMergeAsync_NoOp_WhenRefAlreadyMerged_ReturnsSuccess()
+    {
+        var repoDir = CreateTempGitRepo();
+        var mainBranch = RunGitOutput(repoDir, "rev-parse", "--abbrev-ref", "HEAD");
+
+        RunGit(repoDir, "checkout", "-b", "feature");
+        File.WriteAllText(Path.Combine(repoDir, "feat.txt"), "feature");
+        RunGit(repoDir, "add", "feat.txt");
+        RunGit(repoDir, "commit", "-m", "feature commit");
+
+        // Land feature so the base already contains it: HEAD == feature == same SHA. This is the
+        // exact field no-op (chain integration branch already fast-forwarded into base) that wedged
+        // git merge --ff-only on Windows. The short-circuit must return success without spawning it.
+        RunGit(repoDir, "checkout", mainBranch);
+        RunGit(repoDir, "merge", "--ff-only", "feature");
+        var shaBefore = RunGitOutput(repoDir, "rev-parse", "HEAD");
+
+        var client = new ProcessGitClient(repoDir);
+        var result = await client
+            .FastForwardMergeAsync("feature", repoDir, CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.True(result.Success, $"no-op FastForwardMergeAsync failed: {result.FailureReason}");
+        Assert.Null(result.FailureReason);
+        Assert.Equal(shaBefore, RunGitOutput(repoDir, "rev-parse", "HEAD"));
+    }
+
+    // ---------------------------------------------------------------------------
+    // FastForwardMergeAsync - large diffstat does not deadlock on stdout
+    // ---------------------------------------------------------------------------
+
+    [Fact]
+    public async Task FastForwardMergeAsync_LargeDiffstat_DrainsStdoutWithoutDeadlock()
+    {
+        var repoDir = CreateTempGitRepo();
+        var mainBranch = RunGitOutput(repoDir, "rev-parse", "--abbrev-ref", "HEAD");
+
+        RunGit(repoDir, "checkout", "-b", "feature");
+
+        // git merge --ff-only writes its diffstat (one line per changed file) to STDOUT. Before the
+        // fix this method drained only stderr, so a diffstat larger than the OS pipe buffer (~4-64 KB)
+        // blocked git's stdout write while we blocked on stderr -> permanent deadlock. 1500 files with
+        // long paths produce ~100 KB of stdout, comfortably past any pipe buffer while keeping setup fast.
+        var bigDir = Path.Combine(repoDir, "bulk");
+        Directory.CreateDirectory(bigDir);
+        for (int i = 0; i < 1500; i++)
+        {
+            var name = $"file_{i:D5}_padding_padding_padding_padding_padding.txt";
+            File.WriteAllText(Path.Combine(bigDir, name), "x");
+        }
+        RunGit(repoDir, "add", "--all");
+        // -q suppresses the per-file "create mode" summary git commit otherwise writes to stdout.
+        // The test's own RunGit helper does not drain stdout, so without -q the *setup* commit would
+        // itself deadlock on a full stdout pipe - the very failure this test exists to guard against,
+        // but in scaffolding rather than the code under test. The merge below is left noisy on purpose.
+        RunGit(repoDir, "commit", "-q", "-m", "bulk add");
+        var featureSha = RunGitOutput(repoDir, "rev-parse", "HEAD");
+
+        RunGit(repoDir, "checkout", mainBranch);
+
+        var client = new ProcessGitClient(repoDir);
+        // WaitAsync turns a regression (the historical hang) into a fast test failure instead of a
+        // suite that hangs forever; the fixed code completes in well under a second.
+        var result = await client
+            .FastForwardMergeAsync("feature", repoDir, CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(60));
+
+        Assert.True(result.Success, $"large-diffstat FastForwardMergeAsync failed: {result.FailureReason}");
+        Assert.Equal(featureSha, RunGitOutput(repoDir, "rev-parse", "HEAD"));
+    }
+
     public void Dispose()
     {
         foreach (var dir in _tempDirs)
