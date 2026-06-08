@@ -90,7 +90,8 @@ public class ChainPhaseTests
         bool forwardGitToChain = false,
         BuildOptions? baseOptions = null,
         FakeEventSinkChain? eventSink = null,
-        IWorkerAgent? batchWorker = null)
+        IWorkerAgent? batchWorker = null,
+        Func<BuildOptions, GatePhase>? gateFactory = null)
     {
         _sessionCounter = 0;
         var events = eventSink ?? new FakeEventSinkChain();
@@ -148,7 +149,8 @@ public class ChainPhaseTests
             gitClient: git,
             batchWorker: batchWorker,
             landingRemote: "origin",
-            landingPushEnabled: true);
+            landingPushEnabled: true,
+            gateFactory: gateFactory);
     }
 
     [Fact]
@@ -173,6 +175,46 @@ public class ChainPhaseTests
         Assert.All(result.Steps, s => Assert.Equal(Status.Ok, s.Status));
         Assert.Equal(0, result.Steps[1].ReworkRoundNumber);
         Assert.Null(result.FinalRationale);
+    }
+
+    // AC: "The gate runs after implement and before review for each chain ticket"
+    [Fact]
+    public async Task RunAsync_WithGateFactory_GateStepIsInsertedBetweenImplementAndReview()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var git = new FakeGitClientChain();
+        var events = new FakeEventSinkChain();
+        var gateWasCalled = false;
+        Func<BuildOptions, GatePhase> gateFactory = opts =>
+        {
+            gateWasCalled = true;
+            return new GatePhase(
+                ticketing, events, opts,
+                new GateOptions(Array.Empty<CheckSpec>()),
+                git,
+                new PreComputedChecksRunner(Array.Empty<CheckResult>()));
+        };
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            git: git, eventSink: events, gateFactory: gateFactory);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+        Assert.True(gateWasCalled, "gate factory must be called");
+
+        var names = result.Steps.Select(s => s.PhaseName).ToList();
+        var implIdx = names.IndexOf("implement");
+        var gateIdx = names.IndexOf("gate");
+        var reviewIdx = names.IndexOf("review");
+
+        Assert.True(implIdx >= 0, "implement step must be present");
+        Assert.True(gateIdx > implIdx, "gate must follow implement");
+        Assert.True(reviewIdx > gateIdx, "review must follow gate");
     }
 
     [Fact]
