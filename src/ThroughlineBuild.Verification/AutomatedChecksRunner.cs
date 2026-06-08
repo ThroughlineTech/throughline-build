@@ -28,14 +28,14 @@ public class AutomatedChecksRunner
             // If we should skip (due to cancellation or stopOnFirstFailure), add not-run result
             if (shouldSkipRemaining)
             {
-                results.Add(new CheckResult(spec.Name, false, -1, "", "", TimeSpan.Zero));
+                results.Add(new CheckResult(spec.Name, false, -1, "", "", TimeSpan.Zero, spec.Role));
                 continue;
             }
 
             // Check caller cancellation before starting
             if (ct.IsCancellationRequested)
             {
-                results.Add(new CheckResult(spec.Name, false, -1, "", "", TimeSpan.Zero));
+                results.Add(new CheckResult(spec.Name, false, -1, "", "", TimeSpan.Zero, spec.Role));
                 shouldSkipRemaining = true;
                 continue;
             }
@@ -54,6 +54,22 @@ public class AutomatedChecksRunner
         }
 
         return results;
+    }
+
+    // Run a single named check from a configured list against the given worktree.
+    // Returns Skipped=true when the check name is absent from specs, so callers
+    // can distinguish "not configured" from "ran and failed" without treating it
+    // as a gate-failing outcome.
+    public virtual async Task<CheckResult> RunNamedAsync(
+        string checkName,
+        IReadOnlyList<CheckSpec> specs,
+        string workingDirectory,
+        CancellationToken ct)
+    {
+        var spec = specs.FirstOrDefault(s => s.Name == checkName);
+        if (spec is null)
+            return new CheckResult(checkName, false, 0, "", "", TimeSpan.Zero, Skipped: true);
+        return await RunSingleAsync(spec, workingDirectory, ct);
     }
 
     private static async Task<CheckResult> RunSingleAsync(
@@ -96,13 +112,13 @@ public class AutomatedChecksRunner
         catch (Exception ex)
         {
             sw.Stop();
-            return new CheckResult(spec.Name, false, -1, "", ex.Message, sw.Elapsed);
+            return new CheckResult(spec.Name, false, -1, "", ex.Message, sw.Elapsed, spec.Role);
         }
 
         if (proc == null)
         {
             sw.Stop();
-            return new CheckResult(spec.Name, false, -1, "", "[runner] failed to start process", sw.Elapsed);
+            return new CheckResult(spec.Name, false, -1, "", "[runner] failed to start process", sw.Elapsed, spec.Role);
         }
 
         // Read stdout and stderr concurrently to avoid deadlock
@@ -160,16 +176,16 @@ public class AutomatedChecksRunner
                 ? stderrText + $"\n[runner] timeout after {seconds}s"
                 : $"[runner] timeout after {seconds}s";
 
-            return new CheckResult(spec.Name, false, exitCode, stdoutText, stderrText, sw.Elapsed);
+            return new CheckResult(spec.Name, false, exitCode, stdoutText, stderrText, sw.Elapsed, spec.Role);
         }
 
         if (callerCancelled)
         {
-            return new CheckResult(spec.Name, false, exitCode, stdoutText, stderrText, sw.Elapsed);
+            return new CheckResult(spec.Name, false, exitCode, stdoutText, stderrText, sw.Elapsed, spec.Role);
         }
 
         bool passed = exitCode == 0;
-        return new CheckResult(spec.Name, passed, exitCode, stdoutText, stderrText, sw.Elapsed);
+        return new CheckResult(spec.Name, passed, exitCode, stdoutText, stderrText, sw.Elapsed, spec.Role);
     }
 
     private static async Task ReadStreamAsync(

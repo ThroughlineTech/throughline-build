@@ -134,14 +134,51 @@ Resolved by `ResolveLogDirectory` ([src/ThroughlineBuild.Cli/Config.cs:152-158](
 | `verifier_allowed_tools` | `["Read", "Grep", "Glob"]` ([src/ThroughlineBuild.Cli/Config.cs:559-560](../../src/ThroughlineBuild.Cli/Config.cs#L559-L560)) |
 | `[[review.checks]]` (array-of-tables) | empty list |
 
-Each `[[review.checks]]` entry maps to a `CheckSpec(name, executable, arguments, timeout)` consumed during the review phase. `name` and `executable` are required; `arguments` defaults to empty and `timeout_minutes` defaults to `5` ([src/ThroughlineBuild.Cli/Config.cs:576-589](../../src/ThroughlineBuild.Cli/Config.cs#L576-L589)). Entry keys are also validated against `KnownCheckEntryKeys` by the unknown-key warning pass.
+Each `[[review.checks]]` entry maps to a `CheckSpec(name, executable, arguments, timeout, role)` consumed during the review phase. `name` and `executable` are required; `arguments` defaults to empty, `timeout_minutes` defaults to `5`, and `role` defaults to `"gating"`. Entry keys are validated against `KnownCheckEntryKeys` by the unknown-key warning pass. An invalid `role` value throws a `ConfigException` at parse time.
 
-```
+**Capability map - abstract check names and their roles:**
+
+| Abstract name | Role | Rationale |
+|---|---|---|
+| `build` | gating | Non-zero exit is a hard block; implementer cannot proceed to review. |
+| `test` | gating | Test failures hard-fail the gate. Pass `--no-build` when a `build` check precedes it to avoid recompiling. |
+| `typecheck` | gating | Static type-check (distinct from build in languages where build does not type-check). In C#/dotnet, `dotnet build` is already the typecheck so a separate `typecheck` entry stays not-configured. |
+| `lint` | advisory | Style/lint failures are recorded and surfaced to the verifier but never hard-fail the gate. |
+| `format` | advisory | Formatting violations are recorded as advisory; the verifier sees them as a smoke signal. |
+
+A check absent from config is not-configured and treated as not-run, never as a failure. The gate (Brief 06) skips checks not present in the configured list; it never synthesizes a failure for a missing check name.
+
+**role field:**
+
+| Value | Behaviour |
+|---|---|
+| `"gating"` (default) | Non-zero exit hard-fails the gate; the ticket cannot advance to review. |
+| `"advisory"` | Result is recorded and shown to the verifier; gate does not hard-fail regardless of exit code. |
+
+A missing or invalid `role` value at parse time: absent -> defaults to `"gating"`; an unrecognized string -> `ConfigException`: `key 'role' in [review.checks] must be either "gating" or "advisory", got "<v>"`.
+
+```toml
+[[review.checks]]
+name = "build"
+executable = "dotnet"
+arguments = ["build"]
+timeout_minutes = 5
+role = "gating"
+
 [[review.checks]]
 name = "test"
 executable = "dotnet"
-arguments = ["test"]
-timeout_minutes = 5
+arguments = ["test", "--no-build"]
+timeout_minutes = 10
+role = "gating"
+
+# Advisory example:
+# [[review.checks]]
+# name = "lint"
+# executable = "dotnet"
+# arguments = ["format", "--verify-no-changes"]
+# timeout_minutes = 5
+# role = "advisory"
 ```
 
 ### `[ship]` (optional section) - Functional
