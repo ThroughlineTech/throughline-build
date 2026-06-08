@@ -1465,4 +1465,82 @@ role = "blocking"
             File.Delete(path);
         }
     }
+
+    [Fact]
+    public void Load_VerifyGateVacuity_DefaultsToTrue_WhenReviewOmitsIt()
+    {
+        var toml = ValidToml + """
+
+[[review.checks]]
+name = "build"
+executable = "dotnet"
+arguments = ["build"]
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.True(config.Review.VerifyGateVacuity);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_VerifyGateVacuity_DefaultsToTrue_WhenReviewSectionAbsent()
+    {
+        var path = WriteToml(ValidToml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.True(config.Review.VerifyGateVacuity);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_VerifyGateVacuity_ParsesFalse_WhenSet()
+    {
+        var toml = ValidToml + """
+
+[review]
+verify_gate_vacuity = false
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.False(config.Review.VerifyGateVacuity);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_VerifyGateVacuity_DoesNotWarnAsUnknownKey()
+    {
+        var toml = ValidToml + """
+
+[review]
+verify_gate_vacuity = false
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            BuildConfigLoader.Load(path, w => captured.Add(w));
+            Assert.DoesNotContain(captured, w => w.Contains("verify_gate_vacuity"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

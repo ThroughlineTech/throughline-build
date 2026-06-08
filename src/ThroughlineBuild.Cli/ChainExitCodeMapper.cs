@@ -27,6 +27,7 @@ public static class ChainExitCodeMapper
         ChainOutcome.StoppedAtReview => 5,
         ChainOutcome.ReworkCapExceeded => 6,
         ChainOutcome.StoppedAtShip => 7,
+        ChainOutcome.GateVacuous => 8,
         _ => 1
     };
 }

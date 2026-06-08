@@ -35,7 +35,8 @@ public record EventsConfig(string LogDirectory);
 public record ReviewConfig(
     int VerifierTimeoutMinutes,
     IReadOnlyList<string> VerifierAllowedTools,
-    IReadOnlyList<CheckSpec> Checks);
+    IReadOnlyList<CheckSpec> Checks,
+    bool VerifyGateVacuity = true);
 
 public record ShipConfig(
     string Remote,
@@ -239,7 +240,7 @@ public static class BuildConfigLoader
 
     private static readonly HashSet<string> KnownReviewKeys = new(StringComparer.Ordinal)
     {
-        "verifier_timeout_minutes", "verifier_allowed_tools", "checks"
+        "verifier_timeout_minutes", "verifier_allowed_tools", "checks", "verify_gate_vacuity"
     };
 
     private static readonly HashSet<string> KnownCheckEntryKeys = new(StringComparer.Ordinal)
@@ -711,11 +712,13 @@ public static class BuildConfigLoader
             return new ReviewConfig(
                 VerifierTimeoutMinutes: 15,
                 VerifierAllowedTools: DefaultVerifierAllowedTools,
-                Checks: Array.Empty<CheckSpec>());
+                Checks: Array.Empty<CheckSpec>(),
+                VerifyGateVacuity: true);
         }
 
         var timeoutMinutes = OptionalInt(t, "verifier_timeout_minutes", 15);
         var allowedTools = OptionalStringList(t, "verifier_allowed_tools", DefaultVerifierAllowedTools);
+        var verifyGateVacuity = t.TryGetValue("verify_gate_vacuity", out var vgv) && vgv is bool vgvb ? vgvb : true;
 
         var checks = new List<CheckSpec>();
         if (t.TryGetValue("checks", out var checksVal) && checksVal is TomlTableArray checksArr)
@@ -741,7 +744,8 @@ public static class BuildConfigLoader
         return new ReviewConfig(
             VerifierTimeoutMinutes: timeoutMinutes,
             VerifierAllowedTools: allowedTools,
-            Checks: checks.AsReadOnly());
+            Checks: checks.AsReadOnly(),
+            VerifyGateVacuity: verifyGateVacuity);
     }
 
     private static ShipConfig ReadShipSection(TomlTable root)

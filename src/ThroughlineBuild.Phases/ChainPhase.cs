@@ -673,6 +673,17 @@ public class ChainPhase
 
                 if (!gateOutcome.Passed)
                 {
+                    if (gateOutcome.Vacuous)
+                    {
+                        // Gate integrity failure (vacuous gating check or canary cleanup failure): a config/setup
+                        // defect, not a code defect. Reworking the implementer cannot fix it, so hard-fail the chain
+                        // here WITHOUT a rework round. As a chain FAILURE, preserve-on-failure leaves the worktrees
+                        // in place for inspection.
+                        if (gateWasEngaged)
+                            await EmitCostLedgerAsync(chainSessionId, options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
+                        return (new ChainResult(options.TicketId, steps, ChainOutcome.GateVacuous, TimeSpan.Zero, gateOutcome.HardFailReason), null);
+                    }
+
                     // Gate already transitioned InReview -> InProgress. Re-enter the rework loop
                     // with the gate failure as feedback so the next implement knows what broke.
                     var gatingFailedResults = gateOutcome.CheckResults

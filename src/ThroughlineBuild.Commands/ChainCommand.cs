@@ -242,6 +242,9 @@ public sealed class ChainCommand : ITicketCommand
             ChainOutcome.DryRunPreview =>
                 $"[{ticketId}] dry-run preview ({durationStr})",
 
+            ChainOutcome.GateVacuous =>
+                $"[{ticketId}] chain stopped: gate vacuous - a gating check could not be proven to fail on broken input{(result.FinalRationale is not null ? " - " + result.FinalRationale : "")}",
+
             _ => $"[{ticketId}] chain stopped: unknown outcome {result.Outcome}"
         };
     }

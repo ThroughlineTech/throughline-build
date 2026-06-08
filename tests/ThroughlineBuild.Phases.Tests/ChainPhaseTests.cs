@@ -221,6 +221,56 @@ public class ChainPhaseTests
         Assert.True(reviewIdx > gateIdx, "review must follow gate");
     }
 
+    // Routing: a vacuous gate hard-fails the chain WITHOUT rework and never reaches review/ship.
+    [Fact]
+    public async Task RunAsync_GateVacuous_HardFailsChain_NoRework_NoShip()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        // No verifier is dequeued: the vacuous gate returns before review runs.
+        var verifiers = new Queue<IVerifier>();
+
+        var git = new FakeGitClientChain();
+        var events = new FakeEventSinkChain();
+        Func<BuildOptions, GatePhase> gateFactory = opts =>
+            new GatePhase(
+                ticketing, events, opts,
+                new GateOptions(new[]
+                {
+                    new CheckSpec("build", "noop", Array.Empty<string>(), TimeSpan.FromMinutes(1),
+                        CheckRole.Gating, new[] { new CanaryFile("p", "c") })
+                }),
+                git,
+                new PreComputedChecksRunner(new[]
+                {
+                    new CheckResult("build", Passed: true, ExitCode: 0, StdoutTail: "", StderrTail: "",
+                        Elapsed: TimeSpan.Zero, Role: CheckRole.Gating)
+                }),
+                new FakeVacuityProverChain(GateVacuityOutcome.Vacuous));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            git: git, eventSink: events, gateFactory: gateFactory);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.GateVacuous, result.Outcome);
+        // The vacuity path does not rework.
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.ReworkRound);
+        // The chain did not reach ship and did not complete.
+        Assert.DoesNotContain(result.Steps, s => s.PhaseName == "ship");
+        Assert.NotEqual(ChainOutcome.Completed, result.Outcome);
+    }
+
+    // Deterministic fake prover for chain routing: returns a fixed verdict, no disk/git.
+    private sealed class FakeVacuityProverChain : GateVacuityProver
+    {
+        private readonly GateVacuityVerdict _verdict;
+        public FakeVacuityProverChain(GateVacuityOutcome outcome)
+            => _verdict = new GateVacuityVerdict(outcome, "build", "build is vacuous");
+        public override Task<GateVacuityVerdict> ProveAsync(CheckSpec spec, AutomatedChecksRunner runner, IGitClient git, string worktreePath, CancellationToken ct)
+            => Task.FromResult(_verdict);
+    }
+
     [Fact]
     public async Task RunAsync_HappyPath_EmitsStartMarkerBeforeEachPhaseCompletion()
     {

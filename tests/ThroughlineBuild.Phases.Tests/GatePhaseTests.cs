@@ -27,14 +27,177 @@ public class GatePhaseTests
         FakeGateTicketing? ticketing = null,
         FakeGateEventSink? events = null,
         IReadOnlyList<CheckResult>? checkResults = null,
-        FakeGateGitClient? git = null) =>
+        FakeGateGitClient? git = null,
+        IReadOnlyList<CheckSpec>? specs = null,
+        GateVacuityProver? prover = null) =>
         new GatePhase(
             ticketing ?? new FakeGateTicketing(),
             events ?? new FakeGateEventSink(),
             MakeBuildOptions(),
-            new GateOptions(Array.Empty<CheckSpec>()),
+            new GateOptions(specs ?? Array.Empty<CheckSpec>()),
             git ?? new FakeGateGitClient(),
-            new PreComputedChecksRunner(checkResults ?? Array.Empty<CheckResult>()));
+            new PreComputedChecksRunner(checkResults ?? Array.Empty<CheckResult>()),
+            prover);
+
+    // A gating CheckSpec carrying a dummy canary so the prover loop reaches the prover.
+    // The fake prover ignores the canary; the canary only matters for the real prover.
+    private static CheckSpec GatingSpec(string name = "build") =>
+        new CheckSpec(name, "noop", Array.Empty<string>(), TimeSpan.FromMinutes(1),
+            CheckRole.Gating, new[] { new CanaryFile("p", "c") });
+
+    private static CheckSpec AdvisorySpec(string name = "lint") =>
+        new CheckSpec(name, "noop", Array.Empty<string>(), TimeSpan.FromMinutes(1),
+            CheckRole.Advisory, new[] { new CanaryFile("p", "c") });
+
+    // Deterministic fake prover: returns a fixed verdict without touching disk or git.
+    private sealed class FakeVacuityProver : GateVacuityProver
+    {
+        private readonly GateVacuityVerdict _verdict;
+        public int Calls { get; private set; }
+        public FakeVacuityProver(GateVacuityOutcome outcome, string check = "build", string? reason = "r")
+            => _verdict = new GateVacuityVerdict(outcome, check, reason);
+        public override Task<GateVacuityVerdict> ProveAsync(CheckSpec spec, AutomatedChecksRunner runner, IGitClient git, string worktreePath, CancellationToken ct)
+        { Calls++; return Task.FromResult(_verdict); }
+    }
+
+    // --- non-vacuity prover wiring (commit 4) ---
+
+    [Fact]
+    public async Task RunAsync_GreenGatingCheck_ProverVacuous_HardFailsWithoutRework()
+    {
+        var ticketing = new FakeGateTicketing();
+        var events = new FakeGateEventSink();
+        var prover = new FakeVacuityProver(GateVacuityOutcome.Vacuous, check: "build", reason: "build is vacuous");
+        var gate = MakeGate(ticketing, events,
+            checkResults: new[] { Pass("build") },
+            specs: new[] { GatingSpec("build") },
+            prover: prover);
+
+        var outcome = await gate.RunAsync(
+            TicketId, "/fake/worktree", "ticket/tlb-1", MainSha, "/fake/working",
+            claim: null, CancellationToken.None);
+
+        Assert.True(outcome.Vacuous);
+        Assert.False(outcome.Passed);
+        Assert.NotNull(outcome.HardFailReason);
+        Assert.Contains("build", outcome.HardFailReason);
+        Assert.Contains(events.Events, e => e.Kind == EventKind.GateFailure
+            && e.Data.TryGetValue("kind", out var k) && (string)k == "gate_vacuous");
+        // No rework transition: a config defect must not bounce the ticket back to InProgress.
+        Assert.DoesNotContain((TicketId, TicketState.InProgress), ticketing.Transitions);
+    }
+
+    [Fact]
+    public async Task RunAsync_GreenGatingCheck_ProverOk_GatePasses()
+    {
+        var prover = new FakeVacuityProver(GateVacuityOutcome.Ok);
+        var gate = MakeGate(
+            checkResults: new[] { Pass("build") },
+            specs: new[] { GatingSpec("build") },
+            prover: prover);
+
+        var outcome = await gate.RunAsync(
+            TicketId, "/fake/worktree", "ticket/tlb-1", MainSha, "/fake/working",
+            claim: null, CancellationToken.None);
+
+        Assert.True(outcome.Passed);
+        Assert.False(outcome.Vacuous);
+    }
+
+    [Fact]
+    public async Task RunAsync_GreenGatingCheck_ProverUnverified_GatePasses_EmitsAdvisory()
+    {
+        var events = new FakeGateEventSink();
+        var prover = new FakeVacuityProver(GateVacuityOutcome.Unverified);
+        var gate = MakeGate(events: events,
+            checkResults: new[] { Pass("build") },
+            specs: new[] { GatingSpec("build") },
+            prover: prover);
+
+        var outcome = await gate.RunAsync(
+            TicketId, "/fake/worktree", "ticket/tlb-1", MainSha, "/fake/working",
+            claim: null, CancellationToken.None);
+
+        Assert.True(outcome.Passed);
+        Assert.False(outcome.Vacuous);
+        Assert.Contains(events.Events, e => e.Kind == EventKind.GateFailure
+            && e.Data.TryGetValue("kind", out var k) && (string)k == "gate_unverified");
+    }
+
+    [Fact]
+    public async Task RunAsync_GreenGatingCheck_ProverCleanupFailed_HardFails()
+    {
+        var events = new FakeGateEventSink();
+        var prover = new FakeVacuityProver(GateVacuityOutcome.CleanupFailed);
+        var gate = MakeGate(events: events,
+            checkResults: new[] { Pass("build") },
+            specs: new[] { GatingSpec("build") },
+            prover: prover);
+
+        var outcome = await gate.RunAsync(
+            TicketId, "/fake/worktree", "ticket/tlb-1", MainSha, "/fake/working",
+            claim: null, CancellationToken.None);
+
+        Assert.True(outcome.Vacuous);
+        Assert.False(outcome.Passed);
+        Assert.Contains(events.Events, e => e.Kind == EventKind.GateFailure
+            && e.Data.TryGetValue("kind", out var k) && (string)k == "gate_canary_cleanup_failed");
+    }
+
+    [Fact]
+    public async Task RunAsync_RedGatingCheck_ProverNeverRuns()
+    {
+        var ticketing = new FakeGateTicketing();
+        var prover = new FakeVacuityProver(GateVacuityOutcome.Ok);
+        var gate = MakeGate(ticketing,
+            checkResults: new[] { Fail("build") },
+            specs: new[] { GatingSpec("build") },
+            prover: prover);
+
+        var outcome = await gate.RunAsync(
+            TicketId, "/fake/worktree", "ticket/tlb-1", MainSha, "/fake/working",
+            claim: null, CancellationToken.None);
+
+        Assert.Equal(0, prover.Calls);
+        Assert.False(outcome.Passed);
+        Assert.False(outcome.Vacuous);
+        // The existing gating_checks_failed path still hard-fails and transitions.
+        Assert.Contains((TicketId, TicketState.InProgress), ticketing.Transitions);
+    }
+
+    [Fact]
+    public async Task RunAsync_NullProver_GreenGatingCheck_NormalPass()
+    {
+        var gate = MakeGate(
+            checkResults: new[] { Pass("build") },
+            specs: new[] { GatingSpec("build") },
+            prover: null);
+
+        var outcome = await gate.RunAsync(
+            TicketId, "/fake/worktree", "ticket/tlb-1", MainSha, "/fake/working",
+            claim: null, CancellationToken.None);
+
+        Assert.True(outcome.Passed);
+        Assert.False(outcome.Vacuous);
+    }
+
+    [Fact]
+    public async Task RunAsync_GreenAdvisoryCheck_ProverNeverRuns()
+    {
+        var prover = new FakeVacuityProver(GateVacuityOutcome.Vacuous);
+        var gate = MakeGate(
+            checkResults: new[] { Pass("lint", CheckRole.Advisory) },
+            specs: new[] { AdvisorySpec("lint") },
+            prover: prover);
+
+        var outcome = await gate.RunAsync(
+            TicketId, "/fake/worktree", "ticket/tlb-1", MainSha, "/fake/working",
+            claim: null, CancellationToken.None);
+
+        Assert.Equal(0, prover.Calls);
+        Assert.True(outcome.Passed);
+        Assert.False(outcome.Vacuous);
+    }
 
     // AC: "The gate hard-fails only when build, test, or typecheck fails;
     //      lint, format, and smoke signals never hard-fail it"

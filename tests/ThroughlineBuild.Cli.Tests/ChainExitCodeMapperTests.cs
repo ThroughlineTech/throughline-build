@@ -30,6 +30,12 @@ public class ChainExitCodeMapperTests
         Assert.Equal(2, ChainExitCodeMapper.GetExitCode(ChainOutcome.RefusedWrongBranch));
     }
 
+    [Fact]
+    public void GateVacuous_MapsToDedicatedExitCode()
+    {
+        Assert.Equal(8, ChainExitCodeMapper.GetExitCode(ChainOutcome.GateVacuous));
+    }
+
     private static ChainResult MakeDirtyResult(string ticketId) => new(
         TicketId: ticketId,
         Steps: Array.Empty<ChainStep>(),

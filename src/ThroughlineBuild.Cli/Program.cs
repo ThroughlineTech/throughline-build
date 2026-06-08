@@ -1749,10 +1749,13 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
 
     // Gate factory: runs the configured review checks once on the warm worktree after implement.
     // Uses the same check set as review so the relocation is transparent to the operator.
+    // One shared prover instance per chain run so its per-check-once state persists across every
+    // gate invocation (each gating check is probed at most once per chain). Null disables the probe.
+    var gateVacuityProver = config2.Review.VerifyGateVacuity ? new GateVacuityProver() : null;
     var gatePhaseFactory = (BuildOptions buildOpts) =>
     {
         var gateOptions = new GateOptions(config2.Review.Checks);
-        return new GatePhase(ticketing, eventSink, buildOpts, gateOptions);
+        return new GatePhase(ticketing, eventSink, buildOpts, gateOptions, vacuityProver: gateVacuityProver);
     };
 
     var reviewPhaseFactory = (BuildOptions buildOpts, GateOutcome? gateOutcome) =>

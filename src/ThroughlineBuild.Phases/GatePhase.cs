@@ -13,7 +13,11 @@ public record GateOutcome(
     bool Passed,
     IReadOnlyList<CheckResult> CheckResults,
     IReadOnlyList<SmokeSignal> SmokeSignals,
-    string? HardFailReason = null);
+    string? HardFailReason = null,
+    // Gate-integrity failure (a gating check could not be proven to fail, or its canary leaked):
+    // the chain must hard-fail WITHOUT rework. Distinct from an ordinary gate hard-fail (Passed=false,
+    // Vacuous=false), which is a code defect the rework loop can fix.
+    bool Vacuous = false);
 
 // Gate phase: runs between implement and review in the chain loop.
 // Validates the completion claim, runs the configured checks once against the warm worktree
@@ -28,6 +32,7 @@ public class GatePhase
     private readonly GateOptions _gateOptions;
     private readonly IGitClient _git;
     private readonly AutomatedChecksRunner? _checksRunner;
+    private readonly GateVacuityProver? _vacuityProver;
 
     public GatePhase(
         ITicketing ticketing,
@@ -35,7 +40,8 @@ public class GatePhase
         BuildOptions options,
         GateOptions gateOptions,
         IGitClient? gitClient = null,
-        AutomatedChecksRunner? checksRunner = null)
+        AutomatedChecksRunner? checksRunner = null,
+        GateVacuityProver? vacuityProver = null)
     {
         _ticketing = ticketing;
         _events = events;
@@ -43,6 +49,7 @@ public class GatePhase
         _gateOptions = gateOptions;
         _git = gitClient ?? new ProcessGitClient();
         _checksRunner = checksRunner;
+        _vacuityProver = vacuityProver;
     }
 
     public async Task<GateOutcome> RunAsync(
@@ -129,6 +136,46 @@ public class GatePhase
             catch { /* non-fatal: comment failure must not block the rework loop */ }
             return new GateOutcome(false, checkResults, smokeSignals.AsReadOnly(),
                 $"gate: {string.Join(", ", failedNames)} failed");
+        }
+
+        // Non-vacuity probe: on a gating check's first GREEN, prove it CAN fail by materializing its
+        // canary, re-running only that check, and asserting it now fails. If it cannot be proven to
+        // fail (vacuous) or its canary leaked (cleanup failed), that is a config/setup defect - hard
+        // -fail WITHOUT rework. A green gating check with no canary yields a countable advisory event
+        // but never blocks. Stack-agnostic by construction: the canary is data on the CheckSpec.
+        if (_vacuityProver is not null)
+        {
+            foreach (var spec in _gateOptions.Checks)
+            {
+                if (spec.Role != CheckRole.Gating) continue;
+                var res = checkResults.FirstOrDefault(r => r.Name == spec.Name);
+                if (res is null || !res.Passed || res.Skipped) continue; // only green gating checks
+                var verdict = await _vacuityProver.ProveAsync(spec, runner, _git, worktreePath, ct).ConfigureAwait(false);
+                if (verdict.Outcome == GateVacuityOutcome.Unverified)
+                {
+                    await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+                    {
+                        ["kind"] = "gate_unverified",
+                        ["check"] = spec.Name,
+                        ["detail"] = verdict.Reason ?? ""
+                    }, ct).ConfigureAwait(false);
+                    continue; // advisory: do not block, do not transition
+                }
+                if (verdict.Outcome == GateVacuityOutcome.Vacuous || verdict.Outcome == GateVacuityOutcome.CleanupFailed)
+                {
+                    var kind = verdict.Outcome == GateVacuityOutcome.Vacuous ? "gate_vacuous" : "gate_canary_cleanup_failed";
+                    await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+                    {
+                        ["kind"] = kind,
+                        ["check"] = spec.Name,
+                        ["reason"] = verdict.Reason ?? ""
+                    }, ct).ConfigureAwait(false);
+                    // Config/setup defect: hard-fail WITHOUT rework. Do NOT transition InReview->InProgress.
+                    return new GateOutcome(false, checkResults, smokeSignals.AsReadOnly(),
+                        verdict.Reason ?? $"gate: check '{spec.Name}' is vacuous", Vacuous: true);
+                }
+                // Ok / AlreadyProven: nothing to do.
+            }
         }
 
         return new GateOutcome(true, checkResults, smokeSignals.AsReadOnly());
