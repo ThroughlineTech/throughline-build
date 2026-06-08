@@ -127,6 +127,13 @@ public class ChainPhase
         _landingPushEnabled = landingPushEnabled;
     }
 
+    // Inert read-only accessors over the wired collaborators, for composition-root tests that
+    // verify the chain verb did not silently drop a dependency when constructing this phase.
+    // The original --batch-implement bug was exactly a dropped ctor argument (_batchWorker left
+    // null), so these let a test fail when that recurs. No runtime behavior depends on them.
+    internal IWorkerAgent? BatchWorker => _batchWorker;
+    internal Func<BuildOptions, ShipPhase>? ChainShipFactory => _chainShipFactory;
+
     public async Task<ChainResult> RunAsync(ChainPhaseOptions options, CancellationToken ct)
     {
         var totalSw = Stopwatch.StartNew();
@@ -838,7 +845,12 @@ public class ChainPhase
         CancellationToken ct)
     {
         var revSessionId = _sessionIdGenerator();
-        var revBuildOpts = BuildPhaseOptions(revSessionId, options.TicketId, "review", round);
+        // Pass the chain integration branch so the leaf review diffs against the accumulating
+        // chain branch (e.g. chain/{parent}), not the root target. ReviewPhase resolves its diff
+        // base from TargetBranch; without this a stacked chain hands the reviewer the entire
+        // accumulated stack diff instead of just this ticket's own commit. In the non-chain path
+        // ChainTargetBranch is null, so this falls back to the root target exactly as before.
+        var revBuildOpts = BuildPhaseOptions(revSessionId, options.TicketId, "review", round, options.ChainTargetBranch);
         EmitPhaseStart(options, "review", -1, revSessionId);
         var revSw = Stopwatch.StartNew();
         var revResult = await _reviewFactory(revBuildOpts, gateOutcome)
@@ -2009,6 +2021,44 @@ public class ChainPhase
                 batchCandidates = Array.Empty<Ticket>();
             }
 
+            // Exclude any candidate that is itself an internal node (has its own non-terminal
+            // children). Such a ticket is a parent, not a leaf carrying code - batching it would
+            // "implement" a parent as if it had a diff. Internal nodes must fall through to the
+            // per-child level loop, which recurses them as parents (chaining their own children).
+            // Applies equally to AllEligibleChildren and an explicitly listed ticket that turns
+            // out to be an internal node. Each skip is logged so the downgrade is never silent.
+            if (batchCandidates.Count > 0)
+            {
+                var leafCandidates = new List<Ticket>(batchCandidates.Count);
+                foreach (var candidate in batchCandidates)
+                {
+                    var grandchildren = await _ticketing
+                        .QueryAsync(new TicketQuery(ParentId: candidate.Uuid), ct).ConfigureAwait(false);
+                    var hasLiveChildren = grandchildren.Any(
+                        g => g.State != TicketState.Done && g.State != TicketState.Cancelled);
+                    if (hasLiveChildren)
+                    {
+                        Console.Error.WriteLine(
+                            $"[{parentTicket.Id}] batch-implement: skipping {candidate.Id} - it is an " +
+                            "internal node (has non-terminal children); chaining it as a parent instead.");
+                        await _events.EmitAsync(new WorkflowEvent(
+                            SessionId: _sessionIdGenerator(),
+                            Timestamp: DateTimeOffset.UtcNow,
+                            Kind: EventKind.GateFailure,
+                            TicketId: parentTicket.Id,
+                            Phase: Phase.Chain,
+                            Data: new Dictionary<string, object>
+                            {
+                                ["kind"] = "batch_skip_internal_node",
+                                ["ticket"] = candidate.Id
+                            }), ct).ConfigureAwait(false);
+                        continue;
+                    }
+                    leafCandidates.Add(candidate);
+                }
+                batchCandidates = leafCandidates;
+            }
+
             if (batchCandidates.Count > 0)
             {
                 // Plan any Backlog candidates up front so the batch implement session has a Ready
@@ -2115,6 +2165,34 @@ public class ChainPhase
                     }
                 }
             }
+        }
+        else if (options.BatchImplementGroup is not null && !anyStoppedEarly)
+        {
+            // Batch implement was requested but the batch path cannot run (no batch worker wired,
+            // or no eligible children to batch). Surface the downgrade loudly - a visible console
+            // line plus a GateFailure-style event - instead of silently falling back to the
+            // per-ticket chain. A silent downgrade reads as "batch ran" when it did not, the
+            // failure mode op-31 Brief 10 calls out. Mirrors the size-cap fallback logging above.
+            var downgradeReason = _batchWorker is null
+                ? "no batch worker configured"
+                : sharedWorktreePath is null
+                    ? "no eligible children to batch"
+                    : "batch path unavailable";
+            Console.Error.WriteLine(
+                $"[{parentTicket.Id}] batch-implement requested but {downgradeReason}; " +
+                "running per-ticket chain instead.");
+            await _events.EmitAsync(new WorkflowEvent(
+                SessionId: _sessionIdGenerator(),
+                Timestamp: DateTimeOffset.UtcNow,
+                Kind: EventKind.GateFailure,
+                TicketId: parentTicket.Id,
+                Phase: Phase.Chain,
+                Data: new Dictionary<string, object>
+                {
+                    ["kind"] = "batch_implement_unavailable",
+                    ["reason"] = downgradeReason,
+                    ["ticket_count"] = eligible.Count
+                }), ct).ConfigureAwait(false);
         }
 
         // Accumulated provides from all previously shipped children. Each child's gate

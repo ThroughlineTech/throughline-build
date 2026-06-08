@@ -91,7 +91,8 @@ public class ChainPhaseTests
         BuildOptions? baseOptions = null,
         FakeEventSinkChain? eventSink = null,
         IWorkerAgent? batchWorker = null,
-        Func<BuildOptions, GatePhase>? gateFactory = null)
+        Func<BuildOptions, GatePhase>? gateFactory = null,
+        List<string?>? reviewTargetBranches = null)
     {
         _sessionCounter = 0;
         var events = eventSink ?? new FakeEventSinkChain();
@@ -107,6 +108,9 @@ public class ChainPhaseTests
 
         Func<BuildOptions, GateOutcome?, ReviewPhase> reviewFactory = (opts, _) =>
         {
+            // Record the TargetBranch the review phase is constructed with so a chain review's
+            // diff base (which ReviewPhase resolves from TargetBranch) is assertable.
+            reviewTargetBranches?.Add(opts.TargetBranch);
             var verifier = verifierQueue.Dequeue();
             return new ReviewPhase(ticketing, new FakeWorkerAgent(null), events, opts,
                 MakeReviewOptions(), git, verifierOverride: verifier);
@@ -2863,6 +2867,165 @@ public class ChainPhaseTests
         {
             TryDeleteTree(repoDir);
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Batch-implement bug fixes: no-silent-downgrade, internal-node exclusion,
+    // chain review diff base.
+    // -------------------------------------------------------------------------
+
+    // Bug 2: when a batch group is declared but the batch path cannot run (here: no batch worker
+    // wired), the chain must NOT silently downgrade. It surfaces a visible downgrade plus a
+    // GateFailure-style event, then runs every child through the per-ticket chain.
+    [Fact]
+    public async Task RunAsync_BatchGroup_NullBatchWorker_EmitsDowngradeEvent_RunsPerTicket()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var git = new FakeGitClientChain();
+        var eventSink = new FakeEventSinkChain();
+        // batchWorker intentionally null: the batch path is unreachable, so the request must
+        // downgrade loudly instead of silently running per-ticket.
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            git: git, eventSink: eventSink, batchWorker: null);
+
+        var batchGroup = new ChainBatchImplementGroup.ExplicitList(new[] { "TLB-2", "TLB-3" });
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
+            CancellationToken.None);
+
+        // The downgrade is surfaced as a GateFailure-style event naming the reason.
+        Assert.Contains(eventSink.Events, e =>
+            e.Data.TryGetValue("kind", out var k) && k is string ks && ks == "batch_implement_unavailable"
+            && e.Data.TryGetValue("reason", out var r) && r is string rs && rs == "no batch worker configured");
+
+        // The chain did not stall: every child ran the full per-ticket plan/implement/review/ship loop.
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        Assert.NotNull(result.ChildResults);
+        Assert.Equal(2, result.ChildResults!.Count);
+        Assert.All(result.ChildResults, r => Assert.Equal(ChainOutcome.Completed, r.Outcome));
+    }
+
+    // Bug 3: a batch candidate that is itself an internal node (has its own non-terminal children)
+    // must be excluded from the batch and recursed as a parent. TLB-2 is an internal node whose
+    // child TLB-3 is a real leaf. With --batch-implement, TLB-2 must NOT be batched (batching a
+    // parent would "implement" it as if it carried a diff); it is chained as a parent, while the
+    // genuine leaf TLB-3 is the one batched at the sub-chain level.
+    [Fact]
+    public async Task RunAsync_AllEligibleChildren_InternalNodeChild_ExcludedFromBatch_RecursedAsParent()
+    {
+        var parent = MakeTicket(TicketState.Backlog);                                   // TLB-1 (uuid ticket-uuid-1)
+        var internalNode = MakeChildTicket("TLB-2", "sub-uuid", TicketState.Backlog);   // child of TLB-1, parent of TLB-3
+        var leaf = MakeChildTicket("TLB-3", "leaf-uuid", TicketState.Ready);            // child of TLB-2 (a real leaf)
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { internalNode });  // TLB-1 -> TLB-2
+        ticketing.SeedChildren("sub-uuid", new[] { leaf });               // TLB-2 -> TLB-3 (makes TLB-2 an internal node)
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+
+        // The leaf TLB-3 is batched at the sub-chain level (one warm session): seed its per-ticket
+        // result and matching log sha; the combined review uses the batch worker's Pass verdict.
+        var perTicketResults = new List<BatchTicketResult>
+        {
+            new BatchTicketResult("TLB-3", "ccc222", 0, Array.Empty<string>(), "SUMMARY_3"),
+        };
+        var batchWorker = new BatchFakeWorkerAgent(tickets: perTicketResults);
+
+        var git = new FakeGitClientChain();
+        git.LogShasResult = new[] { "ccc222" };
+        var eventSink = new FakeEventSinkChain();
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            batchWorker: batchWorker, git: git, forwardGitToChain: true, eventSink: eventSink);
+
+        var batchGroup = new ChainBatchImplementGroup.AllEligibleChildren();
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, BatchImplementGroup: batchGroup),
+            CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+
+        // The internal node TLB-2 was excluded from the batch with a logged skip event...
+        Assert.Contains(eventSink.Events, e =>
+            e.Data.TryGetValue("kind", out var k) && k is string ks && ks == "batch_skip_internal_node"
+            && e.Data.TryGetValue("ticket", out var t) && t is string ts && ts == "TLB-2");
+
+        // ...and recursed as a parent (ParentCompleted with its own child results) - NOT mis-batched,
+        // which would have produced a BatchImplemented outcome and no child results for TLB-2.
+        var tlb2 = Assert.Single(result.ChildResults!);
+        Assert.Equal("TLB-2", tlb2.TicketId);
+        Assert.Equal(ChainOutcome.ParentCompleted, tlb2.Outcome);
+        Assert.NotNull(tlb2.ChildResults);
+
+        // The genuine leaf TLB-3 was the one batched (at the sub-chain level).
+        var tlb3 = Assert.Single(tlb2.ChildResults!);
+        Assert.Equal("TLB-3", tlb3.TicketId);
+        Assert.Equal(ChainOutcome.BatchImplemented, tlb3.Outcome);
+    }
+
+    // Bug 4: a leaf review inside a chain must diff against the chain integration branch
+    // (chain/{parent}), not the root target. ReviewPhase resolves its diff base from the
+    // BuildOptions.TargetBranch it is constructed with, so capturing that branch proves the fix.
+    [Fact]
+    public async Task RunAsync_LeafReviewInChain_UsesChainIntegrationBranchAsDiffBase()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Backlog);
+
+        var ticketing = new ChainFakeTicketing(parent);
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child });
+
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var git = new FakeGitClientChain();
+        var reviewTargets = new List<string?>();
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, git: git,
+            reviewTargetBranches: reviewTargets);
+
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        // The leaf review was constructed with the chain integration branch as its diff base,
+        // not the root target ("main").
+        Assert.Equal("chain/tlb-1", Assert.Single(reviewTargets));
+    }
+
+    // Bug 4 (counterpart): a standalone (non-chain) review still falls back to the root target -
+    // ChainTargetBranch is null there, so behavior is unchanged.
+    [Fact]
+    public async Task RunAsync_NonChainReview_UsesRootTargetAsDiffBase()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.InReview));
+        ticketing.SeedImplementedAt(CommitSha);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var reviewTargets = new List<string?>();
+        var chain = BuildChain(ticketing, new FakeWorkerAgent(null),
+            new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks),
+            verifiers, reviewTargetBranches: reviewTargets);
+
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+        // Non-chain: the review TargetBranch falls back to the root target.
+        Assert.Equal("main", Assert.Single(reviewTargets));
     }
 
     private static string CreateTempGitRepo()

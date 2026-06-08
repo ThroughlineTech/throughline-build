@@ -1841,7 +1841,12 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
         return new ShipPhase(ticketing, eventSink, buildOpts, chainShipOptions, gitClient: gitClient, checksRunner: checksRunner, progressWriter: buildOpts.ProgressDigestSink, verbose: debugMode);
     };
 
-    var chainPhase = new ChainPhase(
+    // Wire the chain phase through the composition helper so the construction has a single
+    // test-coverable seam (see ChainPhaseComposition). The batchWorker - omitted from the inline
+    // construction for the feature's whole life (TLB bug 1) - is created inside the helper from the
+    // implement agent, and a Cli.Tests check now fails if it or another required dependency is
+    // dropped. Pure extraction: identical arguments to the prior inline new ChainPhase(...).
+    var chainPhase = ChainPhaseComposition.BuildChainPhase(
         ticketing,
         eventSink,
         buildOptions,
@@ -1849,13 +1854,11 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
         implementPhaseFactory,
         reviewPhaseFactory,
         shipPhaseFactory,
+        chainShipPhaseFactory,
+        ratifierFactory,
         workingDirectory: cwd,
-        ratifierFactory: ratifierFactory,
-        chainShipFactory: chainShipPhaseFactory,
-        // Root-chain landing: after the outermost chain accumulates onto chain/{root}, that
-        // branch is fast-forwarded into the configured target in the main worktree and pushed
-        // here (intermediate chain ships run NoPush above). Push honors the same --no-push /
-        // [ship] push toggle the per-ticket ship uses.
+        workerFactory,
+        effectiveAgentFor,
         landingRemote: config2.Ship.Remote,
         landingPushEnabled: !(noPush || !config2.Ship.Push),
         gateFactory: gatePhaseFactory);
