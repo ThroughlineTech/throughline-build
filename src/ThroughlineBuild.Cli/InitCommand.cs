@@ -220,7 +220,7 @@ public static class InitCommand
     }
 
     /// <summary>
-    /// If a Codex probe is injected, discover models and rewrite the commented [workers.codex.sizes]
+    /// If a Codex probe is injected, discover models and rewrite the [workers.codex.sizes]
     /// block; on probe failure leave the static defaults and print one actionable warning. Returns
     /// the (possibly updated) config content. Shared by the offline and connected write paths.
     /// </summary>
@@ -235,7 +235,7 @@ public static class InitCommand
             var mapping = CodexTierMapper.Map(probe.Discovery);
             if (mapping is not null)
             {
-                var block = CodexSizesBlockRenderer.Render(mapping, probe.Discovery, commented: true);
+                var block = CodexSizesBlockRenderer.Render(mapping, probe.Discovery, commented: false);
                 content = CodexSizesBlockEditor.ReplaceCodexSizesBlock(content, block);
             }
         }

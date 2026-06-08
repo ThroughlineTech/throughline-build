@@ -650,7 +650,7 @@ public class InitCommandTests
             // Codex block now carries the discovered slugs and a discovered-menu comment.
             Assert.Contains("gpt-5.4-mini", written);
             Assert.Contains("gpt-5.5", written);
-            Assert.Contains("# # models: gpt-5.5, gpt-5.4-mini", written);
+            Assert.Contains("models: gpt-5.5, gpt-5.4-mini", written);
 
             // Claude block still reads the static stable aliases.
             Assert.Contains("small  = { model = \"haiku\" }", written);
@@ -680,8 +680,8 @@ public class InitCommandTests
             var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
 
             // Static codex defaults remain (template's commented example).
-            Assert.Contains("# small  = { model = \"gpt-5.4-mini\", effort = \"low\" }", written);
-            Assert.Contains("# large  = { model = \"gpt-5.5\", effort = \"high\" }", written);
+            Assert.Contains("small  = { model = \"gpt-5.4-mini\", effort = \"low\" }", written);
+            Assert.Contains("large  = { model = \"gpt-5.5\", effort = \"high\" }", written);
 
             // Claude block still static aliases.
             Assert.Contains("small  = { model = \"haiku\" }", written);

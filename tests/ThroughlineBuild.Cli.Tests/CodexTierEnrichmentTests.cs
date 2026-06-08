@@ -147,15 +147,15 @@ public class CodexTierEnrichmentTests
         var discovery = RepresentativeDiscovery();
         var mapping = CodexTierMapper.Map(discovery)!;
 
-        var block = CodexSizesBlockRenderer.Render(mapping, discovery, commented: true);
+        var block = CodexSizesBlockRenderer.Render(mapping, discovery, commented: false);
 
-        Assert.Contains("# [workers.codex.sizes]", block);
-        Assert.Contains("# # models: gpt-5.5, gpt-5.4-mini", block);
-        Assert.Contains("# # effort: gpt-5.5 default=medium [minimal,low,medium,high,xhigh]; gpt-5.4-mini default=low [low,medium,high]", block);
-        Assert.Contains("# # Discovered by 'build init' via 'codex debug models'", block);
-        Assert.Contains("# small  = { model = \"gpt-5.4-mini\", effort = \"low\" }", block);
-        Assert.Contains("# medium = { model = \"gpt-5.5\", effort = \"medium\" }", block);
-        Assert.Contains("# large  = { model = \"gpt-5.5\", effort = \"xhigh\" }", block);
+        Assert.Contains("[workers.codex.sizes]", block);
+        Assert.Contains("# models: gpt-5.5, gpt-5.4-mini", block);
+        Assert.Contains("# effort: gpt-5.5 default=medium [minimal,low,medium,high,xhigh]; gpt-5.4-mini default=low [low,medium,high]", block);
+        Assert.Contains("# Discovered by 'build init' via 'codex debug models'", block);
+        Assert.Contains("small  = { model = \"gpt-5.4-mini\", effort = \"low\" }", block);
+        Assert.Contains("medium = { model = \"gpt-5.5\", effort = \"medium\" }", block);
+        Assert.Contains("large  = { model = \"gpt-5.5\", effort = \"xhigh\" }", block);
     }
 
     [Fact]
@@ -186,7 +186,7 @@ public class CodexTierEnrichmentTests
         });
         var mapping = CodexTierMapper.Map(discovery)!;
 
-        var block = CodexSizesBlockRenderer.Render(mapping, discovery, commented: true);
+        var block = CodexSizesBlockRenderer.Render(mapping, discovery, commented: false);
 
         Assert.Contains("# small  = { model = \"gpt-x\" }", block);
         Assert.DoesNotContain("effort = ", block);
@@ -217,13 +217,13 @@ public class CodexTierEnrichmentTests
         var template = ConfigTemplateLoader.Load();
         var discovery = RepresentativeDiscovery();
         var mapping = CodexTierMapper.Map(discovery)!;
-        var newBlock = CodexSizesBlockRenderer.Render(mapping, discovery, commented: true);
+        var newBlock = CodexSizesBlockRenderer.Render(mapping, discovery, commented: false);
 
         var edited = CodexSizesBlockEditor.ReplaceCodexSizesBlock(template, newBlock);
 
         // New codex content is present.
-        Assert.Contains("# # models: gpt-5.5, gpt-5.4-mini", edited);
-        Assert.Contains("# small  = { model = \"gpt-5.4-mini\", effort = \"low\" }", edited);
+        Assert.Contains("# models: gpt-5.5, gpt-5.4-mini", edited);
+        Assert.Contains("small  = { model = \"gpt-5.4-mini\", effort = \"low\" }", edited);
         // The old static codex high-effort large line is gone (escalation rewrote it to xhigh).
         Assert.DoesNotContain("# large  = { model = \"gpt-5.5\", effort = \"high\" }", edited);
         // Other sections untouched.
@@ -241,7 +241,7 @@ public class CodexTierEnrichmentTests
         var template = ConfigTemplateLoader.Load();
         var discovery = RepresentativeDiscovery();
         var mapping = CodexTierMapper.Map(discovery)!;
-        var newBlock = CodexSizesBlockRenderer.Render(mapping, discovery, commented: true);
+        var newBlock = CodexSizesBlockRenderer.Render(mapping, discovery, commented: false);
 
         var once = CodexSizesBlockEditor.ReplaceCodexSizesBlock(template, newBlock);
         var twice = CodexSizesBlockEditor.ReplaceCodexSizesBlock(once, newBlock);
@@ -255,7 +255,7 @@ public class CodexTierEnrichmentTests
         var template = ConfigTemplateLoader.Load();
         var discovery = RepresentativeDiscovery();
         var mapping = CodexTierMapper.Map(discovery)!;
-        var newBlock = CodexSizesBlockRenderer.Render(mapping, discovery, commented: true);
+        var newBlock = CodexSizesBlockRenderer.Render(mapping, discovery, commented: false);
 
         var edited = CodexSizesBlockEditor.ReplaceCodexSizesBlock(template, newBlock);
 

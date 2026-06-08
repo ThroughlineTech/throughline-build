@@ -39,17 +39,17 @@ large  = { model = "opus" }
 # To add a new agent block, copy one of the commented-out examples below and
 # fill in the executable and sizes. Each block is self-contained.
 
-# [workers.codex]
-# executable = "codex"
-# # max_output_tokens is not currently used but accepted for future use.
-# # bypass_permissions = true  # default true; disables Codex approvals and sandboxing.
+[workers.codex]
+executable = "codex"
+# max_output_tokens is not currently used but accepted for future use.
+# bypass_permissions = true  # default true; disables Codex approvals and sandboxing.
 
-# [workers.codex.sizes]
-# # openai: prefix is optional; CodexAgent strips it automatically.
-# # effort is Codex-only (reasoning level: minimal | low | medium | high | xhigh).
-# small  = { model = "gpt-5.4-mini", effort = "low" }
-# medium = { model = "gpt-5.5", effort = "medium" }
-# large  = { model = "gpt-5.5", effort = "high" }
+[workers.codex.sizes]
+# openai: prefix is optional; CodexAgent strips it automatically.
+# effort is Codex-only (reasoning level: minimal | low | medium | high | xhigh).
+small  = { model = "gpt-5.4-mini", effort = "low" }
+medium = { model = "gpt-5.5", effort = "medium" }
+large  = { model = "gpt-5.5", effort = "high" }
 
 # [workers.gemini]
 # executable = "gemini"
