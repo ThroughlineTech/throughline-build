@@ -30,7 +30,7 @@ public class EnumExhaustivenessTests
             EventKind.VerifierVerdict, EventKind.GateFailure, EventKind.TicketWrite,
             EventKind.ChainStart, EventKind.ChainEnd, EventKind.ReworkRound,
             EventKind.TicketSubsumed, EventKind.TargetAutoRebased,
-            EventKind.DispatchStart, EventKind.DispatchEnd
+            EventKind.DispatchStart, EventKind.DispatchEnd, EventKind.CostLedger
         };
         Assert.Equal(expected.OrderBy(x => (int)x), Enum.GetValues<EventKind>().OrderBy(x => (int)x));
     }

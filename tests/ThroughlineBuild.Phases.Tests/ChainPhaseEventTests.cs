@@ -78,10 +78,12 @@ public class ChainPhaseEventTests
         EventFakeWorkerAgent implWorker,
         Queue<IVerifier> verifierQueue,
         EventFakeGitClient? git = null,
-        Func<BuildOptions, IObsoleteRatifier>? ratifierFactory = null)
+        Func<BuildOptions, IObsoleteRatifier>? ratifierFactory = null,
+        CapturingEventSink? eventSink = null,
+        Func<BuildOptions, GatePhase>? gateFactory = null)
     {
         _sessionCounter = 0;
-        var sink = new CapturingEventSink();
+        var sink = eventSink ?? new CapturingEventSink();
         git ??= new EventFakeGitClient();
 
         var baseOpts = MakeBaseOptions();
@@ -111,10 +113,17 @@ public class ChainPhaseEventTests
             planFactory, implFactory, reviewFactory, shipFactory,
             sessionIdGenerator: NextSessionId,
             workingDirectory: WorkDir,
-            ratifierFactory: ratifierFactory);
+            ratifierFactory: ratifierFactory,
+            gateFactory: gateFactory);
 
         return (chain, sink);
     }
+
+    private static CheckResult GatingPass(string name = "build", int elapsedMs = 500) =>
+        new CheckResult(name, true, 0, "", "", TimeSpan.FromMilliseconds(elapsedMs), CheckRole.Gating);
+
+    private static CheckResult GatingFail(string name = "build", int elapsedMs = 300) =>
+        new CheckResult(name, false, 1, "", "error", TimeSpan.FromMilliseconds(elapsedMs), CheckRole.Gating);
 
     // Test 1: Happy path emits ChainStart, per-phase events, ChainEnd in order; no ReworkRound
     [Fact]
@@ -308,6 +317,192 @@ public class ChainPhaseEventTests
         var chainEndIdx = events.FindIndex(e => e.Kind == EventKind.ChainEnd);
         Assert.True(subsumedIdx >= 0 && chainEndIdx >= 0);
         Assert.True(subsumedIdx < chainEndIdx);
+    }
+
+    // AC: "Each gated ticket emits one ledger event"
+    // When no gate factory is configured, no CostLedger event is emitted.
+    [Fact]
+    public async Task NoGate_NoCostLedgerEvent()
+    {
+        var ticketing = new EventChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new EventFakeWorkerAgent(OkWorkerMeta(), blocks: OkWorkerBlocks());
+        var implWorker = new EventFakeWorkerAgent(OkWorkerMeta(), blocks: OkWorkerBlocks());
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new EventFakeVerifier(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var (chain, sink) = BuildChain(ticketing, planWorker, implWorker, verifiers);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+        Assert.DoesNotContain(sink.Events, e => e.Kind == EventKind.CostLedger);
+    }
+
+    // AC: "Each gated ticket emits one ledger event" + "Gate wall is populated from measured check durations"
+    // When the gate passes on the first attempt, one CostLedger is emitted with the correct
+    // gate wall time, zero rework rounds, and annotatable zero slots.
+    [Fact]
+    public async Task GatePasses_OneCostLedger_WithGateWallMs_ZeroReworkRounds()
+    {
+        var ticketing = new EventChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new EventFakeWorkerAgent(OkWorkerMeta(), blocks: OkWorkerBlocks());
+        var implWorker = new EventFakeWorkerAgent(OkWorkerMeta(), blocks: OkWorkerBlocks());
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new EventFakeVerifier(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var git = new EventFakeGitClient();
+        var sink = new CapturingEventSink();
+        var (chain, _) = BuildChain(ticketing, planWorker, implWorker, verifiers, git, eventSink: sink,
+            gateFactory: opts => new GatePhase(ticketing, sink, opts,
+                new GateOptions(Array.Empty<CheckSpec>()), git,
+                new PreComputedChecksRunner(new[] { GatingPass("build", elapsedMs: 500) })));
+
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+
+        var ledgerEvents = sink.Events.Where(e => e.Kind == EventKind.CostLedger).ToList();
+        Assert.Single(ledgerEvents);
+
+        var ledger = ledgerEvents[0];
+        Assert.Equal(Phase.Gate, ledger.Phase);
+        Assert.Equal(TicketId, ledger.TicketId);
+        Assert.Equal(500L, (long)ledger.Data["gate_wall_ms"]);
+        Assert.Equal(0, (int)ledger.Data["gate_attributable_rework_rounds"]);
+        Assert.Equal(0, (int)ledger.Data["cascade_caught"]);
+        Assert.Equal(0, (int)ledger.Data["false_fails"]);
+        // No rework rounds, so no token fields
+        Assert.False(ledger.Data.ContainsKey("gate_attributable_rework_input_tokens"));
+        Assert.False(ledger.Data.ContainsKey("gate_attributable_rework_output_tokens"));
+        Assert.False(ledger.Data.ContainsKey("gate_attributable_rework_tokens_available"));
+
+        // CostLedger emitted before ChainEnd
+        var ledgerIdx = sink.Events.FindIndex(e => e.Kind == EventKind.CostLedger);
+        var chainEndIdx = sink.Events.FindIndex(e => e.Kind == EventKind.ChainEnd);
+        Assert.True(ledgerIdx < chainEndIdx);
+    }
+
+    // AC: "Gate-attributable rework tokens are populated from rework rounds whose trigger was a gate hard-fail"
+    //     "marked unavailable where token accounting is absent"
+    // Gate fails once (triggering one rework round), then passes. The implement fake has no llm_usage,
+    // so tokens are marked unavailable. CostLedger reflects 1 gate-attributable rework round.
+    [Fact]
+    public async Task GateFailsThenPasses_OneCostLedger_OneReworkRound_TokensUnavailable()
+    {
+        var ticketing = new EventChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new EventFakeWorkerAgent(OkWorkerMeta(), blocks: OkWorkerBlocks());
+        var implWorker = new EventFakeWorkerAgent(OkWorkerMeta(), blocks: OkWorkerBlocks());
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new EventFakeVerifier(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var git = new EventFakeGitClient();
+        var sink = new CapturingEventSink();
+        var gateCheckQueue = new Queue<CheckResult[]>();
+        gateCheckQueue.Enqueue(new[] { GatingFail("build", elapsedMs: 300) }); // round 0: gate fails
+        gateCheckQueue.Enqueue(new[] { GatingPass("build", elapsedMs: 400) }); // round 1: gate passes
+
+        var (chain, _) = BuildChain(ticketing, planWorker, implWorker, verifiers, git, eventSink: sink,
+            gateFactory: opts => new GatePhase(ticketing, sink, opts,
+                new GateOptions(Array.Empty<CheckSpec>()), git,
+                new PreComputedChecksRunner(gateCheckQueue.Dequeue())));
+
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+
+        var ledgerEvents = sink.Events.Where(e => e.Kind == EventKind.CostLedger).ToList();
+        Assert.Single(ledgerEvents);
+
+        var ledger = ledgerEvents[0];
+        Assert.Equal(700L, (long)ledger.Data["gate_wall_ms"]); // 300 + 400
+        Assert.Equal(1, (int)ledger.Data["gate_attributable_rework_rounds"]);
+        // No llm_usage in fake worker: tokens marked unavailable
+        Assert.False((bool)ledger.Data["gate_attributable_rework_tokens_available"]);
+        Assert.False(ledger.Data.ContainsKey("gate_attributable_rework_input_tokens"));
+        Assert.Equal(0, (int)ledger.Data["cascade_caught"]);
+        Assert.Equal(0, (int)ledger.Data["false_fails"]);
+    }
+
+    // AC: "Gate-attributable rework tokens are populated from rework rounds whose trigger was a gate hard-fail"
+    // Gate fails once; the rework implement returns llm_usage with non-zero tokens.
+    // CostLedger includes the token sums for gate-attributable rework.
+    [Fact]
+    public async Task GateFailsThenPasses_TokensPresent_CostLedgerIncludesTokenCounts()
+    {
+        var ticketing = new EventChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new EventFakeWorkerAgent(OkWorkerMeta(), blocks: OkWorkerBlocks());
+        // Implement worker includes llm_usage so token accounting is available
+        var implMeta = new Dictionary<string, object>(OkWorkerMeta())
+        {
+            ["llm_usage"] = new Dictionary<string, object?>
+            {
+                ["input_tokens"] = (object)50000,
+                ["output_tokens"] = (object)2000,
+                ["model"] = "claude-code",
+                ["vendor"] = "anthropic",
+                ["wall_clock_ms"] = 30000L
+            }
+        };
+        var implWorker = new EventFakeWorkerAgent(implMeta, blocks: OkWorkerBlocks());
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new EventFakeVerifier(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var git = new EventFakeGitClient();
+        var sink = new CapturingEventSink();
+        var gateCheckQueue = new Queue<CheckResult[]>();
+        gateCheckQueue.Enqueue(new[] { GatingFail("build", elapsedMs: 200) }); // round 0 fails
+        gateCheckQueue.Enqueue(new[] { GatingPass("build", elapsedMs: 100) }); // round 1 passes
+
+        var (chain, _) = BuildChain(ticketing, planWorker, implWorker, verifiers, git, eventSink: sink,
+            gateFactory: opts => new GatePhase(ticketing, sink, opts,
+                new GateOptions(Array.Empty<CheckSpec>()), git,
+                new PreComputedChecksRunner(gateCheckQueue.Dequeue())));
+
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+
+        var ledgerEvents = sink.Events.Where(e => e.Kind == EventKind.CostLedger).ToList();
+        Assert.Single(ledgerEvents);
+
+        var ledger = ledgerEvents[0];
+        Assert.Equal(1, (int)ledger.Data["gate_attributable_rework_rounds"]);
+        // Tokens from the gate-attributable rework round (round 1 implement only, not round 0)
+        Assert.Equal(50000L, (long)ledger.Data["gate_attributable_rework_input_tokens"]);
+        Assert.Equal(2000L, (long)ledger.Data["gate_attributable_rework_output_tokens"]);
+        Assert.False(ledger.Data.ContainsKey("gate_attributable_rework_tokens_available"));
+    }
+
+    // AC: "Each gated ticket emits one ledger event" with ReworkCapExceeded outcome
+    // Gate always fails; rework cap is hit. CostLedger emitted once for the ticket.
+    [Fact]
+    public async Task GateAlwaysFails_ReworkCapExceeded_OneCostLedgerWithReworkRounds()
+    {
+        var ticketing = new EventChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new EventFakeWorkerAgent(OkWorkerMeta(), blocks: OkWorkerBlocks());
+        var implWorker = new EventFakeWorkerAgent(OkWorkerMeta(), blocks: OkWorkerBlocks());
+        var verifiers = new Queue<IVerifier>();
+
+        var git = new EventFakeGitClient();
+        var sink = new CapturingEventSink();
+        // Gate always fails - will hit MaxReworkRounds=2 (rounds 0, 1, 2)
+        var (chain, _) = BuildChain(ticketing, planWorker, implWorker, verifiers, git, eventSink: sink,
+            gateFactory: opts => new GatePhase(ticketing, sink, opts,
+                new GateOptions(Array.Empty<CheckSpec>()), git,
+                new PreComputedChecksRunner(new[] { GatingFail("build", elapsedMs: 100) })));
+
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ReworkCapExceeded, result.Outcome);
+
+        var ledgerEvents = sink.Events.Where(e => e.Kind == EventKind.CostLedger).ToList();
+        Assert.Single(ledgerEvents);
+
+        var ledger = ledgerEvents[0];
+        Assert.Equal(Phase.Gate, ledger.Phase);
+        // 3 gate runs (rounds 0, 1, 2), each 100ms = 300ms total
+        Assert.Equal(300L, (long)ledger.Data["gate_wall_ms"]);
+        // 2 gate-attributable rework rounds (rounds 1 and 2 were triggered by gate failures)
+        Assert.Equal(2, (int)ledger.Data["gate_attributable_rework_rounds"]);
     }
 
     private static WorkerResult ObsoleteEscalateWorkerResult(string commit = "abc123obsolete") =>

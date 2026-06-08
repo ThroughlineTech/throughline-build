@@ -24,7 +24,9 @@ public record ImplementResult(
     string? FailureReason,
     int ReworkRoundNumber = 0,
     WorkerResult? EscalationWorkerResult = null,
-    CompletionClaim? CompletionClaim = null);
+    CompletionClaim? CompletionClaim = null,
+    long? LlmInputTokens = null,
+    long? LlmOutputTokens = null);
 
 public class ImplementPhase : IWorkflowPhase
 {
@@ -308,13 +310,17 @@ public class ImplementPhase : IWorkflowPhase
         if (verdictReason is not null) verdictData["failure_reason"] = verdictReason;
         await EmitAsync(EventKind.VerifierVerdict, ticketId, verdictData, ct).ConfigureAwait(false);
 
-        // Step 13: LlmCall event if usage present
+        // Step 13: LlmCall event if usage present; capture token counts for cost ledger.
+        long? llmInputTokens = null;
+        long? llmOutputTokens = null;
         if (workerResult.Metadata.TryGetValue("llm_usage", out var usageObj))
         {
             var llmData = LlmUsageFlattener.Flatten(usageObj);
             if (llmData is not null)
             {
                 await EmitAsync(EventKind.LlmCall, ticketId, llmData, ct).ConfigureAwait(false);
+                llmInputTokens = TryGetLong(llmData, "input_tokens");
+                llmOutputTokens = TryGetLong(llmData, "output_tokens");
             }
         }
 
@@ -466,7 +472,8 @@ public class ImplementPhase : IWorkflowPhase
 
         // Step 19: Return success
         int reworkRound = _phaseOptions.ReviewFeedback?.ReworkRoundNumber ?? 0;
-        return new ImplementResult(true, ticketId, actualHeadSha, canonicalBranchName, canonicalWorktreePath, null, reworkRound, CompletionClaim: completionClaim);
+        return new ImplementResult(true, ticketId, actualHeadSha, canonicalBranchName, canonicalWorktreePath, null, reworkRound,
+            CompletionClaim: completionClaim, LlmInputTokens: llmInputTokens, LlmOutputTokens: llmOutputTokens);
     }
 
     // Salvage path for a worker that finished a clean, committed session but did not return a
@@ -698,5 +705,15 @@ public class ImplementPhase : IWorkflowPhase
         if (val is JsonElement je && je.ValueKind == JsonValueKind.String)
             return je.GetString();
         return val?.ToString();
+    }
+
+    private static long? TryGetLong(IReadOnlyDictionary<string, object> dict, string key)
+    {
+        if (!dict.TryGetValue(key, out var val)) return null;
+        if (val is int i) return i;
+        if (val is long l) return l;
+        if (val is JsonElement je && je.ValueKind == JsonValueKind.Number)
+            return je.TryGetInt64(out var jl) ? jl : null;
+        return null;
     }
 }

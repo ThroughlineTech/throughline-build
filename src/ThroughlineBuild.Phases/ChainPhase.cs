@@ -529,6 +529,16 @@ public class ChainPhase
         int round = startRound;
         ReviewFeedback? feedback = initialFeedback;
 
+        // Gate cost ledger accumulators: track gate wall time and gate-attributable rework tokens
+        // across all iterations so a single CostLedger event is emitted per ticket at exit.
+        long gateWallMs = 0;
+        int gateAttributableReworkRounds = 0;
+        long gateAttributableReworkInputTokens = 0;
+        long gateAttributableReworkOutputTokens = 0;
+        bool gateAttributableReworkTokensTracked = false;
+        bool thisRoundIsGateAttributable = false;
+        bool gateWasEngaged = false;
+
         while (true)
         {
             var implSessionId = _sessionIdGenerator();
@@ -554,6 +564,19 @@ public class ChainPhase
                 PhaseSessionId: implSessionId);
             steps.Add(implStep);
             options.OnStep?.Invoke(options.TicketId, implStep);
+
+            // Accumulate gate-attributable rework tokens if this implement round was triggered
+            // by a gate hard-fail (identified by the flag set in the prior gate-failure branch).
+            if (thisRoundIsGateAttributable)
+            {
+                gateAttributableReworkRounds++;
+                var inp = implResult.LlmInputTokens ?? 0L;
+                var outp = implResult.LlmOutputTokens ?? 0L;
+                gateAttributableReworkInputTokens += inp;
+                gateAttributableReworkOutputTokens += outp;
+                if (inp + outp > 0) gateAttributableReworkTokensTracked = true;
+                thisRoundIsGateAttributable = false;
+            }
 
             if (!implResult.Success)
             {
@@ -591,6 +614,8 @@ public class ChainPhase
                     }
                     // Ratifier rejected - fall through to StoppedAtImplement
                 }
+                if (gateWasEngaged)
+                    await EmitCostLedgerAsync(chainSessionId, options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
                 return (new ChainResult(options.TicketId, steps, ChainOutcome.StoppedAtImplement,
                     TimeSpan.Zero, null), null);
             }
@@ -636,6 +661,9 @@ public class ChainPhase
                 steps.Add(gateStep);
                 options.OnStep?.Invoke(options.TicketId, gateStep);
 
+                gateWasEngaged = true;
+                gateWallMs += gateOutcome.CheckResults.Sum(r => (long)r.Elapsed.TotalMilliseconds);
+
                 if (!gateOutcome.Passed)
                 {
                     // Gate already transitioned InReview -> InProgress. Re-enter the rework loop
@@ -662,9 +690,11 @@ public class ChainPhase
                                 ["verdict_that_triggered"] = "GateFailure",
                                 ["rationale_preview"] = RationalePreview(gateRationale) ?? ""
                             }), ct).ConfigureAwait(false);
+                        thisRoundIsGateAttributable = true;
                         round++;
                         continue;
                     }
+                    await EmitCostLedgerAsync(chainSessionId, options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
                     return (new ChainResult(options.TicketId, steps, ChainOutcome.ReworkCapExceeded,
                         TimeSpan.Zero, gateRationale), null);
                 }
@@ -673,16 +703,28 @@ public class ChainPhase
             var reviewResult = await RunOneReviewAsync(options, steps, round, gateOutcome, ct).ConfigureAwait(false);
 
             if (reviewResult.abort is not null)
+            {
+                if (gateWasEngaged)
+                    await EmitCostLedgerAsync(chainSessionId, options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
                 return (reviewResult.abort, null);
+            }
 
             var rv = reviewResult.verdict!;
 
             if (rv.Kind == VerdictKind.Pass)
+            {
+                if (gateWasEngaged)
+                    await EmitCostLedgerAsync(chainSessionId, options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
                 return (null, implResult.CompletionClaim?.Provides);
+            }
 
             if (rv.Kind == VerdictKind.Fail)
+            {
+                if (gateWasEngaged)
+                    await EmitCostLedgerAsync(chainSessionId, options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
                 return (new ChainResult(options.TicketId, steps, ChainOutcome.StoppedAtReview,
                     TimeSpan.Zero, rv.Rationale), null);
+            }
 
             if (round < MaxReworkRounds)
             {
@@ -703,6 +745,8 @@ public class ChainPhase
             }
             else
             {
+                if (gateWasEngaged)
+                    await EmitCostLedgerAsync(chainSessionId, options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
                 return (new ChainResult(options.TicketId, steps, ChainOutcome.ReworkCapExceeded,
                     TimeSpan.Zero, rv.Rationale), null);
             }
@@ -747,6 +791,43 @@ public class ChainPhase
             }), ct).ConfigureAwait(false);
         return await RunImplementReviewLoopAsync(options, steps, chainSessionId, round + 1, feedback, totalSw, ct)
             .ConfigureAwait(false);
+    }
+
+    // Emits a CostLedger event capturing gate wall time, gate-attributable rework token counts,
+    // and annotatable slots (cascade_caught, false_fails) for post-run analysis.
+    private async Task EmitCostLedgerAsync(
+        string chainSessionId,
+        string ticketId,
+        long gateWallMs,
+        int gateAttributableReworkRounds,
+        long gateAttributableReworkInputTokens,
+        long gateAttributableReworkOutputTokens,
+        bool gateAttributableReworkTokensTracked,
+        CancellationToken ct)
+    {
+        var data = new Dictionary<string, object>
+        {
+            ["gate_wall_ms"] = gateWallMs,
+            ["gate_attributable_rework_rounds"] = gateAttributableReworkRounds,
+            ["cascade_caught"] = 0,
+            ["false_fails"] = 0
+        };
+        if (gateAttributableReworkRounds > 0 && gateAttributableReworkTokensTracked)
+        {
+            data["gate_attributable_rework_input_tokens"] = gateAttributableReworkInputTokens;
+            data["gate_attributable_rework_output_tokens"] = gateAttributableReworkOutputTokens;
+        }
+        else if (gateAttributableReworkRounds > 0)
+        {
+            data["gate_attributable_rework_tokens_available"] = false;
+        }
+        await _events.EmitAsync(new WorkflowEvent(
+            SessionId: chainSessionId,
+            Timestamp: DateTimeOffset.UtcNow,
+            Kind: EventKind.CostLedger,
+            TicketId: ticketId,
+            Phase: Phase.Gate,
+            Data: data), ct).ConfigureAwait(false);
     }
 
     private async Task<(ChainResult? abort, Verdict? verdict)> RunOneReviewAsync(
