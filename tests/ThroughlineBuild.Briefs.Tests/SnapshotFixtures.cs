@@ -111,4 +111,19 @@ internal static class SnapshotFixtures
         Rationale: "The implementation is incomplete. Please add the missing test cases for the error handling path.",
         ChecksFailed: new[] { "tests" },
         ReworkRoundNumber: 1);
+
+    public static ReviewFeedback GateFeedback() => new ReviewFeedback(
+        Rationale: "gate: tests failed",
+        ChecksFailed: new[] { "tests" },
+        ReworkRoundNumber: 1,
+        GateFailedChecks: new[]
+        {
+            new CheckResult(
+                Name: "tests",
+                Passed: false,
+                ExitCode: 1,
+                StdoutTail: "Test run for src/Foo.Tests/bin/Debug/Foo.Tests.dll (.NETCoreApp,Version=v10.0)\nFailed  FooTests.ParseTest [12ms]\n  Error Message:\n   Assert.Equal() Failure\n  Expected: 42\n  Actual: 0\nFailed! - Failed: 1, Passed: 0",
+                StderrTail: "",
+                Elapsed: TimeSpan.FromSeconds(4.1))
+        });
 }

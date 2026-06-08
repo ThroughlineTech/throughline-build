@@ -13,6 +13,22 @@ You are an implementing agent. Your job is to apply the plan recorded in the tic
 - blocks: TLB-100
 - blocked_by: TLB-99
 
+## Rework round 1 - gate failure
+
+gate: tests failed
+
+### Failed check: tests (exit 1)
+
+stdout:
+```
+Test run for src/Foo.Tests/bin/Debug/Foo.Tests.dll (.NETCoreApp,Version=v10.0)
+Failed  FooTests.ParseTest [12ms]
+  Error Message:
+   Assert.Equal() Failure
+  Expected: 42
+  Actual: 0
+Failed! - Failed: 1, Passed: 0
+```
 
 ## Plan (from ticket description)
 The ticket description (raw HTML) contains the planning output from the prior phase. Read it directly; do not re-render.
@@ -39,31 +55,9 @@ Record mode is cheaper than an iterate-until-match loop, but it is also more dan
 
 Include a short golden-justification note in `IMPLEMENT_SUMMARY` for every golden/snapshot fixture you record or update. Tie the note to the spec or acceptance criteria so review has something concrete to check beyond the captured blob.
 
-## Obsolete detection
+## Obsolete detection (suppressed on rework)
 
-Before making any changes, check whether the plan's acceptance criteria are already satisfied by a prior commit. If the acceptance criteria's artifacts already exist AND their content meets the acceptance criteria, the ticket is obsolete.
-
-**Detection bar:** "the file exists AND its content meets the acceptance criteria" qualifies. "a file with the same name exists" does not.
-
-Emit `Status=Escalate` with a populated `metadata.escalation` block. Do not make any changes.
-
-WORKER_RESULT
-{
-  "status": "Escalate",
-  "summary": "Ticket obsolete: decompose.md already delivered in commit 80ccafa",
-  "files_changed": [],
-  "failure_reason": null,
-  "metadata": {
-    "escalation": {
-      "reason": "obsolete",
-      "subsumed_by": {
-        "commit": "80ccafa",
-        "files": ["src/ThroughlineBuild.Briefs/Templates/claude-code/decompose.md"],
-        "rationale": "decompose.md delivered in commit 80ccafa; file meets this brief's acceptance criteria"
-      }
-    }
-  }
-}
+This is a rework round. Commits already on this branch are your own prior-round work - do NOT raise an obsolete escalation against them. Apply the reviewer feedback above. If the feedback is genuinely already satisfied by the current tree, re-affirm with `Status=Ok` and report the current HEAD SHA; never emit `Status=Escalate` with reason `obsolete` in a rework round.
 
 ## Required output
 

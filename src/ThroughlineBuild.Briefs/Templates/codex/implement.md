@@ -52,11 +52,23 @@ Write a concise summary of what you implemented. This can include:
 This block can contain code snippets, shell commands, file paths, and any characters - no JSON escaping needed here.
 <<<IMPLEMENT_SUMMARY_END
 
+Then emit a completion claim that describes what this implementation delivers:
+
+<<<COMPLETION_CLAIM_START
+{"provides":[],"consumes":[],"ac_bindings":[],"tests_added":[]}
+<<<COMPLETION_CLAIM_END
+
+- `provides`: output artifact paths or module names this implementation delivers (may be empty)
+- `consumes`: input artifact paths or module names this implementation depends on (may be empty)
+- `ac_bindings`: array of {"ac_ref":"<label>","kind":"<kind>"} objects binding AC items to verifier kinds; allowed kinds: Test, GrepPresent, GrepAbsent, File, Exit, Golden, Smoke (may be empty)
+- `tests_added`: test names or test file paths added in this implementation (may be empty)
+
 Then emit the WORKER_RESULT envelope:
 
 WORKER_RESULT
-{"status":"Ok","summary":"Implemented {{ticket_id}}","files_changed":["path/to/changed/file"],"failure_reason":null,"metadata":{"commit_sha":"<HEAD SHA of feature branch after all commits>","files_changed":["path/to/changed/file"],"summary_ref":"IMPLEMENT_SUMMARY"}}
+{"status":"Ok","summary":"Implemented {{ticket_id}}","files_changed":["path/to/changed/file"],"failure_reason":null,"metadata":{"commit_sha":"<HEAD SHA of feature branch after all commits>","files_changed":["path/to/changed/file"],"summary_ref":"IMPLEMENT_SUMMARY","completion_claim_ref":"COMPLETION_CLAIM"}}
 
 - metadata.commit_sha must be the HEAD SHA of the feature branch after all commits land
 - metadata.files_changed must be the list of paths (relative to the worktree root) you wrote
 - metadata.summary_ref must point to the IMPLEMENT_SUMMARY block emitted above
+- metadata.completion_claim_ref must point to the COMPLETION_CLAIM block emitted above

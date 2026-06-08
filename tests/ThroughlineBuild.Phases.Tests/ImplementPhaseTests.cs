@@ -1118,3 +1118,283 @@ public class ImplementPhaseDebugCaptureTests
             Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
     }
 }
+
+public class ImplementPhaseClaimTests
+{
+    private const string MainSha = "0123456789abcdef0123456789abcdef01234567";
+    private const string CommitSha = "ffffffffffffffffffffffffffffffffffffffff";
+    private const string ValidClaimJson = "{\"provides\":[\"src/Foo.cs\"],\"consumes\":[],\"ac_bindings\":[],\"tests_added\":[]}";
+    private const string InvalidClaimJson = "{\"provides\":\"not-an-array\"}";
+
+    private static Ticket MakeTicket() => new Ticket(
+        Id: "TLB-1", Uuid: "ticket-uuid-1", Title: "Test ticket", Type: "feature",
+        State: TicketState.Ready, Size: Size.S, Risk: Risk.Low, DescriptionHtml: "<p>plan</p>",
+        Relations: Array.Empty<Relation>(), Labels: Array.Empty<string>(), ParentId: null);
+
+    private static BuildOptions MakeOptions() => new BuildOptions(
+        SessionId: "session-1", WorkerName: "claude-code", WorkerTimeout: TimeSpan.FromMinutes(5),
+        WorkerAllowedTools: null);
+
+    // Worker result with no completion_claim_ref in metadata (pre-claim format).
+    private static WorkerResult OkWorkerResult() => new WorkerResult(
+        Status.Ok, "implemented", new[] { "src/Foo.cs" }, null,
+        new Dictionary<string, object> { ["commit_sha"] = CommitSha });
+
+    // Worker result with completion_claim_ref in metadata and a valid COMPLETION_CLAIM block.
+    private static WorkerResult ClaimWorkerResult(string? claimJson = null) => new WorkerResult(
+        Status.Ok, "implemented with claim", new[] { "src/Foo.cs" }, null,
+        new Dictionary<string, object>
+        {
+            ["commit_sha"] = CommitSha,
+            ["completion_claim_ref"] = "COMPLETION_CLAIM"
+        },
+        Blocks: new Dictionary<string, string>
+        {
+            ["COMPLETION_CLAIM"] = claimJson ?? ValidClaimJson
+        });
+
+    // Worker result with completion_claim_ref in metadata but no Blocks dict.
+    private static WorkerResult ClaimRefButNoBlocksResult() => new WorkerResult(
+        Status.Ok, "implemented", new[] { "src/Foo.cs" }, null,
+        new Dictionary<string, object>
+        {
+            ["commit_sha"] = CommitSha,
+            ["completion_claim_ref"] = "COMPLETION_CLAIM"
+        },
+        Blocks: null);
+
+    [Fact]
+    public async Task RunAsync_ValidClaim_ReturnedInResult()
+    {
+        var ticketing = new FakeTicketing(MakeTicket());
+        var worker = new FakeWorkerAgent(ClaimWorkerResult());
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha);
+        var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.CompletionClaim);
+        Assert.Equal(new[] { "src/Foo.cs" }, result.CompletionClaim!.Provides);
+        Assert.Empty(result.CompletionClaim.Consumes);
+        Assert.Empty(result.CompletionClaim.AcBindings);
+        Assert.Empty(result.CompletionClaim.TestsAdded);
+    }
+
+    [Fact]
+    public async Task RunAsync_NoClaim_SucceedsWithNullClaim()
+    {
+        // Pre-claim worker (no completion_claim_ref in metadata) = null claim, normal success.
+        var ticketing = new FakeTicketing(MakeTicket());
+        var worker = new FakeWorkerAgent(OkWorkerResult());
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha);
+        var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Null(result.CompletionClaim);
+    }
+
+    [Fact]
+    public async Task RunAsync_MissingClaimBlock_TriggersReAskAndSucceeds()
+    {
+        // First call: completion_claim_ref present but Blocks is null -> re-ask.
+        // Second call (re-ask): valid claim -> success.
+        var ticketing = new FakeTicketing(MakeTicket());
+        var worker = new QueuedFakeWorkerAgent(new[]
+        {
+            ClaimRefButNoBlocksResult(),
+            ClaimWorkerResult()
+        });
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha);
+        var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.CompletionClaim);
+
+        var gateFailures = events.Events.Where(e => e.Kind == EventKind.GateFailure).ToList();
+        Assert.Single(gateFailures);
+        Assert.Equal("claim_invalid_first_attempt", gateFailures[0].Data["kind"].ToString());
+    }
+
+    [Fact]
+    public async Task RunAsync_InvalidClaimJson_TriggersReAskAndSucceeds()
+    {
+        // First call: completion_claim_ref present but claim JSON is invalid.
+        // Second call (re-ask): valid claim -> success.
+        var ticketing = new FakeTicketing(MakeTicket());
+        var worker = new QueuedFakeWorkerAgent(new[]
+        {
+            ClaimWorkerResult(InvalidClaimJson),
+            ClaimWorkerResult()
+        });
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha);
+        var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.CompletionClaim);
+
+        var gateFailures = events.Events.Where(e => e.Kind == EventKind.GateFailure).ToList();
+        Assert.Single(gateFailures);
+        Assert.Equal("claim_invalid_first_attempt", gateFailures[0].Data["kind"].ToString());
+    }
+
+    [Fact]
+    public async Task RunAsync_ReAskAlsoFails_HardFailsWithClearReason()
+    {
+        // Both calls produce an invalid claim -> hard-fail after re-ask.
+        var ticketing = new FakeTicketing(MakeTicket());
+        var worker = new QueuedFakeWorkerAgent(new[]
+        {
+            ClaimWorkerResult(InvalidClaimJson),
+            ClaimWorkerResult(InvalidClaimJson)
+        });
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha);
+        var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.FailureReason);
+        Assert.Contains("COMPLETION_CLAIM", result.FailureReason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("re-ask", result.FailureReason, StringComparison.OrdinalIgnoreCase);
+
+        var gateFailures = events.Events.Where(e => e.Kind == EventKind.GateFailure).ToList();
+        Assert.Single(gateFailures);
+        Assert.Equal("claim_invalid_first_attempt", gateFailures[0].Data["kind"].ToString());
+    }
+
+    [Fact]
+    public async Task RunAsync_ValidClaimWithAcBindings_ClaimTravelsToResult()
+    {
+        var claimJson =
+            "{\"provides\":[\"mod/A\"]," +
+            "\"consumes\":[\"mod/B\"]," +
+            "\"ac_bindings\":[{\"ac_ref\":\"AC-1\",\"kind\":\"Test\"},{\"ac_ref\":\"AC-2\",\"kind\":\"GrepPresent\"}]," +
+            "\"tests_added\":[\"FooTest.Method\"]}";
+
+        var ticketing = new FakeTicketing(MakeTicket());
+        var worker = new FakeWorkerAgent(ClaimWorkerResult(claimJson));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha);
+        var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.CompletionClaim);
+        var claim = result.CompletionClaim!;
+        Assert.Equal(new[] { "mod/A" }, claim.Provides);
+        Assert.Equal(new[] { "mod/B" }, claim.Consumes);
+        Assert.Equal(2, claim.AcBindings.Count);
+        Assert.Equal("AC-1", claim.AcBindings[0].AcRef);
+        Assert.Equal(VerifierKind.Test, claim.AcBindings[0].Kind);
+        Assert.Equal(new[] { "FooTest.Method" }, claim.TestsAdded);
+    }
+
+    private sealed class FakeWorkerAgent : IWorkerAgent
+    {
+        private readonly WorkerResult _result;
+        public FakeWorkerAgent(WorkerResult result) { _result = result; }
+        public string Name => "claude-code";
+        public IWorkerProgressDigester? Digester => null;
+        public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
+            => Task.FromResult(_result);
+    }
+
+    private sealed class QueuedFakeWorkerAgent : IWorkerAgent
+    {
+        private readonly Queue<WorkerResult> _results;
+        public string Name => "claude-code";
+        public IWorkerProgressDigester? Digester => null;
+        public QueuedFakeWorkerAgent(IEnumerable<WorkerResult> results) { _results = new Queue<WorkerResult>(results); }
+        public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
+            => Task.FromResult(_results.Dequeue());
+    }
+
+    private sealed class FakeTicketing : ITicketing
+    {
+        private readonly Ticket _ticket;
+        public FakeTicketing(Ticket ticket) { _ticket = ticket; }
+        public BackendCapabilities Capabilities => new BackendCapabilities(true, true, true, false);
+        public Task<Ticket> GetAsync(string id, CancellationToken ct) => Task.FromResult(_ticket);
+        public Task<IReadOnlyList<Ticket>> GetBatchAsync(IEnumerable<string> ids, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<Ticket>)new[] { _ticket });
+        public Task TransitionAsync(string id, TicketState newState, CancellationToken ct) => Task.CompletedTask;
+        public Task AppendDescriptionAsync(string id, string html, CancellationToken ct) => Task.CompletedTask;
+        public Task<string> CreateCommentAsync(string id, string html, CancellationToken ct) => Task.FromResult("c-1");
+        public Task ApplyLabelsAsync(string id, IEnumerable<string> labels, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<Relation>> GetRelationsAsync(string id, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<Relation>)Array.Empty<Relation>());
+        public Task<RollupResult> RollupParentAsync(string id, CancellationToken ct) =>
+            Task.FromResult(new RollupResult(false, null, null));
+        public Task<IReadOnlyList<TicketComment>> GetCommentsAsync(string id, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<TicketComment>)Array.Empty<TicketComment>());
+        public Task<NewTicketResult> CreateTicketAsync(string title, string? type, string descriptionHtml,
+            IReadOnlyList<string>? initialLabelNames, CancellationToken ct) => throw new NotImplementedException();
+        public Task SetParentAsync(string childUuid, string parentUuid, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<Ticket>> QueryAsync(TicketQuery query, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<Ticket>>(Array.Empty<Ticket>());
+        public Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct) =>
+            Task.CompletedTask;
+        public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) => Task.CompletedTask;
+        public Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct) => Task.CompletedTask;
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+            Task.FromResult(new CreateChildTicketsResult(
+                children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
+                Array.Empty<string>()));
+    }
+
+    private sealed class FakeEventSink : IEventSink
+    {
+        public List<WorkflowEvent> Events { get; } = new();
+        public Task EmitAsync(WorkflowEvent ev, CancellationToken ct) { Events.Add(ev); return Task.CompletedTask; }
+        public Task FlushAsync(CancellationToken ct) => Task.CompletedTask;
+    }
+
+    private sealed class FakeGitClient : IGitClient
+    {
+        private readonly string _mainSha;
+        private readonly string _headSha;
+        public FakeGitClient(string mainSha, string headSha) { _mainSha = mainSha; _headSha = headSha; }
+        public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(_mainSha);
+        public Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<WorktreeInfo>>(Array.Empty<WorktreeInfo>());
+        public Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct) =>
+            Task.FromResult(new WorktreeRemoveResult(true, null));
+        public Task<IReadOnlyList<string>> GetBranchesNotMergedAsync(string pattern, string baseBranch, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
+        public Task<WorktreeCreateResult> CreateWorktreeAsync(string worktreePath, string newBranch, string fromRef, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
+        public Task<string> HeadShaAsync(string worktreePath, CancellationToken ct) => Task.FromResult(_headSha);
+        public Task<GitDiff> DiffAsync(string fromRef, string toRef, string mainWorktreePath, bool includePatchContent, CancellationToken ct) =>
+            Task.FromResult(new GitDiff(fromRef, toRef, Array.Empty<DiffEntry>()));
+        public Task<GitOpResult> FetchAsync(string remote, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+        public Task<RebaseResult> RebaseAsync(string ontoRef, string featureWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new RebaseResult(true, false, Array.Empty<string>(), null));
+        public Task<GitOpResult> RebaseAbortAsync(string featureWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+        public Task<GitOpResult> FastForwardMergeAsync(string mergeRef, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+        public Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+        public Task<int> RevListCountAsync(string range, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(0);
+        public Task<IReadOnlyList<string>> LogOnelineAsync(string range, int limit, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
+        public Task<IReadOnlyList<string>> GetTrackedChangesAsync(string workingDirectory, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+    }
+}

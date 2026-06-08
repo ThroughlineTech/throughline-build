@@ -23,7 +23,10 @@ public record ImplementResult(
     string? WorktreePath,
     string? FailureReason,
     int ReworkRoundNumber = 0,
-    WorkerResult? EscalationWorkerResult = null);
+    WorkerResult? EscalationWorkerResult = null,
+    CompletionClaim? CompletionClaim = null,
+    long? LlmInputTokens = null,
+    long? LlmOutputTokens = null);
 
 public class ImplementPhase : IWorkflowPhase
 {
@@ -307,13 +310,17 @@ public class ImplementPhase : IWorkflowPhase
         if (verdictReason is not null) verdictData["failure_reason"] = verdictReason;
         await EmitAsync(EventKind.VerifierVerdict, ticketId, verdictData, ct).ConfigureAwait(false);
 
-        // Step 13: LlmCall event if usage present
+        // Step 13: LlmCall event if usage present; capture token counts for cost ledger.
+        long? llmInputTokens = null;
+        long? llmOutputTokens = null;
         if (workerResult.Metadata.TryGetValue("llm_usage", out var usageObj))
         {
             var llmData = LlmUsageFlattener.Flatten(usageObj);
             if (llmData is not null)
             {
                 await EmitAsync(EventKind.LlmCall, ticketId, llmData, ct).ConfigureAwait(false);
+                llmInputTokens = TryGetLong(llmData, "input_tokens");
+                llmOutputTokens = TryGetLong(llmData, "output_tokens");
             }
         }
 
@@ -400,6 +407,33 @@ public class ImplementPhase : IWorkflowPhase
             FencedBlockResolver.TryResolveRef(workerResult.Blocks, workerResult.Metadata, "summary_ref", out implementSummaryMarkdown, out _);
         }
 
+        // Step 15c: Resolve COMPLETION_CLAIM if worker opted in via completion_claim_ref metadata key.
+        // Workers that omit this key are treated as pre-claim format (null claim, proceed normally).
+        // Workers that include the key but produce an invalid or missing block get one targeted re-ask
+        // before a hard failure, keeping the anti-lazy-worker property without burning a rework round.
+        CompletionClaim? completionClaim = null;
+        if (workerResult.Metadata.ContainsKey("completion_claim_ref"))
+        {
+            if (!TryExtractClaim(workerResult.Metadata, workerResult.Blocks, out completionClaim, out var claimError))
+            {
+                await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+                {
+                    ["kind"] = "claim_invalid_first_attempt",
+                    ["detail"] = claimError ?? "unknown"
+                }, ct).ConfigureAwait(false);
+
+                var reAskInstruction = BuildClaimReAskInstruction(ticketId, canonicalBranchName, metadataCommitSha);
+                var reAskBrief = brief with { Instruction = reAskInstruction };
+                var reAskResult = await _worker.ExecuteAsync(reAskBrief, canonicalWorktreePath, workerOptions, ct).ConfigureAwait(false);
+
+                if (!TryExtractClaim(reAskResult.Metadata, reAskResult.Blocks, out completionClaim, out var reAskError))
+                {
+                    return new ImplementResult(false, ticketId, null, canonicalBranchName, canonicalWorktreePath,
+                        $"worker failed to emit a valid COMPLETION_CLAIM after re-ask: {reAskError}");
+                }
+            }
+        }
+
         // Step 16: Verify against actual HEAD; prefer actual HEAD if it differs
         var actualHeadSha = await _git.HeadShaAsync(canonicalWorktreePath, ct).ConfigureAwait(false);
         if (string.IsNullOrEmpty(actualHeadSha))
@@ -438,7 +472,8 @@ public class ImplementPhase : IWorkflowPhase
 
         // Step 19: Return success
         int reworkRound = _phaseOptions.ReviewFeedback?.ReworkRoundNumber ?? 0;
-        return new ImplementResult(true, ticketId, actualHeadSha, canonicalBranchName, canonicalWorktreePath, null, reworkRound);
+        return new ImplementResult(true, ticketId, actualHeadSha, canonicalBranchName, canonicalWorktreePath, null, reworkRound,
+            CompletionClaim: completionClaim, LlmInputTokens: llmInputTokens, LlmOutputTokens: llmOutputTokens);
     }
 
     // Salvage path for a worker that finished a clean, committed session but did not return a
@@ -610,6 +645,59 @@ public class ImplementPhase : IWorkflowPhase
         return $"{phase}: worktree dirty after worker exit - {dirtyPaths.Count} file(s) uncommitted: {sampleStr}{morePart}";
     }
 
+    // Resolves completion_claim_ref from metadata and parses the referenced block as a CompletionClaim.
+    // Returns false with a diagnostic error when the ref is absent, the block is missing or empty,
+    // or the JSON does not satisfy the CompletionClaim schema.
+    private static bool TryExtractClaim(
+        IReadOnlyDictionary<string, object> metadata,
+        IReadOnlyDictionary<string, string>? blocks,
+        out CompletionClaim? claim,
+        out string? error)
+    {
+        claim = null;
+        error = null;
+        IReadOnlyDictionary<string, string> effectiveBlocks =
+            blocks ?? new Dictionary<string, string>();
+        if (!FencedBlockResolver.TryResolveRef(effectiveBlocks, metadata, "completion_claim_ref", out var claimJson, out var refError))
+        {
+            error = refError;
+            return false;
+        }
+        if (string.IsNullOrWhiteSpace(claimJson))
+        {
+            error = "COMPLETION_CLAIM block is empty";
+            return false;
+        }
+        return CompletionClaimParser.TryParse(claimJson!, out claim, out error);
+    }
+
+    // Builds a minimal re-ask brief instruction asking the worker to emit only the COMPLETION_CLAIM
+    // block for already-committed work. Deliberately does not re-present the full implementation
+    // context to keep token cost low.
+    private static string BuildClaimReAskInstruction(string ticketId, string branchName, string? commitSha)
+    {
+        var shaNote = commitSha is not null ? $" at commit {commitSha}" : "";
+        return
+            $"[Claim re-emit only]\n\n" +
+            $"Your implementation for ticket {ticketId} has been committed to branch {branchName}{shaNote}. " +
+            $"The WORKER_RESULT you emitted did not include a valid COMPLETION_CLAIM block.\n\n" +
+            $"Emit ONLY the COMPLETION_CLAIM block for your already-committed work. " +
+            $"Do NOT make any additional code changes or commits.\n\n" +
+            $"<<<COMPLETION_CLAIM_START\n" +
+            $"{{\"provides\":[],\"consumes\":[],\"ac_bindings\":[],\"tests_added\":[]}}\n" +
+            $"<<<COMPLETION_CLAIM_END\n\n" +
+            $"- `provides`: output artifact paths or module names this implementation delivers (may be empty)\n" +
+            $"- `consumes`: input artifact paths or module names this implementation depends on (may be empty)\n" +
+            $"- `ac_bindings`: array of {{\"ac_ref\":\"<label>\",\"kind\":\"<kind>\"}} objects binding AC items to verifier kinds; " +
+            $"allowed kinds: Test, GrepPresent, GrepAbsent, File, Exit, Golden, Smoke (may be empty)\n" +
+            $"- `tests_added`: test names or test file paths added in this implementation (may be empty)\n\n" +
+            $"Then emit:\n\n" +
+            $"WORKER_RESULT\n" +
+            $"{{\"status\":\"Ok\",\"summary\":\"Claim re-emit for {ticketId}\",\"files_changed\":[]," +
+            $"\"failure_reason\":null,\"metadata\":{{\"commit_sha\":\"{commitSha ?? "unknown"}\"," +
+            $"\"files_changed\":[],\"completion_claim_ref\":\"COMPLETION_CLAIM\"}}}}";
+    }
+
     private static string? TryGetString(IReadOnlyDictionary<string, object> metadata, string key)
     {
         if (!metadata.TryGetValue(key, out var val)) return null;
@@ -617,5 +705,15 @@ public class ImplementPhase : IWorkflowPhase
         if (val is JsonElement je && je.ValueKind == JsonValueKind.String)
             return je.GetString();
         return val?.ToString();
+    }
+
+    private static long? TryGetLong(IReadOnlyDictionary<string, object> dict, string key)
+    {
+        if (!dict.TryGetValue(key, out var val)) return null;
+        if (val is int i) return i;
+        if (val is long l) return l;
+        if (val is JsonElement je && je.ValueKind == JsonValueKind.Number)
+            return je.TryGetInt64(out var jl) ? jl : null;
+        return null;
     }
 }

@@ -158,7 +158,7 @@ public class HandoffTests
         Func<BuildOptions, ImplementPhaseOptions, ImplementPhase> implFactory = (opts, phaseOpts) =>
             new ImplementPhase(ticketing, capturer, events, opts, git, phaseOptions: phaseOpts);
 
-        Func<BuildOptions, ReviewPhase> reviewFactory = opts =>
+        Func<BuildOptions, GateOutcome?, ReviewPhase> reviewFactory = (opts, _) =>
             new ReviewPhase(ticketing, reviewWorker, events, opts,
                 MakeReviewOptions(), git, verifierOverride: new HoPassVerifier());
 

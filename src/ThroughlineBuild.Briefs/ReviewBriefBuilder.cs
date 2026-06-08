@@ -24,7 +24,8 @@ public static class ReviewBriefBuilder
         GitDiff diff,
         WorkerResult implementerResult,
         IReadOnlyList<CheckResult> checkResults,
-        ProjectContext? project = null)
+        ProjectContext? project = null,
+        IReadOnlyList<SmokeSignal>? smokeSignals = null)
     {
         var proj = project ?? ProjectContext.Empty;
 
@@ -53,6 +54,11 @@ public static class ReviewBriefBuilder
         };
 
         var instruction = template.Substitute(vars);
+
+        // Append smoke signals collected by the gate as advisory context for the reviewer.
+        // Signals are non-gating (never caused a hard-fail) so they are informational priors.
+        if (smokeSignals is { Count: > 0 })
+            instruction = instruction + "\n" + BuildSmokeSignalsSection(smokeSignals);
 
         var context = new Dictionary<string, string>
         {
@@ -227,5 +233,19 @@ public static class ReviewBriefBuilder
         sb.Append(tail);
         sb.Append('\n');
         sb.Append("```\n");
+    }
+
+    private static string BuildSmokeSignalsSection(IReadOnlyList<SmokeSignal> signals)
+    {
+        var sb = new StringBuilder();
+        sb.Append("\n## Smoke signals (gate advisory)\n");
+        sb.Append("These observations were collected by the gate phase and are non-blocking. Use them as context.\n\n");
+        foreach (var s in signals)
+        {
+            var matched = s.Matched ? "ok" : "flag";
+            sb.Append($"- [{matched}] {s.Label}: {s.Details}\n");
+        }
+        sb.Append('\n');
+        return sb.ToString();
     }
 }

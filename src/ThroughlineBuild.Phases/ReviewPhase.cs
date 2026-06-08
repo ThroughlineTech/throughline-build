@@ -32,6 +32,7 @@ public class ReviewPhase : IWorkflowPhase
     private readonly IVerifier? _verifierOverride;
     private readonly AutomatedChecksRunner? _checksRunner;
     private readonly ProjectContext _project;
+    private readonly IReadOnlyList<SmokeSignal>? _preRunSmokeSignals;
 
     public ReviewPhase(
         ITicketing ticketing,
@@ -42,7 +43,8 @@ public class ReviewPhase : IWorkflowPhase
         IGitClient? gitClient = null,
         IVerifier? verifierOverride = null,
         AutomatedChecksRunner? checksRunner = null,
-        ProjectContext? project = null)
+        ProjectContext? project = null,
+        IReadOnlyList<SmokeSignal>? preRunSmokeSignals = null)
     {
         _ticketing = ticketing;
         _verifierWorker = verifierWorker;
@@ -53,6 +55,7 @@ public class ReviewPhase : IWorkflowPhase
         _verifierOverride = verifierOverride;
         _checksRunner = checksRunner;
         _project = project ?? ProjectContext.Empty;
+        _preRunSmokeSignals = preRunSmokeSignals;
     }
 
     public Phase Phase => Phase.Review;
@@ -202,7 +205,7 @@ public class ReviewPhase : IWorkflowPhase
             Size = WorkerSizeMapper.FromTicketSize(ticket.Size)
         };
         var verifier = _verifierOverride
-            ?? new WorkerAgentReviewer(_verifierWorker, ticket, checkResults, effectiveVerifierOptions, canonicalWorktreePath, _project);
+            ?? new WorkerAgentReviewer(_verifierWorker, ticket, checkResults, effectiveVerifierOptions, canonicalWorktreePath, _project, _preRunSmokeSignals);
 
         // Step 9: Emit WorkerSpawn (role = verifier)
         await EmitAsync(EventKind.WorkerSpawn, ticketId, new Dictionary<string, object>

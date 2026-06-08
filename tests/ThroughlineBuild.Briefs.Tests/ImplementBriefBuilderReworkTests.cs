@@ -1,4 +1,5 @@
 using ThroughlineBuild.Briefs;
+using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using Xunit;
 
@@ -201,5 +202,133 @@ public class ImplementBriefBuilderReworkTests
             reviewFeedback: null);
 
         Assert.Equal(expected, brief.Instruction);
+    }
+
+    // --- gate-originated rework ---
+
+    [Fact]
+    public void Build_GateFailedChecks_SectionHeadingIsGateFailure()
+    {
+        var feedback = new ReviewFeedback(
+            Rationale: "gate: build failed",
+            ChecksFailed: new[] { "build" },
+            ReworkRoundNumber: 1,
+            GateFailedChecks: new[]
+            {
+                new CheckResult("build", Passed: false, ExitCode: 1,
+                    StdoutTail: "error CS0001: something", StderrTail: "",
+                    Elapsed: TimeSpan.FromSeconds(2))
+            });
+
+        var brief = ImplementBriefBuilder.Build("claude-code", MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: feedback);
+
+        Assert.Contains("## Rework round 1 - gate failure", brief.Context["review_feedback_section"]);
+        Assert.DoesNotContain("reviewer feedback", brief.Context["review_feedback_section"]);
+    }
+
+    [Fact]
+    public void Build_GateFailedChecks_ContainsCheckNameAndExitCode()
+    {
+        var feedback = new ReviewFeedback(
+            Rationale: "gate: tests failed",
+            ChecksFailed: new[] { "tests" },
+            ReworkRoundNumber: 1,
+            GateFailedChecks: new[]
+            {
+                new CheckResult("tests", Passed: false, ExitCode: 2,
+                    StdoutTail: "1 test failed", StderrTail: "",
+                    Elapsed: TimeSpan.FromSeconds(5))
+            });
+
+        var brief = ImplementBriefBuilder.Build("claude-code", MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: feedback);
+
+        var section = brief.Context["review_feedback_section"];
+        Assert.Contains("### Failed check: tests (exit 2)", section);
+    }
+
+    [Fact]
+    public void Build_GateFailedChecks_ContainsStdoutAndStderrOutput()
+    {
+        var feedback = new ReviewFeedback(
+            Rationale: "gate: tests failed",
+            ChecksFailed: new[] { "tests" },
+            ReworkRoundNumber: 1,
+            GateFailedChecks: new[]
+            {
+                new CheckResult("tests", Passed: false, ExitCode: 1,
+                    StdoutTail: "Test output line", StderrTail: "Stderr line",
+                    Elapsed: TimeSpan.FromSeconds(3))
+            });
+
+        var brief = ImplementBriefBuilder.Build("claude-code", MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: feedback);
+
+        var section = brief.Context["review_feedback_section"];
+        Assert.Contains("Test output line", section);
+        Assert.Contains("Stderr line", section);
+        Assert.Contains("stdout:", section);
+        Assert.Contains("stderr:", section);
+    }
+
+    [Fact]
+    public void Build_GateFailedChecks_EmptyStdoutTail_OmitsStdoutBlock()
+    {
+        var feedback = new ReviewFeedback(
+            Rationale: "gate: build failed",
+            ChecksFailed: new[] { "build" },
+            ReworkRoundNumber: 1,
+            GateFailedChecks: new[]
+            {
+                new CheckResult("build", Passed: false, ExitCode: 1,
+                    StdoutTail: "", StderrTail: "error: symbol not found",
+                    Elapsed: TimeSpan.FromSeconds(1))
+            });
+
+        var brief = ImplementBriefBuilder.Build("claude-code", MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: feedback);
+
+        var section = brief.Context["review_feedback_section"];
+        Assert.DoesNotContain("stdout:", section);
+        Assert.Contains("stderr:", section);
+        Assert.Contains("error: symbol not found", section);
+    }
+
+    [Fact]
+    public void Build_NullGateFailedChecks_UsesReviewerFeedbackPath()
+    {
+        var feedback = new ReviewFeedback(
+            Rationale: "reviewer says fix it",
+            ChecksFailed: new[] { "tests" },
+            ReworkRoundNumber: 1,
+            GateFailedChecks: null);
+
+        var brief = ImplementBriefBuilder.Build("claude-code", MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: feedback);
+
+        Assert.Contains("## Rework round 1 - reviewer feedback", brief.Context["review_feedback_section"]);
+    }
+
+    [Fact]
+    public void Build_GateFailedChecks_MultipleFailedChecks_AllRendered()
+    {
+        var feedback = new ReviewFeedback(
+            Rationale: "gate: build, tests failed",
+            ChecksFailed: new[] { "build", "tests" },
+            ReworkRoundNumber: 2,
+            GateFailedChecks: new[]
+            {
+                new CheckResult("build", Passed: false, ExitCode: 1,
+                    StdoutTail: "build output", StderrTail: "",
+                    Elapsed: TimeSpan.FromSeconds(1)),
+                new CheckResult("tests", Passed: false, ExitCode: 1,
+                    StdoutTail: "tests output", StderrTail: "",
+                    Elapsed: TimeSpan.FromSeconds(2))
+            });
+
+        var brief = ImplementBriefBuilder.Build("claude-code", MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: feedback);
+
+        var section = brief.Context["review_feedback_section"];
+        Assert.Contains("### Failed check: build (exit 1)", section);
+        Assert.Contains("### Failed check: tests (exit 1)", section);
+        Assert.Contains("build output", section);
+        Assert.Contains("tests output", section);
+        Assert.Contains("Rework round 2", section);
     }
 }

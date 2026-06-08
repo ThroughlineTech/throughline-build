@@ -71,6 +71,8 @@ internal sealed class BatchTicketResultDto
 [JsonSerializable(typeof(BatchTicketResult))]
 [JsonSerializable(typeof(BatchWorkerResult))]
 [JsonSerializable(typeof(Dictionary<string, JsonElement>))]
+[JsonSerializable(typeof(CompletionClaimDto))]
+[JsonSerializable(typeof(AcBindingDto))]
 internal partial class WorkersCommonJsonContext : JsonSerializerContext { }
 
 /// <summary>
