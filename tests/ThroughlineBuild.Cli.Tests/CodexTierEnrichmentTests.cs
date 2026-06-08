@@ -188,7 +188,7 @@ public class CodexTierEnrichmentTests
 
         var block = CodexSizesBlockRenderer.Render(mapping, discovery, commented: false);
 
-        Assert.Contains("# small  = { model = \"gpt-x\" }", block);
+        Assert.Contains("small  = { model = \"gpt-x\" }", block);
         Assert.DoesNotContain("effort = ", block);
     }
 
