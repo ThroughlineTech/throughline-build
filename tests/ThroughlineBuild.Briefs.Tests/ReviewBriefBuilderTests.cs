@@ -442,4 +442,133 @@ public class ReviewBriefBuilderTests
 
         Assert.Null(ex);
     }
+
+    // ---------------------------------------------------------------------------
+    // Quiet-on-pass / loud-on-fail convention for automated checks.
+    //
+    // The brief becomes cached LLM context, so a passing check's stdout/stderr is
+    // pure cache weight with zero actionable content. The convention: emit only a
+    // one-line status for a passing check, and surface the captured tails ONLY when
+    // a check fails. These tests pin that convention so a future change cannot start
+    // dumping passing-check output into the brief.
+    // ---------------------------------------------------------------------------
+
+    [Fact]
+    public void Build_PassingCheck_OmitsStdoutAndStderrTails()
+    {
+        var checks = new[]
+        {
+            new CheckResult("build", true, 0, "PASS_STDOUT_SENTINEL_XYZ", "PASS_STDERR_SENTINEL_XYZ", TimeSpan.FromSeconds(1))
+        };
+
+        var brief = ReviewBriefBuilder.Build(
+            "claude-code",
+            MinimalTicket(),
+            MinimalDiff(),
+            MinimalImplementerResult(),
+            checks);
+
+        Assert.Contains("build: PASS", brief.Instruction);
+        // Load-bearing: a passing check's captured output is never surfaced into the brief.
+        Assert.DoesNotContain("PASS_STDOUT_SENTINEL_XYZ", brief.Instruction);
+        Assert.DoesNotContain("PASS_STDERR_SENTINEL_XYZ", brief.Instruction);
+    }
+
+    [Fact]
+    public void Build_FailingCheck_SurfacesStdoutAndStderrTails()
+    {
+        var checks = new[]
+        {
+            new CheckResult("build", false, 1, "FAIL_STDOUT_SENTINEL_XYZ", "FAIL_STDERR_SENTINEL_XYZ", TimeSpan.FromSeconds(1))
+        };
+
+        var brief = ReviewBriefBuilder.Build(
+            "claude-code",
+            MinimalTicket(),
+            MinimalDiff(),
+            MinimalImplementerResult(),
+            checks);
+
+        Assert.Contains("build: FAIL", brief.Instruction);
+        Assert.Contains("FAIL_STDOUT_SENTINEL_XYZ", brief.Instruction);
+        Assert.Contains("FAIL_STDERR_SENTINEL_XYZ", brief.Instruction);
+    }
+
+    [Fact]
+    public void Build_MixedChecks_OmitsPassingTailsButSurfacesFailingTails()
+    {
+        // Proves the omission is per-check, not all-or-nothing: a passing check next to a
+        // failing check still has its tails dropped while the failing check's tails appear.
+        var checks = new[]
+        {
+            new CheckResult("build", true, 0, "PASS_STDOUT_SENTINEL_XYZ", "PASS_STDERR_SENTINEL_XYZ", TimeSpan.FromSeconds(1)),
+            new CheckResult("tests", false, 1, "FAIL_STDOUT_SENTINEL_XYZ", "FAIL_STDERR_SENTINEL_XYZ", TimeSpan.FromSeconds(1))
+        };
+
+        var brief = ReviewBriefBuilder.Build(
+            "claude-code",
+            MinimalTicket(),
+            MinimalDiff(),
+            MinimalImplementerResult(),
+            checks);
+
+        Assert.Contains("build: PASS", brief.Instruction);
+        Assert.Contains("tests: FAIL", brief.Instruction);
+        Assert.DoesNotContain("PASS_STDOUT_SENTINEL_XYZ", brief.Instruction);
+        Assert.DoesNotContain("PASS_STDERR_SENTINEL_XYZ", brief.Instruction);
+        Assert.Contains("FAIL_STDOUT_SENTINEL_XYZ", brief.Instruction);
+        Assert.Contains("FAIL_STDERR_SENTINEL_XYZ", brief.Instruction);
+    }
+
+    // BatchReviewBriefBuilder.BuildAutomatedChecksSection uses the identical per-check
+    // pattern; pin the same convention there. Wiring the batch inputs is a single ticket
+    // plus its BatchTicketResult and a base ref.
+    private static BatchTicketResult MinimalBatchResult() => new BatchTicketResult(
+        TicketId: "TLB-1",
+        CommitSha: "abcdef1234567",
+        StackPosition: 1,
+        FilesChanged: Array.Empty<string>(),
+        SummaryRef: "summary-ref");
+
+    [Fact]
+    public void BatchBuild_PassingCheck_OmitsStdoutAndStderrTails()
+    {
+        var checks = new[]
+        {
+            new CheckResult("build", true, 0, "PASS_STDOUT_SENTINEL_XYZ", "PASS_STDERR_SENTINEL_XYZ", TimeSpan.FromSeconds(1))
+        };
+
+        var brief = BatchReviewBriefBuilder.Build(
+            "claude-code",
+            new[] { MinimalTicket() },
+            new[] { MinimalBatchResult() },
+            "origin/main",
+            MinimalDiff(),
+            checks);
+
+        Assert.Contains("build: PASS", brief.Instruction);
+        Assert.DoesNotContain("PASS_STDOUT_SENTINEL_XYZ", brief.Instruction);
+        Assert.DoesNotContain("PASS_STDERR_SENTINEL_XYZ", brief.Instruction);
+    }
+
+    [Fact]
+    public void BatchBuild_FailingCheck_SurfacesStdoutAndStderrTails()
+    {
+        var checks = new[]
+        {
+            new CheckResult("build", false, 1, "FAIL_STDOUT_SENTINEL_XYZ", "FAIL_STDERR_SENTINEL_XYZ", TimeSpan.FromSeconds(1))
+        };
+
+        var brief = BatchReviewBriefBuilder.Build(
+            "claude-code",
+            new[] { MinimalTicket() },
+            new[] { MinimalBatchResult() },
+            "origin/main",
+            MinimalDiff(),
+            checks);
+
+        Assert.Contains("build: FAIL", brief.Instruction);
+        Assert.Contains("FAIL_STDOUT_SENTINEL_XYZ", brief.Instruction);
+        Assert.Contains("FAIL_STDERR_SENTINEL_XYZ", brief.Instruction);
+    }
 }
