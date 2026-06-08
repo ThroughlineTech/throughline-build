@@ -1297,8 +1297,34 @@ public class ChainPhase
         // exists in the branch in declared stack order. Fail before any marker is posted
         // when the check does not hold, naming the first ticket that fails.
         var verifyBase = !string.IsNullOrEmpty(mainSha) ? mainSha : baseRef;
+
+        // Prefer the worker's per-ticket self-report; if it omitted the tickets array,
+        // reconstruct attribution from the actual commits. The brief mandates one commit
+        // per ticket in declared stack order, so the commits map 1:1 onto the tickets -
+        // git is the source of truth and a forgotten echo must not discard real work.
+        var reportedTickets = workerResult.Tickets;
+        if (reportedTickets is null || reportedTickets.Count == 0)
+        {
+            var recon = await BatchCommitVerifier
+                .ReconstructFromGitAsync(
+                    _git, sharedWorktreePath, verifyBase,
+                    batchTickets.Select(t => t.Id).ToList(), ct)
+                .ConfigureAwait(false);
+            if (!recon.Success)
+            {
+                batchSw.Stop();
+                return new BatchImplementOutcome(
+                    batchTickets.Select(t => new ChainResult(
+                        t.Id, Array.Empty<ChainStep>(),
+                        ChainOutcome.StoppedAtImplement, batchSw.Elapsed,
+                        recon.FailureReason)).ToList().AsReadOnly(),
+                    null, batchBranchName, verifyBase);
+            }
+            reportedTickets = recon.ConfirmedTickets;
+        }
+
         var verifyResult = await BatchCommitVerifier
-            .VerifyAsync(_git, sharedWorktreePath, verifyBase, workerResult.Tickets, ct)
+            .VerifyAsync(_git, sharedWorktreePath, verifyBase, reportedTickets, ct)
             .ConfigureAwait(false);
         if (!verifyResult.Success)
         {
@@ -1324,37 +1350,52 @@ public class ChainPhase
             var perTicket = perTicketResults.FirstOrDefault(
                 r => string.Equals(r.TicketId, ticket.Id, StringComparison.Ordinal));
 
-            if (perTicket is not null)
+            if (perTicket is null)
             {
-                // Resolve per-ticket summary markdown from the worker's fenced blocks (best-effort).
-                string summaryHtml = "";
-                if (workerResult.Blocks is not null &&
-                    !string.IsNullOrEmpty(perTicket.SummaryRef) &&
-                    workerResult.Blocks.TryGetValue(perTicket.SummaryRef, out var summaryMarkdown) &&
-                    !string.IsNullOrEmpty(summaryMarkdown))
-                {
-                    summaryHtml = MarkdownRenderer.Render(summaryMarkdown);
-                }
-
-                // Post the implemented_at marker in the same shape as a single-ticket run.
-                // Batch fields use parens (not brackets) so the marker parser does not read
-                // them as additional markers.
-                var commentHtml =
-                    $"<p>[implemented_at: {perTicket.CommitSha}] (branch {batchBranchName})" +
-                    $" (batch: stack_position={perTicket.StackPosition})</p>{summaryHtml}";
-                try
-                {
-                    await _ticketing.CreateCommentAsync(ticket.Id, commentHtml, ct).ConfigureAwait(false);
-                }
-                catch { /* non-fatal: marker posting failure must not block the batch result */ }
-
-                // Transition InProgress -> InReview to match single-ticket run observable state.
-                try
-                {
-                    await _ticketing.TransitionAsync(ticket.Id, TicketState.InReview, ct).ConfigureAwait(false);
-                }
-                catch { /* non-fatal: transition failure must not block the batch result */ }
+                // No commit attribution for this ticket: without a SHA we cannot post the
+                // implemented_at marker, transition to InReview, or ship it. Stop it
+                // explicitly rather than laundering it into a BatchImplemented success that
+                // never advances - that silent half-complete is what made a fully-committed
+                // batch read as "child did not complete" to the parent chain.
+                results.Add(new ChainResult(
+                    TicketId: ticket.Id,
+                    Steps: Array.Empty<ChainStep>(),
+                    Outcome: ChainOutcome.StoppedAtImplement,
+                    TotalDuration: batchSw.Elapsed,
+                    FinalRationale:
+                        $"batch implement: no commit attribution for {ticket.Id}; the worker " +
+                        "self-report omitted it and it could not be reconstructed from git"));
+                continue;
             }
+
+            // Resolve per-ticket summary markdown from the worker's fenced blocks (best-effort).
+            string summaryHtml = "";
+            if (workerResult.Blocks is not null &&
+                !string.IsNullOrEmpty(perTicket.SummaryRef) &&
+                workerResult.Blocks.TryGetValue(perTicket.SummaryRef, out var summaryMarkdown) &&
+                !string.IsNullOrEmpty(summaryMarkdown))
+            {
+                summaryHtml = MarkdownRenderer.Render(summaryMarkdown);
+            }
+
+            // Post the implemented_at marker in the same shape as a single-ticket run.
+            // Batch fields use parens (not brackets) so the marker parser does not read
+            // them as additional markers.
+            var commentHtml =
+                $"<p>[implemented_at: {perTicket.CommitSha}] (branch {batchBranchName})" +
+                $" (batch: stack_position={perTicket.StackPosition})</p>{summaryHtml}";
+            try
+            {
+                await _ticketing.CreateCommentAsync(ticket.Id, commentHtml, ct).ConfigureAwait(false);
+            }
+            catch { /* non-fatal: marker posting failure must not block the batch result */ }
+
+            // Transition InProgress -> InReview to match single-ticket run observable state.
+            try
+            {
+                await _ticketing.TransitionAsync(ticket.Id, TicketState.InReview, ct).ConfigureAwait(false);
+            }
+            catch { /* non-fatal: transition failure must not block the batch result */ }
 
             var implStep = new ChainStep(
                 PhaseName: "batch-implement",
@@ -1370,9 +1411,7 @@ public class ChainPhase
                 Steps: new[] { implStep },
                 Outcome: ChainOutcome.BatchImplemented,
                 TotalDuration: batchSw.Elapsed,
-                FinalRationale: perTicket is not null
-                    ? $"batch implement succeeded; commit {perTicket.CommitSha}"
-                    : "batch implement succeeded"));
+                FinalRationale: $"batch implement succeeded; commit {perTicket.CommitSha}"));
         }
 
         return new BatchImplementOutcome(

@@ -115,6 +115,66 @@ internal static class BatchCommitVerifier
         return new VerifyResult(true, null, sortedTickets.AsReadOnly());
     }
 
+    /// <summary>
+    /// Reconstructs per-ticket commit attribution from git when a batch session
+    /// succeeded but the worker omitted (or emptied) its self-reported <c>tickets</c>
+    /// array. The batch brief mandates exactly one commit per ticket in declared stack
+    /// order, so the commits in <c><paramref name="baseRef"/>..HEAD</c> map 1:1 onto
+    /// <paramref name="declaredTicketIds"/> - oldest commit = stack_position 1, HEAD =
+    /// the last ticket. This keeps a forgotten self-report from discarding work that is
+    /// already correctly committed: git, not the worker's echo, is the source of truth.
+    ///
+    /// Fails (rather than guess) when the commit count does not match the ticket count,
+    /// since the one-commit-per-ticket assumption no longer holds and a wrong attribution
+    /// would ship the wrong diff under the wrong ticket. The resulting list is suitable to
+    /// pass straight back into <see cref="VerifyAsync"/>, which re-checks worktree
+    /// cleanliness and commit order against the same git state.
+    /// </summary>
+    internal static async Task<VerifyResult> ReconstructFromGitAsync(
+        IGitClient git,
+        string worktreePath,
+        string baseRef,
+        IReadOnlyList<string> declaredTicketIds,
+        CancellationToken ct)
+    {
+        if (declaredTicketIds.Count == 0)
+            return new VerifyResult(true, null, Array.Empty<BatchTicketResult>());
+
+        var actualShas = (await git
+                .LogShasAsync($"{baseRef}..HEAD", 0, worktreePath, ct)
+                .ConfigureAwait(false))
+            .Where(s => !string.IsNullOrEmpty(s))
+            .ToList();
+
+        if (actualShas.Count == 0)
+            return Fail(
+                "batch self-report was missing and git reported no commits since base; " +
+                "cannot reconstruct per-ticket commit attribution");
+
+        if (actualShas.Count != declaredTicketIds.Count)
+            return Fail(
+                $"batch self-report was missing and the commit count ({actualShas.Count}) does " +
+                $"not match the ticket count ({declaredTicketIds.Count}); cannot safely attribute " +
+                "commits to tickets (the batch brief requires exactly one commit per ticket)");
+
+        // One commit per ticket in declared stack order. actualShas is newest-first, so the
+        // oldest commit is stack_position 1 (the first ticket) and HEAD is the last ticket.
+        var reconstructed = new List<BatchTicketResult>(declaredTicketIds.Count);
+        for (int i = 0; i < declaredTicketIds.Count; i++)
+        {
+            var sha = actualShas[actualShas.Count - 1 - i];
+            int stackPosition = i + 1;
+            reconstructed.Add(new BatchTicketResult(
+                declaredTicketIds[i],
+                sha,
+                stackPosition,
+                Array.Empty<string>(),
+                $"IMPLEMENT_SUMMARY_{stackPosition}"));
+        }
+
+        return new VerifyResult(true, null, reconstructed.AsReadOnly());
+    }
+
     private static VerifyResult Fail(string reason) =>
         new(false, reason, Array.Empty<BatchTicketResult>());
 }
