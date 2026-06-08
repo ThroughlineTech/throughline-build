@@ -89,7 +89,9 @@ verifier_timeout_minutes = 15
 verifier_allowed_tools = ["Read", "Grep", "Glob"]
 
 # Each [[review.checks]] entry defines an automated check run before the verifier.
-# Failures are surfaced to the verifier but do not short-circuit the review.
+# role = "gating"   -> non-zero exit hard-fails the gate; use for build, test, typecheck.
+# role = "advisory" -> failure recorded and shown to verifier, never hard-fails; use for lint, format.
+# Absent role defaults to "gating". A check absent from config is not-configured, never a failure.
 [[review.checks]]
 # Human-readable name shown in verifier context and event log.
 name = "build"
@@ -99,12 +101,24 @@ executable = "dotnet"
 arguments = ["build", "--no-restore", "-c", "Release", "--nologo", "-v", "q"]
 # Maximum time this check may run before it is killed and treated as failed.
 timeout_minutes = 5
+# Gating: build failure hard-fails the gate; the implementer cannot proceed to review.
+role = "gating"
 
 [[review.checks]]
 name = "test"
 executable = "dotnet"
+# Pass --no-build so dotnet test does not recompile; build already ran above.
 arguments = ["test", "--no-build", "-c", "Release", "--nologo", "-v", "q", "--logger", "console;verbosity=minimal"]
 timeout_minutes = 10
+role = "gating"
+
+# Advisory check example (lint/format): records result, never hard-fails.
+# [[review.checks]]
+# name = "lint"
+# executable = "dotnet"
+# arguments = ["format", "--verify-no-changes"]
+# timeout_minutes = 5
+# role = "advisory"
 
 # [ship] is optional - omit entirely to use defaults (remote="origin", base_branch="main",
 # delete_feature_branch=true, no regression_checks).
@@ -119,12 +133,14 @@ name = "build"
 executable = "dotnet"
 arguments = ["build", "--nologo", "--configuration", "Release", "-v", "q"]
 timeout_minutes = 5
+role = "gating"
 
 [[ship.regression_checks]]
 name = "test"
 executable = "dotnet"
 arguments = ["test", "--nologo", "--configuration", "Release", "--no-build", "-v", "q", "--logger", "console;verbosity=minimal"]
 timeout_minutes = 10
+role = "gating"
 
 # [project] is optional - omit entirely to skip project-aware brief enrichment.
 [project]

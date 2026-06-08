@@ -1,4 +1,5 @@
 using ThroughlineBuild.Cli;
+using ThroughlineBuild.Contracts;
 using Xunit;
 
 namespace ThroughlineBuild.Cli.Tests;
@@ -1261,6 +1262,112 @@ max_tickets = 0
         try
         {
             Assert.Throws<ConfigException>(() => BuildConfigLoader.Load(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_ReviewChecks_AbsentRole_DefaultsToGating()
+    {
+        var toml = ValidToml + """
+
+[[review.checks]]
+name = "build"
+executable = "dotnet"
+arguments = ["build"]
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Single(config.Review.Checks);
+            Assert.Equal(CheckRole.Gating, config.Review.Checks[0].Role);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_ReviewChecks_ExplicitGatingRole_Parsed()
+    {
+        var toml = ValidToml + """
+
+[[review.checks]]
+name = "build"
+executable = "dotnet"
+role = "gating"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Equal(CheckRole.Gating, config.Review.Checks[0].Role);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_ReviewChecks_AdvisoryRole_Parsed()
+    {
+        var toml = ValidToml + """
+
+[[review.checks]]
+name = "lint"
+executable = "dotnet"
+arguments = ["format", "--verify-no-changes"]
+role = "advisory"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Equal(CheckRole.Advisory, config.Review.Checks[0].Role);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_ReviewChecks_InvalidRole_ThrowsConfigException()
+    {
+        var toml = ValidToml + """
+
+[[review.checks]]
+name = "build"
+executable = "dotnet"
+role = "blocking"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var ex = Assert.Throws<ConfigException>(() => BuildConfigLoader.Load(path));
+            Assert.Contains("role", ex.Message);
+            Assert.Contains("blocking", ex.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_ReviewChecks_Absent_ReturnsEmpty_NotFailure()
+    {
+        var path = WriteToml(ValidToml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Empty(config.Review.Checks);
         }
         finally
         {

@@ -244,7 +244,7 @@ public static class BuildConfigLoader
 
     private static readonly HashSet<string> KnownCheckEntryKeys = new(StringComparer.Ordinal)
     {
-        "name", "executable", "arguments", "timeout_minutes"
+        "name", "executable", "arguments", "timeout_minutes", "role"
     };
 
     private static readonly HashSet<string> KnownShipKeys = new(StringComparer.Ordinal)
@@ -453,6 +453,18 @@ public static class BuildConfigLoader
         return section;
     }
 
+    private static CheckRole ParseCheckRole(TomlTable entry, string context)
+    {
+        var raw = OptionalString(entry, "role", "gating");
+        return raw.ToLowerInvariant() switch
+        {
+            "gating"   => CheckRole.Gating,
+            "advisory" => CheckRole.Advisory,
+            _ => throw new ConfigException(
+                $"key 'role' in [{context}] must be either \"gating\" or \"advisory\", got \"{raw}\"")
+        };
+    }
+
     private static string RequireString(TomlTable section, string sectionName, string key)
     {
         if (!section.TryGetValue(key, out var val))
@@ -656,11 +668,13 @@ public static class BuildConfigLoader
                 var executable = RequireString(entry, "review.checks", "executable");
                 var arguments = OptionalStringList(entry, "arguments", Array.Empty<string>());
                 var timeoutMins = OptionalInt(entry, "timeout_minutes", 5);
+                var role = ParseCheckRole(entry, "review.checks");
                 checks.Add(new CheckSpec(
                     Name: name,
                     Executable: executable,
                     Arguments: arguments,
-                    Timeout: TimeSpan.FromMinutes(timeoutMins)));
+                    Timeout: TimeSpan.FromMinutes(timeoutMins),
+                    Role: role));
             }
         }
 
@@ -700,11 +714,13 @@ public static class BuildConfigLoader
                 var executable = RequireString(entry, "ship.regression_checks", "executable");
                 var arguments = OptionalStringList(entry, "arguments", Array.Empty<string>());
                 var timeoutMins = OptionalInt(entry, "timeout_minutes", 5);
+                var role = ParseCheckRole(entry, "ship.regression_checks");
                 checks.Add(new CheckSpec(
                     Name: name,
                     Executable: executable,
                     Arguments: arguments,
-                    Timeout: TimeSpan.FromMinutes(timeoutMins)));
+                    Timeout: TimeSpan.FromMinutes(timeoutMins),
+                    Role: role));
             }
         }
 
