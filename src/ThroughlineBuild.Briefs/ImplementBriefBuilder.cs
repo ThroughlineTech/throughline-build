@@ -1,3 +1,4 @@
+using System.Text;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Helpers;
 
@@ -102,13 +103,32 @@ public static class ImplementBriefBuilder
         if (reviewFeedback is null)
             return "";
 
+        var priorContextSection = BuildPriorImplementContextSection(reworkContext);
+
+        if (reviewFeedback.GateFailedChecks is { Count: > 0 })
+            return BuildGateFailureFeedbackSection(reviewFeedback, priorContextSection);
+
         var checksList = reviewFeedback.ChecksFailed.Count > 0
             ? string.Join("\n", reviewFeedback.ChecksFailed.Select(c => $"- {c}"))
             : "(none)";
 
-        var priorContextSection = BuildPriorImplementContextSection(reworkContext);
-
         return $"\n## Rework round {reviewFeedback.ReworkRoundNumber} - reviewer feedback\n\n{reviewFeedback.Rationale}\n\nChecks failed:\n{checksList}{priorContextSection}";
+    }
+
+    private static string BuildGateFailureFeedbackSection(ReviewFeedback reviewFeedback, string priorContextSection)
+    {
+        var sb = new StringBuilder();
+        sb.Append($"\n## Rework round {reviewFeedback.ReworkRoundNumber} - gate failure\n\n{reviewFeedback.Rationale}");
+        foreach (var check in reviewFeedback.GateFailedChecks!)
+        {
+            sb.Append($"\n\n### Failed check: {check.Name} (exit {check.ExitCode})");
+            if (!string.IsNullOrWhiteSpace(check.StdoutTail))
+                sb.Append($"\n\nstdout:\n```\n{check.StdoutTail.TrimEnd()}\n```");
+            if (!string.IsNullOrWhiteSpace(check.StderrTail))
+                sb.Append($"\n\nstderr:\n```\n{check.StderrTail.TrimEnd()}\n```");
+        }
+        sb.Append(priorContextSection);
+        return sb.ToString();
     }
 
     private static string BuildPriorImplementContextSection(ReworkBriefContext? reworkContext)

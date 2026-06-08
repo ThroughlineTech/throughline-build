@@ -192,4 +192,21 @@ public class ImplementBriefBuilderTests
 
         Assert.Equal(expected, brief.Instruction);
     }
+
+    [Fact]
+    public void Build_MatchesSnapshot_GateRework()
+    {
+        var expected = SnapshotLoader.Load("implement-gate-rework.txt");
+
+        var brief = ImplementBriefBuilder.Build(
+            "claude-code",
+            SnapshotFixtures.Ticket(),
+            SnapshotFixtures.Repo(),
+            SnapshotFixtures.FixtureBranch,
+            SnapshotFixtures.FixtureWorktree,
+            reviewFeedback: SnapshotFixtures.GateFeedback());
+
+        Assert.Equal(expected, brief.Instruction);
+    }
+
 }

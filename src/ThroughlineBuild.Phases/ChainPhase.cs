@@ -640,15 +640,16 @@ public class ChainPhase
                 {
                     // Gate already transitioned InReview -> InProgress. Re-enter the rework loop
                     // with the gate failure as feedback so the next implement knows what broke.
-                    var gatingFailed = gateOutcome.CheckResults
+                    var gatingFailedResults = gateOutcome.CheckResults
                         .Where(r => r.Role == CheckRole.Gating && !r.Passed && !r.Skipped)
-                        .Select(r => r.Name)
                         .ToList();
+                    var gatingFailed = gatingFailedResults.Select(r => r.Name).ToList();
                     var gateRationale = gateOutcome.HardFailReason ?? "gate: gating checks failed";
 
                     if (round < MaxReworkRounds)
                     {
-                        feedback = new ReviewFeedback(gateRationale, gatingFailed, round + 1);
+                        feedback = new ReviewFeedback(gateRationale, gatingFailed, round + 1,
+                            GateFailedChecks: gatingFailedResults);
                         await _events.EmitAsync(new WorkflowEvent(
                             SessionId: chainSessionId,
                             Timestamp: DateTimeOffset.UtcNow,

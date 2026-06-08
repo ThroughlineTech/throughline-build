@@ -1,0 +1,93 @@
+# Implement Phase Brief
+
+You are an implementing agent. Your job is to apply the plan recorded in the ticket description to the working tree, committing logical units to the feature branch.
+
+## Ticket
+- Id: TLB-SNAP
+- Title: Snapshot fixture ticket
+- Type: feature
+- Size: M
+- Risk: Medium
+
+## Relations
+- blocks: TLB-100
+- blocked_by: TLB-99
+
+## Rework round 1 - gate failure
+
+gate: tests failed
+
+### Failed check: tests (exit 1)
+
+stdout:
+```
+Test run for src/Foo.Tests/bin/Debug/Foo.Tests.dll (.NETCoreApp,Version=v10.0)
+Failed  FooTests.ParseTest [12ms]
+  Error Message:
+   Assert.Equal() Failure
+  Expected: 42
+  Actual: 0
+Failed! - Failed: 1, Passed: 0
+```
+
+## Plan (from ticket description)
+The ticket description (raw HTML) contains the planning output from the prior phase. Read it directly; do not re-render.
+
+<h2>Plan</h2><p>Implement the fixture feature.</p><ul><li>Step 1</li><li>Step 2</li></ul>
+
+## Worktree and branch
+- Worktree path: /repo/.worktrees/ticket-tlb-snap-fixture
+- Branch: ticket/tlb-snap-fixture
+- Base SHA (origin/main): abc1234567890def
+
+## Constraints
+- Work only inside the worktree at /repo/.worktrees/ticket-tlb-snap-fixture
+- Commit all changes locally on branch ticket/tlb-snap-fixture
+- Do NOT force-push, do NOT rebase, do NOT mutate the main branch
+- Do NOT write outside the worktree
+- Do NOT use git stash or the shared stash stack; the stash stack is repo-global and leaks across worktrees, which can corrupt a later ticket's working tree. If you need a clean state to build, build in place rather than stashing.
+
+## Golden and snapshot tests
+
+For golden/snapshot tests, use record-then-justify. Write the production code first, then run the code or test harness and capture its actual output as the golden fixture. If the project has a record/update flag or fixture-regeneration command, use that convention; if it does not, capture the real output verbatim and write that captured output to the fixture. Do NOT hand-author the expected string and iterate until it matches.
+
+Record mode is cheaper than an iterate-until-match loop, but it is also more dangerous: it can silently enshrine wrong output as the expected fixture. The justification step is mandatory and is the point of the process. After recording the fixture, justify the captured output against the ticket's acceptance criteria or spec: explain what the golden represents and why this exact output is correct. Do not justify it by saying the test passes, and do not rubber-stamp it as "looks right". If you cannot justify the captured output against the spec, stop and fix the production code before committing the fixture.
+
+Include a short golden-justification note in `IMPLEMENT_SUMMARY` for every golden/snapshot fixture you record or update. Tie the note to the spec or acceptance criteria so review has something concrete to check beyond the captured blob.
+
+## Obsolete detection (suppressed on rework)
+
+This is a rework round. Commits already on this branch are your own prior-round work - do NOT raise an obsolete escalation against them. Apply the reviewer feedback above. If the feedback is genuinely already satisfied by the current tree, re-affirm with `Status=Ok` and report the current HEAD SHA; never emit `Status=Escalate` with reason `obsolete` in a rework round.
+
+## Required output
+
+Before emitting the WORKER_RESULT envelope, emit your implementation summary as a named fenced block:
+
+<<<IMPLEMENT_SUMMARY_START
+Write a concise summary of what you implemented. This can include:
+- Which files were changed and why
+- Key design decisions made
+- Any non-obvious implementation details
+This block can contain code snippets, shell commands, file paths, and any characters - no JSON escaping needed here.
+<<<IMPLEMENT_SUMMARY_END
+
+Then emit a completion claim that describes what this implementation delivers:
+
+<<<COMPLETION_CLAIM_START
+{"provides":[],"consumes":[],"ac_bindings":[],"tests_added":[]}
+<<<COMPLETION_CLAIM_END
+
+- `provides`: output artifact paths or module names this implementation delivers (may be empty)
+- `consumes`: input artifact paths or module names this implementation depends on (may be empty)
+- `ac_bindings`: array of {"ac_ref":"<label>","kind":"<kind>"} objects binding AC items to verifier kinds; allowed kinds: Test, GrepPresent, GrepAbsent, File, Exit, Golden, Smoke (may be empty)
+- `tests_added`: test names or test file paths added in this implementation (may be empty)
+
+Then emit the WORKER_RESULT envelope:
+
+WORKER_RESULT
+{"status":"Ok","summary":"Implemented TLB-SNAP","files_changed":["path/to/changed/file"],"failure_reason":null,"metadata":{"commit_sha":"<HEAD SHA of feature branch after all commits>","files_changed":["path/to/changed/file"],"summary_ref":"IMPLEMENT_SUMMARY","completion_claim_ref":"COMPLETION_CLAIM"}}
+
+- metadata.commit_sha must be the HEAD SHA of the feature branch after all commits land
+- metadata.files_changed must be the list of paths (relative to the worktree root) you wrote
+- metadata.summary_ref must point to the IMPLEMENT_SUMMARY block emitted above
+- metadata.completion_claim_ref must point to the COMPLETION_CLAIM block emitted above
