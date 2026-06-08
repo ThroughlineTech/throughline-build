@@ -18,4 +18,5 @@ public record CheckResult(
     string StdoutTail,     // last ~4 KB of stdout
     string StderrTail,     // last ~4 KB of stderr
     TimeSpan Elapsed,
-    CheckRole Role = CheckRole.Gating);
+    CheckRole Role = CheckRole.Gating,
+    bool Skipped = false); // true when the check is absent from config; never counts as a failure

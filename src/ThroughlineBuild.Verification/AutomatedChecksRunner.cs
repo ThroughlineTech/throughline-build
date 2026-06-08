@@ -56,6 +56,22 @@ public class AutomatedChecksRunner
         return results;
     }
 
+    // Run a single named check from a configured list against the given worktree.
+    // Returns Skipped=true when the check name is absent from specs, so callers
+    // can distinguish "not configured" from "ran and failed" without treating it
+    // as a gate-failing outcome.
+    public virtual async Task<CheckResult> RunNamedAsync(
+        string checkName,
+        IReadOnlyList<CheckSpec> specs,
+        string workingDirectory,
+        CancellationToken ct)
+    {
+        var spec = specs.FirstOrDefault(s => s.Name == checkName);
+        if (spec is null)
+            return new CheckResult(checkName, false, 0, "", "", TimeSpan.Zero, Skipped: true);
+        return await RunSingleAsync(spec, workingDirectory, ct);
+    }
+
     private static async Task<CheckResult> RunSingleAsync(
         CheckSpec spec,
         string workingDirectory,

@@ -119,6 +119,63 @@ public class AutomatedChecksRunnerTests
         Assert.Contains("timeout after", results[0].StderrTail, StringComparison.OrdinalIgnoreCase);
     }
 
+    // --- Tests (f-h): RunNamedAsync - gate-granularity ---
+
+    // Test (f): Named check found, exits zero => Passed=true, Skipped=false, Elapsed>Zero
+    [Fact]
+    public async Task RunNamed_ConfiguredCheck_ExitZero_ReturnsPassed()
+    {
+        var runner = new AutomatedChecksRunner();
+        var specs = new[]
+        {
+            Spec("version", "dotnet", new[] { "--version" })
+        };
+
+        var result = await runner.RunNamedAsync("version", specs, Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.True(result.Passed, $"configured check should pass; stderr={result.StderrTail}");
+        Assert.False(result.Skipped, "configured check should not be skipped");
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(result.Elapsed > TimeSpan.Zero, "elapsed should be > Zero");
+    }
+
+    // Test (g): Named check found, exits non-zero => Passed=false, Skipped=false, Elapsed>Zero
+    [Fact]
+    public async Task RunNamed_ConfiguredCheck_ExitNonZero_ReturnsFailed()
+    {
+        var runner = new AutomatedChecksRunner();
+        var specs = new[]
+        {
+            Spec("fail", "cmd", new[] { "/c", "exit 1" })
+        };
+
+        var result = await runner.RunNamedAsync("fail", specs, Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.False(result.Passed, "non-zero exit should be Passed=false");
+        Assert.False(result.Skipped, "configured check should not be skipped");
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.True(result.Elapsed > TimeSpan.Zero, "elapsed should be > Zero");
+    }
+
+    // Test (h): Named check not in list => Skipped=true, Passed=false, Elapsed=Zero
+    // A not-configured check must never count as a gate failure.
+    [Fact]
+    public async Task RunNamed_NotConfigured_ReturnsSkipped_NeverFailure()
+    {
+        var runner = new AutomatedChecksRunner();
+        var specs = new[]
+        {
+            Spec("build", "dotnet", new[] { "build" })
+        };
+
+        var result = await runner.RunNamedAsync("typecheck", specs, Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.True(result.Skipped, "unconfigured check should be Skipped=true");
+        Assert.False(result.Passed, "skipped result should not claim Passed=true");
+        Assert.Equal("typecheck", result.Name);
+        Assert.Equal(TimeSpan.Zero, result.Elapsed);
+    }
+
     // --- Test (e): Cancellation mid-flight ---
     // spec1: long-running sleep (~29s, cross-platform)
     // spec2: fast success (dotnet --version)
