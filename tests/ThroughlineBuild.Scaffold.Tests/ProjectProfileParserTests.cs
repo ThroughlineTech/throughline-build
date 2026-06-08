@@ -120,4 +120,47 @@ public class ProjectProfileParserTests
         Assert.False(ProjectProfileParser.TryParse("not json at all", out _, out var err));
         Assert.Contains("parse", err);
     }
+
+    [Fact]
+    public void Canary_PresentOnReviewCheck_ParsesPathAndContent()
+    {
+        var json = """
+        {
+          "build_command": "npm run build",
+          "test_command": "npm test",
+          "review_checks": [
+            {
+              "name": "typecheck",
+              "executable": "npm",
+              "arguments": ["run", "typecheck"],
+              "canary": [
+                { "path": "src/probe/__tlb_probe.ts", "content": "let y: number = \"s\";" }
+              ]
+            }
+          ]
+        }
+        """;
+        Assert.True(ProjectProfileParser.TryParse(json, out var profile, out var err), err);
+        var canary = profile!.ReviewChecks[0].Canary;
+        Assert.NotNull(canary);
+        var only = Assert.Single(canary!);
+        Assert.Equal("src/probe/__tlb_probe.ts", only.Path);
+        Assert.Equal("let y: number = \"s\";", only.Content);
+    }
+
+    [Fact]
+    public void Canary_Absent_YieldsNull()
+    {
+        var json = """
+        {
+          "build_command": "npm run build",
+          "test_command": "npm test",
+          "review_checks": [
+            { "name": "build", "executable": "npm", "arguments": ["run", "build"] }
+          ]
+        }
+        """;
+        Assert.True(ProjectProfileParser.TryParse(json, out var profile, out var err), err);
+        Assert.Null(profile!.ReviewChecks[0].Canary);
+    }
 }

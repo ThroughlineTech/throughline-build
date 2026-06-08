@@ -1,6 +1,7 @@
 using System.Text;
 using Tomlyn;
 using Tomlyn.Model;
+using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Scaffold;
 
 namespace ThroughlineBuild.Cli;
@@ -233,8 +234,21 @@ public static class ConfigProfileWriter
             rendered.Add($"executable = {TomlString(c.Executable)}");
             rendered.Add($"arguments = {TomlStringArray(c.Arguments)}");
             rendered.Add($"timeout_minutes = {c.TimeoutMinutes}");
+            if (c.Canary is { Count: > 0 })
+                rendered.Add($"canary = {TomlCanaryArray(c.Canary)}");
         }
         return rendered;
+    }
+
+    // Renders the canary files as a TOML inline-table array:
+    //   canary = [{ path = "...", content = "..." }, { ... }]
+    // Uses the newline-safe basic-string escaper since canary content commonly contains
+    // newlines/tabs (a deliberately-broken source file).
+    private static string TomlCanaryArray(IReadOnlyList<CanaryFile> canary)
+    {
+        var items = canary.Select(cf =>
+            $"{{ path = {TomlBasicString(cf.Path)}, content = {TomlBasicString(cf.Content)} }}");
+        return "[" + string.Join(", ", items) + "]";
     }
 
     // ------------------------------------------------------------------
@@ -244,6 +258,22 @@ public static class ConfigProfileWriter
     private static string TomlString(string value)
     {
         var escaped = value.Replace("\\", "\\\\").Replace("\"", "\\\"");
+        return $"\"{escaped}\"";
+    }
+
+    // Newline-safe TOML basic string. TOML basic strings cannot carry literal control
+    // characters, so escape (in order) backslash, double-quote, then CR/LF/TAB as the
+    // two-character escape sequences. Used for canary path+content, which may contain
+    // newlines and tabs. TomlString is intentionally left alone so existing outputs stay
+    // byte-identical.
+    private static string TomlBasicString(string value)
+    {
+        var escaped = value
+            .Replace("\\", "\\\\")
+            .Replace("\"", "\\\"")
+            .Replace("\r", "\\r")
+            .Replace("\n", "\\n")
+            .Replace("\t", "\\t");
         return $"\"{escaped}\"";
     }
 

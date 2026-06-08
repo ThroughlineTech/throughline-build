@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ThroughlineBuild.Contracts;
 
 namespace ThroughlineBuild.Scaffold;
 
@@ -27,7 +28,8 @@ public sealed record ProfileCheck(
     string Name,
     string Executable,
     IReadOnlyList<string> Arguments,
-    int TimeoutMinutes);
+    int TimeoutMinutes,
+    IReadOnlyList<CanaryFile>? Canary = null);
 
 // --- JSON DTOs (source-gen; AOT-safe) -------------------------------------------------
 
@@ -50,10 +52,19 @@ internal sealed class ProfileCheckDto
     [JsonPropertyName("executable")] public string? Executable { get; set; }
     [JsonPropertyName("arguments")] public List<string>? Arguments { get; set; }
     [JsonPropertyName("timeout_minutes")] public int? TimeoutMinutes { get; set; }
+    [JsonPropertyName("canary")] public List<CanaryFileDto>? Canary { get; set; }
+}
+
+internal sealed class CanaryFileDto
+{
+    [JsonPropertyName("path")] public string? Path { get; set; }
+    [JsonPropertyName("content")] public string? Content { get; set; }
 }
 
 [JsonSerializable(typeof(ProjectProfileDto))]
 [JsonSerializable(typeof(ProfileCheckDto))]
+[JsonSerializable(typeof(CanaryFileDto))]
+[JsonSerializable(typeof(List<CanaryFileDto>))]
 internal partial class ProfileJsonContext : JsonSerializerContext { }
 
 /// <summary>
@@ -170,7 +181,23 @@ public static class ProjectProfileParser
                 .Select(a => a.Trim())
                 .ToList();
             int timeout = c.TimeoutMinutes is > 0 ? c.TimeoutMinutes.Value : DefaultTimeoutMinutes;
-            list.Add(new ProfileCheck(c.Name!.Trim(), c.Executable!.Trim(), args, timeout));
+
+            // Canary is optional/best-effort: map non-empty-Path entries, skip blanks, never throw.
+            IReadOnlyList<CanaryFile>? canary = null;
+            if (c.Canary is { Count: > 0 })
+            {
+                var canaryFiles = new List<CanaryFile>();
+                foreach (var cf in c.Canary)
+                {
+                    if (cf is null || string.IsNullOrWhiteSpace(cf.Path))
+                        continue;
+                    canaryFiles.Add(new CanaryFile(cf.Path.Trim(), cf.Content ?? ""));
+                }
+                if (canaryFiles.Count > 0)
+                    canary = canaryFiles;
+            }
+
+            list.Add(new ProfileCheck(c.Name!.Trim(), c.Executable!.Trim(), args, timeout, canary));
         }
 
         checks = list;

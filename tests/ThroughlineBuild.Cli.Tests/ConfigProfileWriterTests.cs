@@ -1,5 +1,8 @@
 using ThroughlineBuild.Cli;
+using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Scaffold;
+using Tomlyn;
+using Tomlyn.Model;
 using Xunit;
 
 namespace ThroughlineBuild.Cli.Tests;
@@ -209,4 +212,109 @@ public class ConfigProfileWriterTests
 
     private static int HeaderLines(string text, string header) =>
         text.Split('\n').Count(l => l.Trim() == header);
+
+    // A fully-loadable config (required [ticketing]) seeded with a dotnet review check so
+    // Apply overwrites it. The canary round-trip test renders into this, then loads it back
+    // through the real Config loader.
+    private const string LoadableDotnetConfig = """
+    [ticketing]
+    backend = "plane"
+    plane_base_url = "https://api.plane.so"
+    plane_workspace_slug = "ws"
+    plane_project_id = "abc-123"
+    plane_api_token = "tok"
+
+    [workers]
+    default_agent = "claude-code"
+    timeout_minutes = 30
+
+    [workers.claude-code]
+    executable = "claude"
+
+    [workers.claude-code.sizes]
+    small  = { model = "haiku" }
+    medium = { model = "sonnet" }
+    large  = { model = "opus" }
+
+    [events]
+    log_directory = ".build/events"
+
+    [review]
+    verifier_timeout_minutes = 15
+
+    [[review.checks]]
+    name = "build"
+    executable = "dotnet"
+    arguments = ["build"]
+    timeout_minutes = 5
+
+    [[ship.regression_checks]]
+    name = "build"
+    executable = "dotnet"
+    arguments = ["build"]
+    timeout_minutes = 5
+
+    [project]
+    language = "csharp"
+    framework = "dotnet"
+    package_manager = "dotnet"
+    build_command = "dotnet build"
+    test_command = "dotnet test"
+    install_command = "dotnet restore"
+    dev_command = "dotnet run"
+    """;
+
+    // The load-bearing escaping test: a canary whose content contains BOTH a double-quote
+    // and a newline must survive ConfigProfileWriter render -> real Config loader parse
+    // byte-for-byte. This is the case that breaks if TOML control-char escaping is wrong.
+    [Fact]
+    public void Canary_SurvivesRenderThenConfigLoad()
+    {
+        const string canaryPath = "src/probe/__tlb_probe.ts";
+        const string canaryContent = "export const x: number = \"s\";\nlet y;";
+
+        var canary = new[] { new CanaryFile(canaryPath, canaryContent) };
+        var checks = new[]
+        {
+            new ProfileCheck("typecheck", "npm", new[] { "run", "typecheck" }, 5, canary),
+        };
+        var profile = new ProjectProfile(
+            "typescript", "react-vite", "npm",
+            "npm install", "npm run build", "npm test", "npm run dev",
+            checks, checks);
+
+        var outcome = ConfigProfileWriter.Apply(LoadableDotnetConfig, profile, force: false);
+        Assert.True(outcome.Changed, outcome.SkipReason);
+        var rendered = outcome.NewText!;
+
+        // Sanity: the rendered TOML re-parses cleanly via Tomlyn (no raw control chars).
+        var model = Toml.ToModel(rendered);
+        Assert.NotNull(model);
+
+        var tmpDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tmpDir);
+        var path = Path.Combine(tmpDir, "config.toml");
+        try
+        {
+            File.WriteAllText(path, rendered);
+            var config = BuildConfigLoader.Load(path, warnSink: _ => { });
+
+            var check = Assert.Single(config.Review.Checks);
+            Assert.Equal("typecheck", check.Name);
+            Assert.NotNull(check.Canary);
+            var file = Assert.Single(check.Canary!);
+            Assert.Equal(canaryPath, file.Path);
+            Assert.Equal(canaryContent, file.Content);
+
+            // The ship regression check carried the same canary; it must round-trip too.
+            var shipCheck = Assert.Single(config.Ship.RegressionChecks);
+            Assert.NotNull(shipCheck.Canary);
+            Assert.Equal(canaryContent, Assert.Single(shipCheck.Canary!).Content);
+        }
+        finally
+        {
+            File.Delete(path);
+            Directory.Delete(tmpDir, recursive: true);
+        }
+    }
 }

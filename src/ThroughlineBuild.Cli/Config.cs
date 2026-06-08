@@ -244,7 +244,7 @@ public static class BuildConfigLoader
 
     private static readonly HashSet<string> KnownCheckEntryKeys = new(StringComparer.Ordinal)
     {
-        "name", "executable", "arguments", "timeout_minutes", "role"
+        "name", "executable", "arguments", "timeout_minutes", "role", "canary"
     };
 
     private static readonly HashSet<string> KnownShipKeys = new(StringComparer.Ordinal)
@@ -463,6 +463,29 @@ public static class BuildConfigLoader
             _ => throw new ConfigException(
                 $"key 'role' in [{context}] must be either \"gating\" or \"advisory\", got \"{raw}\"")
         };
+    }
+
+    // Parses the optional inline-table array `canary = [{ path = "...", content = "..." }, ...]`.
+    // Returns null when absent or empty; entries lacking a non-empty path are skipped (canary is
+    // optional/best-effort). Every cast is guarded.
+    private static IReadOnlyList<CanaryFile>? ParseCanary(TomlTable entry)
+    {
+        if (!entry.TryGetValue("canary", out var raw) || raw is not TomlArray arr || arr.Count == 0)
+            return null;
+
+        var files = new List<CanaryFile>(arr.Count);
+        foreach (var item in arr)
+        {
+            if (item is not TomlTable cf)
+                continue;
+            var path = cf.TryGetValue("path", out var pVal) && pVal is string p ? p : null;
+            if (string.IsNullOrWhiteSpace(path))
+                continue;
+            var content = cf.TryGetValue("content", out var cVal) && cVal is string c ? c : "";
+            files.Add(new CanaryFile(path.Trim(), content));
+        }
+
+        return files.Count > 0 ? files.AsReadOnly() : null;
     }
 
     private static string RequireString(TomlTable section, string sectionName, string key)
@@ -704,12 +727,14 @@ public static class BuildConfigLoader
                 var arguments = OptionalStringList(entry, "arguments", Array.Empty<string>());
                 var timeoutMins = OptionalInt(entry, "timeout_minutes", 5);
                 var role = ParseCheckRole(entry, "review.checks");
+                var canary = ParseCanary(entry);
                 checks.Add(new CheckSpec(
                     Name: name,
                     Executable: executable,
                     Arguments: arguments,
                     Timeout: TimeSpan.FromMinutes(timeoutMins),
-                    Role: role));
+                    Role: role,
+                    Canary: canary));
             }
         }
 
@@ -750,12 +775,14 @@ public static class BuildConfigLoader
                 var arguments = OptionalStringList(entry, "arguments", Array.Empty<string>());
                 var timeoutMins = OptionalInt(entry, "timeout_minutes", 5);
                 var role = ParseCheckRole(entry, "ship.regression_checks");
+                var canary = ParseCanary(entry);
                 checks.Add(new CheckSpec(
                     Name: name,
                     Executable: executable,
                     Arguments: arguments,
                     Timeout: TimeSpan.FromMinutes(timeoutMins),
-                    Role: role));
+                    Role: role,
+                    Canary: canary));
             }
         }
 

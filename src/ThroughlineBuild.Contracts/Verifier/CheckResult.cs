@@ -4,12 +4,21 @@ namespace ThroughlineBuild.Contracts;
 // Advisory: failures are recorded and surfaced to the verifier but never hard-fail (lint, format).
 public enum CheckRole { Gating, Advisory }
 
+/// <summary>
+/// A deliberately-broken file a gating check MUST reject. Path is relative to the target
+/// project root; Content is the file body. Stack-agnostic: the deriver supplies the
+/// stack-specific content (this engine never hard-codes what "broken" means for a stack).
+/// </summary>
+public record CanaryFile(string Path, string Content);
+
 public record CheckSpec(
     string Name,           // e.g. "build", "test", "lint"
     string Executable,     // e.g. "dotnet"
     IReadOnlyList<string> Arguments,
     TimeSpan Timeout,
-    CheckRole Role = CheckRole.Gating);
+    CheckRole Role = CheckRole.Gating,
+    // optional per-check canary files; null/empty means no canary declared (the gate cannot prove this check is non-vacuous)
+    IReadOnlyList<CanaryFile>? Canary = null);
 
 public record CheckResult(
     string Name,
