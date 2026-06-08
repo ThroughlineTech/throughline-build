@@ -481,6 +481,8 @@ public class ChainPhase
 
         var completed = new ChainResult(options.TicketId, steps, ChainOutcome.Completed, totalSw.Elapsed, null,
             ShippedProvides: shippedProvides);
+        if (options.ChainTargetBranch is null)
+            await SweepChainWorktreesAsync(options.TicketId, chainSessionId, ct).ConfigureAwait(false);
         await EmitChainEndAsync(completed, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
         return completed;
     }
@@ -2394,6 +2396,9 @@ public class ChainPhase
                 ? $"One or more children did not complete: {string.Join(", ", childResults.Where(r => !IsChainSuccess(r.Outcome)).Select(r => r.TicketId))}"
                 : $"All {eligible.Count} eligible children completed.");
 
+        if (options.ChainTargetBranch is null && IsChainSuccess(outcome))
+            await SweepChainWorktreesAsync(options.TicketId, _sessionIdGenerator(), ct).ConfigureAwait(false);
+
         return new ChainResult(
             TicketId: options.TicketId,
             Steps: Array.Empty<ChainStep>(),
@@ -2896,6 +2901,46 @@ public class ChainPhase
             or ChainOutcome.RatifiedObsolete
             or ChainOutcome.ParentCompleted
             or ChainOutcome.BatchImplemented;
+
+    // Success-only sweep of this chain's worktrees. Reuses the stack-agnostic WorktreeDecrufter
+    // (git + filesystem only). Branch-prefix filtering (ticket/, chain/) is safer than nuking
+    // .worktrees/: it never removes the main worktree or an unrelated checkout. Dispatch is serial
+    // (concurrency pinned to 1), so no concurrent chain owns a ticket/ or chain/ worktree here.
+    // A cleanup miss must NEVER fail an otherwise-successful chain - it is swallowed/advisory only.
+    internal async Task SweepChainWorktreesAsync(string ticketId, string sessionId, CancellationToken ct)
+    {
+        try
+        {
+            var worktrees = await _git.ListWorktreesAsync(ct).ConfigureAwait(false);
+            var decrufter = new WorktreeDecrufter(_git);
+            var halted = new List<string>();
+            foreach (var w in worktrees)
+            {
+                if (string.IsNullOrEmpty(w.Branch)) continue;
+                if (!(w.Branch.StartsWith("ticket/", StringComparison.Ordinal)
+                      || w.Branch.StartsWith("chain/", StringComparison.Ordinal)))
+                    continue;
+                var result = await decrufter.DecruftAsync(w.Path, _workingDirectory, ct).ConfigureAwait(false);
+                if (result.HaltedAt is not null && result.HaltedAt != DecruftStep.WorktreeNotFound)
+                    halted.Add($"{w.Path} (halted at {result.HaltedAt})");
+            }
+            if (halted.Count > 0)
+            {
+                await _events.EmitAsync(new WorkflowEvent(
+                    SessionId: sessionId,
+                    Timestamp: DateTimeOffset.UtcNow,
+                    Kind: EventKind.GateFailure,
+                    TicketId: ticketId,
+                    Phase: Phase.Chain,
+                    Data: new Dictionary<string, object>
+                    {
+                        ["kind"] = "worktree_sweep_incomplete",
+                        ["halted"] = halted.ToArray()
+                    }), ct).ConfigureAwait(false);
+            }
+        }
+        catch { /* cleanup must never fail a successful chain */ }
+    }
 
     /// <summary>
     /// Decides where the chain enters for a single (leaf) ticket and performs any state-reconciliation

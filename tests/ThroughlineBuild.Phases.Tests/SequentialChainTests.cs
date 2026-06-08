@@ -370,11 +370,11 @@ public class SequentialChainTests
     }
 
     // ==========================================================================
-    // Test 3: multi-ticket parent chain creates and removes exactly one worktree
+    // Test 3: a SUCCESSFUL multi-ticket parent chain sweeps its ticket/chain worktrees
     // ==========================================================================
 
     [Fact]
-    public async Task ParentChain_TwoChildren_CreatesAndRemovesExactlyOneWorktree()
+    public async Task ParentChain_TwoChildren_Success_SweepsTicketAndChainWorktrees()
     {
         // Arrange: two independent children; no blocked_by edges -> both in level 0.
         var parent = MakeParent();
@@ -438,14 +438,22 @@ public class SequentialChainTests
         var result = await chain.RunAsync(new ChainPhaseOptions(ParentId, false), CancellationToken.None);
 
         // Assert: chain completed and created one integration worktree plus one fresh
-        // worktree per leaf. Integration branches/worktrees are retained for resume.
+        // worktree per leaf.
         Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
 
         // Total creates: 1 parent integration worktree + 2 child leaf worktrees.
         Assert.Equal(3, git.CreateWorktreeCallCount);
 
-        // Chain-level cleanup no longer deletes the accumulated integration topology.
-        Assert.Equal(0, git.RemoveWorktreeCallCount);
+        // Defect 2 (commit 6): on a SUCCESSFUL parent chain, the chain-end sweep prunes this
+        // chain's ticket/ and chain/ worktrees so a later glob-based runner does not collect
+        // stale worktree copies and report a false red. All three accumulated worktrees here
+        // are on ticket/ branches and get swept; the main worktree is preserved. (Failure
+        // PRESERVES worktrees for resume - see the preserve-on-failure tests.)
+        Assert.Equal(3, git.RemoveWorktreeCallCount);
+        Assert.All(git.RemovedWorktreePaths, p =>
+            Assert.Contains(".worktrees", p, StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("main", git.BranchAt("/fake/main"));
+        Assert.DoesNotContain("/fake/main", git.RemovedWorktreePaths);
     }
 
     // ==========================================================================
@@ -728,8 +736,10 @@ public class SequentialChainTests
         public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
             Task.FromResult(MainSha);
 
+        // Snapshot, not a live view: matches production ListWorktreesAsync so a caller can
+        // enumerate one result while a later RemoveWorktreeAsync mutates state.
         public Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<WorktreeInfo>>(_worktrees.AsReadOnly());
+            Task.FromResult<IReadOnlyList<WorktreeInfo>>(_worktrees.ToList());
 
         public Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct)
         {
@@ -847,19 +857,29 @@ public class SequentialChainTests
 
         public int CreateWorktreeCallCount { get; private set; }
         public int RemoveWorktreeCallCount { get; private set; }
+        public List<string> RemovedWorktreePaths { get; } = new();
 
         public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
             Task.FromResult(MainSha);
 
+        // Snapshot, not a live view: production ListWorktreesAsync re-parses git output into a
+        // fresh list each call, so a caller enumerating one result while a later
+        // RemoveWorktreeAsync mutates state never sees a concurrent-modification throw.
         public Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<WorktreeInfo>>(_worktrees.AsReadOnly());
+            Task.FromResult<IReadOnlyList<WorktreeInfo>>(_worktrees.ToList());
 
         public Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct)
         {
             RemoveWorktreeCallCount++;
+            RemovedWorktreePaths.Add(path);
             _worktrees.RemoveAll(w => string.Equals(w.Path, path, StringComparison.OrdinalIgnoreCase));
             return Task.FromResult(new WorktreeRemoveResult(true, null));
         }
+
+        // Exposes the branch of the worktree at the given path (null if not tracked) so a test
+        // can assert which kinds of worktrees the chain-end sweep removed vs preserved.
+        public string? BranchAt(string path) => _worktrees
+            .FirstOrDefault(w => string.Equals(w.Path, path, StringComparison.OrdinalIgnoreCase))?.Branch;
 
         public Task<IReadOnlyList<string>> GetBranchesNotMergedAsync(string pattern, string baseBranch, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
