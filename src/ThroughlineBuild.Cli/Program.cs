@@ -1837,6 +1837,12 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
         workingDirectory: cwd,
         ratifierFactory: ratifierFactory,
         chainShipFactory: chainShipPhaseFactory,
+        // Batch-implement worker: a declared batch group dispatches ONE warm implement session
+        // here instead of a cold per-ticket implement for each group member. Reuse the same
+        // agent the per-ticket implement factory uses so batch and non-batch implement share a
+        // worker; without this the batch path in RunParentChainAsync is unreachable and
+        // --batch-implement silently degrades to per-ticket (TLB bug 1).
+        batchWorker: workerFactory.Create(effectiveAgentFor("implement")),
         // Root-chain landing: after the outermost chain accumulates onto chain/{root}, that
         // branch is fast-forwarded into the configured target in the main worktree and pushed
         // here (intermediate chain ships run NoPush above). Push honors the same --no-push /
