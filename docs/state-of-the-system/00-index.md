@@ -1,8 +1,8 @@
 # 00 - State of the System: latticeflow
 
-This doc set is a code-true map of the `latticeflow` repository as it exists at commit `420d9c4` on `main` (refresh history in [PROMPT.md](PROMPT.md)).
+This doc set is a code-true map of the `latticeflow` repository as it exists at commit `de1909e` on `main` (refresh history in [PROMPT.md](PROMPT.md)).
 
-The repository is **Throughline Build** - a `.NET 10` native-AOT CLI named `build` that orchestrates an Agile ticket workflow against a Plane backend by spawning an external coding-agent CLI as a worker subprocess for the LLM-bearing phases and running everything else as deterministic C# code. The worker subprocess is multi-vendor: four agents (`claude-code`, `codex`, `gemini`, `copilot`) are implemented and selectable by config or `--agent` flag. The product/template default is `claude-code`, but the checked-in operator config (`.build/config.toml`) now defaults to `codex`. The architecture is described in [docs/throughline-build-architecture.md](../throughline-build-architecture.md); that document is a forward-looking proposal and disagrees with the tree in several places - this doc set documents what is actually in the source, and calls out the disagreements as loose ends.
+The repository is **Throughline Build** - a `.NET 10` native-AOT CLI named `build` that orchestrates an Agile ticket workflow against a Plane backend by spawning an external coding-agent CLI as a worker subprocess for the LLM-bearing phases and running everything else as deterministic C# code. The worker subprocess is multi-vendor: four agents (`claude-code`, `codex`, `gemini`, `copilot`) are implemented and selectable by config or `--agent` flag. The default is `claude-code` in both the shipped template and the checked-in operator config (`.build/config.toml`); there is no hardcoded vendor default in C# - `default_agent` is required config. The architecture is described in [docs/throughline-build-architecture.md](../throughline-build-architecture.md); that document is a forward-looking proposal and disagrees with the tree in several places - this doc set documents what is actually in the source, and calls out the disagreements as loose ends.
 
 Voice: technical, `file:line` references throughout, status-tagged. The reader is expected to have all sets open side-by-side.
 
@@ -24,16 +24,17 @@ Voice: technical, `file:line` references throughout, status-tagged. The reader i
                   |  Phases     |    |  Commands           |
                   | Plan        |    |  AmendCommand        |
                   | Implement   |    |  ChainCommand        |
-                  | Review      |    |  CloseCommand        |
-                  | Ship        |    |  DeferCommand        |
-                  | Chain       |    |  ListCommand         |
-                  | Rework      |    |  NewCommand          |
-                  | Decompose   |    |  ReopenCommand       |
-                  | New / Draft |    |  ReworkCommand       |
-                  | Scaffold    |    |  ScaffoldCommand     |
-                  |  + Parallel |    |  InitCommand         |
-                  |  Dispatcher |    +---+---+---+----+----+
-                  +--+---+---+--+        |   |   |    |
+                  | Gate        |    |  CloseCommand        |
+                  | Review      |    |  DeferCommand        |
+                  | Ship        |    |  ListCommand         |
+                  | Chain       |    |  NewCommand          |
+                  | Rework      |    |  ReopenCommand       |
+                  | Decompose   |    |  ReworkCommand       |
+                  | New / Draft |    |  ScaffoldCommand     |
+                  | Scaffold    |    |  SetupCommand        |
+                  |  + Parallel |    |  (Init/op-doc/models |
+                  |  Dispatcher |    |   in Cli)            |
+                  +--+---+---+--+    +---+---+---+----+----+
                      |   |   |           |   |   |    |
         +------------+   |   +---+   +---+   |   |    +-----+
         v                v       v   v       v   v          v
@@ -63,7 +64,7 @@ Voice: technical, `file:line` references throughout, status-tagged. The reader i
             +-------+ ModelClient / IModelClient (built + tested, UNWIRED)
 ```
 
-The CLI dispatches one of seventeen action verbs (`plan`, `implement`, `review`, `ship`, `chain`, `rework`, `decompose`, `new`, `init`, `settarget`, `user-guide`, `scaffold`, `list`, `amend`, `close`, `defer`, `reopen`), plus a `--help`/`help` token; any other token returns exit 2 ([src/ThroughlineBuild.Cli/CliUsage.cs](../../src/ThroughlineBuild.Cli/CliUsage.cs), dispatch is a chain of `if (verb == ...)` blocks in [src/ThroughlineBuild.Cli/Program.cs](../../src/ThroughlineBuild.Cli/Program.cs)). Three verbs run ahead of config load: `init` (now interactively prompts for missing Plane values when stdin is a TTY), `settarget` (writes `[work].target_branch` into `.build/config.toml`, [src/ThroughlineBuild.Cli/SetTargetCommand.cs](../../src/ThroughlineBuild.Cli/SetTargetCommand.cs)), and `user-guide` (writes `docs/throughline_build_userguide.md`, [src/ThroughlineBuild.Cli/UserGuideCommand.cs](../../src/ThroughlineBuild.Cli/UserGuideCommand.cs)). Most verbs route to a phase or command, which composes calls against `ITicketing` (Plane), `IWorkerAgent` (the selected agent CLI), `IGitClient` (git subprocesses), and `IEventSink` (JSONL log). The whole binary exits at the end of each verb - there is no daemon, no shared in-process state across invocations.
+The CLI dispatches one of twenty action verbs (`plan`, `implement`, `review`, `ship`, `chain`, `rework`, `decompose`, `new`, `init`, `settarget`, `user-guide`, `op-doc`, `models`, `setup`, `scaffold`, `list`, `amend`, `close`, `defer`, `reopen`), plus a `--help`/`help` token and a `-V`/`--version` flag; any other token returns exit 2 (dispatch is a chain of `if (verb == ...)` blocks in [src/ThroughlineBuild.Cli/Program.cs](../../src/ThroughlineBuild.Cli/Program.cs)). Help text now lives in a tiered registry under [src/ThroughlineBuild.Cli/Help/](../../src/ThroughlineBuild.Cli/Help/) (`HelpRegistryFactory` + `Tier0Renderer`/`Tier1Renderer` + a `help <topic>` topic dispatcher); the old monolithic `CliUsage.cs` is now dead in production (asserted only by tests). Five verbs run ahead of config load because they edit or ignore the config itself: `init` (now an interactive/connected bootstrap that creates-or-picks a Plane project by name with no UUID to paste), `settarget` (writes `[work].target_branch` into `.build/config.toml`, [src/ThroughlineBuild.Cli/SetTargetCommand.cs](../../src/ThroughlineBuild.Cli/SetTargetCommand.cs)), `user-guide` (writes `docs/throughline_build_userguide.md`, [src/ThroughlineBuild.Cli/UserGuideCommand.cs](../../src/ThroughlineBuild.Cli/UserGuideCommand.cs)), `op-doc` (prints/writes the embedded op-doc authoring spec or a skeleton), and `models refresh` (re-probes Codex and rewrites the `[workers.codex.sizes]` block). Most verbs route to a phase or command, which composes calls against `ITicketing` (Plane), `IWorkerAgent` (the selected agent CLI), `IGitClient` (git subprocesses), and `IEventSink` (JSONL log). The whole binary exits at the end of each verb - there is no daemon, no shared in-process state across invocations.
 
 Coordination between phases happens through three persistent channels:
 
@@ -88,11 +89,11 @@ LLM contact splits into three tiers (architecture Section 3), but at two differe
 | [03-external-dependencies.md](03-external-dependencies.md) | Plane REST API, Anthropic API, the worker CLIs (claude/codex/gemini/copilot), NuGet packages, what failure looks like for each. |
 | [04-configuration.md](04-configuration.md) | `.build/config.toml` sections key-by-key, per-agent worker blocks, per-phase agent selection, environment variables, secrets, precedence. |
 | [05-state-and-persistence.md](05-state-and-persistence.md) | Everything written to disk and to Plane during a session - locations, lifetime, cleanup posture. |
-| [06-public-surfaces.md](06-public-surfaces.md) | CLI exit codes, summary contract, `WORKER_RESULT` envelope, JSONL event schema, library-level public types. |
+| [06-public-surfaces.md](06-public-surfaces.md) | CLI exit codes, summary contract, `WORKER_RESULT` + `COMPLETION_CLAIM` envelope, JSONL event schema, the tiered help registry, library-level public types. |
 | [07-contracts.md](07-contracts.md) | Inter-project type contracts inside the repo, and shared artifacts with Plane / the worker CLIs / the older claude-config workflow. |
 | [08-workspace-assumptions.md](08-workspace-assumptions.md) | Branch conventions, auto-rebase/push, required tooling, OS / shell / git assumptions, CI matrix, worktree-aware behavior. |
 | [09-failure-modes.md](09-failure-modes.md) | Per-phase failure modes (incl. decompose and multi-ticket dispatch), idempotency, recovery. |
-| [10-lifecycle-orchestration.md](10-lifecycle-orchestration.md) | The state machine, per-phase step sequences, tree-aware chain recursion, parallel/sequential dispatch, the rework loop, event kinds. |
+| [10-lifecycle-orchestration.md](10-lifecycle-orchestration.md) | The state machine (incl. the gate phase), per-phase step sequences, recursive chain integration branches, batch-implement, the gate/rework loop, event kinds. |
 | [11-llm-architecture.md](11-llm-architecture.md) | The two LLM layers - the wired four-vendor worker layer and the built-but-unwired model-client layer - where vendor code lives, what it takes to add a new provider. |
 | [PROMPT.md](PROMPT.md) | Verbatim prompt that produced this set, refresh history, interpretation notes. |
 
@@ -110,8 +111,9 @@ Every command and major code path is tagged with one of these throughout the set
 
 As of the refresh in [PROMPT.md](PROMPT.md):
 
-- The four worker agents (`claude-code`, `codex`, `gemini`, `copilot`) are all **Functional** and reachable from `WorkerAgentFactory` by config name or `--agent` flag. There is no hardcoded vendor default in C# - `default_agent` is required config; the shipped template/`build init` write `claude-code`, while the checked-in operator `.build/config.toml` now sets `codex`. They are no longer Aspirational.
-- **Partial / Aspirational** items now centre on the model-client layer: `AnthropicClient.InvokeStreamAsync` still throws `NotImplementedException`, and the entire `ThroughlineBuild.ModelClient` layer (`IModelClient`, `AnthropicModelClient` with real SSE streaming, `ModelClientLlmAdapter`) is built and unit-tested but constructed on no production path. The `BackendCapabilities` plumbing declared in `ITicketing` is still never read.
+- The four worker agents (`claude-code`, `codex`, `gemini`, `copilot`) are all **Functional** and reachable from `WorkerAgentFactory` by config name or `--agent` flag. There is no hardcoded vendor default in C# - `default_agent` is required config; both the shipped template/`build init` and the checked-in operator `.build/config.toml` now write `claude-code` (the prior template-vs-checked-in split is resolved). They are no longer Aspirational.
+- The **verification gate** (op-30, `GatePhase` between implement and review, the `Gate` `Phase` value, the `CompletionClaim` worker contract, and the `CostLedger` event) is **Functional** and wired into the chain path. Its declared-but-unenforced tiering hooks (`CompletionClaim.RedGreenKind`/`Tier`/`RoutingKey`) and the unconsumed cost-ledger data are the new **Aspirational** items at that layer.
+- **Partial / Aspirational** items still centre on the model-client layer: `AnthropicClient.InvokeStreamAsync` still throws `NotImplementedException`, and the entire `ThroughlineBuild.ModelClient` layer (`IModelClient`, `AnthropicModelClient` with real SSE streaming, `ModelClientLlmAdapter`) is built and unit-tested but constructed on no production path. The `BackendCapabilities` plumbing declared in `ITicketing` is still never read.
 - **Aspirational** items named in the architecture but absent from the source tree: the `install` verb (the real bootstrap verb is now `init`), the OpenAI / Google `ILlmClient` implementations, the GitHub `ITicketing` adapter, MCP server packaging, and the replay verb.
 - There are no **Broken** components.
 

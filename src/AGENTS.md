@@ -1,7 +1,7 @@
 # src/ - library + CLI orientation
 
-19 library projects compiled AOT into the `build` binary. Full per-project
-index with status tags and gotchas: [docs/state-of-the-system/01-inventory.md](../docs/state-of-the-system/01-inventory.md).
+19 projects (1 CLI entry point + 18 libraries) compiled AOT into the `build`
+binary. Full per-project index with status tags and gotchas: [docs/state-of-the-system/01-inventory.md](../docs/state-of-the-system/01-inventory.md).
 Architecture overview: [docs/state-of-the-system/00-index.md](../docs/state-of-the-system/00-index.md).
 
 Dependency order (leaf -> root):

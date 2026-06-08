@@ -1,7 +1,11 @@
 # ThroughlineBuild.Plane - the ticketing backend
 
-`PlaneTicketingClient` is the SOLE `ITicketing` implementation. GET/PATCH/POST
-against the Plane REST API. No GitHub or Linear adapter exists.
+`PlaneTicketingClient` is the SOLE `ITicketing` implementation, and also
+implements `ITicketingProvisioner` (create states/labels), `IProjectDiscovery`
+(list/find/create projects), and `ITicketingConnectivity` (op-34, driving
+`build setup` and connected `build init`). `ProjectResolver` (find-or-create a
+project by name) lives here too. GET/PATCH/POST against the Plane REST API. No
+GitHub or Linear adapter exists.
 
 Key behaviors to know before touching it:
 - Per-run issue snapshot cache: the whole project is paginated once into

@@ -10,6 +10,10 @@ stdout by REVERSE scan, so the last envelope wins. Metadata is an AOT-safe
 block body. Protocol spec: [../../docs/op-docs/complete/op-27-worker-result-fenced-payloads.md](../../docs/op-docs/complete/op-27-worker-result-fenced-payloads.md)
 and [../../docs/worker-result-envelope.md](../../docs/worker-result-envelope.md).
 
+`CompletionClaimParser` (op-30) parses the implement worker's `COMPLETION_CLAIM`
+fenced block (resolved via `completion_claim_ref`) into a typed `CompletionClaim`
+for the gate. Same AOT-safe source-gen discipline as the envelope parser.
+
 `MarkdownRenderer` is a hand-rolled, AOT-safe CommonMark-subset md->HTML
 renderer used to turn resolved block bodies into Plane HTML. Do not swap in a
 reflection-based markdown lib - it would break AOT.

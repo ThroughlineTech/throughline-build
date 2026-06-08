@@ -16,7 +16,7 @@ Status: Functional.
 
 Single implementation: [src/ThroughlineBuild.Plane/PlaneTicketingClient.cs](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs). Wraps `System.Net.Http.HttpClient` with a `Polly` resilience pipeline that retries on `PlaneApiException` where status is 429 or >= 500. Retries default to 5 attempts with exponential-with-jitter backoff (base 2s), but when a 429 carries a `Retry-After` header the pipeline waits exactly that long (clamped to `MaxRetryDelay`, default 60s) instead of guessing. Attempt count and delays are configurable via `PlaneClientOptions`; the pipeline is built in the constructor at [src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:80-110](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L80-L110).
 
-- **Base URL:** configurable via `ticketing.plane_base_url`. Default in [.build/config.toml.example](../../.build/config.toml.example): `https://api.plane.so`. `PlaneClientOptions.BaseUrl` also defaults to `https://api.plane.so` ([src/ThroughlineBuild.Plane/PlaneClientOptions.cs:5](../../src/ThroughlineBuild.Plane/PlaneClientOptions.cs#L5)).
+- **Base URL:** configurable via `ticketing.plane_base_url`. The embedded template ships the `REQUIRED_PLANE_BASE_URL` placeholder with an inline hint of `https://api.plane.so` ([src/ThroughlineBuild.Commands/Templates/config.toml.template:6](../../src/ThroughlineBuild.Commands/Templates/config.toml.template#L6)); the checked-in operator config points at a self-hosted Plane ([.build/config.toml:7](../../.build/config.toml#L7)). `PlaneClientOptions.BaseUrl` defaults to `https://api.plane.so` ([src/ThroughlineBuild.Plane/PlaneClientOptions.cs:5](../../src/ThroughlineBuild.Plane/PlaneClientOptions.cs#L5)). The old `.build/config.toml.example` file is gone - the template is the only embedded source.
 - **Auth:** `X-API-Key` header, value from `ticketing.plane_api_token` (or env, default name `PLANE_API_TOKEN`). Set in the `PlaneTicketingClient` constructor at [src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:75](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L75).
 - **Endpoint base paths:** issues `api/v1/workspaces/{slug}/projects/{id}/issues/` ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:122-123](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L122-L123)); also `states/`, `labels/`, and `issue-types/` under the same project root ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:125-132](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L125-L132)).
 
@@ -52,6 +52,33 @@ New since the architecture doc:
 - **`QueryAsync` / `TransitionLifecycleAsync` / `UpdateDescriptionAsync` (TLB-251):** filtered listing, lifecycle transitions with marker comments, and full description replace.
 - **Issue-type NAME -> UUID resolution (TLB-213/214):** `CreateTicketAsync` resolves a `type` string against an `issue-types/` cache and PATCHes the resolved UUID; an unknown type throws `InvalidOperationException` ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:682](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L682)).
 - **Per-run snapshot cache + correct pagination (TLB-366):** Plane silently ignores the list endpoint's query filters (notably `parent=`) and returns the whole project, so the client no longer re-paginates per lookup. Instead the entire project is paginated once into an in-memory snapshot and every `FindIssueAsync` / `QueryAsync` answer is computed from it client-side - see "Per-run issue snapshot cache" below. This eliminated the redundant page walks that kept `build chain` hammering Plane's rate limiter as the project grew.
+
+### Provisioning, discovery, and connectivity endpoints (op-34)
+
+Status: Functional.
+
+`PlaneTicketingClient` now implements three more interfaces beyond `ITicketing` - `ITicketingProvisioner`, `IProjectDiscovery`, and `ITicketingConnectivity` ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:18](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L18)) - so the same client backs `build setup` and connected `build init` without a second HTTP stack.
+
+| Interface | Method | HTTP | Path | Used by |
+|---|---|---|---|---|
+| `ITicketingProvisioner` | `ListStatesAsync` | GET | `states/` ([:365-371](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L365-L371)) | `setup` gap diff |
+| `ITicketingProvisioner` | `ListLabelNamesAsync` | GET | `labels/` ([:373-377](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L373-L377)) | `setup` gap diff |
+| `ITicketingProvisioner` | `CreateStateAsync(name, group, seq)` | POST | `states/` ([:379-384](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L379-L384)) | `setup` create-missing |
+| `ITicketingProvisioner` | `CreateLabelAsync(name)` | POST | `labels/` ([:386-391](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L386-L391)) | `setup` create-missing |
+| `IProjectDiscovery` | `ListProjectsAsync` | GET (paginated) | `api/v1/workspaces/{slug}/projects/?per_page=100` ([:399-440](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L399-L440)) | interactive pick, find-or-create |
+| `IProjectDiscovery` | `FindProjectByNameAsync(name)` | (in-memory over the list) | - ([:442-449](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L442-L449)) | `ProjectResolver` find-or-create |
+| `IProjectDiscovery` | `CreateProjectAsync(name, identifier)` | POST | `api/v1/workspaces/{slug}/projects/` ([:451-472](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L451-L472)) | `ProjectResolver`, interactive create |
+| `ITicketingConnectivity` | `TestConnectivityAsync` | GET labels + GET states + a probe POST | `labels/`, `states/`, then `issues/` ([:124-155](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L124-L155)) | connected `init` summary, diagnostics |
+
+The project-discovery routes use the **workspace-level** `projects/` URL (slug only, empty `ProjectId` is fine - [:396-397](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L396-L397)), so they run before any project id is known. `ListProjectsAsync` paginates with the same `next_page_results`-authoritative loop as the issue snapshot, capped at `MaxListPages`, and warns loudly if the cap is hit so find-or-create cannot silently miss an existing project ([:414-440](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L414-L440)). `ProjectResolver.ResolveAsync` is find-or-create: `FindProjectByNameAsync` (case-insensitive name match) first, else `CreateProjectAsync` with a derived 2-10 char identifier ([src/ThroughlineBuild.Plane/ProjectResolver.cs:46-81](../../src/ThroughlineBuild.Plane/ProjectResolver.cs#L46-L81)).
+
+`TestConnectivityAsync` is the handshake connected init prints: it GETs labels and states (proving read access) then issues a deliberately-malformed create POST (`ProbeIssueCreatePermissionAsync`) that Plane authorizes before validating - a `400`/`422` means the token can create, a `401`/`403` means it cannot ([:171-...](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L171)). When unauthenticated/under-scoped:
+
+- **`401`/`403`** on the handshake -> a not-authorized message naming the workspace and project ("API token is not authorized to create issues ...") rather than an exception ([:133-138](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L133-L138)).
+- **`401`/`403`** on `CreateProjectAsync` -> rewrapped as `workspace-admin scope required to create a project in '<slug>'` ([:459-465](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L459-L465)).
+- **`404`** on a project-scoped route -> the shared `BuildProjectNotFoundMessage` ("plane_project_id '<id>' does not resolve ... re-run 'build init' connected mode") used by both connectivity probing and `build setup` ([:139-141](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L139-L141), [:166-169](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L166-L169)).
+
+The states/labels these provision match the canonical `WorkspaceSchema`: 7 states and 9 labels ([src/ThroughlineBuild.Contracts/WorkspaceSchema.cs:23-44](../../src/ThroughlineBuild.Contracts/WorkspaceSchema.cs#L23-L44)). See [02-install-build-run.md](02-install-build-run.md) for the `build setup` / connected-init flow that drives these.
 
 ### Deep-link URL (TLB-292, 9450889)
 
@@ -112,9 +139,9 @@ BackendCapabilities(TypedRelations: true, TypedLabels: true, RichHtmlComments: t
 
 Status: Functional but fully optional (single production caller, degrades gracefully when absent).
 
-Direct REST calls. Still exactly one production caller: `ReasonTranslator` for `close` / `defer` / `reopen` - this is the **only** LLM consumer left in the deterministic CLI, and it is now non-essential. The hard API-key gate was removed in TLB-227 (2c04bf9 / 042f963): instead of a top-level check, the client is now built lazily by `LlmClientFactory.Create` only when one of those three verbs runs ([src/ThroughlineBuild.Cli/LlmClientFactory.cs](../../src/ThroughlineBuild.Cli/LlmClientFactory.cs), invoked from `WireUpConditionalCommands` at [src/ThroughlineBuild.Cli/Program.cs:1710-1738](../../src/ThroughlineBuild.Cli/Program.cs#L1710-L1738)). All other verbs never touch the Anthropic REST API - workers reach Anthropic through the `claude` CLI's own OAuth.
+Direct REST calls. Still exactly one production caller: `ReasonTranslator` for `close` / `defer` / `reopen` - this is the **only** LLM consumer left in the deterministic CLI, and it is now non-essential. The hard API-key gate was removed in TLB-227 (2c04bf9 / 042f963): instead of a top-level check, the client is now built lazily by `LlmClientFactory.Create` only when one of those three verbs runs ([src/ThroughlineBuild.Cli/LlmClientFactory.cs](../../src/ThroughlineBuild.Cli/LlmClientFactory.cs), invoked from `WireUpConditionalCommands` at [src/ThroughlineBuild.Cli/Program.cs:2145-2172](../../src/ThroughlineBuild.Cli/Program.cs#L2145-L2172)). All other verbs never touch the Anthropic REST API - workers reach Anthropic through the `claude` CLI's own OAuth.
 
-TLB-371 (0b017fb) went one step further: when the factory throws because no key/model is configured, `WireUpConditionalCommands` no longer aborts. It catches the `ConfigException`, logs `WARNING: LLM unavailable (...); recording reason verbatim without translation.`, and substitutes an `EchoLlmClient` ([src/ThroughlineBuild.Cli/EchoLlmClient.cs](../../src/ThroughlineBuild.Cli/EchoLlmClient.cs)) that returns the last user message unchanged ([src/ThroughlineBuild.Cli/Program.cs:1727-1737](../../src/ThroughlineBuild.Cli/Program.cs#L1727-L1737)). The reason is recorded verbatim and the ticket transition still runs. So `close` / `defer` / `reopen` work with no Anthropic key at all - only non-English reason text would go untranslated.
+TLB-371 (0b017fb) went one step further: when the factory throws because no key/model is configured, `WireUpConditionalCommands` no longer aborts. It catches the `ConfigException`, logs `WARNING: LLM unavailable (...); recording reason verbatim without translation.`, and substitutes an `EchoLlmClient` ([src/ThroughlineBuild.Cli/EchoLlmClient.cs](../../src/ThroughlineBuild.Cli/EchoLlmClient.cs)) that returns the last user message unchanged ([src/ThroughlineBuild.Cli/Program.cs:2162-2172](../../src/ThroughlineBuild.Cli/Program.cs#L2162-L2172)). The reason is recorded verbatim and the ticket transition still runs. So `close` / `defer` / `reopen` work with no Anthropic key at all - only non-English reason text would go untranslated.
 
 The production path goes through `AnthropicClient` (implements `ILlmClient`):
 
@@ -135,7 +162,7 @@ A parallel client abstraction `IModelClient` ([src/ThroughlineBuild.ModelClient/
 
 ### Handshake when missing or unauthenticated
 
-- **No API key:** only `close` / `defer` / `reopen` ever ask for it, and as of TLB-371 they no longer fail without it. `LlmClientFactory.Create` still throws `ConfigException` (message `anthropic_api_key not set and env var '<env>' is not set; configure [llm] anthropic_api_key or set the env var`, or `LLM client required but [llm] default_model is not set in config.toml` when no model is configured at all - [src/ThroughlineBuild.Cli/LlmClientFactory.cs:10-19](../../src/ThroughlineBuild.Cli/LlmClientFactory.cs#L10-L19)), but `WireUpConditionalCommands` catches it, prints the `WARNING: LLM unavailable (...); recording reason verbatim` line, and swaps in `EchoLlmClient` ([src/ThroughlineBuild.Cli/Program.cs:1727-1737](../../src/ThroughlineBuild.Cli/Program.cs#L1727-L1737)). The verb runs to completion and exits 0; the reason is stored untranslated. There is no longer any `Secret error:` exit-3 path for a missing Anthropic key, nor the old `"anthropic api key required for close/defer/reopen (reason translation)"` wording.
+- **No API key:** only `close` / `defer` / `reopen` ever ask for it, and as of TLB-371 they no longer fail without it. `LlmClientFactory.Create` still throws `ConfigException` (message `anthropic_api_key not set and env var '<env>' is not set; configure [llm] anthropic_api_key or set the env var`, or `LLM client required but [llm] default_model is not set in config.toml` when no model is configured at all - [src/ThroughlineBuild.Cli/LlmClientFactory.cs:10-19](../../src/ThroughlineBuild.Cli/LlmClientFactory.cs#L10-L19)), but `WireUpConditionalCommands` catches it, prints the `WARNING: LLM unavailable (...); recording reason verbatim` line, and swaps in `EchoLlmClient` ([src/ThroughlineBuild.Cli/Program.cs:2162-2172](../../src/ThroughlineBuild.Cli/Program.cs#L2162-L2172)). The verb runs to completion and exits 0; the reason is stored untranslated. There is no longer any `Secret error:` exit-3 path for a missing Anthropic key, nor the old `"anthropic api key required for close/defer/reopen (reason translation)"` wording.
 - **401/403:** `AnthropicApiException(status, body)` propagates; verb exits with phase failure.
 - **Rate limit:** Polly retries.
 
@@ -151,10 +178,10 @@ A parallel client abstraction `IModelClient` ([src/ThroughlineBuild.ModelClient/
 
 Status: Functional (all four agents). Which CLI must be installed depends on `[workers] default_agent` in the live config, not on a hardcoded vendor default.
 
-**Which external CLI the repo requires depends on config.** There is no hardcoded vendor default in C# - `default_agent` is a required string ([src/ThroughlineBuild.Cli/Config.cs:478](../../src/ThroughlineBuild.Cli/Config.cs#L478)) and `WorkerAgentFactory` dispatches off whatever name is configured. The two live answers diverge:
+**Which external CLI the repo requires depends on config.** There is no hardcoded vendor default in C# - `default_agent` is a required string and `WorkerAgentFactory` dispatches off whatever name is configured via the shared `WorkerAgentBuilder.Create` switch ([src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs:16-45](../../src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs#L16-L45)). The prior template-vs-checked-in split is now **resolved**: both default to `claude-code`.
 
-- **Checked-in operator config (`.build/config.toml`) now defaults to `codex`** ([.build/config.toml:25](../../.build/config.toml#L25), commit 420d9c4). The `[workers.codex]` block is uncommented (executable `codex`; sizes small=`gpt-5.4-mini`, medium=`gpt-5.4`, large=`gpt-5.5` - [.build/config.toml:47-56](../../.build/config.toml#L47-L56)). So this repo, as configured, expects the **`codex`** CLI on PATH.
-- **The shipped template and example still default to `claude-code`** ([src/ThroughlineBuild.Commands/Templates/config.toml.template:23](../../src/ThroughlineBuild.Commands/Templates/config.toml.template#L23), [.build/config.toml.example:25](../../.build/config.toml.example#L25)). A fresh `build init` therefore generates a `claude-code` default, expecting the **`claude`** CLI on PATH.
+- **Checked-in operator config (`.build/config.toml`) defaults to `claude-code`** ([.build/config.toml:25](../../.build/config.toml#L25)). The `[workers.codex]` block is also present and uncommented (executable `codex`; sizes small=`gpt-5.4-mini`/`low`, medium=`gpt-5.5`/`medium`, large=`gpt-5.5`/`high` - [.build/config.toml:47-57](../../.build/config.toml#L47-L57)) so codex is selectable per phase, but the default phase agent is `claude-code`. As configured, this repo expects the **`claude`** CLI on PATH.
+- **The shipped template also defaults to `claude-code`** ([src/ThroughlineBuild.Commands/Templates/config.toml.template:24](../../src/ThroughlineBuild.Commands/Templates/config.toml.template#L24)). A fresh `build init` therefore generates a `claude-code` default, expecting the **`claude`** CLI on PATH. There is no longer a `.build/config.toml.example`.
 
 The four agents and their executables/flags are otherwise unchanged (see the per-CLI table below).
 
@@ -175,7 +202,7 @@ All four agents:
 | Agent (`Name`) | Default exe | Brief delivery | Spawn flags | Stdout shape parsed | Auth env stripped |
 |---|---|---|---|---|---|
 | `claude-code` | `claude` | stdin | `--print --verbose --output-format stream-json` `[--dangerously-skip-permissions]` `[--allowedTools a,b]` `[--model M]` `ExtraArgs` ([:373-387](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L373-L387)) | NDJSON, terminal `type=result` envelope; legacy single-blob `--output-format json` also accepted; inner `result` text run through `WorkerResultParser` ([:259-321](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L259-L321)) | `ANTHROPIC_API_KEY` ([:408](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L408)); sets `CLAUDE_CODE_MAX_OUTPUT_TOKENS` when configured |
-| `codex` | `codex` | stdin | `exec [--dangerously-bypass-approvals-and-sandbox] ExtraArgs [--model M] -`, with the brief written to stdin | plain text; raw stdout scanned for `WORKER_RESULT` | `CODEX_API_KEY`, `OPENAI_API_KEY` |
+| `codex` | `codex` | stdin | `exec --json [--dangerously-bypass-approvals-and-sandbox] ExtraArgs [--model M] [-c model_reasoning_effort=<effort>] -`, brief on stdin ([:356-378](../../src/ThroughlineBuild.Workers.Codex/CodexAgent.cs#L356-L378)) | JSONL; `WORKER_RESULT` extracted from `item.completed` agent_message text, raw-stdout fallback ([:169-176](../../src/ThroughlineBuild.Workers.Codex/CodexAgent.cs#L169-L176)) | `CODEX_API_KEY`, `OPENAI_API_KEY` ([:338-339](../../src/ThroughlineBuild.Workers.Codex/CodexAgent.cs#L338-L339)) |
 | `gemini` | `gemini` | `-p` prompt arg | `-p "<brief>" --output-format json [--yolo] [--model M] ExtraArgs` ([:224-236](../../src/ThroughlineBuild.Workers.Gemini/GeminiAgent.cs#L224-L236)) | JSON envelope `{response, stats}`; `.response` text run through `WorkerResultParser`, raw-stdout fallback ([:163-217](../../src/ThroughlineBuild.Workers.Gemini/GeminiAgent.cs#L163-L217)) | `GEMINI_API_KEY`, `GOOGLE_API_KEY` ([:264-271](../../src/ThroughlineBuild.Workers.Gemini/GeminiAgent.cs#L264-L271)) |
 | `copilot` | `copilot` | `-p` prompt arg | `-p "<brief>" -s --no-ask-user ExtraArgs [--model M] [--allow-tool T ...]` ([:22-35](../../src/ThroughlineBuild.Workers.Copilot/CopilotAgent.cs#L22-L35)) | plain text; raw stdout scanned for `WORKER_RESULT` | none stripped; additive `GH_TOKEN` |
 
@@ -183,6 +210,7 @@ Notes on the flag variants:
 
 - Claude Code requires `--verbose` alongside `--print --output-format stream-json` (the CLI rejects the combination otherwise); the bypass flag is `--dangerously-skip-permissions`, emitted only when `ClaudeCodeOptions.BypassPermissions` is true (default true) ([src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs:357-387](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L357-L387)).
 - The bypass flag is per-vendor: codex `--dangerously-bypass-approvals-and-sandbox`, gemini `--yolo`, copilot `-s --no-ask-user` (always emitted). Each agent's model prefix differs: `anthropic:` (claude-code), `openai:` (codex), `google:` (gemini), `github:` (copilot).
+- Codex additionally passes the tier's reasoning effort as `-c model_reasoning_effort=<effort>` (two discrete argv entries) when the resolved size tier sets a non-empty `effort`; when unset, Codex applies its own per-model default reasoning level ([src/ThroughlineBuild.Workers.Codex/CodexAgent.cs:373-375](../../src/ThroughlineBuild.Workers.Codex/CodexAgent.cs#L373-L375)). No other worker has this knob.
 - Copilot maps `AllowedTools` to repeated `--allow-tool <tool>` flags, not a comma list; it has no progress digester (`Digester => null`).
 
 ### Handshake when CLI missing or unauthenticated
@@ -192,13 +220,26 @@ Notes on the flag variants:
 - **Worker emits no `WORKER_RESULT` marker:** `Status.Failed` with "No WORKER_RESULT found in output" (e.g. [src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs:317-321](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L317-L321)).
 - **Timeout:** `Status.Failed` with "Process cancelled or timed out"; partial stdout/stderr captured to the debug-capture directory when set.
 
+### Codex `debug models` discovery probe (op-33)
+
+Status: Functional.
+
+This is the **only** place a worker CLI is shelled out for discovery rather than to do ticket work. `build init` (any write path) and `build models refresh` run `<codex-exe> debug models` to discover the model tiers a Codex login can see, then rewrite the `[workers.codex.sizes]` block accordingly. The probe lives in `CodexModelProbe.ProbeAsync` ([src/ThroughlineBuild.Workers.Codex/CodexModelProbe.cs:53-98](../../src/ThroughlineBuild.Workers.Codex/CodexModelProbe.cs#L53-L98)):
+
+- Spawns `<exe> debug models` with `UseShellExecute=false`, redirected stdout/stderr, UTF-8. It is a read-only query: it inherits the parent environment and passes **no** bypass flags (unlike `CodexAgent`).
+- **60s timeout** via a linked `CancellationTokenSource`; on timeout the process tree is killed and a typed `CommandFailed` result is returned.
+- **Never throws.** A missing executable (`Win32Exception`), a non-zero exit, a timeout, or unparseable stdout all degrade to a typed `CodexProbeResult.Fail(...)` carrying a diagnostic (stderr or the first ~500 chars of stdout) - the success case returns `CodexProbeResult.Ok(discovery)` ([:26-34](../../src/ThroughlineBuild.Workers.Codex/CodexModelProbe.cs#L26-L34), [:148-162](../../src/ThroughlineBuild.Workers.Codex/CodexModelProbe.cs#L148-L162)).
+- Parsing keeps only `visibility == "list"` models with a non-empty slug, capturing each model's supported reasoning-effort levels and default effort ([:105-144](../../src/ThroughlineBuild.Workers.Codex/CodexModelProbe.cs#L105-L144)).
+
+Because the probe never throws, both `init` and `models refresh` continue past a missing/unauthenticated Codex: `init` leaves the static template defaults and prints one warning, still exiting 0 (see [02-install-build-run.md](02-install-build-run.md)).
+
 ### Loose ends - worker CLIs
 
 - **Vendor CLI drift** is identified in architecture Section 10 as a top risk. No agent pins a CLI version; each parses whatever shape the current CLI produces.
 - **Tool-input summarization** in `ClaudeCodeProgressDigester.SummarizeToolInput` hardcodes recognized fields (`command`, `file_path`, `pattern`, `path`, `url`) ([src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeProgressDigester.cs:149-176](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeProgressDigester.cs#L149-L176)) - new Claude Code tools render as bare names. Codex/Gemini digesters have their own field maps; Copilot has no digester.
 - **Token usage is best-effort or absent** for codex / gemini / copilot: their `BuildLlmUsageMetadata` reports 0 tokens (gemini reports only a combined total) and null cost. Only claude-code emits real input/output/cache counts from the envelope.
 - **Per-platform process-tree kill** `entireProcessTree: true` may fail on some platforms and the exception is swallowed.
-- **Default agent depends on config**: the checked-in `.build/config.toml` selects `codex` (420d9c4); the template/example `build init` generates still select `claude-code`. All four agents are real, unit-tested, and selectable per phase via `[workers.phases]`; see 04-configuration.md and 07-contracts.md.
+- **Default agent depends on config**: both the checked-in `.build/config.toml` and the `build init` template now default to `claude-code` (the prior split is resolved). All four agents are real, unit-tested, and selectable per phase via `[workers.phases]`; see 04-configuration.md and 07-contracts.md.
 
 ---
 
@@ -208,7 +249,7 @@ Direct dependencies only (verify by grepping `PackageReference` across the `.csp
 
 ### Cli project ([src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj))
 
-- **`Tomlyn 0.16.0`** - TOML parser for `.build/config.toml`. Selected because it is AOT-friendly (architecture Appendix item 2). This is the only third-party package the AOT binary links ([src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj:41](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L41)). Its reflection-based trim warning (`IL2104`) is suppressed via `NoWarn` because only the dynamic-model API is reachable ([:13-20](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L13-L20)).
+- **`Tomlyn 0.16.0`** - TOML parser for `.build/config.toml`. Selected because it is AOT-friendly (architecture Appendix item 2). This is the only third-party package the AOT binary links ([src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj:46](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L46)). Its reflection-based trim warning (`IL2104`) is suppressed via `NoWarn` because only the dynamic-model API is reachable ([:14-21](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L14-L21)).
 
 ### Plane and Anthropic clients
 
@@ -232,7 +273,7 @@ There are no other significant third-party NuGets in the dependency tree. The re
 |---|---|---|
 | `git` | Every phase shells out to it. | Process-start failure at first invocation; surfaces as `InvalidOperationException`. |
 | `git worktree` (>= git 2.5) | All implement/review/ship phases. | "unknown command" from older git; same failure path. |
-| ICU data | `<InvariantGlobalization>true</InvariantGlobalization>` is set ([src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj:10](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L10)) so the binary does **not** require ICU at runtime. | n/a |
+| ICU data | `<InvariantGlobalization>true</InvariantGlobalization>` is set ([src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj:11](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L11)) so the binary does **not** require ICU at runtime. | n/a |
 | OpenSSL / Schannel | TLS for HTTPS to Plane and Anthropic. | Network failure if absent. |
 
 ---
@@ -243,7 +284,7 @@ There are no other significant third-party NuGets in the dependency tree. The re
 |---|---|
 | GitHub Issues backend | Plumbed via `BackendCapabilities` but no `GitHubTicketingClient`. |
 | OpenAI / Google LLM `ILlmClient`s | `ILlmClient` has only `AnthropicClient`; `LlmClientFactory` rejects any non-`anthropic:` prefix. (`AnthropicModelClient` adds an `IModelClient` shape designed for OpenAI/Ollama configs but is unwired.) |
-| Codex / Gemini / Copilot worker agents | Now implemented as real `IWorkerAgent`s (`CodexAgent`, `GeminiAgent`, `CopilotAgent`), unit-tested. The checked-in `.build/config.toml` selects `codex` as default; the template/example still default to `claude-code`. Token/cost metadata is partial for codex/gemini/copilot. |
+| Codex / Gemini / Copilot worker agents | Now implemented as real `IWorkerAgent`s (`CodexAgent`, `GeminiAgent`, `CopilotAgent`), unit-tested. Both the checked-in `.build/config.toml` and the `build init` template default to `claude-code`; codex/gemini/copilot are selectable per phase. Token/cost metadata is partial for codex/gemini/copilot. |
 | MCP server packaging | Architecture Appendix item 3 calls for stubbing it; no stub today. |
 | `bin/notify` shim | Referenced in user-global `CLAUDE.md` for agent notifications; this repo has no `bin/notify` script (the shim lives in the operator's home, not the project). |
 
