@@ -564,6 +564,97 @@ log_directory = ".build/events"
     }
 
     [Fact]
+    public void Load_DefaultAgentNotDefined_ThrowsConfigExceptionWithGuidance()
+    {
+        // The reported bug: default_agent names "codex" but the [workers.codex]
+        // sections were left commented out. Previously this loaded fine and then
+        // crashed later with an UNHANDLED ConfigException at agent-resolution time.
+        // Now Load() rejects it with an actionable message routed through the
+        // friendly "Config error:" handler.
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "abc-123"
+plane_api_token_env = "PLANE_TOKEN"
+
+[workers]
+default_agent = "codex"
+
+[workers.claude-code]
+executable = "claude"
+
+[workers.claude-code.sizes]
+small  = { model = "claude-haiku-4-5-20251001" }
+medium = { model = "claude-sonnet-4-6" }
+large  = { model = "claude-opus-4-7" }
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var ex = Assert.Throws<ConfigException>(() => BuildConfigLoader.Load(path));
+            // Names the offending setting and the missing sub-table.
+            Assert.Contains("default_agent", ex.Message);
+            Assert.Contains("[workers.codex]", ex.Message);
+            // Tells the operator how to fix it and what is actually configured.
+            Assert.Contains(".build/config.toml", ex.Message);
+            Assert.Contains("claude-code", ex.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_PhaseAgentNotDefined_ThrowsConfigExceptionWithGuidance()
+    {
+        // A [workers.phases] entry pointing at an undefined agent has the same
+        // failure mode as an undefined default_agent and must be caught at load time.
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "abc-123"
+plane_api_token_env = "PLANE_TOKEN"
+
+[workers]
+default_agent = "claude-code"
+
+[workers.claude-code]
+executable = "claude"
+
+[workers.claude-code.sizes]
+small  = { model = "claude-haiku-4-5-20251001" }
+medium = { model = "claude-sonnet-4-6" }
+large  = { model = "claude-opus-4-7" }
+
+[workers.phases]
+implement = "codex"
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var ex = Assert.Throws<ConfigException>(() => BuildConfigLoader.Load(path));
+            Assert.Contains("implement", ex.Message);
+            Assert.Contains("[workers.codex]", ex.Message);
+            Assert.Contains("claude-code", ex.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Load_GeminiAgentSubTable_MissingSizes_ThrowsConfigException()
     {
         var toml = """

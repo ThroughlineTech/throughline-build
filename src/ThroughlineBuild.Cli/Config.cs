@@ -614,6 +614,24 @@ public static class BuildConfigLoader
             agents[kv.Key] = new AgentConfig(executable, maxOutputTokens, sizes.AsReadOnly(), bypassPermissions);
         }
 
+        // Validate that default_agent and every phase agent resolve to a defined
+        // [workers.<name>] sub-table. Without this, a default_agent (or phase agent)
+        // pointing at a missing/commented-out sub-table sails through Load() and only
+        // blows up later at agent-resolution time as an *unhandled* exception
+        // (Program.cs throws ConfigException outside any try/catch when the agent is
+        // looked up). The classic trigger is leaving the [workers.codex] sections
+        // commented in config.toml while default_agent = "codex". Catching it here
+        // routes through the friendly "Config error:" handler (exit 2) and tells the
+        // operator exactly how to fix it.
+        if (!agents.ContainsKey(defaultAgent))
+            throw new ConfigException(BuildUndefinedAgentMessage("default_agent", defaultAgent, agents.Keys));
+        foreach (var phaseKv in phases)
+        {
+            if (!agents.ContainsKey(phaseKv.Value))
+                throw new ConfigException(
+                    BuildUndefinedAgentMessage($"[workers.phases].{phaseKv.Key}", phaseKv.Value, agents.Keys));
+        }
+
         var maxConcurrency = OptionalInt(t, "max_concurrency", Math.Min(Environment.ProcessorCount, 4));
 
         return new WorkersConfig(
@@ -622,6 +640,23 @@ public static class BuildConfigLoader
             Agents: agents,
             Phases: phases,
             MaxConcurrency: maxConcurrency);
+    }
+
+    // Build an actionable error for a setting (default_agent or a phase) that names an
+    // agent with no matching [workers.<name>] sub-table - the common "codex sections
+    // left commented out" case. Names the offending setting, the fix (uncomment/add the
+    // sub-table or repoint the setting), and which agents ARE defined.
+    private static string BuildUndefinedAgentMessage(string settingName, string agentName, ICollection<string> definedAgents)
+    {
+        var definedNames = new List<string>(definedAgents);
+        definedNames.Sort(StringComparer.Ordinal);
+        var available = definedNames.Count > 0
+            ? $"Configured agents: {string.Join(", ", definedNames)}."
+            : "No [workers.<name>] sub-tables are currently defined.";
+        return
+            $"{settingName} = \"{agentName}\" but there is no [workers.{agentName}] sub-table in config. " +
+            $"Uncomment or add the [workers.{agentName}] and [workers.{agentName}.sizes] sections in " +
+            $".build/config.toml, or set {settingName} to a configured agent. {available}";
     }
 
     private static EventsConfig ReadEventsSection(TomlTable root)
