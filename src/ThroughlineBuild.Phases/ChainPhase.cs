@@ -48,7 +48,12 @@ public record ChainPhaseOptions(
     // here - NOT in the main worktree, which stays parked on the configured root branch.
     // Distinct from SharedWorktreePath, which ImplementPhase reads as "build the ticket
     // inside this worktree"; the integration worktree must not be reused for that.
-    string? ChainIntegrationWorktreePath = null);
+    string? ChainIntegrationWorktreePath = null,
+    // Provides accumulated from all previously shipped upstream tickets in the same chain.
+    // Passed through to the gate so the consumes-provides preflight can check whether the
+    // current ticket's declared consumes are satisfied. Null means no chain context (single
+    // ticket) and is treated identically to an empty set.
+    IReadOnlySet<string>? AccumulatedUpstreamProvides = null);
 
 public class ChainPhase
 {
@@ -390,6 +395,8 @@ public class ChainPhase
             }
         }
 
+        IReadOnlyList<string>? shippedProvides = null;
+
         if (startPhase == StartPhase.Plan || startPhase == StartPhase.Implement || startPhase == StartPhase.ResumeImplement)
         {
             // ResumeImplement re-enters the loop as a rework round (carries recovered/synthesized
@@ -397,27 +404,29 @@ public class ChainPhase
             // creating a fresh one. Plan/Implement start a clean initial round.
             var startRound = startPhase == StartPhase.ResumeImplement ? entry.ResumeStartRound : 0;
             var initialFeedback = startPhase == StartPhase.ResumeImplement ? entry.ResumeFeedback : null;
-            var chainResult = await RunImplementReviewLoopAsync(options, steps, chainSessionId, startRound, initialFeedback, totalSw, ct)
+            var (loopFailure, loopProvides) = await RunImplementReviewLoopAsync(options, steps, chainSessionId, startRound, initialFeedback, totalSw, ct)
                 .ConfigureAwait(false);
-            if (chainResult is not null)
+            if (loopFailure is not null)
             {
                 totalSw.Stop();
-                var finalResult = chainResult with { TotalDuration = totalSw.Elapsed };
+                var finalResult = loopFailure with { TotalDuration = totalSw.Elapsed };
                 await EmitChainEndAsync(finalResult, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
                 return finalResult;
             }
+            shippedProvides = loopProvides;
         }
         else
         {
-            var chainResult = await RunReviewBranchAsync(options, steps, chainSessionId, 0, totalSw, ct)
+            var (loopFailure, loopProvides) = await RunReviewBranchAsync(options, steps, chainSessionId, 0, totalSw, ct)
                 .ConfigureAwait(false);
-            if (chainResult is not null)
+            if (loopFailure is not null)
             {
                 totalSw.Stop();
-                var finalResult = chainResult with { TotalDuration = totalSw.Elapsed };
+                var finalResult = loopFailure with { TotalDuration = totalSw.Elapsed };
                 await EmitChainEndAsync(finalResult, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
                 return finalResult;
             }
+            shippedProvides = loopProvides;
         }
 
         var shipSessionId = _sessionIdGenerator();
@@ -463,7 +472,8 @@ public class ChainPhase
             return stoppedAtShip;
         }
 
-        var completed = new ChainResult(options.TicketId, steps, ChainOutcome.Completed, totalSw.Elapsed, null);
+        var completed = new ChainResult(options.TicketId, steps, ChainOutcome.Completed, totalSw.Elapsed, null,
+            ShippedProvides: shippedProvides);
         await EmitChainEndAsync(completed, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
         return completed;
     }
@@ -507,7 +517,7 @@ public class ChainPhase
             Data: data), ct).ConfigureAwait(false);
     }
 
-    private async Task<ChainResult?> RunImplementReviewLoopAsync(
+    private async Task<(ChainResult? abort, IReadOnlyList<string>? successProvides)> RunImplementReviewLoopAsync(
         ChainPhaseOptions options,
         List<ChainStep> steps,
         string chainSessionId,
@@ -576,13 +586,13 @@ public class ChainPhase
                                 ["rationale"] = evidence?.Rationale ?? ""
                             }), ct).ConfigureAwait(false);
                         totalSw.Stop();
-                        return new ChainResult(options.TicketId, steps, ChainOutcome.RatifiedObsolete,
-                            totalSw.Elapsed, finalRationale, evidence);
+                        return (new ChainResult(options.TicketId, steps, ChainOutcome.RatifiedObsolete,
+                            totalSw.Elapsed, finalRationale, evidence), null);
                     }
                     // Ratifier rejected - fall through to StoppedAtImplement
                 }
-                return new ChainResult(options.TicketId, steps, ChainOutcome.StoppedAtImplement,
-                    TimeSpan.Zero, null);
+                return (new ChainResult(options.TicketId, steps, ChainOutcome.StoppedAtImplement,
+                    TimeSpan.Zero, null), null);
             }
 
             // Gate phase: run checks once on the warm worktree and collect smoke signals.
@@ -611,7 +621,8 @@ public class ChainPhase
 
                 gateOutcome = await _gateFactory(gateBuildOpts).RunAsync(
                     options.TicketId, gateWorktreePath, gateBranchName, gateBaseRef,
-                    _workingDirectory, implResult.CompletionClaim, ct).ConfigureAwait(false);
+                    _workingDirectory, implResult.CompletionClaim, ct,
+                    options.AccumulatedUpstreamProvides).ConfigureAwait(false);
                 gateSw.Stop();
 
                 var gateStep = new ChainStep(
@@ -653,24 +664,24 @@ public class ChainPhase
                         round++;
                         continue;
                     }
-                    return new ChainResult(options.TicketId, steps, ChainOutcome.ReworkCapExceeded,
-                        TimeSpan.Zero, gateRationale);
+                    return (new ChainResult(options.TicketId, steps, ChainOutcome.ReworkCapExceeded,
+                        TimeSpan.Zero, gateRationale), null);
                 }
             }
 
             var reviewResult = await RunOneReviewAsync(options, steps, round, gateOutcome, ct).ConfigureAwait(false);
 
             if (reviewResult.abort is not null)
-                return reviewResult.abort;
+                return (reviewResult.abort, null);
 
             var rv = reviewResult.verdict!;
 
             if (rv.Kind == VerdictKind.Pass)
-                return null;
+                return (null, implResult.CompletionClaim?.Provides);
 
             if (rv.Kind == VerdictKind.Fail)
-                return new ChainResult(options.TicketId, steps, ChainOutcome.StoppedAtReview,
-                    TimeSpan.Zero, rv.Rationale);
+                return (new ChainResult(options.TicketId, steps, ChainOutcome.StoppedAtReview,
+                    TimeSpan.Zero, rv.Rationale), null);
 
             if (round < MaxReworkRounds)
             {
@@ -691,13 +702,13 @@ public class ChainPhase
             }
             else
             {
-                return new ChainResult(options.TicketId, steps, ChainOutcome.ReworkCapExceeded,
-                    TimeSpan.Zero, rv.Rationale);
+                return (new ChainResult(options.TicketId, steps, ChainOutcome.ReworkCapExceeded,
+                    TimeSpan.Zero, rv.Rationale), null);
             }
         }
     }
 
-    private async Task<ChainResult?> RunReviewBranchAsync(
+    private async Task<(ChainResult? abort, IReadOnlyList<string>? successProvides)> RunReviewBranchAsync(
         ChainPhaseOptions options,
         List<ChainStep> steps,
         string chainSessionId,
@@ -709,16 +720,16 @@ public class ChainPhase
         var reviewResult = await RunOneReviewAsync(options, steps, round, null, ct).ConfigureAwait(false);
 
         if (reviewResult.abort is not null)
-            return reviewResult.abort;
+            return (reviewResult.abort, null);
 
         var rv = reviewResult.verdict!;
 
         if (rv.Kind == VerdictKind.Pass)
-            return null;
+            return (null, null);
 
         if (rv.Kind == VerdictKind.Fail)
-            return new ChainResult(options.TicketId, steps, ChainOutcome.StoppedAtReview,
-                TimeSpan.Zero, rv.Rationale);
+            return (new ChainResult(options.TicketId, steps, ChainOutcome.StoppedAtReview,
+                TimeSpan.Zero, rv.Rationale), null);
 
         var feedback = new ReviewFeedback(rv.Rationale, rv.ChecksFailed, round + 1);
         await _events.EmitAsync(new WorkflowEvent(
@@ -2024,6 +2035,11 @@ public class ChainPhase
             }
         }
 
+        // Accumulated provides from all previously shipped children. Each child's gate
+        // receives this set so the consumes-provides preflight can check whether the child's
+        // declared consumes are satisfied by upstream siblings. Updated after every successful ship.
+        var accumulatedProvides = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var level in levels)
         {
             if (anyStoppedEarly)
@@ -2078,7 +2094,8 @@ public class ChainPhase
                     Depth = options.Depth + 1,
                     VisitedTicketUuids = AddVisited(options.VisitedTicketUuids, parentTicket.Uuid),
                     ChainTargetBranch = integrationBranch,
-                    ChainIntegrationWorktreePath = sharedWorktreePath ?? integrationWorktreePath
+                    ChainIntegrationWorktreePath = sharedWorktreePath ?? integrationWorktreePath,
+                    AccumulatedUpstreamProvides = accumulatedProvides
                 };
                 var childResult = await RunAsync(childOptions, ct).ConfigureAwait(false);
 
@@ -2100,6 +2117,11 @@ public class ChainPhase
                     anyStoppedEarly = true;
                     break;
                 }
+
+                // Accumulate the shipped child's provides so subsequent siblings can check their
+                // consumes against the growing set in the consumes-provides preflight.
+                if (childResult.ShippedProvides is { Count: > 0 } provides)
+                    accumulatedProvides.UnionWith(provides);
 
                 if (childResult.Outcome == ChainOutcome.ParentCompleted)
                 {

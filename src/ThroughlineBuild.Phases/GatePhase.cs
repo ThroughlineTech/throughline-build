@@ -52,7 +52,8 @@ public class GatePhase
         string baseRef,
         string workingDirectory,
         CompletionClaim? claim,
-        CancellationToken ct)
+        CancellationToken ct,
+        IReadOnlySet<string>? accumulatedUpstreamProvides = null)
     {
         // Validate claim schema when one is present (null means pre-claim-format worker - allowed).
         if (claim is not null)
@@ -88,6 +89,20 @@ public class GatePhase
         {
             smokeSignals.Add(new SmokeSignal("diff-facts", SmokeSignalKind.DiffFacts, false,
                 $"diff unavailable: {ex.Message}"));
+        }
+
+        // Consumes-provides preflight: check whether the current ticket's consumes are
+        // a subset of the accumulated upstream provides. No-op (no signal) when consumes
+        // is empty or absent; never hard-fails the gate.
+        if (claim is not null && claim.Consumes.Count > 0)
+        {
+            var upstream = accumulatedUpstreamProvides ?? (IReadOnlySet<string>)new HashSet<string>(StringComparer.Ordinal);
+            var unsatisfied = claim.Consumes.Where(c => !upstream.Contains(c)).ToList();
+            var satisfied = unsatisfied.Count == 0;
+            var details = satisfied
+                ? $"all {claim.Consumes.Count} consume(s) satisfied by upstream provides"
+                : $"{unsatisfied.Count} unsatisfied: {string.Join(", ", unsatisfied)}";
+            smokeSignals.Add(new SmokeSignal("consumes-provides-preflight", SmokeSignalKind.GrepPresent, satisfied, details));
         }
 
         // Hard-fail only on Gating role failures; Advisory failures (lint, format) are recorded

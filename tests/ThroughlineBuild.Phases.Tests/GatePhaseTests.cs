@@ -111,6 +111,86 @@ public class GatePhaseTests
         Assert.Contains(outcome.SmokeSignals, s => s.Kind == SmokeSignalKind.DiffFacts);
     }
 
+    // AC: "When claims declare consumes and provides, the preflight reports whether consumes
+    //      is a subset of accumulated upstream provides"
+    [Fact]
+    public async Task RunAsync_ConsumesAllSatisfied_EmitsMatchedPreflightSignal()
+    {
+        var claim = new CompletionClaim(
+            Provides: new[] { "module-a" },
+            Consumes: new[] { "module-b", "module-c" },
+            AcBindings: Array.Empty<AcBinding>(),
+            TestsAdded: Array.Empty<string>());
+        var upstream = new HashSet<string> { "module-b", "module-c", "module-d" };
+        var gate = MakeGate(checkResults: Array.Empty<CheckResult>());
+
+        var outcome = await gate.RunAsync(
+            TicketId, "/fake/worktree", "ticket/tlb-1", MainSha, "/fake/working",
+            claim, CancellationToken.None, accumulatedUpstreamProvides: upstream);
+
+        Assert.True(outcome.Passed);
+        var signal = Assert.Single(outcome.SmokeSignals, s => s.Label == "consumes-provides-preflight");
+        Assert.Equal(SmokeSignalKind.GrepPresent, signal.Kind);
+        Assert.True(signal.Matched);
+        Assert.Contains("2", signal.Details); // "all 2 consume(s) satisfied"
+    }
+
+    // AC: "The result is emitted as a smoke signal and never hard-fails the gate"
+    [Fact]
+    public async Task RunAsync_ConsumesMissingFromUpstream_EmitsUnmatchedSignal_GateStillPasses()
+    {
+        var claim = new CompletionClaim(
+            Provides: new[] { "module-a" },
+            Consumes: new[] { "module-b", "module-z" },
+            AcBindings: Array.Empty<AcBinding>(),
+            TestsAdded: Array.Empty<string>());
+        var upstream = new HashSet<string> { "module-b" }; // module-z missing
+        var gate = MakeGate(checkResults: Array.Empty<CheckResult>());
+
+        var outcome = await gate.RunAsync(
+            TicketId, "/fake/worktree", "ticket/tlb-1", MainSha, "/fake/working",
+            claim, CancellationToken.None, accumulatedUpstreamProvides: upstream);
+
+        Assert.True(outcome.Passed);
+        var signal = Assert.Single(outcome.SmokeSignals, s => s.Label == "consumes-provides-preflight");
+        Assert.Equal(SmokeSignalKind.GrepPresent, signal.Kind);
+        Assert.False(signal.Matched);
+        Assert.Contains("module-z", signal.Details);
+    }
+
+    // AC: "The preflight is a no-op, not a failure, when the fields are absent"
+    [Fact]
+    public async Task RunAsync_EmptyConsumes_NoPreflightSignalEmitted()
+    {
+        var claim = new CompletionClaim(
+            Provides: new[] { "module-a" },
+            Consumes: Array.Empty<string>(),
+            AcBindings: Array.Empty<AcBinding>(),
+            TestsAdded: Array.Empty<string>());
+        var gate = MakeGate(checkResults: Array.Empty<CheckResult>());
+
+        var outcome = await gate.RunAsync(
+            TicketId, "/fake/worktree", "ticket/tlb-1", MainSha, "/fake/working",
+            claim, CancellationToken.None);
+
+        Assert.True(outcome.Passed);
+        Assert.DoesNotContain(outcome.SmokeSignals, s => s.Label == "consumes-provides-preflight");
+    }
+
+    // AC: "The preflight is a no-op, not a failure, when the fields are absent" (null claim)
+    [Fact]
+    public async Task RunAsync_NullClaim_NoPreflightSignalEmitted()
+    {
+        var gate = MakeGate(checkResults: Array.Empty<CheckResult>());
+
+        var outcome = await gate.RunAsync(
+            TicketId, "/fake/worktree", "ticket/tlb-1", MainSha, "/fake/working",
+            claim: null, CancellationToken.None);
+
+        Assert.True(outcome.Passed);
+        Assert.DoesNotContain(outcome.SmokeSignals, s => s.Label == "consumes-provides-preflight");
+    }
+
     // -------------------------------------------------------------------------
     // Fakes
     // -------------------------------------------------------------------------
