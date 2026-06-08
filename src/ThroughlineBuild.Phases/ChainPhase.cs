@@ -119,6 +119,13 @@ public class ChainPhase
         _landingPushEnabled = landingPushEnabled;
     }
 
+    // Inert read-only accessors over the wired collaborators, for composition-root tests that
+    // verify the chain verb did not silently drop a dependency when constructing this phase.
+    // The original --batch-implement bug was exactly a dropped ctor argument (_batchWorker left
+    // null), so these let a test fail when that recurs. No runtime behavior depends on them.
+    internal IWorkerAgent? BatchWorker => _batchWorker;
+    internal Func<BuildOptions, ShipPhase>? ChainShipFactory => _chainShipFactory;
+
     public async Task<ChainResult> RunAsync(ChainPhaseOptions options, CancellationToken ct)
     {
         var totalSw = Stopwatch.StartNew();
