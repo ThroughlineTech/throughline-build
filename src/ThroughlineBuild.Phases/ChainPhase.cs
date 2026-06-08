@@ -59,7 +59,8 @@ public class ChainPhase
     private readonly IEventSink _events;
     private readonly Func<BuildOptions, PlanPhase> _planFactory;
     private readonly Func<BuildOptions, ImplementPhaseOptions, ImplementPhase> _implementFactory;
-    private readonly Func<BuildOptions, ReviewPhase> _reviewFactory;
+    private readonly Func<BuildOptions, GateOutcome?, ReviewPhase> _reviewFactory;
+    private readonly Func<BuildOptions, GatePhase>? _gateFactory;
     private readonly Func<BuildOptions, ShipPhase> _shipFactory;
     // Ship factory used within the parent-chain path: produces a ShipPhase with SkipDecruft=true
     // so the shared worktree is not torn down after each ticket. Falls back to _shipFactory when null.
@@ -89,7 +90,7 @@ public class ChainPhase
         BuildOptions baseOptions,
         Func<BuildOptions, PlanPhase> planFactory,
         Func<BuildOptions, ImplementPhaseOptions, ImplementPhase> implementFactory,
-        Func<BuildOptions, ReviewPhase> reviewFactory,
+        Func<BuildOptions, GateOutcome?, ReviewPhase> reviewFactory,
         Func<BuildOptions, ShipPhase> shipFactory,
         Func<string>? sessionIdGenerator = null,
         string? workingDirectory = null,
@@ -99,7 +100,8 @@ public class ChainPhase
         IReviewFeedbackRetriever? feedbackRetriever = null,
         IWorkerAgent? batchWorker = null,
         string? landingRemote = null,
-        bool landingPushEnabled = false)
+        bool landingPushEnabled = false,
+        Func<BuildOptions, GatePhase>? gateFactory = null)
     {
         _ticketing = ticketing;
         _events = events;
@@ -107,6 +109,7 @@ public class ChainPhase
         _planFactory = planFactory;
         _implementFactory = implementFactory;
         _reviewFactory = reviewFactory;
+        _gateFactory = gateFactory;
         _shipFactory = shipFactory;
         _chainShipFactory = chainShipFactory;
         _sessionIdGenerator = sessionIdGenerator ?? (() => Guid.NewGuid().ToString("N"));
@@ -582,7 +585,80 @@ public class ChainPhase
                     TimeSpan.Zero, null);
             }
 
-            var reviewResult = await RunOneReviewAsync(options, steps, round, ct).ConfigureAwait(false);
+            // Gate phase: run checks once on the warm worktree and collect smoke signals.
+            // Only engaged when a gate factory was supplied; nil factory skips gate entirely.
+            GateOutcome? gateOutcome = null;
+            if (_gateFactory is not null)
+            {
+                var gateSessionId = _sessionIdGenerator();
+                var gateBuildOpts = BuildPhaseOptions(gateSessionId, options.TicketId, "gate", round, options.ChainTargetBranch);
+                EmitPhaseStart(options, "gate", round, gateSessionId);
+                var gateSw = Stopwatch.StartNew();
+
+                var gateWorktreePath = implResult.WorktreePath ?? _workingDirectory;
+                var gateBranchName = implResult.BranchName ?? PhaseWorktreeLayout.BranchName(options.TicketId);
+
+                string gateBaseRef;
+                try
+                {
+                    (gateBaseRef, _) = await BaseRefResolver.ResolveAsync(
+                        _git, _workingDirectory, _baseOptions.TargetBranch, ct).ConfigureAwait(false);
+                }
+                catch
+                {
+                    gateBaseRef = _baseOptions.TargetBranch;
+                }
+
+                gateOutcome = await _gateFactory(gateBuildOpts).RunAsync(
+                    options.TicketId, gateWorktreePath, gateBranchName, gateBaseRef,
+                    _workingDirectory, implResult.CompletionClaim, ct).ConfigureAwait(false);
+                gateSw.Stop();
+
+                var gateStep = new ChainStep(
+                    PhaseName: "gate",
+                    ReworkRoundNumber: round,
+                    Status: gateOutcome.Passed ? Status.Ok : Status.Failed,
+                    FailureReason: gateOutcome.HardFailReason,
+                    Verdict: null,
+                    Duration: gateSw.Elapsed,
+                    PhaseSessionId: gateSessionId);
+                steps.Add(gateStep);
+                options.OnStep?.Invoke(options.TicketId, gateStep);
+
+                if (!gateOutcome.Passed)
+                {
+                    // Gate already transitioned InReview -> InProgress. Re-enter the rework loop
+                    // with the gate failure as feedback so the next implement knows what broke.
+                    var gatingFailed = gateOutcome.CheckResults
+                        .Where(r => r.Role == CheckRole.Gating && !r.Passed && !r.Skipped)
+                        .Select(r => r.Name)
+                        .ToList();
+                    var gateRationale = gateOutcome.HardFailReason ?? "gate: gating checks failed";
+
+                    if (round < MaxReworkRounds)
+                    {
+                        feedback = new ReviewFeedback(gateRationale, gatingFailed, round + 1);
+                        await _events.EmitAsync(new WorkflowEvent(
+                            SessionId: chainSessionId,
+                            Timestamp: DateTimeOffset.UtcNow,
+                            Kind: EventKind.ReworkRound,
+                            TicketId: options.TicketId,
+                            Phase: Phase.Implement,
+                            Data: new Dictionary<string, object>
+                            {
+                                ["round"] = round + 1,
+                                ["verdict_that_triggered"] = "GateFailure",
+                                ["rationale_preview"] = RationalePreview(gateRationale) ?? ""
+                            }), ct).ConfigureAwait(false);
+                        round++;
+                        continue;
+                    }
+                    return new ChainResult(options.TicketId, steps, ChainOutcome.ReworkCapExceeded,
+                        TimeSpan.Zero, gateRationale);
+                }
+            }
+
+            var reviewResult = await RunOneReviewAsync(options, steps, round, gateOutcome, ct).ConfigureAwait(false);
 
             if (reviewResult.abort is not null)
                 return reviewResult.abort;
@@ -629,7 +705,8 @@ public class ChainPhase
         Stopwatch totalSw,
         CancellationToken ct)
     {
-        var reviewResult = await RunOneReviewAsync(options, steps, round, ct).ConfigureAwait(false);
+        // No gate for tickets already in InReview (resume path): ReviewPhase runs checks itself.
+        var reviewResult = await RunOneReviewAsync(options, steps, round, null, ct).ConfigureAwait(false);
 
         if (reviewResult.abort is not null)
             return reviewResult.abort;
@@ -664,13 +741,14 @@ public class ChainPhase
         ChainPhaseOptions options,
         List<ChainStep> steps,
         int round,
+        GateOutcome? gateOutcome,
         CancellationToken ct)
     {
         var revSessionId = _sessionIdGenerator();
         var revBuildOpts = BuildPhaseOptions(revSessionId, options.TicketId, "review", round);
         EmitPhaseStart(options, "review", -1, revSessionId);
         var revSw = Stopwatch.StartNew();
-        var revResult = await _reviewFactory(revBuildOpts)
+        var revResult = await _reviewFactory(revBuildOpts, gateOutcome)
             .RunAsync(options.TicketId, _workingDirectory, ct).ConfigureAwait(false);
         revSw.Stop();
 

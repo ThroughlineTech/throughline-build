@@ -20,6 +20,7 @@ public sealed class WorkerAgentReviewer : IVerifier
     private readonly WorkerOptions _workerOptions;
     private readonly string _workingDirectory;
     private readonly ProjectContext _project;
+    private readonly IReadOnlyList<SmokeSignal>? _smokeSignals;
 
     public WorkerResult? LastWorkerResult { get; private set; }
 
@@ -29,7 +30,8 @@ public sealed class WorkerAgentReviewer : IVerifier
         IReadOnlyList<CheckResult> checkResults,
         WorkerOptions workerOptions,
         string workingDirectory,
-        ProjectContext? project = null)
+        ProjectContext? project = null,
+        IReadOnlyList<SmokeSignal>? smokeSignals = null)
     {
         _worker = worker;
         _ticket = ticket;
@@ -37,6 +39,7 @@ public sealed class WorkerAgentReviewer : IVerifier
         _workerOptions = workerOptions;
         _workingDirectory = workingDirectory;
         _project = project ?? ProjectContext.Empty;
+        _smokeSignals = smokeSignals;
     }
 
     /// <summary>
@@ -56,7 +59,7 @@ public sealed class WorkerAgentReviewer : IVerifier
         // implementerBrief is on the public surface for future use; not forwarded in v1
         _ = implementerBrief;
 
-        var reviewBrief = ReviewBriefBuilder.Build(_worker.Name, _ticket, diff, implementerResult, _checkResults, _project);
+        var reviewBrief = ReviewBriefBuilder.Build(_worker.Name, _ticket, diff, implementerResult, _checkResults, _project, _smokeSignals);
 
         var workerResult = await _worker.ExecuteAsync(reviewBrief, _workingDirectory, _workerOptions, ct)
             .ConfigureAwait(false);

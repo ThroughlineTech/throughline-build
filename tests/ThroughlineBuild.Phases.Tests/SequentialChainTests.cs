@@ -129,7 +129,7 @@ public class SequentialChainTests
         Func<BuildOptions, ImplementPhaseOptions, ImplementPhase> implFactory = (opts, phaseOpts) =>
             new ImplementPhase(ticketing, implWorker, events, opts, git, phaseOptions: phaseOpts);
 
-        Func<BuildOptions, ReviewPhase> reviewFactory = opts =>
+        Func<BuildOptions, GateOutcome?, ReviewPhase> reviewFactory = (opts, _) =>
         {
             var verifier = verifierQueue.Dequeue();
             return new ReviewPhase(ticketing, new SeqOkWorkerAgent(null, null), events, opts,
@@ -403,7 +403,7 @@ public class SequentialChainTests
         Func<BuildOptions, ImplementPhaseOptions, ImplementPhase> implFactory = (opts, phaseOpts) =>
             new ImplementPhase(ticketing, implWorker, events, opts, git, phaseOptions: phaseOpts);
 
-        Func<BuildOptions, ReviewPhase> reviewFactory = opts =>
+        Func<BuildOptions, GateOutcome?, ReviewPhase> reviewFactory = (opts, _) =>
         {
             var verifier = verifiers.Dequeue();
             return new ReviewPhase(ticketing, new SeqOkWorkerAgent(null, null), events, opts,

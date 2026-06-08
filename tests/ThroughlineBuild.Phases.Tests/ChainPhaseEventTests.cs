@@ -92,7 +92,7 @@ public class ChainPhaseEventTests
         Func<BuildOptions, ImplementPhaseOptions, ImplementPhase> implFactory = (opts, phaseOpts) =>
             new ImplementPhase(ticketing, implWorker, sink, opts, git, phaseOptions: phaseOpts);
 
-        Func<BuildOptions, ReviewPhase> reviewFactory = opts =>
+        Func<BuildOptions, GateOutcome?, ReviewPhase> reviewFactory = (opts, _) =>
         {
             var verifier = verifierQueue.Dequeue();
             return new ReviewPhase(ticketing, new EventFakeWorkerAgent(null), sink, opts,

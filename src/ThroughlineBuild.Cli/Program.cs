@@ -1747,7 +1747,15 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
     var implementPhaseFactory = (BuildOptions buildOpts, ImplementPhaseOptions implOpts) =>
         new ImplementPhase(ticketing, workerFactory.Create(effectiveAgentFor("implement")), eventSink, buildOpts, project: config2.Project, phaseOptions: implOpts);
 
-    var reviewPhaseFactory = (BuildOptions buildOpts) =>
+    // Gate factory: runs the configured review checks once on the warm worktree after implement.
+    // Uses the same check set as review so the relocation is transparent to the operator.
+    var gatePhaseFactory = (BuildOptions buildOpts) =>
+    {
+        var gateOptions = new GateOptions(config2.Review.Checks);
+        return new GatePhase(ticketing, eventSink, buildOpts, gateOptions);
+    };
+
+    var reviewPhaseFactory = (BuildOptions buildOpts, GateOutcome? gateOutcome) =>
     {
         var verifierWorkerOptions = new WorkerOptions(
             TimeSpan.FromMinutes(config2.Review.VerifierTimeoutMinutes),
@@ -1757,7 +1765,14 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             LiveStderrSink: debugMode ? Console.Error : null,
             ProgressDigestSink: enableDigest ? Console.Error : null);
         var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
-        return new ReviewPhase(ticketing, workerFactory.Create(effectiveAgentFor("review")), eventSink, buildOpts, reviewOptions, project: config2.Project);
+        // When the gate ran its checks, pass its results to ReviewPhase so it reuses them
+        // rather than running the checks a second time (one build per ticket).
+        var checksRunner = gateOutcome is not null
+            ? (AutomatedChecksRunner)new PreComputedChecksRunner(gateOutcome.CheckResults)
+            : null;
+        var preRunSmokeSignals = gateOutcome?.SmokeSignals;
+        return new ReviewPhase(ticketing, workerFactory.Create(effectiveAgentFor("review")), eventSink, buildOpts, reviewOptions,
+            checksRunner: checksRunner, preRunSmokeSignals: preRunSmokeSignals, project: config2.Project);
     };
     // Once-per-chain honesty warning when the review worker won't enforce verifier_allowed_tools.
     var chainReviewToolWarning = VerifierToolEnforcement.UnenforcedWarning(effectiveAgentFor("review"), config2.Review.VerifierAllowedTools);
@@ -1842,7 +1857,8 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
         // here (intermediate chain ships run NoPush above). Push honors the same --no-push /
         // [ship] push toggle the per-ticket ship uses.
         landingRemote: config2.Ship.Remote,
-        landingPushEnabled: !(noPush || !config2.Ship.Push));
+        landingPushEnabled: !(noPush || !config2.Ship.Push),
+        gateFactory: gatePhaseFactory);
 
     ChainBatchImplementGroup? batchImplementGroup = null;
     if (batchImplementAllChildren)

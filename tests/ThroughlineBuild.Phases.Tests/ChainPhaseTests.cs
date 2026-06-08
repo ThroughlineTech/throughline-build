@@ -104,7 +104,7 @@ public class ChainPhaseTests
         Func<BuildOptions, ImplementPhaseOptions, ImplementPhase> implFactory = (opts, phaseOpts) =>
             new ImplementPhase(ticketing, implWorker, events, opts, git, phaseOptions: phaseOpts);
 
-        Func<BuildOptions, ReviewPhase> reviewFactory = opts =>
+        Func<BuildOptions, GateOutcome?, ReviewPhase> reviewFactory = (opts, _) =>
         {
             var verifier = verifierQueue.Dequeue();
             return new ReviewPhase(ticketing, new FakeWorkerAgent(null), events, opts,
@@ -558,7 +558,7 @@ public class ChainPhaseTests
             return new ImplementPhase(ticketing, new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks), events, opts, git, phaseOptions: phaseOpts);
         };
 
-        Func<BuildOptions, ReviewPhase> reviewFactory = opts =>
+        Func<BuildOptions, GateOutcome?, ReviewPhase> reviewFactory = (opts, _) =>
         {
             var verifier = verifiers.Dequeue();
             return new ReviewPhase(ticketing, new FakeWorkerAgent(null), events, opts,
@@ -2783,7 +2783,7 @@ public class ChainPhaseTests
             _sessionCounter = 0;
             Func<BuildOptions, PlanPhase> planFactory = _ => throw new InvalidOperationException("plan not expected for Ready batch");
             Func<BuildOptions, ImplementPhaseOptions, ImplementPhase> implFactory = (_, _) => throw new InvalidOperationException("implement not expected for batch");
-            Func<BuildOptions, ReviewPhase> reviewFactory = _ => throw new InvalidOperationException("per-ticket review not expected for batch");
+            Func<BuildOptions, GateOutcome?, ReviewPhase> reviewFactory = (_, _) => throw new InvalidOperationException("per-ticket review not expected for batch");
             Func<BuildOptions, ShipPhase> shipFactory = _ => throw new InvalidOperationException("per-ticket ship not expected for batch");
 
             var chain = new ChainPhase(

@@ -126,7 +126,7 @@ public class SequenceContractChainTests
         Func<BuildOptions, ImplementPhaseOptions, ImplementPhase> implFactory = (opts, phaseOpts) =>
             new ImplementPhase(ticketing, implWorker, events, opts, git, phaseOptions: phaseOpts);
 
-        Func<BuildOptions, ReviewPhase> reviewFactory = opts =>
+        Func<BuildOptions, GateOutcome?, ReviewPhase> reviewFactory = (opts, _) =>
         {
             var verifier = verifierQueue.Dequeue();
             return new ReviewPhase(ticketing, new ScOkWorkerAgent(null, null), events, opts,
