@@ -46,6 +46,14 @@ Rules for checks:
   under the empty root is never seen). For .NET, target the solution or the correct project, not an
   empty directory. For Python, point `mypy` at the package, not the repo root. The same canary
   mechanism applies to every stack - the engine only writes the file and runs the command.
+- HERMETIC TEST COMMAND: the test command (and the `test` check) must be HERMETIC - it must not
+  collect the engine's working directories (`.worktrees/`, `.build/`) or nested dependency installs,
+  which would make a root test run report a false red from stale copies. Express the exclusion in the
+  target runner's own idiom: vitest `test.exclude: ['**/node_modules/**', '**/.worktrees/**',
+  '**/.build/**']`; pytest `--ignore`/`norecursedirs`; jest `testPathIgnorePatterns`. A
+  project-scoped runner like `dotnet test` is already hermetic and needs no exclusion. Same principle
+  for every stack: tests run only over the project's real sources, never over the engine's scratch
+  directories.
 
 ## Output
 
