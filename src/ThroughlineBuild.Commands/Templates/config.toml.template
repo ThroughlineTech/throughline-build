@@ -88,35 +88,53 @@ verifier_timeout_minutes = 15
 # git-state guard. See TLB-478.
 verifier_allowed_tools = ["Read", "Grep", "Glob"]
 
+# Review checks are LEFT EMPTY on purpose. They are derived from your op-doc at
+# 'build scaffold' time: the op-doc states the real toolchain in prose and the scaffold
+# worker turns it into concrete checks. Until then there are no gating checks, so a
+# project with no build/test step (e.g. one that just emits a JSON file) passes the gate
+# cleanly instead of hard-failing on a phantom 'dotnet build'. To set checks by hand
+# instead, uncomment the block matching your stack.
+#
 # Each [[review.checks]] entry defines an automated check run before the verifier.
 # role = "gating"   -> non-zero exit hard-fails the gate; use for build, test, typecheck.
 # role = "advisory" -> failure recorded and shown to verifier, never hard-fails; use for lint, format.
 # Absent role defaults to "gating". A check absent from config is not-configured, never a failure.
-[[review.checks]]
-# Human-readable name shown in verifier context and event log.
-name = "build"
-# Executable to invoke (must be on PATH or an absolute path).
-executable = "dotnet"
-# Arguments passed to the executable.
-arguments = ["build", "--no-restore", "-c", "Release", "--nologo", "-v", "q"]
-# Maximum time this check may run before it is killed and treated as failed.
-timeout_minutes = 5
-# Gating: build failure hard-fails the gate; the implementer cannot proceed to review.
-role = "gating"
-
-[[review.checks]]
-name = "test"
-executable = "dotnet"
-# Pass --no-build so dotnet test does not recompile; build already ran above.
-arguments = ["test", "--no-build", "-c", "Release", "--nologo", "-v", "q", "--logger", "console;verbosity=minimal"]
-timeout_minutes = 10
-role = "gating"
-
-# Advisory check example (lint/format): records result, never hard-fails.
+#
+# --- Example: .NET stack ---
+# [[review.checks]]
+# name = "build"
+# executable = "dotnet"
+# arguments = ["build", "--no-restore", "-c", "Release", "--nologo", "-v", "q"]
+# timeout_minutes = 5
+# role = "gating"
+#
+# [[review.checks]]
+# name = "test"
+# executable = "dotnet"
+# arguments = ["test", "--no-build", "-c", "Release", "--nologo", "-v", "q", "--logger", "console;verbosity=minimal"]
+# timeout_minutes = 10
+# role = "gating"
+#
+# --- Example: Node / web stack ---
+# [[review.checks]]
+# name = "build"
+# executable = "npm"
+# arguments = ["run", "build"]
+# timeout_minutes = 5
+# role = "gating"
+#
+# [[review.checks]]
+# name = "test"
+# executable = "npm"
+# arguments = ["test"]
+# timeout_minutes = 10
+# role = "gating"
+#
+# --- Advisory example (lint/format): records result, never hard-fails ---
 # [[review.checks]]
 # name = "lint"
-# executable = "dotnet"
-# arguments = ["format", "--verify-no-changes"]
+# executable = "npm"
+# arguments = ["run", "lint"]
 # timeout_minutes = 5
 # role = "advisory"
 
@@ -127,34 +145,56 @@ remote = "origin"
 base_branch = "main"
 delete_feature_branch = true
 
-# Regression checks run after rebase and conflict-marker scan, before the fast-forward merge.
-[[ship.regression_checks]]
-name = "build"
-executable = "dotnet"
-arguments = ["build", "--nologo", "--configuration", "Release", "-v", "q"]
-timeout_minutes = 5
-role = "gating"
-
-[[ship.regression_checks]]
-name = "test"
-executable = "dotnet"
-arguments = ["test", "--nologo", "--configuration", "Release", "--no-build", "-v", "q", "--logger", "console;verbosity=minimal"]
-timeout_minutes = 10
-role = "gating"
+# Regression checks run after rebase and conflict-marker scan, before the fast-forward
+# merge. LEFT EMPTY on purpose - derived from your op-doc at 'build scaffold', same as
+# [[review.checks]] above. No entries = no regression gate. Uncomment to set by hand.
+#
+# --- Example: .NET stack ---
+# [[ship.regression_checks]]
+# name = "build"
+# executable = "dotnet"
+# arguments = ["build", "--nologo", "--configuration", "Release", "-v", "q"]
+# timeout_minutes = 5
+# role = "gating"
+#
+# [[ship.regression_checks]]
+# name = "test"
+# executable = "dotnet"
+# arguments = ["test", "--nologo", "--configuration", "Release", "--no-build", "-v", "q", "--logger", "console;verbosity=minimal"]
+# timeout_minutes = 10
+# role = "gating"
+#
+# --- Example: Node / web stack ---
+# [[ship.regression_checks]]
+# name = "build"
+# executable = "npm"
+# arguments = ["run", "build"]
+# timeout_minutes = 5
+# role = "gating"
+#
+# [[ship.regression_checks]]
+# name = "test"
+# executable = "npm"
+# arguments = ["test"]
+# timeout_minutes = 10
+# role = "gating"
 
 # [project] is optional - omit entirely to skip project-aware brief enrichment.
+# The toolchain fields below are LEFT BLANK on purpose: they are derived from your op-doc
+# at 'build scaffold' time. An all-blank toolchain assumes no stack (no phantom dotnet).
+# Fill them in by hand only if you are not scaffolding from an op-doc.
 [project]
 # Primary implementation language (e.g. "csharp", "typescript", "python").
-language = "csharp"
+language = ""
 # Framework or top-level stack (e.g. "dotnet", "react-vite", "django").
-framework = "dotnet"
+framework = ""
 # Package/dependency manager (e.g. "dotnet", "npm", "pip", "uv").
-package_manager = "dotnet"
+package_manager = ""
 # Common shell commands the brief can suggest to the worker.
-build_command = "dotnet build"
-test_command = "dotnet test"
-install_command = "dotnet restore"
-dev_command = "dotnet run"
+build_command = ""
+test_command = ""
+install_command = ""
+dev_command = ""
 # REQUIRED: "build" if using this CLI; "claude-config" if using Claude Code slash commands.
 workflow_tool = "build"
 # Plane project browse URL prefix; informational for the worker.
