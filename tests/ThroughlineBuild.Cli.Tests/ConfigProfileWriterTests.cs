@@ -317,4 +317,71 @@ public class ConfigProfileWriterTests
             Directory.Delete(tmpDir, recursive: true);
         }
     }
+
+    // convention_files renders into [project] as a string array and survives the real Config loader
+    // back into ProjectContext.ConventionFiles. A path carrying a double-quote exercises the escaping.
+    [Fact]
+    public void ConventionFiles_SurviveRenderThenConfigLoad()
+    {
+        var conventionFiles = new[] { "src/setupTests.ts", "vite.config.ts", "src/weird\"name.ts" };
+        var checks = new[] { new ProfileCheck("build", "npm", new[] { "run", "build" }, 5) };
+        var profile = new ProjectProfile(
+            "typescript", "react-vite", "npm",
+            "npm install", "npm run build", "npm test", "npm run dev",
+            checks, checks)
+        {
+            ConventionFiles = conventionFiles,
+        };
+
+        var outcome = ConfigProfileWriter.Apply(LoadableDotnetConfig, profile, force: false);
+        Assert.True(outcome.Changed, outcome.SkipReason);
+        var rendered = outcome.NewText!;
+        Assert.Contains("convention_files = [", rendered);
+
+        // Sanity: the rendered TOML re-parses cleanly via Tomlyn (escaping is valid).
+        Assert.NotNull(Toml.ToModel(rendered));
+
+        var tmpDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tmpDir);
+        var path = Path.Combine(tmpDir, "config.toml");
+        try
+        {
+            File.WriteAllText(path, rendered);
+            var config = BuildConfigLoader.Load(path, warnSink: _ => { });
+            Assert.Equal(conventionFiles, config.Project.ConventionFiles);
+        }
+        finally
+        {
+            File.Delete(path);
+            Directory.Delete(tmpDir, recursive: true);
+        }
+    }
+
+    // Apply into a config WITHOUT a [project] section appends one carrying the bundle.
+    [Fact]
+    public void ConventionFiles_AppendedWhenNoProjectSection()
+    {
+        var noProject = LoadableDotnetConfig[..LoadableDotnetConfig.IndexOf("[project]")].TrimEnd();
+        var checks = new[] { new ProfileCheck("build", "npm", new[] { "run", "build" }, 5) };
+        var profile = new ProjectProfile(
+            "typescript", "react-vite", "npm",
+            "npm install", "npm run build", "npm test", "npm run dev",
+            checks, checks)
+        {
+            ConventionFiles = new[] { "conftest.py" },
+        };
+
+        var rendered = ConfigProfileWriter.Apply(noProject, profile, force: false).NewText!;
+        Assert.Contains("[project]", rendered);
+        Assert.Contains("convention_files = [\"conftest.py\"]", rendered);
+        Assert.NotNull(Toml.ToModel(rendered));
+    }
+
+    // Empty bundle writes no convention_files line (no `convention_files = []` noise).
+    [Fact]
+    public void ConventionFiles_EmptyBundle_WritesNoLine()
+    {
+        var rendered = ConfigProfileWriter.Apply(LoadableDotnetConfig, NpmProfile(), force: false).NewText!;
+        Assert.DoesNotContain("convention_files", rendered);
+    }
 }

@@ -136,6 +136,8 @@ public static class ConfigProfileWriter
             lines.Add("[project]");
             foreach (var key in ProjectKeysOwnedByProfile)
                 lines.Add($"{key} = {TomlString(values[key])}");
+            if (profile.ConventionFiles.Count > 0)
+                lines.Add($"convention_files = {TomlStringArray(profile.ConventionFiles)}");
             return true;
         }
 
@@ -152,6 +154,24 @@ public static class ConfigProfileWriter
             {
                 lines.Insert(start + 1, newLine);
                 end++;
+                changed = true;
+            }
+        }
+
+        // convention_files is an ARRAY key (not a scalar), so it is handled apart from the owned scalar
+        // keys above. Write it only when the profile carries a bundle; replace an existing active line,
+        // insert when absent. A commented template line is skipped by FindKeyLine, so it survives.
+        if (profile.ConventionFiles.Count > 0)
+        {
+            var cfLine = $"convention_files = {TomlStringArray(profile.ConventionFiles)}";
+            int cfKeyLine = FindKeyLine(lines, start + 1, end, "convention_files");
+            if (cfKeyLine >= 0)
+            {
+                if (lines[cfKeyLine] != cfLine) { lines[cfKeyLine] = cfLine; changed = true; }
+            }
+            else
+            {
+                lines.Insert(start + 1, cfLine);
                 changed = true;
             }
         }
