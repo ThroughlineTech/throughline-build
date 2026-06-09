@@ -71,6 +71,36 @@ public class ImplementPhase : IWorkflowPhase
 
     public Phase Phase => Phase.Implement;
 
+    /// <summary>
+    /// A worktree-confined file reader for <see cref="PreloadedContextBuilder"/>: resolves a relative
+    /// path under <paramref name="worktreeRoot"/> and returns its text, or null if the file is absent,
+    /// unreadable, or resolves OUTSIDE the worktree (defense in depth - the builder already rejects
+    /// rooted/`..` paths, this catches anything that slips through). Never throws.
+    /// </summary>
+    internal static Func<string, string?> MakeWorktreeReader(string worktreeRoot)
+    {
+        string root;
+        try { root = Path.GetFullPath(worktreeRoot); }
+        catch { return static _ => null; }
+
+        return relPath =>
+        {
+            try
+            {
+                var combined = Path.GetFullPath(Path.Combine(root, relPath));
+                bool inside = string.Equals(combined, root, StringComparison.OrdinalIgnoreCase)
+                    || combined.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+                if (!inside)
+                    return null;
+                return File.Exists(combined) ? File.ReadAllText(combined) : null;
+            }
+            catch
+            {
+                return null;
+            }
+        };
+    }
+
     public async Task<ImplementResult> RunAsync(string ticketId, string workingDirectory, CancellationToken ct)
     {
         // Step 1: Fetch ticket
@@ -236,7 +266,16 @@ public class ImplementPhase : IWorkflowPhase
         var reworkContext = isRework
             ? await BuildReworkBriefContextAsync(comments, baseRef, canonicalBranchName, workingDirectory, ct).ConfigureAwait(false)
             : null;
-        var brief = ImplementBriefBuilder.Build(_worker.Name, ticket, repoState, canonicalBranchName, canonicalWorktreePath, _project, _phaseOptions.ReviewFeedback, effectiveChainRange, reworkContext);
+        // Experiment 2: pre-load the brief's named-input + convention file contents from the LIVE
+        // worktree so the worker does not re-discover them. Gated by [project].preload_context (default
+        // on); off -> "" -> the brief is byte-identical to the pre-preload baseline. In the chain path
+        // the shared worktree is already materialized here; in the standalone initial path it is not yet
+        // (created at Step 9), so the reader returns null for everything and the section is empty -
+        // tolerated by design (see plan 2.3), not an error.
+        var preloadedContextSection = _project.PreloadContext
+            ? PreloadedContextBuilder.Build(ticket.DescriptionHtml, _project, MakeWorktreeReader(canonicalWorktreePath))
+            : string.Empty;
+        var brief = ImplementBriefBuilder.Build(_worker.Name, ticket, repoState, canonicalBranchName, canonicalWorktreePath, _project, _phaseOptions.ReviewFeedback, effectiveChainRange, reworkContext, preloadedContextSection);
 
         // Step 9: Set up the working directory for the ticket.
         // - Shared-worktree (initial): create the ticket branch inside the pre-existing worktree.
