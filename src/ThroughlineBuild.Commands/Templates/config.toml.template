@@ -202,6 +202,13 @@ plane_project_url = "https://plane.example.com/workspace/browse/PROJ/"
 # Optional markdown file with extra project notes; path resolves relative to this config file.
 # Missing files emit a stderr warning but do not fail the run.
 # notes_file = ".build/project.md"
+# Derived at 'build scaffold': stable, project-wide convention files (test harness/config + one
+# canonical test example) inlined into EVERY implement brief so the worker does not re-read them.
+# Paths are relative to the project root; contents are read lazily per brief from the worktree.
+# convention_files = ["src/setupTests.ts", "vite.config.ts", "src/data/__tests__/repository.test.ts"]
+# Pre-load named-input + convention file contents into the implement brief (default true).
+# Set false to ablate the lever and restore the pre-preload brief.
+# preload_context = true
 
 # [plan] mode controls the plan phase:
 # "investigate" - spawn a worker to investigate the ticket and write the plan.

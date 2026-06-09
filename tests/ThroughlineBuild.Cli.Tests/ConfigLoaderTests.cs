@@ -1543,4 +1543,102 @@ verify_gate_vacuity = false
             File.Delete(path);
         }
     }
+
+    [Fact]
+    public void Load_ConventionFiles_ParsedIntoProjectContext()
+    {
+        var toml = ValidToml + "\n[project]\nconvention_files = [\"src/setupTests.ts\", \"vite.config.ts\"]";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Equal(new[] { "src/setupTests.ts", "vite.config.ts" }, config.Project.ConventionFiles);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_ConventionFilesAbsent_DefaultsToEmpty()
+    {
+        var toml = ValidToml + "\n[project]\nlanguage = \"typescript\"";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Empty(config.Project.ConventionFiles);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_ConventionFiles_BlankEntriesDropped()
+    {
+        var toml = ValidToml + "\n[project]\nconvention_files = [\"src/setupTests.ts\", \"\", \"  \"]";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Equal(new[] { "src/setupTests.ts" }, config.Project.ConventionFiles);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_PreloadContext_DefaultsTrueWhenAbsent()
+    {
+        var toml = ValidToml + "\n[project]\nlanguage = \"typescript\"";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.True(config.Project.PreloadContext);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_PreloadContext_ParsesFalse()
+    {
+        var toml = ValidToml + "\n[project]\npreload_context = false";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.False(config.Project.PreloadContext);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_ConventionFilesAndPreloadContext_DoNotWarnAsUnknownKeys()
+    {
+        var toml = ValidToml + "\n[project]\nconvention_files = [\"a.ts\"]\npreload_context = false";
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            BuildConfigLoader.Load(path, w => captured.Add(w));
+            Assert.DoesNotContain(captured, w => w.Contains("convention_files"));
+            Assert.DoesNotContain(captured, w => w.Contains("preload_context"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

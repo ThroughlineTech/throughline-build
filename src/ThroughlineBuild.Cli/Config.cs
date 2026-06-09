@@ -266,7 +266,8 @@ public static class BuildConfigLoader
     private static readonly HashSet<string> KnownProjectKeys = new(StringComparer.Ordinal)
     {
         "language", "framework", "package_manager", "build_command", "test_command",
-        "install_command", "dev_command", "plane_project_url", "workflow_tool", "notes_file"
+        "install_command", "dev_command", "plane_project_url", "workflow_tool", "notes_file",
+        "convention_files", "preload_context"
     };
 
     private static readonly HashSet<string> KnownBatchKeys = new(StringComparer.Ordinal)
@@ -512,6 +513,13 @@ public static class BuildConfigLoader
         if (val is long l) return (int)l;
         if (val is int i) return i;
         return defaultValue;
+    }
+
+    private static bool OptionalBool(TomlTable section, string key, bool defaultValue)
+    {
+        if (!section.TryGetValue(key, out var val) || val is not bool b)
+            return defaultValue;
+        return b;
     }
 
     private static IReadOnlyList<string> OptionalStringList(TomlTable section, string key, IReadOnlyList<string> defaultValue)
@@ -885,6 +893,18 @@ public static class BuildConfigLoader
             }
         }
 
+        // Project-convention bundle (derived; the deriver chose these paths). Read as a plain list of
+        // relative paths; their CONTENTS are read lazily at brief-build from the live worktree, not
+        // here (the target source may not exist yet at config load). Blank entries are dropped.
+        var conventionFiles = OptionalStringList(t, "convention_files", Array.Empty<string>())
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => p.Trim())
+            .ToList()
+            .AsReadOnly();
+
+        // Pre-load gate: default ON; set false to ablate the lever (restore the pre-preload brief).
+        var preloadContext = OptionalBool(t, "preload_context", true);
+
         return new ProjectContext(
             Language: language,
             Framework: framework,
@@ -895,6 +915,10 @@ public static class BuildConfigLoader
             DevCommand: devCommand,
             PlaneProjectUrl: planeProjectUrl,
             Notes: notes,
-            WorkflowTool: workflowTool);
+            WorkflowTool: workflowTool)
+        {
+            ConventionFiles = conventionFiles,
+            PreloadContext = preloadContext
+        };
     }
 }
