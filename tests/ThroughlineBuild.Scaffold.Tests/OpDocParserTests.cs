@@ -343,6 +343,107 @@ public class OpDocParserTests
         Assert.Equal("**critical** thing to do.", brief.Goal);
     }
 
+    // ---- Preload label (experiment 3: positive-only context pre-load channel) ----
+
+    [Fact]
+    public void PreloadLabel_ParsesToPreloadFiles_IndependentOfInputs()
+    {
+        // A `Preload:` block is a bullet list of file PATHS. It parses to Brief.PreloadFiles and is
+        // independent of the prose Inputs read-map (both may coexist).
+        string content =
+            "# Operation: preload-op\n\nPreload op title.\n\n" +
+            "## Why this exists\n\nWhy content.\n\n" +
+            "## Dispatch order\n\n" +
+            "| Plan | Name | Depends on | Effort |\n" +
+            "| ---- | ---- | ---------- | ------ |\n" +
+            "| A    | Plan A | - | M |\n\n" +
+            "## Plan A: Plan with a preload block\n\n" +
+            "### Goal\n\nPlan goal.\n\n" +
+            "### Briefs\n\n" +
+            "| # | Slug | Intent | Deps | Files |\n" +
+            "|---|------|--------|------|-------|\n" +
+            "| 01 | preload-brief | Preload brief | - | - |\n\n" +
+            "### Briefs - detail\n\n" +
+            "#### Brief 01: preload-brief\n\n" +
+            "Goal: Brief goal.\n\n" +
+            "Inputs:\n- src/data/types.ts\n\n" +
+            "Preload:\n- src/data/aggregate.ts\n- src/pages/admin/AdminResults.tsx\n\n" +
+            "Acceptance:\n- [ ] criterion\n\n" +
+            "OOS:\n- oos item\n\n" +
+            "## What done looks like\n\nAll done.\n";
+
+        var result = Parse(content);
+        Assert.Empty(result.Errors);
+        var brief = result.Parsed!.Plans[0].Briefs[0];
+        Assert.Equal(new[] { "src/data/aggregate.ts", "src/pages/admin/AdminResults.tsx" }, brief.PreloadFiles);
+        Assert.Equal(new[] { "src/data/types.ts" }, brief.Inputs);
+    }
+
+    [Fact]
+    public void NoPreloadBlock_PreloadFilesEmpty()
+    {
+        // A brief with no Preload block leaves PreloadFiles empty (it is optional, not required).
+        string content =
+            "# Operation: nopre-op\n\nNo-preload op title.\n\n" +
+            "## Why this exists\n\nWhy content.\n\n" +
+            "## Dispatch order\n\n" +
+            "| Plan | Name | Depends on | Effort |\n" +
+            "| ---- | ---- | ---------- | ------ |\n" +
+            "| A    | Plan A | - | M |\n\n" +
+            "## Plan A: Plan without a preload block\n\n" +
+            "### Goal\n\nPlan goal.\n\n" +
+            "### Briefs\n\n" +
+            "| # | Slug | Intent | Deps | Files |\n" +
+            "|---|------|--------|------|-------|\n" +
+            "| 01 | plain-brief | Plain brief | - | - |\n\n" +
+            "### Briefs - detail\n\n" +
+            "#### Brief 01: plain-brief\n\n" +
+            "Goal: Brief goal.\n\n" +
+            "Acceptance:\n- [ ] criterion\n\n" +
+            "OOS:\n- oos item\n\n" +
+            "## What done looks like\n\nAll done.\n";
+
+        var result = Parse(content);
+        Assert.Empty(result.Errors);
+        Assert.Empty(result.Parsed!.Plans[0].Briefs[0].PreloadFiles);
+    }
+
+    [Fact]
+    public void ParentheticalInputsLabel_AbsorbedIntoGoal_NotAnInputsSection()
+    {
+        // The `Inputs (parenthetical):` form does NOT match the label regex, so its content is
+        // absorbed into the preceding Goal - the exact reason experiment 3 adds a dedicated Preload
+        // label rather than scraping the prose read-map. Adding Preload to the regex must NOT change
+        // this behavior (out of scope per the plan: do not fix the parenthetical absorption).
+        string content =
+            "# Operation: paren-op\n\nParen op title.\n\n" +
+            "## Why this exists\n\nWhy content.\n\n" +
+            "## Dispatch order\n\n" +
+            "| Plan | Name | Depends on | Effort |\n" +
+            "| ---- | ---- | ---------- | ------ |\n" +
+            "| A    | Plan A | - | M |\n\n" +
+            "## Plan A: Plan with a parenthetical inputs label\n\n" +
+            "### Goal\n\nPlan goal.\n\n" +
+            "### Briefs\n\n" +
+            "| # | Slug | Intent | Deps | Files |\n" +
+            "|---|------|--------|------|-------|\n" +
+            "| 01 | paren-brief | Paren brief | - | - |\n\n" +
+            "### Briefs - detail\n\n" +
+            "#### Brief 01: paren-brief\n\n" +
+            "Goal: Brief goal.\n\n" +
+            "Inputs (read these; do not rediscover them):\n- src/data/types.ts\n\n" +
+            "Acceptance:\n- [ ] criterion\n\n" +
+            "OOS:\n- oos item\n\n" +
+            "## What done looks like\n\nAll done.\n";
+
+        var result = Parse(content);
+        Assert.Empty(result.Errors);
+        var brief = result.Parsed!.Plans[0].Briefs[0];
+        Assert.Empty(brief.Inputs);                       // the parenthetical label never became an Inputs section
+        Assert.Empty(brief.PreloadFiles);                 // and no Preload block was declared
+        Assert.Contains("src/data/types.ts", brief.Goal); // the read-map prose absorbed into Goal
+    }
+
     // ---- Missing required H2 sections ----
 
     [Fact]

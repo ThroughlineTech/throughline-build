@@ -34,7 +34,14 @@ public record Brief(
     IReadOnlyList<string> AcceptanceCriteria,
     string? Notes,
     IReadOnlyList<string> OutOfScope,
-    string? DependsOn);
+    string? DependsOn)
+{
+    // Positive-only file paths the brief declares for context pre-loading (the `Preload:` op-doc
+    // label). Author-declared DATA - just paths, never scraped from prose and never language-branched.
+    // Empty unless the brief carries a Preload block. Init-only property (not a positional param) so the
+    // existing new Brief(...) sites do not churn; set only where the data exists. See experiment-3 plan.
+    public IReadOnlyList<string> PreloadFiles { get; init; } = Array.Empty<string>();
+}
 
 public record OpDocParseError(
     int LineNumber,

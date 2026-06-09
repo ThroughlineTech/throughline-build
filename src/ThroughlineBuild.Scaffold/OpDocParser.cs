@@ -29,7 +29,7 @@ public static class OpDocParser
     // The closing emphasis is only consumed when there was a matching opening emphasis (backreference \k<e>),
     // so a plain "Goal: **bold** content" keeps the leading "**" as content rather than treating it as a marker.
     private static readonly Regex BriefLabelPattern = new(
-        @"^\s*(?:(?<e>\*{1,2}|_{1,2})\s*(?<label>Goal|Inputs|Outputs|Acceptance|Notes|OOS)\s*(?::\s*\k<e>|\k<e>\s*:)|(?<label2>Goal|Inputs|Outputs|Acceptance|Notes|OOS)\s*:)\s*(?<rest>.*)$",
+        @"^\s*(?:(?<e>\*{1,2}|_{1,2})\s*(?<label>Goal|Inputs|Outputs|Acceptance|Notes|OOS|Preload)\s*(?::\s*\k<e>|\k<e>\s*:)|(?<label2>Goal|Inputs|Outputs|Acceptance|Notes|OOS|Preload)\s*:)\s*(?<rest>.*)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     // Required H2 section names (case-sensitive match per spec)
@@ -472,7 +472,8 @@ public static class OpDocParser
                     Outputs = detail.Outputs,
                     AcceptanceCriteria = detail.AcceptanceCriteria,
                     Notes = detail.Notes,
-                    OutOfScope = detail.OutOfScope
+                    OutOfScope = detail.OutOfScope,
+                    PreloadFiles = detail.PreloadFiles
                 });
             }
             else
@@ -640,6 +641,7 @@ public static class OpDocParser
         var acceptance = new List<string>();
         string? notes = null;
         var oos = new List<string>();
+        var preload = new List<string>();
 
         // Simple label-scanning state machine
         string? currentLabel = null;
@@ -678,6 +680,10 @@ public static class OpDocParser
                         if (!string.IsNullOrEmpty(prose))
                             oos.Add(prose);
                     }
+                    break;
+                case "preload":
+                    // Positive-only file paths (one bullet per path). Optional; greenfield briefs omit it.
+                    preload.AddRange(ExtractBullets(currentLines));
                     break;
             }
         }
@@ -731,7 +737,10 @@ public static class OpDocParser
             AcceptanceCriteria: acceptance,
             Notes: notes,
             OutOfScope: oos,
-            DependsOn: null);
+            DependsOn: null)
+        {
+            PreloadFiles = preload
+        };
 
         return (brief, errors);
     }
