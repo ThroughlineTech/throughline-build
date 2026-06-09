@@ -273,7 +273,7 @@ public class ImplementPhase : IWorkflowPhase
         // (created at Step 9), so the reader returns null for everything and the section is empty -
         // tolerated by design (see plan 2.3), not an error.
         var preloadedContextSection = _project.PreloadContext
-            ? PreloadedContextBuilder.Build(ticket.DescriptionHtml, _project, MakeWorktreeReader(canonicalWorktreePath))
+            ? PreloadedContextBuilder.Build(ticket.DescriptionHtml, _project, MakeWorktreeReader(canonicalWorktreePath)).Section
             : string.Empty;
         var brief = ImplementBriefBuilder.Build(_worker.Name, ticket, repoState, canonicalBranchName, canonicalWorktreePath, _project, _phaseOptions.ReviewFeedback, effectiveChainRange, reworkContext, preloadedContextSection);
 
