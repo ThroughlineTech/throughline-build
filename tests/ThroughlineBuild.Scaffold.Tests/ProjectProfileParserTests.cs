@@ -1,3 +1,4 @@
+using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Scaffold;
 using Xunit;
 
@@ -196,5 +197,63 @@ public class ProjectProfileParserTests
         Assert.True(ProjectProfileParser.TryParse(json, out var profile, out var err), err);
         Assert.NotNull(profile!.ConventionFiles);
         Assert.Empty(profile.ConventionFiles);
+    }
+
+    [Fact]
+    public void Role_Explicit_ParsesAdvisoryAndGating()
+    {
+        var json = """
+        {
+          "build_command": "npm run build",
+          "test_command": "npm test",
+          "review_checks": [
+            { "name": "build", "executable": "npm", "arguments": ["run", "build"], "role": "gating" },
+            { "name": "lint", "executable": "npm", "arguments": ["run", "lint"], "role": "advisory" }
+          ]
+        }
+        """;
+        Assert.True(ProjectProfileParser.TryParse(json, out var profile, out var err), err);
+        Assert.Equal(CheckRole.Gating, profile!.ReviewChecks[0].Role);
+        Assert.Equal(CheckRole.Advisory, profile.ReviewChecks[1].Role);
+    }
+
+    [Fact]
+    public void Role_Omitted_InfersAdvisoryForLintFormat_GatingOtherwise()
+    {
+        // Protects projects scaffolded by an older worker (no role field) and any model that ignores
+        // the role instruction: a cosmetic name de-gates, everything else stays gating.
+        var json = """
+        {
+          "build_command": "npm run build",
+          "test_command": "npm test",
+          "review_checks": [
+            { "name": "build", "executable": "npm", "arguments": ["run", "build"] },
+            { "name": "lint", "executable": "npm", "arguments": ["run", "lint"] },
+            { "name": "format", "executable": "npm", "arguments": ["run", "format"] }
+          ]
+        }
+        """;
+        Assert.True(ProjectProfileParser.TryParse(json, out var profile, out var err), err);
+        Assert.Equal(CheckRole.Gating, profile!.ReviewChecks[0].Role);   // build
+        Assert.Equal(CheckRole.Advisory, profile.ReviewChecks[1].Role);  // lint
+        Assert.Equal(CheckRole.Advisory, profile.ReviewChecks[2].Role);  // format
+    }
+
+    [Fact]
+    public void Role_Unrecognized_FallsBackToNameInference()
+    {
+        var json = """
+        {
+          "build_command": "npm run build",
+          "test_command": "npm test",
+          "review_checks": [
+            { "name": "build", "executable": "npm", "arguments": ["run", "build"], "role": "blocking" },
+            { "name": "lint", "executable": "npm", "arguments": ["run", "lint"], "role": "???" }
+          ]
+        }
+        """;
+        Assert.True(ProjectProfileParser.TryParse(json, out var profile, out var err), err);
+        Assert.Equal(CheckRole.Gating, profile!.ReviewChecks[0].Role);   // unknown role, name build -> gating
+        Assert.Equal(CheckRole.Advisory, profile.ReviewChecks[1].Role);  // unknown role, name lint -> advisory
     }
 }

@@ -384,4 +384,53 @@ public class ConfigProfileWriterTests
         var rendered = ConfigProfileWriter.Apply(LoadableDotnetConfig, NpmProfile(), force: false).NewText!;
         Assert.DoesNotContain("convention_files", rendered);
     }
+
+    // A derived advisory check (lint/format) renders role = "advisory" and round-trips through the
+    // real Config loader to CheckRole.Advisory, so the gate never hard-fails on it; a gating check
+    // renders role = "gating" explicitly. This is the produce-side fix for op-30 (lint/format are
+    // never hard gates) - the gate already honors Role, but the role was being dropped before config.
+    [Fact]
+    public void CheckRole_RendersAndRoundTripsThroughConfigLoad()
+    {
+        var checks = new[]
+        {
+            new ProfileCheck("build", "npm", new[] { "run", "build" }, 5),
+            new ProfileCheck("lint", "npm", new[] { "run", "lint" }, 5, Role: CheckRole.Advisory),
+        };
+        var profile = new ProjectProfile(
+            "typescript", "react-vite", "npm",
+            "npm install", "npm run build", "npm test", "npm run dev",
+            checks, checks);
+
+        var outcome = ConfigProfileWriter.Apply(LoadableDotnetConfig, profile, force: false);
+        Assert.True(outcome.Changed, outcome.SkipReason);
+        var rendered = outcome.NewText!;
+
+        Assert.Contains("role = \"gating\"", rendered);
+        Assert.Contains("role = \"advisory\"", rendered);
+        Assert.NotNull(Toml.ToModel(rendered));
+
+        var tmpDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tmpDir);
+        var path = Path.Combine(tmpDir, "config.toml");
+        try
+        {
+            File.WriteAllText(path, rendered);
+            var config = BuildConfigLoader.Load(path, warnSink: _ => { });
+
+            Assert.Equal(2, config.Review.Checks.Count);
+            var build = config.Review.Checks.Single(c => c.Name == "build");
+            var lint = config.Review.Checks.Single(c => c.Name == "lint");
+            Assert.Equal(CheckRole.Gating, build.Role);
+            Assert.Equal(CheckRole.Advisory, lint.Role);
+
+            // The same advisory check rode into the ship regression set and must survive there too.
+            Assert.Equal(CheckRole.Advisory, config.Ship.RegressionChecks.Single(c => c.Name == "lint").Role);
+        }
+        finally
+        {
+            File.Delete(path);
+            Directory.Delete(tmpDir, recursive: true);
+        }
+    }
 }

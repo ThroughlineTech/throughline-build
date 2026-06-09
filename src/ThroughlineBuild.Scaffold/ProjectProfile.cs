@@ -38,7 +38,12 @@ public sealed record ProfileCheck(
     string Executable,
     IReadOnlyList<string> Arguments,
     int TimeoutMinutes,
-    IReadOnlyList<CanaryFile>? Canary = null);
+    IReadOnlyList<CanaryFile>? Canary = null,
+    // gating: a non-zero exit hard-fails the build gate; advisory: recorded and shown to the reviewer
+    // but never hard-fails (op-30: lint/format are never hard gates). Defaults to gating, matching
+    // CheckSpec; ProjectProfileParser resolves the real role from the deriver's "role" field, with a
+    // name-based fallback (lint/format -> advisory) for profiles an older worker emitted.
+    CheckRole Role = CheckRole.Gating);
 
 // --- JSON DTOs (source-gen; AOT-safe) -------------------------------------------------
 
@@ -63,6 +68,7 @@ internal sealed class ProfileCheckDto
     [JsonPropertyName("arguments")] public List<string>? Arguments { get; set; }
     [JsonPropertyName("timeout_minutes")] public int? TimeoutMinutes { get; set; }
     [JsonPropertyName("canary")] public List<CanaryFileDto>? Canary { get; set; }
+    [JsonPropertyName("role")] public string? Role { get; set; }
 }
 
 internal sealed class CanaryFileDto
@@ -217,10 +223,34 @@ public static class ProjectProfileParser
                     canary = canaryFiles;
             }
 
-            list.Add(new ProfileCheck(c.Name!.Trim(), c.Executable!.Trim(), args, timeout, canary));
+            var role = ResolveCheckRole(c.Role, c.Name!);
+
+            list.Add(new ProfileCheck(c.Name!.Trim(), c.Executable!.Trim(), args, timeout, canary, role));
         }
 
         checks = list;
         return true;
+    }
+
+    // Resolve a check's gating/advisory role. An explicit "advisory"/"gating" from the deriver wins;
+    // anything else (omitted, blank, or unrecognized) is inferred from the check NAME so a profile
+    // emitted by an older worker - or a model that ignores the role instruction - still de-gates
+    // lint/format. The asymmetry is deliberate (op-30): a false-advisory is cheap, a false-gating
+    // burns a cold rework loop on a cosmetic, auto-fixable finding, so an unknown check name stays
+    // gating but a clearly-cosmetic one (lint/format/style) does not.
+    private static CheckRole ResolveCheckRole(string? role, string name)
+    {
+        switch (role?.Trim().ToLowerInvariant())
+        {
+            case "advisory": return CheckRole.Advisory;
+            case "gating": return CheckRole.Gating;
+            default: return IsCosmeticCheckName(name) ? CheckRole.Advisory : CheckRole.Gating;
+        }
+    }
+
+    private static bool IsCosmeticCheckName(string name)
+    {
+        var n = name.Trim().ToLowerInvariant();
+        return n.Contains("lint") || n.Contains("format") || n is "fmt" or "prettier" or "style";
     }
 }

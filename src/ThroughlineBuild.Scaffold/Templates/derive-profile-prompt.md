@@ -27,6 +27,13 @@ Rules for checks:
 - "arguments" is the argument array, e.g. for "npm run build" -> executable "npm", arguments
   ["run", "build"]. For "npm test" -> executable "npm", arguments ["test"].
 - "timeout_minutes" is a sensible per-check ceiling (build ~5, test ~10).
+- "role" is "gating" or "advisory" and is REQUIRED on every check. A gating check HARD-FAILS the build
+  gate on a non-zero exit (the work bounces back into a cold rework loop); an advisory check is
+  recorded and shown to the reviewer but NEVER hard-fails. Classify by what the check proves, never by
+  language: build / test / typecheck / compile -> "gating"; lint / format / style -> "advisory". When
+  unsure, choose "advisory" - a false-advisory is cheap, a false-gating burns a rework loop on a
+  cosmetic, auto-fixable finding. Emit "role" on every entry of BOTH review_checks and
+  regression_checks.
 - Do not invent a check the op-doc does not support. If the op-doc only specifies a build and a
   test command, emit exactly those two checks.
 - NON-VACUITY: Every gating check must be capable of FAILING on broken input. Choose a command that
@@ -101,19 +108,20 @@ First emit the profile as a single fenced block named PROJECT_PROFILE containing
   "test_command": "npm test",
   "dev_command": "npm run dev",
   "review_checks": [
-    { "name": "typecheck", "executable": "npm", "arguments": ["run", "typecheck"], "timeout_minutes": 5,
+    { "name": "typecheck", "executable": "npm", "arguments": ["run", "typecheck"], "timeout_minutes": 5, "role": "gating",
       "canary": [ { "path": "src/__tlb_probe.ts", "content": "import { useState } from 'react';\nexport const x: number = null;" } ] },
-    { "name": "build", "executable": "npm", "arguments": ["run", "build"], "timeout_minutes": 5,
+    { "name": "build", "executable": "npm", "arguments": ["run", "build"], "timeout_minutes": 5, "role": "gating",
       "canary": [ { "path": "src/__tlb_probe.ts", "content": "import { useState } from 'react';\nexport const x: number = null;" } ] },
-    { "name": "test", "executable": "npm", "arguments": ["test"], "timeout_minutes": 10,
-      "canary": [ { "path": "src/__tlb_probe.test.ts", "content": "import { test, expect } from 'vitest';\ntest('canary fails', () => { expect(1).toBe(2); });" } ] }
+    { "name": "test", "executable": "npm", "arguments": ["test"], "timeout_minutes": 10, "role": "gating",
+      "canary": [ { "path": "src/__tlb_probe.test.ts", "content": "import { test, expect } from 'vitest';\ntest('canary fails', () => { expect(1).toBe(2); });" } ] },
+    { "name": "lint", "executable": "npm", "arguments": ["run", "lint"], "timeout_minutes": 5, "role": "advisory" }
   ],
   "regression_checks": [
-    { "name": "typecheck", "executable": "npm", "arguments": ["run", "typecheck"], "timeout_minutes": 5,
+    { "name": "typecheck", "executable": "npm", "arguments": ["run", "typecheck"], "timeout_minutes": 5, "role": "gating",
       "canary": [ { "path": "src/__tlb_probe.ts", "content": "import { useState } from 'react';\nexport const x: number = null;" } ] },
-    { "name": "build", "executable": "npm", "arguments": ["run", "build"], "timeout_minutes": 5,
+    { "name": "build", "executable": "npm", "arguments": ["run", "build"], "timeout_minutes": 5, "role": "gating",
       "canary": [ { "path": "src/__tlb_probe.ts", "content": "import { useState } from 'react';\nexport const x: number = null;" } ] },
-    { "name": "test", "executable": "npm", "arguments": ["test"], "timeout_minutes": 10,
+    { "name": "test", "executable": "npm", "arguments": ["test"], "timeout_minutes": 10, "role": "gating",
       "canary": [ { "path": "src/__tlb_probe.test.ts", "content": "import { test, expect } from 'vitest';\ntest('canary fails', () => { expect(1).toBe(2); });" } ] }
   ],
   "convention_files": ["src/setupTests.ts", "vite.config.ts", "src/data/__tests__/repository.test.ts"]

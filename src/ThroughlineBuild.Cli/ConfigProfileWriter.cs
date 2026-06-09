@@ -254,11 +254,18 @@ public static class ConfigProfileWriter
             rendered.Add($"executable = {TomlString(c.Executable)}");
             rendered.Add($"arguments = {TomlStringArray(c.Arguments)}");
             rendered.Add($"timeout_minutes = {c.TimeoutMinutes}");
+            rendered.Add($"role = {TomlString(RoleToToml(c.Role))}");
             if (c.Canary is { Count: > 0 })
                 rendered.Add($"canary = {TomlCanaryArray(c.Canary)}");
         }
         return rendered;
     }
+
+    // Render the check role as the TOML string the config loader's ParseCheckRole expects. Written on
+    // every check (not just advisory) so the scaffolded config states the gating decision explicitly
+    // rather than leaning on the loader's implicit default - an operator can see and flip it.
+    private static string RoleToToml(CheckRole role) =>
+        role == CheckRole.Advisory ? "advisory" : "gating";
 
     // Renders the canary files as a TOML inline-table array:
     //   canary = [{ path = "...", content = "..." }, { ... }]

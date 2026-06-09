@@ -108,4 +108,17 @@ public class ScaffoldProfileDeriverTests
         Assert.False(result.Success);
         Assert.Contains("invalid", result.FailureReason);
     }
+
+    // Prompt-contract guard: the deriver's actual classification is the LLM's (faked above), but the
+    // prompt MUST instruct it to emit a gating/advisory role per check, and show the field in the
+    // example. A future edit that drops the role instruction (re-introducing lint/format hard-gating)
+    // fails here.
+    [Fact]
+    public void DeriveProfilePrompt_RequiresAGatingOrAdvisoryRolePerCheck()
+    {
+        var prompt = ProfilePromptLoader.Load();
+
+        Assert.Contains("\"role\" is \"gating\" or \"advisory\"", prompt);
+        Assert.Contains("\"role\": \"advisory\"", prompt);
+    }
 }
