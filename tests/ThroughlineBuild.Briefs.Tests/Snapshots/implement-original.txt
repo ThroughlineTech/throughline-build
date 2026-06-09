@@ -50,16 +50,16 @@ Emit `Status=Escalate` with a populated `metadata.escalation` block. Do not make
 WORKER_RESULT
 {
   "status": "Escalate",
-  "summary": "Ticket obsolete: decompose.md already delivered in commit 80ccafa",
+  "summary": "Ticket obsolete: <artifact> already delivered in commit <sha>",
   "files_changed": [],
   "failure_reason": null,
   "metadata": {
     "escalation": {
       "reason": "obsolete",
       "subsumed_by": {
-        "commit": "80ccafa",
-        "files": ["src/ThroughlineBuild.Briefs/Templates/claude-code/decompose.md"],
-        "rationale": "decompose.md delivered in commit 80ccafa; file meets this brief's acceptance criteria"
+        "commit": "<sha>",
+        "files": ["<path/to/artifact>"],
+        "rationale": "<artifact> delivered in commit <sha>; file meets this brief's acceptance criteria"
       }
     }
   }
