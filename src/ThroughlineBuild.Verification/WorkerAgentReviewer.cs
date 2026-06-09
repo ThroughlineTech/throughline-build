@@ -24,6 +24,14 @@ public sealed class WorkerAgentReviewer : IVerifier
 
     public WorkerResult? LastWorkerResult { get; private set; }
 
+    /// <summary>
+    /// Set when the most recent VerifyAsync call's worker failed with a transient provider error
+    /// (usage limit / quota, rate limit, or auth) rather than producing a verdict. The verifier
+    /// never ran, so ReviewPhase must treat this as "review unavailable", NOT as a Fail verdict.
+    /// Null when the worker produced a verdict or failed for some other (real) reason. See TLB-527.
+    /// </summary>
+    public ProviderError? LastProviderError { get; private set; }
+
     public WorkerAgentReviewer(
         IWorkerAgent worker,
         Ticket ticket,
@@ -59,6 +67,8 @@ public sealed class WorkerAgentReviewer : IVerifier
         // implementerBrief is on the public surface for future use; not forwarded in v1
         _ = implementerBrief;
 
+        LastProviderError = null;
+
         var reviewBrief = ReviewBriefBuilder.Build(_worker.Name, _ticket, diff, implementerResult, _checkResults, _project, _smokeSignals);
 
         var workerResult = await _worker.ExecuteAsync(reviewBrief, _workingDirectory, _workerOptions, ct)
@@ -68,6 +78,13 @@ public sealed class WorkerAgentReviewer : IVerifier
 
         if (workerResult.Status != Status.Ok)
         {
+            // A provider-level block (quota/rate-limit/auth) means the verifier never produced a
+            // judgment. Surface it as a typed signal so ReviewPhase can route it to "review
+            // unavailable" instead of recording a Fail verdict the reviewer never made. The Fail
+            // verdict below remains a defensive fallback for genuine worker failures (crash,
+            // timeout, malformed output). See TLB-527.
+            LastProviderError = ProviderErrorClassifier.Classify(workerResult, _worker.Name);
+
             var reason = workerResult.FailureReason ?? workerResult.Status.ToString();
             return new Verdict(VerdictKind.Fail, $"verifier worker failed: {reason}", Array.Empty<string>());
         }

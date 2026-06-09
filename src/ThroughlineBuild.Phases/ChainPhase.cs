@@ -896,7 +896,16 @@ public class ChainPhase
                 PhaseSessionId: revSessionId);
             steps.Add(failedRevStep);
             options.OnStep?.Invoke(options.TicketId, failedRevStep);
-            return (new ChainResult(options.TicketId, steps, ChainOutcome.StoppedAtReview,
+
+            // A provider block (quota/rate-limit/auth) is not a review failure - the verifier never
+            // ran. Surface a distinct, resumable ReviewUnavailable outcome instead of StoppedAtReview,
+            // so the operator sees "re-run once quota resets", not "review rejected the diff". This
+            // single branch covers both the implement->review loop and the InReview resume path, since
+            // both funnel a provider error through ReviewPhase returning Success=false. See TLB-527.
+            var failOutcome = revResult.ProviderUnavailable is not null
+                ? ChainOutcome.ReviewUnavailable
+                : ChainOutcome.StoppedAtReview;
+            return (new ChainResult(options.TicketId, steps, failOutcome,
                 TimeSpan.Zero, revResult.FailureReason), null);
         }
 

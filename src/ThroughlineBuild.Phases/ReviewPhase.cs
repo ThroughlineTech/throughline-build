@@ -19,7 +19,11 @@ public record ReviewResult(
     VerdictKind? Verdict,
     string? VerdictRationale,
     IReadOnlyList<string> ChecksFailed,
-    string? FailureReason);
+    string? FailureReason,
+    // Set when review could not run because the verifier worker was blocked by a transient provider
+    // error (quota/rate-limit/auth). Success is false; the ticket is left cleanly InReview and is
+    // resumable via `build review <id>`. Distinct from a Fail verdict. See TLB-527.
+    ProviderError? ProviderUnavailable = null);
 
 public class ReviewPhase : IWorkflowPhase
 {
@@ -226,6 +230,26 @@ public class ReviewPhase : IWorkflowPhase
 
         // Step 10: Run verifier
         var verdict = await verifier.VerifyAsync(implementerBrief, diff, implementerResult, ct).ConfigureAwait(false);
+
+        // Step 10a: Provider-unavailable short-circuit. A quota / rate-limit / auth block means the
+        // verifier never produced a judgment, so do NOT post a Fail comment or transition the ticket -
+        // that would record a rejection the reviewer never made. Emit a distinct signal and return a
+        // typed ReviewResult so the chain surfaces ReviewUnavailable; the ticket stays cleanly InReview
+        // and is resumable via `build review <id>` once quota returns. The verifier ran read-only and
+        // bailed immediately, so the tree is clean - skipping the hygiene guards below is safe. See TLB-527.
+        if (verifier is WorkerAgentReviewer providerAwareReviewer && providerAwareReviewer.LastProviderError is { } providerError)
+        {
+            await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+            {
+                ["kind"] = "review_provider_unavailable",
+                ["provider"] = providerError.Provider,
+                ["error_kind"] = providerError.Kind.ToString(),
+                ["retry_at"] = providerError.RetryAt?.ToString("O") ?? "",
+                ["message"] = providerError.RawMessage
+            }, ct).ConfigureAwait(false);
+            return new ReviewResult(false, ticketId, null, null, Array.Empty<string>(),
+                FormatProviderUnavailableReason(ticketId, providerError), providerError);
+        }
 
         // Step 10b: Dirty-worktree check after verifier exit - hard-fail, no retry
         var reviewDirtyPaths = await WorkingTreeHygieneGate.DirtyFilesCheckAsync(_git, canonicalWorktreePath, ct).ConfigureAwait(false);
@@ -444,6 +468,17 @@ public class ReviewPhase : IWorkflowPhase
         else if (stashDelta < 0)
             parts.Add($"verifier consumed {-stashDelta} pre-existing stash entr{(stashDelta == -1 ? "y" : "ies")}");
         return "Review: verifier mutated shared git state - " + string.Join("; ", parts);
+    }
+
+    private static string FormatProviderUnavailableReason(string ticketId, ProviderError pe)
+    {
+        var what = pe.Kind == ProviderErrorKind.Auth
+            ? $"{pe.Provider} authentication failed"
+            : $"{pe.Provider} usage limit / quota exhausted";
+        var until = pe.RetryAt is { } at ? $" until {at:yyyy-MM-dd HH:mm zzz}" : "";
+        return $"review could not run - {what}{until} - the verifier never ran, so this is NOT a review " +
+               $"rejection. Re-run `build review {ticketId}` once it resets, or switch the verifier agent. " +
+               $"Provider message: {pe.RawMessage}";
     }
 
     private static string FormatDirtyWorktreeReason(string phase, IReadOnlyList<string> dirtyPaths, int sampleLimit = 5)

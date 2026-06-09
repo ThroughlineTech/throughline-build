@@ -84,7 +84,8 @@ public class EnumExhaustivenessTests
             ChainOutcome.Skipped,
             ChainOutcome.BatchImplemented,
             ChainOutcome.DryRunPreview,
-            ChainOutcome.GateVacuous
+            ChainOutcome.GateVacuous,
+            ChainOutcome.ReviewUnavailable
         };
         Assert.Equal(expected.OrderBy(x => (int)x), Enum.GetValues<ChainOutcome>().OrderBy(x => (int)x));
     }

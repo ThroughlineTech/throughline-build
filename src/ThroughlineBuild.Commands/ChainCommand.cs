@@ -219,6 +219,9 @@ public sealed class ChainCommand : ITicketCommand
             ChainOutcome.StoppedAtReview =>
                 $"[{ticketId}] chain stopped: review returned Fail",
 
+            ChainOutcome.ReviewUnavailable =>
+                $"[{ticketId}] chain stopped: review unavailable - verifier blocked by a provider quota/rate-limit/auth error ({result.FinalRationale})",
+
             ChainOutcome.ReworkCapExceeded =>
                 $"[{ticketId}] chain stopped: rework cap exceeded after {CountImplementRounds(result.Steps)} implement attempts",
 
@@ -342,6 +345,9 @@ public sealed class ChainCommand : ITicketCommand
 
             ChainOutcome.StoppedAtReview =>
                 GetStoppedAtReviewTriage(ticketId, result),
+
+            ChainOutcome.ReviewUnavailable =>
+                GetReviewUnavailableTriage(ticketId, result),
 
             ChainOutcome.ReworkCapExceeded =>
                 GetReworkCapExceededTriage(ticketId, result),
@@ -480,6 +486,20 @@ public sealed class ChainCommand : ITicketCommand
     private static string GetStoppedAtReviewTriage(string ticketId, ChainResult result)
     {
         return $"Operator triage: Review returned Fail (permanent rejection). Ticket left in InReview state. Options:\n- Inspect the reviewer's feedback above.\n- Transition ticket to Cancelled if work is no longer viable, or back to Backlog for replanning.\n- Consider starting fresh with a new ticket if the scope has fundamentally changed.";
+    }
+
+    private static string GetReviewUnavailableTriage(string ticketId, ChainResult result)
+    {
+        // result.FinalRationale already names the provider, the quota/auth cause, and the reset time
+        // (built by ReviewPhase.FormatProviderUnavailableReason). The verifier never ran, so no code
+        // changes were lost and the ticket is still InReview - the work resumes cleanly.
+        var detail = result.FinalRationale is not null ? $"\n- {result.FinalRationale}" : "";
+        return $"Operator triage: Review could not run - the verifier worker was blocked by a provider "
+             + $"quota/rate-limit/auth error, NOT a review rejection. No work was lost. Options:"
+             + detail
+             + $"\n- Re-run 'build review {ticketId}' once the quota resets (the ticket is still InReview)."
+             + $"\n- Or switch the verifier agent (e.g. --agent-review <name>) and re-run."
+             + $"\n- Check the account's plan/limits if this recurs immediately.";
     }
 
     private static string GetReworkCapExceededTriage(string ticketId, ChainResult result)

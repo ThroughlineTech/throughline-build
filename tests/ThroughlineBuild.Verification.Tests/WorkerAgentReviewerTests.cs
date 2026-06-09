@@ -177,6 +177,47 @@ public class WorkerAgentReviewerTests
     }
 
     // -------------------------------------------------------------------------
+    // TLB-527: a provider quota/rate-limit block sets LastProviderError so ReviewPhase can route
+    // it to "review unavailable" instead of recording the (defensive) Fall-through Fail verdict.
+    // -------------------------------------------------------------------------
+    [Fact]
+    public async Task ProviderQuotaError_SetsLastProviderError()
+    {
+        var quota = new WorkerResult(Status.Failed, "Process exited with non-zero code",
+            Array.Empty<string>(),
+            "Exit code 1. Codex error: You've hit your usage limit. Upgrade to Pro or try again at Jun 10th, 2026 5:27 PM.",
+            new Dictionary<string, object>());
+        var agent = new StubWorkerAgent(quota);
+        var reviewer = BuildReviewer(agent);
+
+        var verdict = await reviewer.VerifyAsync(
+            BuildImplementerBrief(), BuildDiff(), BuildImplementerResult(), CancellationToken.None);
+
+        Assert.NotNull(reviewer.LastProviderError);
+        Assert.Equal(ProviderErrorKind.RateLimitOrQuota, reviewer.LastProviderError!.Kind);
+        Assert.Equal("claude-code", reviewer.LastProviderError.Provider); // StubWorkerAgent.Name
+        // The defensive Fail verdict is still returned, but ReviewPhase consults LastProviderError first.
+        Assert.Equal(VerdictKind.Fail, verdict.Kind);
+    }
+
+    [Fact]
+    public async Task GenuineWorkerFailure_LeavesLastProviderErrorNull()
+    {
+        var crash = new WorkerResult(Status.Failed, "No WORKER_RESULT found in output",
+            Array.Empty<string>(),
+            "No WORKER_RESULT block found in stdout. Stderr: ",
+            new Dictionary<string, object>());
+        var agent = new StubWorkerAgent(crash);
+        var reviewer = BuildReviewer(agent);
+
+        var verdict = await reviewer.VerifyAsync(
+            BuildImplementerBrief(), BuildDiff(), BuildImplementerResult(), CancellationToken.None);
+
+        Assert.Null(reviewer.LastProviderError);
+        Assert.Equal(VerdictKind.Fail, verdict.Kind);
+    }
+
+    // -------------------------------------------------------------------------
     // Test 4: Malformed verdict string maps to Fail with rationale noting the bad value
     // -------------------------------------------------------------------------
     [Fact]

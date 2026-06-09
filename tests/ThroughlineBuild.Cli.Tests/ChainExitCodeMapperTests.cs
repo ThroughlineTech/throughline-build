@@ -36,6 +36,16 @@ public class ChainExitCodeMapperTests
         Assert.Equal(8, ChainExitCodeMapper.GetExitCode(ChainOutcome.GateVacuous));
     }
 
+    [Fact]
+    public void ReviewUnavailable_MapsToDedicatedExitCode()
+    {
+        // Distinct from StoppedAtReview (5): a provider block is not a review rejection. See TLB-527.
+        Assert.Equal(9, ChainExitCodeMapper.GetExitCode(ChainOutcome.ReviewUnavailable));
+        Assert.NotEqual(
+            ChainExitCodeMapper.GetExitCode(ChainOutcome.StoppedAtReview),
+            ChainExitCodeMapper.GetExitCode(ChainOutcome.ReviewUnavailable));
+    }
+
     private static ChainResult MakeDirtyResult(string ticketId) => new(
         TicketId: ticketId,
         Steps: Array.Empty<ChainStep>(),

@@ -101,6 +101,8 @@ Exit codes:
   5  StoppedAtReview (review returned Fail)
   6  ReworkCapExceeded (review returned Rework more than the cap)
   7  StoppedAtShip (ship gate failed)
+  8  GateVacuous (a gating check could not be proven to fail on broken input)
+  9  ReviewUnavailable (verifier blocked by a provider quota/rate-limit/auth error; review never ran - resumable)
 
   For 'build rework' verb only (overrides global codes 2 and 4):
   0  Implemented (rework implement succeeded; ticket transitioned to InReview)

@@ -92,7 +92,10 @@ public class ChainPhaseTests
         FakeEventSinkChain? eventSink = null,
         IWorkerAgent? batchWorker = null,
         Func<BuildOptions, GatePhase>? gateFactory = null,
-        List<string?>? reviewTargetBranches = null)
+        List<string?>? reviewTargetBranches = null,
+        // When set, replaces the default verifier-queue review factory. Lets a test drive review
+        // through a real WorkerAgentReviewer (e.g. to exercise the provider-error path). See TLB-527.
+        Func<BuildOptions, GateOutcome?, ReviewPhase>? reviewFactoryOverride = null)
     {
         _sessionCounter = 0;
         var events = eventSink ?? new FakeEventSinkChain();
@@ -106,7 +109,7 @@ public class ChainPhaseTests
         Func<BuildOptions, ImplementPhaseOptions, ImplementPhase> implFactory = (opts, phaseOpts) =>
             new ImplementPhase(ticketing, implWorker, events, opts, git, phaseOptions: phaseOpts);
 
-        Func<BuildOptions, GateOutcome?, ReviewPhase> reviewFactory = (opts, _) =>
+        Func<BuildOptions, GateOutcome?, ReviewPhase> reviewFactory = reviewFactoryOverride ?? ((opts, _) =>
         {
             // Record the TargetBranch the review phase is constructed with so a chain review's
             // diff base (which ReviewPhase resolves from TargetBranch) is assertable.
@@ -114,7 +117,7 @@ public class ChainPhaseTests
             var verifier = verifierQueue.Dequeue();
             return new ReviewPhase(ticketing, new FakeWorkerAgent(null), events, opts,
                 MakeReviewOptions(), git, verifierOverride: verifier);
-        };
+        });
 
         Func<BuildOptions, ShipPhase> shipFactory = opts =>
             new ShipPhase(ticketing, events, opts, MakeShipOptions(), git,
@@ -441,6 +444,36 @@ public class ChainPhaseTests
         Assert.Equal(ChainOutcome.StoppedAtReview, result.Outcome);
         Assert.Equal("still wrong", result.FinalRationale);
         Assert.Equal(5, result.Steps.Count);
+    }
+
+    [Fact]
+    public async Task RunAsync_ReviewProviderQuota_ReviewUnavailable_NotStoppedAtReview()
+    {
+        // TLB-527: a verifier blocked by a provider quota/rate-limit error must yield the distinct,
+        // resumable ReviewUnavailable outcome (exit 9), NOT StoppedAtReview (exit 5, a real review
+        // rejection). The diff is fine - the verifier never ran. Drive review through a real
+        // WorkerAgentReviewer wrapping a worker that returns the codex usage-limit message.
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var git = new FakeGitClientChain();
+        var events = new FakeEventSinkChain();
+        var quota = new WorkerResult(Status.Failed, "Process exited with non-zero code",
+            Array.Empty<string>(),
+            "Exit code 1. Codex error: You've hit your usage limit. Upgrade to Pro or try again at Jun 10th, 2026 5:27 PM.",
+            new Dictionary<string, object>());
+        Func<BuildOptions, GateOutcome?, ReviewPhase> reviewFactory = (opts, _) =>
+            new ReviewPhase(ticketing, new StubResultWorkerAgent(quota), events, opts, MakeReviewOptions(), git);
+        var verifiers = new Queue<IVerifier>(); // unused - review goes through the real reviewer
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, git: git, eventSink: events,
+            reviewFactoryOverride: reviewFactory);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ReviewUnavailable, result.Outcome);
+        Assert.NotEqual(ChainOutcome.StoppedAtReview, result.Outcome);
+        Assert.Contains("usage limit", result.FinalRationale ?? "", StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(result.Steps, s => s.PhaseName == "ship");
     }
 
     [Fact]
@@ -1024,6 +1057,18 @@ public class ChainPhaseTests
                 Status.Ok, "ok", Array.Empty<string>(), null,
                 _metadata ?? new Dictionary<string, object>(), _blocks));
         }
+    }
+
+    // Returns a caller-supplied WorkerResult verbatim, to drive a real WorkerAgentReviewer down a
+    // provider-error path inside a chain review. See TLB-527.
+    private sealed class StubResultWorkerAgent : IWorkerAgent
+    {
+        private readonly WorkerResult _result;
+        public string Name => "claude-code";
+        public IWorkerProgressDigester? Digester => null;
+        public StubResultWorkerAgent(WorkerResult result) => _result = result;
+        public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct) =>
+            Task.FromResult(_result);
     }
 
     /// <summary>Worker that fails on the first call and succeeds on all subsequent calls.</summary>
