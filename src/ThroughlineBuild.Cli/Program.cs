@@ -709,7 +709,8 @@ static async Task<int> RunAsync(string[] args)
                 LiveStderrSink: debugMode ? Console.Error : null,
                 ProgressDigestSink: (!debugMode && !quietMode
                     && (!Console.IsErrorRedirected || Environment.GetEnvironmentVariable("BUILD_PROGRESS") == "1"))
-                    ? Console.Error : null);
+                    ? Console.Error : null,
+                BuildVersion: BuildVersion.Current);
         }
         else
         {
@@ -717,7 +718,8 @@ static async Task<int> RunAsync(string[] args)
                 SessionId: sessionId2,
                 WorkerName: "",
                 WorkerTimeout: TimeSpan.Zero,
-                DebugCaptureDirectory: debugCaptureDir2);
+                DebugCaptureDirectory: debugCaptureDir2,
+                BuildVersion: BuildVersion.Current);
         }
 
         var newPhase2 = new NewPhase(ticketing2, eventSink2, buildOptions2);
@@ -1169,7 +1171,8 @@ static async Task<int> RunAsync(string[] args)
             LiveStdoutSink: debugMode ? Console.Out : null,
             LiveStderrSink: debugMode ? Console.Error : null,
             ProgressDigestSink: enableDigest ? Console.Error : null,
-            TargetBranch: config2.ResolveTargetBranch());
+            TargetBranch: config2.ResolveTargetBranch(),
+            BuildVersion: BuildVersion.Current);
 
         string PlaneUrl() => BuildPlaneUrl(config2.Ticketing.PlaneBaseUrl, config2.Ticketing.PlaneWorkspaceSlug, singleTicketId);
         string? ArtifactsPath() => debugCaptureDir is not null
@@ -1375,7 +1378,8 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
         PromotePlan: effectivePromotePlan,
         BatchMaxTickets: config2.Batch.MaxTickets,
         BatchMaxSizeScore: config2.Batch.MaxSizeScore,
-        BatchMaxDescriptionBytes: config2.Batch.MaxDescriptionBytes);
+        BatchMaxDescriptionBytes: config2.Batch.MaxDescriptionBytes,
+        BuildVersion: BuildVersion.Current);
 
     string planeUrl = BuildPlaneUrl(config2.Ticketing.PlaneBaseUrl, config2.Ticketing.PlaneWorkspaceSlug, ticketId);
     string? artifactsPath = debugCaptureDir is not null
@@ -1512,7 +1516,9 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
             DebugCaptureDirectory: debugCaptureDir,
             LiveStdoutSink: debugMode ? Console.Out : null,
             LiveStderrSink: debugMode ? Console.Error : null,
-            ProgressDigestSink: enableDigest ? Console.Error : null);
+            ProgressDigestSink: enableDigest ? Console.Error : null,
+            DebugTranscript: new DebugTranscriptContext(
+                BuildVersion: buildOptions.BuildVersion, SessionId: buildOptions.SessionId));
         var reviewToolWarning = VerifierToolEnforcement.UnenforcedWarning(effectiveAgentFor("review"), config2.Review.VerifierAllowedTools);
         if (reviewToolWarning is not null) Console.Error.WriteLine($"[build] {reviewToolWarning}");
         var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
@@ -1766,7 +1772,9 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             DebugCaptureDirectory: debugCaptureDir,
             LiveStdoutSink: debugMode ? Console.Out : null,
             LiveStderrSink: debugMode ? Console.Error : null,
-            ProgressDigestSink: enableDigest ? Console.Error : null);
+            ProgressDigestSink: enableDigest ? Console.Error : null,
+            DebugTranscript: new DebugTranscriptContext(
+                BuildVersion: buildOpts.BuildVersion, SessionId: buildOpts.SessionId));
         var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
         // When the gate ran its checks, pass its results to ReviewPhase so it reuses them
         // rather than running the checks a second time (one build per ticket).
@@ -1803,7 +1811,7 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
         return new ShipPhase(ticketing, eventSink, buildOpts, shipOptions, gitClient: gitClient, checksRunner: checksRunner, progressWriter: buildOpts.ProgressDigestSink, verbose: debugMode);
     };
 
-    var ratifierFactory = (BuildOptions _) =>
+    var ratifierFactory = (BuildOptions ratifyBuildOpts) =>
     {
         var ratifierWorkerOptions = new WorkerOptions(
             TimeSpan.FromMinutes(config2.Review.VerifierTimeoutMinutes),
@@ -1811,7 +1819,9 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             DebugCaptureDirectory: debugCaptureDir,
             LiveStdoutSink: debugMode ? Console.Out : null,
             LiveStderrSink: debugMode ? Console.Error : null,
-            ProgressDigestSink: enableDigest ? Console.Error : null);
+            ProgressDigestSink: enableDigest ? Console.Error : null,
+            DebugTranscript: new DebugTranscriptContext(
+                BuildVersion: ratifyBuildOpts.BuildVersion, SessionId: ratifyBuildOpts.SessionId));
         return (IObsoleteRatifier)new ObsoleteRatifier(
             workerFactory.Create(effectiveAgentFor("review")),
             ratifierWorkerOptions,

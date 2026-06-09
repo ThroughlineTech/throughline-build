@@ -16,7 +16,7 @@ The `build` CLI writes a structured event log for every invocation. Each run pro
   - `<verb>` is the CLI subcommand, lowercased.
   - The `HHmmss` suffix is local time and exists for collision-safety: the sink opens in `FileMode.Append`, so two runs of the same verb on the same ticket on the same second would otherwise merge into one file. Within the same second, the second run will indeed append to the first.
   - Stem construction lives in [src/ThroughlineBuild.EventLog/SessionFileNameBuilder.cs](../src/ThroughlineBuild.EventLog/SessionFileNameBuilder.cs).
-- The same stem is used as the directory name for `--debug` worker captures under `.build/sessions/<stem>/`, so the two artifacts of a single run sort together by name.
+- The same stem is used as the directory name for `--debug` worker captures under `.build/sessions/<stem>/`, so the two artifacts of a single run sort together by name. Under `--debug` those captures also include a structured per-session `transcript.jsonl` (per-turn usage, tool calls, files read/written) and a per-rework `rework-round.json`; see [debug-transcript-format.md](debug-transcript-format.md).
 - The `SessionId` field inside each event record (see [Record schema](#record-schema) below) is still a per-invocation GUID with no hyphens. The on-disk filename was made human-readable; the in-record correlation key was not changed.
 - Format: [JSON Lines](https://jsonlines.org/) - one UTF-8 JSON object per line, terminated by `\n`. Append-only.
 - Empty file: legal. It means the run exited before emitting any event (for example, PlanPhase rejects a ticket that is not in `Backlog` state at [src/ThroughlineBuild.Phases/PlanPhase.cs:59-60](../src/ThroughlineBuild.Phases/PlanPhase.cs#L59-L60) before the first emit).

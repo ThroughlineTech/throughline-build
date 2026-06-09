@@ -538,6 +538,11 @@ public class ChainPhase
         int round = startRound;
         ReviewFeedback? feedback = initialFeedback;
 
+        // Carries the prior round's HEAD across iterations so a rework round can record the
+        // commit sha BEFORE it ran (sha_after comes from the round's own implResult). Null on
+        // the first round (or a resume), where the prior sha is not known in this invocation.
+        string? priorCommitSha = null;
+
         // Gate cost ledger accumulators: track gate wall time and gate-attributable rework tokens
         // across all iterations so a single CostLedger event is emitted per ticket at exit.
         long gateWallMs = 0;
@@ -573,6 +578,15 @@ public class ChainPhase
                 PhaseSessionId: implSessionId);
             steps.Add(implStep);
             options.OnStep?.Invoke(options.TicketId, implStep);
+
+            // --debug side channel: when this implement round was driven by prior feedback it
+            // IS a rework. Record what triggered it (gate vs reviewer), the failure payload
+            // verbatim, and the commit shas before/after - the inputs analysis needs to split
+            // design misses from hygiene slips. No-op when debug capture is off.
+            if (feedback is not null)
+                ReworkRoundManifest.Write(implBuildOpts.DebugCaptureDirectory, round, feedback,
+                    shaBefore: priorCommitSha, shaAfter: implResult.CommitSha);
+            priorCommitSha = implResult.CommitSha;
 
             // Accumulate gate-attributable rework tokens if this implement round was triggered
             // by a gate hard-fail (identified by the flag set in the prior gate-failure branch).
@@ -1177,7 +1191,9 @@ public class ChainPhase
             LiveStdoutSink: _baseOptions.LiveStdoutSink,
             LiveStderrSink: _baseOptions.LiveStderrSink,
             ProgressDigestSink: _baseOptions.ProgressDigestSink,
-            Size: maxSize);
+            Size: maxSize,
+            DebugTranscript: new DebugTranscriptContext(
+                BuildVersion: _baseOptions.BuildVersion, SessionId: batchSessionId));
         if (batchBuildOpts.DebugCaptureDirectory is not null)
             Directory.CreateDirectory(batchBuildOpts.DebugCaptureDirectory);
 
@@ -1570,7 +1586,9 @@ public class ChainPhase
             LiveStdoutSink: _baseOptions.LiveStdoutSink,
             LiveStderrSink: _baseOptions.LiveStderrSink,
             ProgressDigestSink: _baseOptions.ProgressDigestSink,
-            Size: maxSize);
+            Size: maxSize,
+            DebugTranscript: new DebugTranscriptContext(
+                BuildVersion: _baseOptions.BuildVersion, SessionId: reviewSessionId));
 
         // Workers run in the shared worktree (where the batch branch is checked out).
         var workerResult = await _batchWorker!
@@ -1907,7 +1925,10 @@ public class ChainPhase
             LiveStdoutSink: _baseOptions.LiveStdoutSink,
             LiveStderrSink: _baseOptions.LiveStderrSink,
             ProgressDigestSink: _baseOptions.ProgressDigestSink,
-            Size: maxSize);
+            Size: maxSize,
+            DebugTranscript: new DebugTranscriptContext(
+                BuildVersion: _baseOptions.BuildVersion, SessionId: reworkSessionId,
+                ReworkRound: feedback?.ReworkRoundNumber));
         if (batchBuildOpts.DebugCaptureDirectory is not null)
             Directory.CreateDirectory(batchBuildOpts.DebugCaptureDirectory);
 

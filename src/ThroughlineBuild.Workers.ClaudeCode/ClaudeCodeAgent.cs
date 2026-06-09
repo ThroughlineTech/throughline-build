@@ -52,6 +52,15 @@ public class ClaudeCodeAgent : IWorkerAgent
         cts.CancelAfter(options.Timeout);
 
         var stopwatch = Stopwatch.StartNew();
+        var startedAt = DateTimeOffset.UtcNow;
+
+        // Under --debug, capture each stdout line with its arrival timestamp so the structured
+        // transcript can report per-turn latency. The CLI's stream events carry no timestamps;
+        // arrival time is the authoritative inter-turn clock. Allocated only when capturing -
+        // the non-debug path keeps the exact same zero-overhead handler it had before.
+        var timestampedStdout = options.DebugCaptureDirectory is not null
+            ? new List<(DateTimeOffset At, string Line)>()
+            : null;
 
         var process = new Process { StartInfo = psi };
         _digester.ResetStart();
@@ -66,6 +75,7 @@ public class ClaudeCodeAgent : IWorkerAgent
             if (e.Data != null)
             {
                 stdoutBuilder.AppendLine(e.Data);
+                timestampedStdout?.Add((DateTimeOffset.UtcNow, e.Data));
                 if (options.LiveStdoutSink is not null)
                 {
                     // --debug path: raw firehose. Digest is suppressed (mutually exclusive).
@@ -131,19 +141,30 @@ public class ClaudeCodeAgent : IWorkerAgent
             try { process.Kill(entireProcessTree: true); } catch { }
             stopwatch.Stop();
 
+            var cancelResult = new WorkerResult(Status.Failed, "Process cancelled or timed out", Array.Empty<string>(),
+                "Execution cancelled or timed out", new Dictionary<string, object>());
+
             // Write partial output to debug capture directory (best-effort)
             try
             {
                 WriteCancellationCapture(options.DebugCaptureDirectory, brief.Instruction,
                     stdoutBuilder.ToString(), stderrBuilder.ToString());
+
+                // Partial transcript too: a worker killed mid-session still spent turns, and the
+                // truncated stream synthesizes an "incomplete" result record so the file is usable.
+                if (options.DebugCaptureDirectory is not null && timestampedStdout is not null)
+                {
+                    var cancelModel = TryExtractModelFromStream(stdoutBuilder.ToString()) ?? NormalizeModel(tier?.Model);
+                    WorkerTranscriptWriter.Write(options.DebugCaptureDirectory, brief, timestampedStdout,
+                        cancelResult, options.DebugTranscript, cancelModel, args, stopwatch.ElapsedMilliseconds, startedAt);
+                }
             }
             catch
             {
                 // Best-effort: failure to write debug artifacts never masks the cancellation.
             }
 
-            return new WorkerResult(Status.Failed, "Process cancelled or timed out", Array.Empty<string>(),
-                "Execution cancelled or timed out", new Dictionary<string, object>());
+            return cancelResult;
         }
 
         var stdout = stdoutBuilder.ToString();
@@ -158,6 +179,13 @@ public class ClaudeCodeAgent : IWorkerAgent
             // object first (legacy), fall back to last type=result NDJSON line.
             ClaudeCodeJsonEnvelope? envelope = TryParseEnvelopeFromStdout(stdout, out _);
             WriteDebugCapture(options.DebugCaptureDirectory, brief.Instruction, stdout, stderr, envelope, result);
+
+            // Structured side-channel transcript: the raw stream re-emitted in a stable,
+            // mechanically-comparable JSONL schema. Pure observation; best-effort internally.
+            var transcriptModel = TryExtractModelFromStream(stdout) ?? fallbackModel;
+            WorkerTranscriptWriter.Write(options.DebugCaptureDirectory, brief,
+                timestampedStdout ?? new List<(DateTimeOffset, string)>(), result, options.DebugTranscript,
+                transcriptModel, args, stopwatch.ElapsedMilliseconds, startedAt);
         }
 
         return result;

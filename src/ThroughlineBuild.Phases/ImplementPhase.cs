@@ -299,7 +299,11 @@ public class ImplementPhase : IWorkflowPhase
             LiveStdoutSink: _options.LiveStdoutSink,
             LiveStderrSink: _options.LiveStderrSink,
             ProgressDigestSink: _options.ProgressDigestSink,
-            Size: WorkerSizeMapper.FromTicketSize(ticket.Size));
+            Size: WorkerSizeMapper.FromTicketSize(ticket.Size),
+            DebugTranscript: new DebugTranscriptContext(
+                BuildVersion: _options.BuildVersion,
+                SessionId: _options.SessionId,
+                ReworkRound: _phaseOptions.ReviewFeedback?.ReworkRoundNumber));
         if (_options.DebugCaptureDirectory is not null)
             Directory.CreateDirectory(_options.DebugCaptureDirectory);
         var workerResult = await _worker.ExecuteAsync(brief, canonicalWorktreePath, workerOptions, ct).ConfigureAwait(false);

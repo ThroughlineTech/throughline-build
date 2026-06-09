@@ -40,6 +40,10 @@ public interface IWorkerAgent
 /// <param name="ProgressDigestSink">Optional TextWriter to receive a one-line human-readable digest per worker stream event (system init, tool_use, assistant turn, terminal result). When non-null and LiveStdoutSink is null (i.e. --debug is OFF), each parsed NDJSON line is formatted via the agent's IWorkerProgressDigester and written to this sink. Mutually exclusive with LiveStdoutSink: under --debug the raw firehose replaces the digest. Null means no digest (default behavior).</param>
 /// <param name="Size">An abstract size signal the calling phase provides; agents map this
 /// to their own model tiers. Defaults to <see cref="WorkerSize.Medium"/>.</param>
+/// <param name="DebugTranscript">Optional keying metadata stamped onto the structured debug
+/// transcript an agent writes under <see cref="DebugCaptureDirectory"/>. Pure observation:
+/// it never enters the worker's prompt or alters its behavior. Null means "record only what
+/// is derivable from the brief and stream". See <see cref="DebugTranscriptContext"/>.</param>
 public record WorkerOptions(
     TimeSpan Timeout,
     IReadOnlyList<string>? AllowedTools = null,
@@ -48,4 +52,5 @@ public record WorkerOptions(
     System.IO.TextWriter? LiveStdoutSink = null,
     System.IO.TextWriter? LiveStderrSink = null,
     System.IO.TextWriter? ProgressDigestSink = null,
-    WorkerSize Size = WorkerSize.Medium);
+    WorkerSize Size = WorkerSize.Medium,
+    DebugTranscriptContext? DebugTranscript = null);

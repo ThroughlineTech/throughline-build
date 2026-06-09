@@ -80,7 +80,9 @@ public class DecomposePhase : IWorkflowPhase
             LiveStdoutSink: _options.LiveStdoutSink,
             LiveStderrSink: _options.LiveStderrSink,
             ProgressDigestSink: _options.ProgressDigestSink,
-            Size: WorkerSizeMapper.FromTicketSize(ticket.Size));
+            Size: WorkerSizeMapper.FromTicketSize(ticket.Size),
+            DebugTranscript: new DebugTranscriptContext(
+                BuildVersion: _options.BuildVersion, SessionId: _options.SessionId));
         var workerResult = await _worker.ExecuteAsync(brief, workingDirectory, workerOptions, ct).ConfigureAwait(false);
 
         await EmitAsync(EventKind.VerifierVerdict, ticketId, new Dictionary<string, object>
