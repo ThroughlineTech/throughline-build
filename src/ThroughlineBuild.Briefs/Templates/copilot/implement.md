@@ -17,7 +17,7 @@ You are an implementing agent. Your job is to apply the plan recorded in the tic
 The ticket description (raw HTML) contains the planning output from the prior phase. Read it directly; do not re-render.
 
 {{description_html}}
-
+{{preloaded_context_section}}
 ## Worktree and branch
 - Worktree path: {{worktree_path}}
 - Branch: {{branch}}

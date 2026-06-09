@@ -209,4 +209,45 @@ public class ImplementBriefBuilderTests
         Assert.Equal(expected, brief.Instruction);
     }
 
+    [Fact]
+    public void Build_NoPreloadedSection_InstructionUnchangedFromBaseline()
+    {
+        // Default (empty) preloaded section must leave the brief byte-identical to the pre-preload
+        // baseline - this is the ablation / review-reconstruction case. The original snapshot is that
+        // baseline; if the empty placeholder added a stray line this assertion (and the snapshot) fail.
+        var expected = SnapshotLoader.Load("implement-original.txt");
+
+        var brief = ImplementBriefBuilder.Build(
+            "claude-code",
+            SnapshotFixtures.Ticket(),
+            SnapshotFixtures.Repo(),
+            SnapshotFixtures.FixtureBranch,
+            SnapshotFixtures.FixtureWorktree,
+            preloadedContextSection: "");
+
+        Assert.Equal(expected, brief.Instruction);
+    }
+
+    [Fact]
+    public void Build_WithPreloadedSection_InjectedBetweenPlanAndWorktree()
+    {
+        var section = "\n## Pre-loaded context\n\n`src/data/types.ts`\n```\nexport type Survey = {};\n```\n";
+
+        var brief = ImplementBriefBuilder.Build(
+            "claude-code",
+            SnapshotFixtures.Ticket(),
+            SnapshotFixtures.Repo(),
+            SnapshotFixtures.FixtureBranch,
+            SnapshotFixtures.FixtureWorktree,
+            preloadedContextSection: section);
+
+        Assert.Contains("## Pre-loaded context", brief.Instruction);
+        Assert.Contains("export type Survey = {};", brief.Instruction);
+        // Ordering: the section lands after the Plan block and before the Worktree block.
+        int plan = brief.Instruction.IndexOf("## Plan (from ticket description)");
+        int preload = brief.Instruction.IndexOf("## Pre-loaded context");
+        int worktree = brief.Instruction.IndexOf("## Worktree and branch");
+        Assert.True(plan >= 0 && preload > plan && worktree > preload,
+            $"order plan={plan} preload={preload} worktree={worktree}");
+    }
 }

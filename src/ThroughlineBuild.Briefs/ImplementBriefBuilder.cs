@@ -21,7 +21,8 @@ public static class ImplementBriefBuilder
         ProjectContext? project = null,
         ReviewFeedback? reviewFeedback = null,
         ChainCommitRange? chainCommitRange = null,
-        ReworkBriefContext? reworkContext = null)
+        ReworkBriefContext? reworkContext = null,
+        string preloadedContextSection = "")
     {
         var proj = project ?? ProjectContext.Empty;
 
@@ -45,7 +46,12 @@ public static class ImplementBriefBuilder
             ["branch"] = branchName,
             ["main_sha"] = repo.MainSha,
             ["review_feedback_section"] = reviewFeedbackSection,
-            ["obsolete_detection_section"] = obsoleteDetectionSection
+            ["obsolete_detection_section"] = obsoleteDetectionSection,
+            // Experiment 2: the pre-loaded-context block (named inputs + convention bundle), built by
+            // the phase from the live worktree. Empty "" => the placeholder substitutes inert, leaving
+            // the brief byte-identical to the pre-preload baseline (the ablation / review-reconstruct
+            // case). The leading newline lives inside the section string (see PreloadedContextBuilder).
+            ["preloaded_context_section"] = preloadedContextSection
         };
 
         var instruction = TemplateLoader.Load(agentName, "implement.md").Substitute(vars);
