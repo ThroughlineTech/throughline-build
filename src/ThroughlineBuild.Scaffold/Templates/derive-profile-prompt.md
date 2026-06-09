@@ -16,6 +16,8 @@ determine:
 - review_checks: the automated checks the reviewer should run after each implementation. Normally a
   build check and a test check, expressed as a discrete executable plus an argument array.
 - regression_checks: the checks to run before shipping (usually the same as review_checks).
+- convention_files: a SHORT list (<= 4) of stable, project-wide files every implementation brief
+  should carry - the test harness/setup, the build/test config, and ONE canonical test example.
 
 Rules for checks:
 - "executable" is the BARE tool name, never a shell string and never an OS-specific variant. Use
@@ -55,6 +57,20 @@ Rules for checks:
   for every stack: tests run only over the project's real sources, never over the engine's scratch
   directories.
 
+Rules for convention_files:
+- These files are inlined into EVERY implementation brief so the worker does not re-read them turn
+  after turn. Pick files that are STABLE across the build (config + harness), not files that change
+  every brief - they must be worth carrying in every prompt. Cap the list at ~4. Paths are relative to
+  the project root.
+- Include exactly ONE canonical test example (a representative test file the op-doc will produce) so
+  later briefs mirror the established test idiom instead of re-deriving it.
+- The files may not all exist yet at scaffold time (greenfield) - that is fine, the engine reads each
+  one lazily per brief when it exists, and silently skips any that do not.
+- Stack notes (examples, not exhaustive): TypeScript/vitest -> ["src/setupTests.ts", "vite.config.ts",
+  "<one representative *.test.tsx>"]; .NET -> ["Directory.Build.props", "<a sample *.csproj>",
+  "<one *Tests.cs>"]; Python/pytest -> ["conftest.py", "pyproject.toml", "<one test_*.py>"]. The
+  engine carries whatever paths you choose; it never assumes a stack.
+
 ## Output
 
 First emit the profile as a single fenced block named PROJECT_PROFILE containing ONLY a JSON object:
@@ -83,7 +99,8 @@ First emit the profile as a single fenced block named PROJECT_PROFILE containing
       "canary": [ { "path": "src/__tlb_probe.ts", "content": "import { useState } from 'react';\nexport const x: number = null;" } ] },
     { "name": "test", "executable": "npm", "arguments": ["test"], "timeout_minutes": 10,
       "canary": [ { "path": "src/__tlb_probe.test.ts", "content": "import { test, expect } from 'vitest';\ntest('canary fails', () => { expect(1).toBe(2); });" } ] }
-  ]
+  ],
+  "convention_files": ["src/setupTests.ts", "vite.config.ts", "src/data/__tests__/repository.test.ts"]
 }
 <<<PROJECT_PROFILE_END
 
