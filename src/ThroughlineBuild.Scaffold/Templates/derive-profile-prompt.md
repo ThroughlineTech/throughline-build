@@ -17,7 +17,9 @@ determine:
   build check and a test check, expressed as a discrete executable plus an argument array.
 - regression_checks: the checks to run before shipping (usually the same as review_checks).
 - convention_files: a SHORT list (<= 4) of stable, project-wide files every implementation brief
-  should carry - the test harness/setup, the build/test config, and ONE canonical test example.
+  should carry. ALWAYS lead with the test harness/setup file the test runner loads automatically
+  before any test (when the stack has one), then the build/test config, then ONE canonical test
+  example.
 
 Rules for checks:
 - "executable" is the BARE tool name, never a shell string and never an OS-specific variant. Use
@@ -59,17 +61,31 @@ Rules for checks:
 
 Rules for convention_files:
 - These files are inlined into EVERY implementation brief so the worker does not re-read them turn
-  after turn. Pick files that are STABLE across the build (config + harness), not files that change
+  after turn. Pick files that are STABLE across the build (harness + config), not files that change
   every brief - they must be worth carrying in every prompt. Cap the list at ~4. Paths are relative to
   the project root.
+- MANDATORY when the stack has one - the test harness/setup file: the file the test runner loads
+  AUTOMATICALLY before any test runs (the runner's configured setup/bootstrap file, not a per-feature
+  test). Every test transitively depends on it, so a worker that lacks it re-opens it on every single
+  brief - which is exactly the cost this list exists to remove. Identify it by the runner's own setup
+  mechanism, NEVER by language: the vitest/jest `setupFiles`/`setupFilesAfterEach` entry (e.g.
+  "src/setupTests.ts"); pytest's auto-loaded "conftest.py"; an xUnit/NUnit shared test base, fixture,
+  or global-usings file. List it FIRST. If the stack genuinely has no auto-loaded setup file, omit it
+  and say nothing - do not invent one.
+- Include the build/test config that pins how the project is built and tested (the test-runner config
+  plus the build/typecheck config) so later briefs conform to the established settings.
 - Include exactly ONE canonical test example (a representative test file the op-doc will produce) so
   later briefs mirror the established test idiom instead of re-deriving it.
 - The files may not all exist yet at scaffold time (greenfield) - that is fine, the engine reads each
   one lazily per brief when it exists, and silently skips any that do not.
-- Stack notes (examples, not exhaustive): TypeScript/vitest -> ["src/setupTests.ts", "vite.config.ts",
-  "<one representative *.test.tsx>"]; .NET -> ["Directory.Build.props", "<a sample *.csproj>",
-  "<one *Tests.cs>"]; Python/pytest -> ["conftest.py", "pyproject.toml", "<one test_*.py>"]. The
-  engine carries whatever paths you choose; it never assumes a stack.
+- Stack notes (examples, not exhaustive; the engine carries whatever paths you choose and never
+  assumes a stack):
+  - TypeScript/vitest -> ["src/setupTests.ts" (the setupFiles entry), "vite.config.ts",
+    "<one representative *.test.tsx>"].
+  - Python/pytest -> ["conftest.py" (auto-loaded), "pyproject.toml", "<one test_*.py>"].
+  - .NET/xUnit -> ["<the shared test base/fixture or GlobalUsings.cs, if the suite has one>",
+    "Directory.Build.props", "<one *Tests.cs>"]; if there is no auto-loaded setup file, just the
+    config + one canonical test example.
 
 ## Output
 
