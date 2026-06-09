@@ -163,4 +163,38 @@ public class ProjectProfileParserTests
         Assert.True(ProjectProfileParser.TryParse(json, out var profile, out var err), err);
         Assert.Null(profile!.ReviewChecks[0].Canary);
     }
+
+    [Fact]
+    public void ConventionFiles_Present_ParsedTrimmedBlanksDropped()
+    {
+        var json = """
+        {
+          "build_command": "npm run build",
+          "test_command": "npm test",
+          "review_checks": [
+            { "name": "build", "executable": "npm", "arguments": ["run", "build"] }
+          ],
+          "convention_files": ["src/setupTests.ts", "  vite.config.ts  ", "", "   "]
+        }
+        """;
+        Assert.True(ProjectProfileParser.TryParse(json, out var profile, out var err), err);
+        Assert.Equal(new[] { "src/setupTests.ts", "vite.config.ts" }, profile!.ConventionFiles);
+    }
+
+    [Fact]
+    public void ConventionFiles_Absent_YieldsEmptyNotNull()
+    {
+        var json = """
+        {
+          "build_command": "npm run build",
+          "test_command": "npm test",
+          "review_checks": [
+            { "name": "build", "executable": "npm", "arguments": ["run", "build"] }
+          ]
+        }
+        """;
+        Assert.True(ProjectProfileParser.TryParse(json, out var profile, out var err), err);
+        Assert.NotNull(profile!.ConventionFiles);
+        Assert.Empty(profile.ConventionFiles);
+    }
 }

@@ -22,7 +22,16 @@ public sealed record ProjectProfile(
     string TestCommand,
     string DevCommand,
     IReadOnlyList<ProfileCheck> ReviewChecks,
-    IReadOnlyList<ProfileCheck> RegressionChecks);
+    IReadOnlyList<ProfileCheck> RegressionChecks)
+{
+    /// <summary>
+    /// Stable, project-wide convention files (test harness/config + one canonical test example) to
+    /// inline into EVERY implement brief so the worker does not re-discover them. Paths relative to the
+    /// project root; empty when the deriver emitted none. Stack-agnostic: the deriver chose them per
+    /// stack, the engine only carries the paths and reads whatever they are.
+    /// </summary>
+    public IReadOnlyList<string> ConventionFiles { get; init; } = Array.Empty<string>();
+}
 
 public sealed record ProfileCheck(
     string Name,
@@ -44,6 +53,7 @@ internal sealed class ProjectProfileDto
     [JsonPropertyName("dev_command")] public string? DevCommand { get; set; }
     [JsonPropertyName("review_checks")] public List<ProfileCheckDto>? ReviewChecks { get; set; }
     [JsonPropertyName("regression_checks")] public List<ProfileCheckDto>? RegressionChecks { get; set; }
+    [JsonPropertyName("convention_files")] public List<string>? ConventionFiles { get; set; }
 }
 
 internal sealed class ProfileCheckDto
@@ -134,6 +144,13 @@ public static class ProjectProfileParser
             regressionChecks = reviewChecks;
         }
 
+        // Convention bundle is optional/best-effort: trim, drop blank entries, never throw.
+        var conventionFiles = (dto.ConventionFiles ?? new List<string>())
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => p.Trim())
+            .ToList()
+            .AsReadOnly();
+
         profile = new ProjectProfile(
             Language: dto.Language?.Trim() ?? "",
             Framework: dto.Framework?.Trim() ?? "",
@@ -143,7 +160,10 @@ public static class ProjectProfileParser
             TestCommand: dto.TestCommand!.Trim(),
             DevCommand: dto.DevCommand?.Trim() ?? "",
             ReviewChecks: reviewChecks,
-            RegressionChecks: regressionChecks);
+            RegressionChecks: regressionChecks)
+        {
+            ConventionFiles = conventionFiles
+        };
         return true;
     }
 
