@@ -78,6 +78,15 @@ public static class BriefHtmlRenderer
             RenderList(sb, brief.Inputs);
         }
 
+        // Preload (experiment 3): positive-only file paths the brief declares for context pre-loading.
+        // A deterministic, machine-parseable block - every token is a PATH wrapped in <code> - so the
+        // PreloadedContextBuilder keys on <h3>Preload</h3> and reads exactly these paths, with no
+        // symbol-vs-path heuristic and no language branch. Empty PreloadFiles -> no section.
+        if (brief.PreloadFiles.Count > 0)
+        {
+            RenderPreloadList(sb, brief.PreloadFiles);
+        }
+
         // Outputs
         if (brief.Outputs.Count > 0)
         {
@@ -117,6 +126,24 @@ public static class BriefHtmlRenderer
             sb.Append("<li>");
             sb.Append(RenderInlineMarkdown(item.Trim()));
             sb.Append("</li>");
+        }
+        sb.Append("</ul>");
+    }
+
+    /// <summary>
+    /// Render the Preload section: one &lt;code&gt;-wrapped path per bullet. Unlike <see cref="RenderList"/>,
+    /// each item is treated as a raw PATH and wrapped directly in &lt;code&gt; (not routed through
+    /// <see cref="RenderInlineMarkdown"/>), so a backticked or bare bullet both emit a single clean code
+    /// token the builder can extract. Stripping a surrounding backtick pair tolerates `path`-style bullets.
+    /// </summary>
+    private static void RenderPreloadList(StringBuilder sb, IReadOnlyList<string> paths)
+    {
+        sb.Append("<h3>Preload</h3><ul>");
+        foreach (var path in paths)
+        {
+            sb.Append("<li><code>");
+            sb.Append(EscapeHtml(path.Trim('`').Trim()));
+            sb.Append("</code></li>");
         }
         sb.Append("</ul>");
     }
