@@ -433,4 +433,41 @@ public class ConfigProfileWriterTests
             Directory.Delete(tmpDir, recursive: true);
         }
     }
+
+    // TLB-523: a derived setup step renders role = "setup" and round-trips through the real Config
+    // loader to CheckRole.Setup (a prerequisite codegen/install step run before the gating checks).
+    [Fact]
+    public void CheckRole_Setup_RendersAndRoundTripsThroughConfigLoad()
+    {
+        var checks = new[]
+        {
+            new ProfileCheck("xcodegen", "xcodegen", new[] { "generate" }, 2, Role: CheckRole.Setup),
+            new ProfileCheck("build", "xcodebuild", Array.Empty<string>(), 5),
+        };
+        var profile = new ProjectProfile(
+            "swift", "ios", "xcodegen",
+            "brew install xcodegen", "xcodebuild build", "xcodebuild test", "",
+            checks, checks);
+
+        var outcome = ConfigProfileWriter.Apply(LoadableDotnetConfig, profile, force: false);
+        Assert.True(outcome.Changed, outcome.SkipReason);
+        var rendered = outcome.NewText!;
+        Assert.Contains("role = \"setup\"", rendered);
+        Assert.NotNull(Toml.ToModel(rendered));
+
+        var tmpDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tmpDir);
+        var path = Path.Combine(tmpDir, "config.toml");
+        try
+        {
+            File.WriteAllText(path, rendered);
+            var config = BuildConfigLoader.Load(path, warnSink: _ => { });
+            Assert.Equal(CheckRole.Setup, config.Review.Checks.Single(c => c.Name == "xcodegen").Role);
+        }
+        finally
+        {
+            File.Delete(path);
+            Directory.Delete(tmpDir, recursive: true);
+        }
+    }
 }

@@ -98,6 +98,9 @@ verifier_allowed_tools = ["Read", "Grep", "Glob"]
 # Each [[review.checks]] entry defines an automated check run before the verifier.
 # role = "gating"   -> non-zero exit hard-fails the gate; use for build, test, typecheck.
 # role = "advisory" -> failure recorded and shown to verifier, never hard-fails; use for lint, format.
+# role = "setup"    -> a prerequisite command (e.g. a codegen/install step) run ONCE before the checks,
+#                      not a pass/fail check; a non-zero exit hard-fails the gate. Rarely needed - only
+#                      when the build cannot run in a fresh worktree without it (e.g. `xcodegen generate`).
 # Absent role defaults to "gating". A check absent from config is not-configured, never a failure.
 #
 # --- Example: .NET stack ---

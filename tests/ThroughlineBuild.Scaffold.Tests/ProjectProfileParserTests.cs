@@ -256,4 +256,22 @@ public class ProjectProfileParserTests
         Assert.Equal(CheckRole.Gating, profile!.ReviewChecks[0].Role);   // unknown role, name build -> gating
         Assert.Equal(CheckRole.Advisory, profile.ReviewChecks[1].Role);  // unknown role, name lint -> advisory
     }
+
+    [Fact]
+    public void Role_Setup_ParsedExplicitly()
+    {
+        var json = """
+        {
+          "build_command": "xcodebuild build",
+          "test_command": "xcodebuild test",
+          "review_checks": [
+            { "name": "xcodegen", "executable": "xcodegen", "arguments": ["generate"], "role": "setup" },
+            { "name": "build", "executable": "xcodebuild", "arguments": ["build"], "role": "gating" }
+          ]
+        }
+        """;
+        Assert.True(ProjectProfileParser.TryParse(json, out var profile, out var err), err);
+        Assert.Equal(CheckRole.Setup, profile!.ReviewChecks[0].Role);
+        Assert.Equal(CheckRole.Gating, profile.ReviewChecks[1].Role);
+    }
 }

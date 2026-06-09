@@ -462,8 +462,9 @@ public static class BuildConfigLoader
         {
             "gating"   => CheckRole.Gating,
             "advisory" => CheckRole.Advisory,
+            "setup"    => CheckRole.Setup,
             _ => throw new ConfigException(
-                $"key 'role' in [{context}] must be either \"gating\" or \"advisory\", got \"{raw}\"")
+                $"key 'role' in [{context}] must be \"gating\", \"advisory\", or \"setup\", got \"{raw}\"")
         };
     }
 

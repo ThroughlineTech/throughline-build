@@ -244,6 +244,7 @@ public static class ProjectProfileParser
         {
             case "advisory": return CheckRole.Advisory;
             case "gating": return CheckRole.Gating;
+            case "setup": return CheckRole.Setup;
             default: return IsCosmeticCheckName(name) ? CheckRole.Advisory : CheckRole.Gating;
         }
     }

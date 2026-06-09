@@ -114,11 +114,12 @@ public class ScaffoldProfileDeriverTests
     // example. A future edit that drops the role instruction (re-introducing lint/format hard-gating)
     // fails here.
     [Fact]
-    public void DeriveProfilePrompt_RequiresAGatingOrAdvisoryRolePerCheck()
+    public void DeriveProfilePrompt_RequiresARolePerCheck_IncludingSetup()
     {
         var prompt = ProfilePromptLoader.Load();
 
-        Assert.Contains("\"role\" is \"gating\" or \"advisory\"", prompt);
+        Assert.Contains("\"role\" is \"gating\", \"advisory\", or \"setup\"", prompt);
+        Assert.Contains("REQUIRED on every check", prompt);
         Assert.Contains("\"role\": \"advisory\"", prompt);
     }
 }

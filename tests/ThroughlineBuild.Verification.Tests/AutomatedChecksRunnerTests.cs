@@ -11,6 +11,9 @@ public class AutomatedChecksRunnerTests
         TimeSpan? timeout = null)
         => new CheckSpec(name, exe, args, timeout ?? TimeSpan.FromSeconds(30));
 
+    private static CheckSpec SpecRole(string name, CheckRole role)
+        => new CheckSpec(name, "noop", Array.Empty<string>(), TimeSpan.FromSeconds(5), role);
+
     // Cross-platform "sleep for ~N seconds" command for synthesizing long-running processes.
     // Windows lacks `sleep`; macOS/Linux lack `cmd`/`ping -n`.
     private static (string exe, string[] args) SleepCmd(int seconds)
@@ -42,6 +45,38 @@ public class AutomatedChecksRunnerTests
         Assert.True(results[1].Passed, $"spec2 should pass; stderr={results[1].StderrTail}");
         Assert.Equal(0, results[1].ExitCode);
         Assert.True(results[1].Elapsed > TimeSpan.Zero, "spec2 elapsed should be > Zero");
+    }
+
+    // --- TLB-523: setup-role specs are prerequisites that must run before the rest ---
+    [Fact]
+    public void OrderSetupFirst_MovesSetupSpecsAhead_StableWithinGroups()
+    {
+        var specs = new[]
+        {
+            SpecRole("build", CheckRole.Gating),
+            SpecRole("gen-a", CheckRole.Setup),
+            SpecRole("lint", CheckRole.Advisory),
+            SpecRole("gen-b", CheckRole.Setup),
+        };
+
+        var ordered = AutomatedChecksRunner.OrderSetupFirst(specs);
+
+        // Setup steps first (in their original relative order), then the rest (in theirs).
+        Assert.Equal(new[] { "gen-a", "gen-b", "build", "lint" }, ordered.Select(s => s.Name).ToArray());
+    }
+
+    [Fact]
+    public void OrderSetupFirst_NoSetupSpecs_ReturnsInputUnchanged()
+    {
+        var specs = new[]
+        {
+            SpecRole("build", CheckRole.Gating),
+            SpecRole("lint", CheckRole.Advisory),
+        };
+
+        var ordered = AutomatedChecksRunner.OrderSetupFirst(specs);
+
+        Assert.Same(specs, ordered); // nothing to reorder -> input returned untouched
     }
 
     // --- Test (b): One-failure-default-mode (run-all) ---

@@ -112,6 +112,36 @@ public class GatePhase
             smokeSignals.Add(new SmokeSignal("consumes-provides-preflight", SmokeSignalKind.GrepPresent, satisfied, details));
         }
 
+        // Setup steps (CheckRole.Setup) are prerequisites the runner executes BEFORE the real checks
+        // (e.g. a codegen/install step the gitignored build inputs depend on). A failed setup step means
+        // the checks could not run against a prepared worktree - hard-fail and bounce into rework: it may
+        // be worker-fixable (a broken manifest) and the rework cap bounds it. Reported as setup_failed so
+        // it is not mistaken for a code-level gating failure, and checked BEFORE the gating failures it
+        // would have cascaded into (a missing prerequisite fails the build check too).
+        var setupFailed = checkResults
+            .Where(r => r.Role == CheckRole.Setup && !r.Passed && !r.Skipped)
+            .ToList();
+
+        if (setupFailed.Count > 0)
+        {
+            var failedSetupNames = setupFailed.Select(r => r.Name).ToArray();
+            await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+            {
+                ["kind"] = "setup_failed",
+                ["checks_failed"] = failedSetupNames
+            }, ct).ConfigureAwait(false);
+            await TransitionInReviewToInProgressAsync(ticketId, ct).ConfigureAwait(false);
+            try
+            {
+                var escapedNames = WebUtility.HtmlEncode(string.Join(", ", failedSetupNames));
+                var commentHtml = $"<p>[gate: hard-fail] setup step(s) failed before checks could run: {escapedNames}</p>";
+                await _ticketing.CreateCommentAsync(ticketId, commentHtml, ct).ConfigureAwait(false);
+            }
+            catch { /* non-fatal: comment failure must not block the rework loop */ }
+            return new GateOutcome(false, checkResults, smokeSignals.AsReadOnly(),
+                $"gate: setup step(s) failed: {string.Join(", ", failedSetupNames)}");
+        }
+
         // Hard-fail only on Gating role failures; Advisory failures (lint, format) are recorded
         // in checkResults but never block the gate.
         var gatingFailed = checkResults

@@ -354,6 +354,50 @@ public class GatePhaseTests
         Assert.DoesNotContain(outcome.SmokeSignals, s => s.Label == "consumes-provides-preflight");
     }
 
+    // TLB-523: a failed setup step (a prerequisite codegen/install run) hard-fails the gate and bounces
+    // the ticket back to InProgress for rework, reported distinctly as setup_failed.
+    [Fact]
+    public async Task RunAsync_SetupStepFails_HardFails_TransitionsToInProgress()
+    {
+        var ticketing = new FakeGateTicketing();
+        var events = new FakeGateEventSink();
+        var gate = MakeGate(ticketing, events, checkResults: new[]
+        {
+            Fail("xcodegen", CheckRole.Setup),
+            Fail("build", CheckRole.Gating) // cascade: the build also fails without the prerequisite
+        });
+
+        var outcome = await gate.RunAsync(
+            TicketId, "/fake/worktree", "ticket/tlb-1", MainSha, "/fake/working",
+            claim: null, CancellationToken.None);
+
+        Assert.False(outcome.Passed);
+        Assert.False(outcome.Vacuous); // setup failure is reworkable, not a vacuity integrity hard-fail
+        Assert.NotNull(outcome.HardFailReason);
+        Assert.Contains("setup", outcome.HardFailReason);
+        Assert.Contains("xcodegen", outcome.HardFailReason);
+        Assert.Contains((TicketId, TicketState.InProgress), ticketing.Transitions);
+        Assert.Contains(events.Events, e => e.Kind == EventKind.GateFailure
+            && e.Data.TryGetValue("kind", out var k) && (string)k == "setup_failed");
+    }
+
+    [Fact]
+    public async Task RunAsync_SetupStepPasses_GateProceedsToPass()
+    {
+        var gate = MakeGate(checkResults: new[]
+        {
+            Pass("xcodegen", CheckRole.Setup),
+            Pass("build", CheckRole.Gating)
+        });
+
+        var outcome = await gate.RunAsync(
+            TicketId, "/fake/worktree", "ticket/tlb-1", MainSha, "/fake/working",
+            claim: null, CancellationToken.None);
+
+        Assert.True(outcome.Passed);
+        Assert.False(outcome.Vacuous);
+    }
+
     // -------------------------------------------------------------------------
     // Fakes
     // -------------------------------------------------------------------------

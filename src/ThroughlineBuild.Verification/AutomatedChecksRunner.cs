@@ -18,6 +18,11 @@ public class AutomatedChecksRunner
         string workingDirectory,
         CancellationToken ct)
     {
+        // Setup-role specs are prerequisites (a codegen/install step the real checks depend on); run
+        // them FIRST so the gating/advisory checks they enable see a prepared worktree. Stable, and a
+        // no-op when no setup spec is present, so single-role check lists keep their original order.
+        specs = OrderSetupFirst(specs);
+
         var results = new List<CheckResult>(specs.Count);
         bool shouldSkipRemaining = false;
 
@@ -70,6 +75,29 @@ public class AutomatedChecksRunner
         if (spec is null)
             return new CheckResult(checkName, false, 0, "", "", TimeSpan.Zero, Skipped: true);
         return await RunSingleAsync(spec, workingDirectory, ct);
+    }
+
+    // Reorder so every CheckRole.Setup spec runs before the rest, preserving relative order within each
+    // group (stable). Returns the input unchanged when there is nothing to reorder (no setup specs, or
+    // only setup specs), so existing single-role check lists run byte-for-byte as before.
+    public static IReadOnlyList<CheckSpec> OrderSetupFirst(IReadOnlyList<CheckSpec> specs)
+    {
+        if (specs.Count < 2)
+            return specs;
+
+        bool anySetup = false, anyOther = false;
+        foreach (var s in specs)
+        {
+            if (s.Role == CheckRole.Setup) anySetup = true;
+            else anyOther = true;
+        }
+        if (!anySetup || !anyOther)
+            return specs;
+
+        var ordered = new List<CheckSpec>(specs.Count);
+        foreach (var s in specs) if (s.Role == CheckRole.Setup) ordered.Add(s);
+        foreach (var s in specs) if (s.Role != CheckRole.Setup) ordered.Add(s);
+        return ordered;
     }
 
     private static async Task<CheckResult> RunSingleAsync(

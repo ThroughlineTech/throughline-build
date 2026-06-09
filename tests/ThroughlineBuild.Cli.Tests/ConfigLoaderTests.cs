@@ -1429,6 +1429,29 @@ role = "advisory"
     }
 
     [Fact]
+    public void Load_ReviewChecks_SetupRole_Parsed()
+    {
+        var toml = ValidToml + """
+
+[[review.checks]]
+name = "xcodegen"
+executable = "xcodegen"
+arguments = ["generate"]
+role = "setup"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Equal(CheckRole.Setup, config.Review.Checks[0].Role);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Load_ReviewChecks_InvalidRole_ThrowsConfigException()
     {
         var toml = ValidToml + """
