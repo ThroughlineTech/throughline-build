@@ -266,16 +266,10 @@ public class ImplementPhase : IWorkflowPhase
         var reworkContext = isRework
             ? await BuildReworkBriefContextAsync(comments, baseRef, canonicalBranchName, workingDirectory, ct).ConfigureAwait(false)
             : null;
-        // Experiment 2: pre-load the brief's named-input + convention file contents from the LIVE
-        // worktree so the worker does not re-discover them. Gated by [project].preload_context (default
-        // on); off -> "" -> the brief is byte-identical to the pre-preload baseline. In the chain path
-        // the shared worktree is already materialized here; in the standalone initial path it is not yet
-        // (created at Step 9), so the reader returns null for everything and the section is empty -
-        // tolerated by design (see plan 2.3), not an error.
-        var preloadedContextSection = _project.PreloadContext
-            ? PreloadedContextBuilder.Build(ticket.DescriptionHtml, _project, MakeWorktreeReader(canonicalWorktreePath)).Section
-            : string.Empty;
-        var brief = ImplementBriefBuilder.Build(_worker.Name, ticket, repoState, canonicalBranchName, canonicalWorktreePath, _project, _phaseOptions.ReviewFeedback, effectiveChainRange, reworkContext, preloadedContextSection);
+        // NOTE: the pre-load section + brief build moved BELOW Step 9 (experiment 3, Defect 2). The
+        // reader must see the MATERIALIZED worktree (baseRef + prior briefs' commits in the chain path),
+        // which only exists after Step 9 checks the ticket branch out. Nothing between here and the
+        // worker spawn reads `brief`, so the build is safe to defer to Step 9b.
 
         // Step 9: Set up the working directory for the ticket.
         // - Shared-worktree (initial): create the ticket branch inside the pre-existing worktree.
@@ -325,6 +319,14 @@ public class ImplementPhase : IWorkflowPhase
                 ["to"] = "InProgress"
             }, ct).ConfigureAwait(false);
         }
+
+        // Step 9b (experiment 3): build the pre-load section against the NOW-materialized worktree and
+        // emit loud, countable telemetry, then build the brief. The reader sees baseRef + prior briefs'
+        // commits (chain), the freshly-created worktree (standalone), or the existing one (rework) - all
+        // three correct. The events are advisory: BuildAndReportPreloadAsync emits and we PROCEED.
+        var preloadedContextSection = await BuildAndReportPreloadAsync(
+            ticketId, ticket.DescriptionHtml, MakeWorktreeReader(canonicalWorktreePath), ct).ConfigureAwait(false);
+        var brief = ImplementBriefBuilder.Build(_worker.Name, ticket, repoState, canonicalBranchName, canonicalWorktreePath, _project, _phaseOptions.ReviewFeedback, effectiveChainRange, reworkContext, preloadedContextSection);
 
         // Step 10: Emit WorkerSpawn
         await EmitAsync(EventKind.WorkerSpawn, ticketId, new Dictionary<string, object>
@@ -594,6 +596,63 @@ public class ImplementPhase : IWorkflowPhase
             ticketId,
             Phase.Implement,
             data), ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Build the pre-load section from the worker's MATERIALIZED worktree (call AFTER Step 9 checks out
+    /// baseRef - experiment 3, Defect 2) and emit loud, countable telemetry (Defect 3): a per-ticket
+    /// preload_summary; a preload_file_not_found per DECLARED Preload path still absent after
+    /// materialization; and a single preload_empty when a brief declared Preload paths but loaded zero
+    /// (the signal that would have caught experiment 2's silent no-op on ticket 1). All ADVISORY: this
+    /// emits and returns; the caller proceeds. The chain's hard-fail comes from a phase return value,
+    /// never the event stream, so emitting GateFailure here is pure telemetry (same as the sibling
+    /// drift_warning/hygiene_gate advisories). Gated by [project].preload_context: off -> "" and NO
+    /// events, leaving the brief byte-identical to the pre-preload baseline.
+    /// </summary>
+    internal async Task<string> BuildAndReportPreloadAsync(
+        string ticketId, string? descriptionHtml, Func<string, string?> readFile, CancellationToken ct)
+    {
+        if (!_project.PreloadContext)
+            return string.Empty;
+
+        var result = PreloadedContextBuilder.Build(descriptionHtml, _project, readFile);
+
+        // Per-ticket summary (mirrors the gate's per-ticket CostLedger). The event log is the system of
+        // record; the worker's prompt gets none of this enumeration.
+        await EmitAsync(EventKind.CostLedger, ticketId, new Dictionary<string, object>
+        {
+            ["kind"] = "preload_summary",
+            ["files_requested"] = result.FilesRequested,
+            ["files_loaded"] = result.FilesLoaded,
+            ["files_truncated"] = result.FilesTruncated,
+            ["bytes_loaded"] = result.TotalBytes,
+            ["not_found"] = result.NotFoundAll.ToList(),
+            ["truncated"] = result.LoadedTruncated.ToList(),
+            ["omitted"] = result.Omitted.ToList(),
+        }, ct).ConfigureAwait(false);
+
+        // A path the brief NAMED that is absent even after the worktree is materialized is genuinely
+        // suspicious (convention-only absence stays in the summary's not_found list, no loud event).
+        foreach (var file in result.NotFoundNamed)
+        {
+            await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+            {
+                ["kind"] = "preload_file_not_found",
+                ["file"] = file,
+            }, ct).ConfigureAwait(false);
+        }
+
+        // Declared Preload paths but loaded zero - the single signal that catches a no-opped pre-load.
+        if (result.DeclaredButAllMissing)
+        {
+            await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+            {
+                ["kind"] = "preload_empty",
+                ["requested"] = result.FilesRequested,
+            }, ct).ConfigureAwait(false);
+        }
+
+        return result.Section;
     }
 
     private async Task<ReworkBriefContext> BuildReworkBriefContextAsync(

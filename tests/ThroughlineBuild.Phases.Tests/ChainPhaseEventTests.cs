@@ -334,7 +334,7 @@ public class ChainPhaseEventTests
         var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
 
         Assert.Equal(ChainOutcome.Completed, result.Outcome);
-        Assert.DoesNotContain(sink.Events, e => e.Kind == EventKind.CostLedger);
+        Assert.DoesNotContain(sink.Events, e => e.Kind == EventKind.CostLedger && e.Phase == Phase.Gate);
     }
 
     // AC: "Each gated ticket emits one ledger event" + "Gate wall is populated from measured check durations"
@@ -360,7 +360,7 @@ public class ChainPhaseEventTests
 
         Assert.Equal(ChainOutcome.Completed, result.Outcome);
 
-        var ledgerEvents = sink.Events.Where(e => e.Kind == EventKind.CostLedger).ToList();
+        var ledgerEvents = sink.Events.Where(e => e.Kind == EventKind.CostLedger && e.Phase == Phase.Gate).ToList();
         Assert.Single(ledgerEvents);
 
         var ledger = ledgerEvents[0];
@@ -376,7 +376,7 @@ public class ChainPhaseEventTests
         Assert.False(ledger.Data.ContainsKey("gate_attributable_rework_tokens_available"));
 
         // CostLedger emitted before ChainEnd
-        var ledgerIdx = sink.Events.FindIndex(e => e.Kind == EventKind.CostLedger);
+        var ledgerIdx = sink.Events.FindIndex(e => e.Kind == EventKind.CostLedger && e.Phase == Phase.Gate);
         var chainEndIdx = sink.Events.FindIndex(e => e.Kind == EventKind.ChainEnd);
         Assert.True(ledgerIdx < chainEndIdx);
     }
@@ -409,7 +409,7 @@ public class ChainPhaseEventTests
 
         Assert.Equal(ChainOutcome.Completed, result.Outcome);
 
-        var ledgerEvents = sink.Events.Where(e => e.Kind == EventKind.CostLedger).ToList();
+        var ledgerEvents = sink.Events.Where(e => e.Kind == EventKind.CostLedger && e.Phase == Phase.Gate).ToList();
         Assert.Single(ledgerEvents);
 
         var ledger = ledgerEvents[0];
@@ -461,7 +461,7 @@ public class ChainPhaseEventTests
 
         Assert.Equal(ChainOutcome.Completed, result.Outcome);
 
-        var ledgerEvents = sink.Events.Where(e => e.Kind == EventKind.CostLedger).ToList();
+        var ledgerEvents = sink.Events.Where(e => e.Kind == EventKind.CostLedger && e.Phase == Phase.Gate).ToList();
         Assert.Single(ledgerEvents);
 
         var ledger = ledgerEvents[0];
@@ -494,7 +494,7 @@ public class ChainPhaseEventTests
 
         Assert.Equal(ChainOutcome.ReworkCapExceeded, result.Outcome);
 
-        var ledgerEvents = sink.Events.Where(e => e.Kind == EventKind.CostLedger).ToList();
+        var ledgerEvents = sink.Events.Where(e => e.Kind == EventKind.CostLedger && e.Phase == Phase.Gate).ToList();
         Assert.Single(ledgerEvents);
 
         var ledger = ledgerEvents[0];
