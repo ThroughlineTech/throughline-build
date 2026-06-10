@@ -1617,8 +1617,29 @@ public class ShipPhaseTests
             Task.FromResult(workingDirectory.Contains("baseline-") ? _baselineResults : _featureResults);
     }
 
-    private static CheckSpec MakeCheckSpec(string name = "check-a") =>
-        new CheckSpec(name, "dotnet", new[] { "test" }, TimeSpan.FromMinutes(5));
+    private static CheckSpec MakeCheckSpec(string name = "check-a", CheckRole role = CheckRole.Gating) =>
+        new CheckSpec(name, "dotnet", new[] { "test" }, TimeSpan.FromMinutes(5), Role: role);
+
+    // Records the probe arguments and returns a canned verdict; never touches git or a worktree.
+    private sealed class FakeBaselineProber : GateControlProber
+    {
+        private readonly GateControlVerdict _verdict;
+        public int ProbeCallCount { get; private set; }
+        public IReadOnlyList<CheckSpec>? LastSpecs { get; private set; }
+        public string? LastBaseRef { get; private set; }
+
+        public FakeBaselineProber(GateControlVerdict verdict) { _verdict = verdict; }
+
+        public override Task<GateControlVerdict> ProbeAsync(
+            IReadOnlyList<CheckSpec> checks, string baseRef, string mainWorktreePath,
+            AutomatedChecksRunner runner, IGitClient git, CancellationToken ct)
+        {
+            ProbeCallCount++;
+            LastSpecs = checks;
+            LastBaseRef = baseRef;
+            return Task.FromResult(_verdict);
+        }
+    }
 
     // ---------- Baseline regression tests ----------
 
@@ -1801,5 +1822,310 @@ public class ShipPhaseTests
         var result2 = await phase2.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
         Assert.True(result2.Success);
         Assert.Equal(1, git.CreateDetachedWorktreeCallCount); // still 1, not 2
+    }
+
+    // ---------- Advisory-role regression tests ----------
+
+    [Fact]
+    public async Task RunAsync_AdvisoryRegression_NeverBlocksShip()
+    {
+        // Baseline: lint (advisory) passes. Feature: lint fails. Advisory checks are documented
+        // as never hard-failing; the ship gate must honor that like the review gate does.
+        var checkSpec = MakeCheckSpec("lint", CheckRole.Advisory);
+        var baselineResults = new CheckResult[] { new("lint", true, 0, "", "", TimeSpan.Zero, CheckRole.Advisory) };
+        var featureResults = new CheckResult[] { new("lint", false, 2, "2 violations", "", TimeSpan.Zero, CheckRole.Advisory) };
+        var checksRunner = new DirectoryAwareFakeChecksRunner(baselineResults, featureResults);
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var decrufter = new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git);
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(),
+            MakeShipOptions(checks: new[] { checkSpec }, baselineCache: new BaselineCache()),
+            git, checksRunner: checksRunner, markerScanner: EmptyScanner(), decrufter: decrufter);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Null(result.FailedAt);
+
+        var advisoryEvent = events.Events
+            .Where(e => e.Kind == EventKind.TicketWrite)
+            .FirstOrDefault(e => e.Data.TryGetValue("action", out var a) && a.ToString() == "advisory_regressions_noted");
+        Assert.NotNull(advisoryEvent);
+        var names = (IReadOnlyList<string>)advisoryEvent.Data["names"];
+        Assert.Contains("lint", names);
+
+        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.GateFailure));
+        Assert.Single(ticketing.Transitions);
+        Assert.Equal(TicketState.Done, ticketing.Transitions[0].state);
+    }
+
+    [Fact]
+    public async Task RunAsync_AdvisoryAndGatingRegressions_BlocksOnGatingOnly()
+    {
+        // Feature breaks both a gating check and an advisory check: ship blocks on the gating
+        // regression only, and the gate-failure event reports the advisory one separately.
+        var specs = new[] { MakeCheckSpec("test"), MakeCheckSpec("lint", CheckRole.Advisory) };
+        var baselineResults = new CheckResult[]
+        {
+            new("test", true, 0, "", "", TimeSpan.Zero),
+            new("lint", true, 0, "", "", TimeSpan.Zero, CheckRole.Advisory)
+        };
+        var featureResults = new CheckResult[]
+        {
+            new("test", false, 1, "", "test failed", TimeSpan.Zero),
+            new("lint", false, 2, "2 violations", "", TimeSpan.Zero, CheckRole.Advisory)
+        };
+        var checksRunner = new DirectoryAwareFakeChecksRunner(baselineResults, featureResults);
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var decrufter = new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git);
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(),
+            MakeShipOptions(checks: specs, baselineCache: new BaselineCache()),
+            git, checksRunner: checksRunner, markerScanner: EmptyScanner(), decrufter: decrufter);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ShipFailureStage.RegressionChecks, result.FailedAt);
+        Assert.Contains("test", result.FailureReason ?? "");
+        Assert.DoesNotContain("lint", result.FailureReason ?? "");
+
+        var gate = events.Events.Single(e => e.Kind == EventKind.GateFailure);
+        var regressions = (IReadOnlyList<string>)gate.Data["regressions"];
+        Assert.Equal(new[] { "test" }, regressions);
+        var advisoryRegressions = (IReadOnlyList<string>)gate.Data["advisory_regressions"];
+        Assert.Equal(new[] { "lint" }, advisoryRegressions);
+    }
+
+    [Fact]
+    public async Task RunAsync_LegacyAdvisoryFailure_DoesNotBlock()
+    {
+        // SkipBaseline (legacy path): an advisory failure is noted but never blocks ship.
+        var checkSpec = MakeCheckSpec("lint", CheckRole.Advisory);
+        var featureResults = new CheckResult[] { new("lint", false, 2, "2 violations", "", TimeSpan.Zero, CheckRole.Advisory) };
+        var checksRunner = new FakeChecksRunner(featureResults);
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var decrufter = new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git);
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(),
+            MakeShipOptions(checks: new[] { checkSpec }, skipBaseline: true),
+            git, checksRunner: checksRunner, markerScanner: EmptyScanner(), decrufter: decrufter);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        var advisoryEvent = events.Events
+            .Where(e => e.Kind == EventKind.TicketWrite)
+            .FirstOrDefault(e => e.Data.TryGetValue("action", out var a) && a.ToString() == "advisory_failures_noted");
+        Assert.NotNull(advisoryEvent);
+        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.GateFailure));
+        Assert.Single(ticketing.Transitions);
+        Assert.Equal(TicketState.Done, ticketing.Transitions[0].state);
+    }
+
+    // ---------- Baseline contradiction re-check tests ----------
+
+    [Fact]
+    public async Task RunAsync_BaselineRecheck_ConfirmedOnBase_ReclassifiesAndShips()
+    {
+        // The baseline run reported check-a clean (poisoned, e.g. by a user-global linter cache),
+        // the feature branch fails it. The re-check probe finds check-a failing on the pristine
+        // base too: reclassify as pre-existing, correct the cache entry, and ship.
+        var setupSpec = MakeCheckSpec("prep", CheckRole.Setup);
+        var failingSpec = MakeCheckSpec("check-a");
+        var passingSpec = MakeCheckSpec("check-b");
+        var specs = new[] { setupSpec, failingSpec, passingSpec };
+        var baselineResults = new CheckResult[]
+        {
+            new("prep", true, 0, "", "", TimeSpan.Zero, CheckRole.Setup),
+            new("check-a", true, 0, "", "", TimeSpan.Zero),
+            new("check-b", true, 0, "", "", TimeSpan.Zero)
+        };
+        var featureResults = new CheckResult[]
+        {
+            new("prep", true, 0, "", "", TimeSpan.Zero, CheckRole.Setup),
+            new("check-a", false, 2, "2 violations", "", TimeSpan.Zero),
+            new("check-b", true, 0, "", "", TimeSpan.Zero)
+        };
+        var prober = new FakeBaselineProber(new GateControlVerdict(
+            GateControlOutcome.BaseFails, MergedSha, new CheckResult[]
+            {
+                new("prep", true, 0, "", "", TimeSpan.Zero, CheckRole.Setup),
+                new("check-a", false, 2, "2 violations", "", TimeSpan.Zero)
+            }));
+        var baselineCache = new BaselineCache();
+        var checksRunner = new DirectoryAwareFakeChecksRunner(baselineResults, featureResults);
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var decrufter = new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git);
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(),
+            MakeShipOptions(checks: specs, baselineCache: baselineCache),
+            git, checksRunner: checksRunner, markerScanner: EmptyScanner(), decrufter: decrufter,
+            baselineProber: prober);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Null(result.FailedAt);
+        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.GateFailure));
+
+        // The probe re-ran only the regressed check plus Setup prerequisites.
+        Assert.Equal(1, prober.ProbeCallCount);
+        Assert.Equal(new[] { "prep", "check-a" }, prober.LastSpecs!.Select(s => s.Name).ToArray());
+        Assert.Equal(MergedSha, prober.LastBaseRef);
+
+        var recheckEvent = events.Events
+            .Where(e => e.Kind == EventKind.TicketWrite)
+            .Single(e => e.Data.TryGetValue("action", out var a) && a.ToString() == "baseline_recheck");
+        var confirmed = (IReadOnlyList<string>)recheckEvent.Data["confirmed_failing_on_base"];
+        Assert.Equal(new[] { "check-a" }, confirmed);
+
+        // Reclassified as pre-existing.
+        var preExistingEvent = events.Events
+            .Where(e => e.Kind == EventKind.TicketWrite)
+            .Single(e => e.Data.TryGetValue("action", out var a) && a.ToString() == "pre_existing_failures_noted");
+        Assert.Contains("check-a", (IReadOnlyList<string>)preExistingEvent.Data["names"]);
+
+        // The poisoned cache entry was corrected so later ships in the chain inherit it.
+        Assert.True(baselineCache.TryGet(MergedSha, out var corrected));
+        Assert.Contains("check-a", corrected);
+
+        Assert.Single(ticketing.Transitions);
+        Assert.Equal(TicketState.Done, ticketing.Transitions[0].state);
+    }
+
+    [Fact]
+    public async Task RunAsync_BaselineRecheck_BasePasses_StillBlocks()
+    {
+        // The re-check confirms the base really is clean: the regression stands, ship blocks.
+        var checkSpec = MakeCheckSpec();
+        var baselineResults = new CheckResult[] { new("check-a", true, 0, "", "", TimeSpan.Zero) };
+        var featureResults = new CheckResult[] { new("check-a", false, 1, "", "test failed", TimeSpan.Zero) };
+        var prober = new FakeBaselineProber(new GateControlVerdict(
+            GateControlOutcome.BasePasses, MergedSha,
+            new CheckResult[] { new("check-a", true, 0, "", "", TimeSpan.Zero) }));
+        var checksRunner = new DirectoryAwareFakeChecksRunner(baselineResults, featureResults);
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var decrufter = new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git);
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(),
+            MakeShipOptions(checks: new[] { checkSpec }, baselineCache: new BaselineCache()),
+            git, checksRunner: checksRunner, markerScanner: EmptyScanner(), decrufter: decrufter,
+            baselineProber: prober);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ShipFailureStage.RegressionChecks, result.FailedAt);
+        Assert.Equal(1, prober.ProbeCallCount);
+        var gate = events.Events.Single(e => e.Kind == EventKind.GateFailure);
+        Assert.Contains("check-a", (IReadOnlyList<string>)gate.Data["regressions"]);
+    }
+
+    [Fact]
+    public async Task RunAsync_BaselineRecheck_Inconclusive_StillBlocks()
+    {
+        // An inconclusive probe must never downgrade a regression to pre-existing.
+        var checkSpec = MakeCheckSpec();
+        var baselineResults = new CheckResult[] { new("check-a", true, 0, "", "", TimeSpan.Zero) };
+        var featureResults = new CheckResult[] { new("check-a", false, 1, "", "test failed", TimeSpan.Zero) };
+        var prober = new FakeBaselineProber(new GateControlVerdict(
+            GateControlOutcome.Inconclusive, null, Array.Empty<CheckResult>(), "worktree creation failed"));
+        var checksRunner = new DirectoryAwareFakeChecksRunner(baselineResults, featureResults);
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var decrufter = new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git);
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(),
+            MakeShipOptions(checks: new[] { checkSpec }, baselineCache: new BaselineCache()),
+            git, checksRunner: checksRunner, markerScanner: EmptyScanner(), decrufter: decrufter,
+            baselineProber: prober);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ShipFailureStage.RegressionChecks, result.FailedAt);
+    }
+
+    [Fact]
+    public async Task RunAsync_BaselineRecheck_SetupFailedOnBase_StillBlocks()
+    {
+        // A failed Setup step on the pristine base means the control results prove nothing
+        // about the regressed check; the regression classification must stand.
+        var setupSpec = MakeCheckSpec("prep", CheckRole.Setup);
+        var checkSpec = MakeCheckSpec();
+        var baselineResults = new CheckResult[]
+        {
+            new("prep", true, 0, "", "", TimeSpan.Zero, CheckRole.Setup),
+            new("check-a", true, 0, "", "", TimeSpan.Zero)
+        };
+        var featureResults = new CheckResult[]
+        {
+            new("prep", true, 0, "", "", TimeSpan.Zero, CheckRole.Setup),
+            new("check-a", false, 1, "", "test failed", TimeSpan.Zero)
+        };
+        var prober = new FakeBaselineProber(new GateControlVerdict(
+            GateControlOutcome.BaseFails, MergedSha, new CheckResult[]
+            {
+                new("prep", false, 1, "", "install failed", TimeSpan.Zero, CheckRole.Setup),
+                new("check-a", false, 1, "", "cannot run", TimeSpan.Zero)
+            }));
+        var checksRunner = new DirectoryAwareFakeChecksRunner(baselineResults, featureResults);
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var decrufter = new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git);
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(),
+            MakeShipOptions(checks: new[] { setupSpec, checkSpec }, baselineCache: new BaselineCache()),
+            git, checksRunner: checksRunner, markerScanner: EmptyScanner(), decrufter: decrufter,
+            baselineProber: prober);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ShipFailureStage.RegressionChecks, result.FailedAt);
+        var recheckEvent = events.Events
+            .Where(e => e.Kind == EventKind.TicketWrite)
+            .Single(e => e.Data.TryGetValue("action", out var a) && a.ToString() == "baseline_recheck");
+        Assert.Empty((IReadOnlyList<string>)recheckEvent.Data["confirmed_failing_on_base"]);
+    }
+
+    [Fact]
+    public async Task RunAsync_BaselineComputed_EmitsPerCheckEvidence()
+    {
+        // The baseline_computed event must carry per-check evidence (name, exit code, output
+        // tails) so a wrong baseline is diagnosable from the event log alone.
+        var checkSpec = MakeCheckSpec();
+        var baselineResults = new CheckResult[] { new("check-a", false, 2, "2 violations found", "warn", TimeSpan.Zero) };
+        var featureResults = new CheckResult[] { new("check-a", true, 0, "", "", TimeSpan.Zero) };
+        var checksRunner = new DirectoryAwareFakeChecksRunner(baselineResults, featureResults);
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(includeWorktreeMatching: true);
+        var decrufter = new FakeDecrufter(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()), git);
+        var phase = new ShipPhase(ticketing, events, MakeBuildOptions(),
+            MakeShipOptions(checks: new[] { checkSpec }, baselineCache: new BaselineCache()),
+            git, checksRunner: checksRunner, markerScanner: EmptyScanner(), decrufter: decrufter);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        var computedEvent = events.Events
+            .Where(e => e.Kind == EventKind.TicketWrite)
+            .Single(e => e.Data.TryGetValue("action", out var a) && a.ToString() == "baseline_computed");
+        Assert.Equal(1, (int)computedEvent.Data["failing_count"]);
+        Assert.Contains("check-a", (IReadOnlyList<string>)computedEvent.Data["failing"]);
+        var evidence = (List<Dictionary<string, object>>)computedEvent.Data["check_evidence"];
+        var entry = Assert.Single(evidence);
+        Assert.Equal("check-a", entry["name"]);
+        Assert.Equal(false, entry["passed"]);
+        Assert.Equal(2, (int)entry["exit_code"]);
+        Assert.Equal("2 violations found", entry["stdout_tail"]);
+        Assert.Equal("warn", entry["stderr_tail"]);
     }
 }

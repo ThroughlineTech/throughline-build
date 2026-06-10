@@ -55,6 +55,7 @@ public class ShipPhase : IWorkflowPhase
     private readonly Func<string?> _processPathProvider;
     private readonly TextWriter? _progress;
     private readonly bool _verbose;
+    private readonly GateControlProber? _baselineProber;
 
     public ShipPhase(
         ITicketing ticketing,
@@ -67,7 +68,8 @@ public class ShipPhase : IWorkflowPhase
         WorktreeDecrufter? decrufter = null,
         Func<string?>? processPathProvider = null,
         TextWriter? progressWriter = null,
-        bool verbose = false)
+        bool verbose = false,
+        GateControlProber? baselineProber = null)
     {
         _ticketing = ticketing;
         _events = events;
@@ -80,6 +82,7 @@ public class ShipPhase : IWorkflowPhase
         _processPathProvider = processPathProvider ?? (() => Environment.ProcessPath);
         _progress = progressWriter;
         _verbose = verbose;
+        _baselineProber = baselineProber;
     }
 
     private void ReportProgress(string message) => _progress?.WriteLine(message);
@@ -500,9 +503,10 @@ public class ShipPhase : IWorkflowPhase
         {
             if (_shipOptions.RegressionChecks.Count > 0)
                 ReportProgress("[ship] computing baseline check results...");
-            var baselineFailures = await ComputeBaselineAsync(ticketId, ontoRef, workingDirectory, ct).ConfigureAwait(false);
-            if (baselineFailures is not null)
+            var baseline = await ComputeBaselineAsync(ticketId, ontoRef, workingDirectory, ct).ConfigureAwait(false);
+            if (baseline is not null)
             {
+                var baselineFailures = baseline.Failing;
                 regressionGateHandled = true;
                 if (_shipOptions.RegressionChecks.Count > 0)
                     ReportProgress($"[ship] running {_shipOptions.RegressionChecks.Count} regression check(s) on feature branch...");
@@ -526,9 +530,69 @@ public class ShipPhase : IWorkflowPhase
                     }
                 }
 
-                var regressions = featureResults.Where(r => !r.Passed && !baselineFailures.Contains(r.Name)).ToList();
-                var preExisting = featureResults.Where(r => !r.Passed && baselineFailures.Contains(r.Name)).ToList();
+                // Advisory checks (lint, format) are documented as never hard-failing; the gate
+                // already honors that, so ship must too - an advisory failure that is new vs the
+                // baseline is reported but never blocks the merge.
+                var failedFeature = featureResults.Where(r => !r.Passed).ToList();
+                var preExisting = failedFeature.Where(r => baselineFailures.Contains(r.Name)).ToList();
+                var advisoryRegressions = failedFeature
+                    .Where(r => r.Role == CheckRole.Advisory && !baselineFailures.Contains(r.Name)).ToList();
+                var regressions = failedFeature
+                    .Where(r => r.Role != CheckRole.Advisory && !baselineFailures.Contains(r.Name)).ToList();
                 var fixes = featureResults.Where(r => r.Passed && baselineFailures.Contains(r.Name)).ToList();
+
+                // Baseline contradiction re-check: "fails on feature, passed on baseline" can also
+                // mean the baseline run was wrong - the baseline worktree is fresh, but checks can
+                // leak state through user-global tool caches (e.g. SwiftLint's path+mtime-keyed
+                // cache replaying a falsely-clean result written by a sandboxed build phase). Before
+                // blocking the ship, re-run JUST the regressed checks (plus Setup prerequisites)
+                // against the same base SHA in a fresh control worktree. A check that fails there
+                // too is pre-existing, not a regression, and the cached baseline entry is corrected
+                // so later ships in this chain inherit the fixed set.
+                if (regressions.Count > 0 && _baselineProber is not null)
+                {
+                    var regressedNames = new HashSet<string>(regressions.Select(r => r.Name), StringComparer.Ordinal);
+                    var recheckSpecs = _shipOptions.RegressionChecks
+                        .Where(s => s.Role == CheckRole.Setup || regressedNames.Contains(s.Name))
+                        .ToList();
+                    ReportProgress($"[ship] regression(s) detected: {string.Join(", ", regressedNames)} - re-checking baseline in a fresh worktree...");
+                    var control = await _baselineProber.ProbeAsync(
+                        recheckSpecs, baseline.OntoSha, workingDirectory, _checksRunner, _git, ct).ConfigureAwait(false);
+
+                    // A failed Setup step on the pristine base means the control results prove
+                    // nothing about the regressed checks; same for an inconclusive probe. Keep
+                    // the regression classification in both cases (never misclassify a real
+                    // regression as pre-existing on weak evidence).
+                    var baseSetupFailed = control.CheckResults
+                        .Any(r => r.Role == CheckRole.Setup && !r.Passed && !r.Skipped);
+                    var confirmedOnBase = control.Outcome == GateControlOutcome.Inconclusive || baseSetupFailed
+                        ? new HashSet<string>(StringComparer.Ordinal)
+                        : control.CheckResults
+                            .Where(r => !r.Passed && !r.Skipped && regressedNames.Contains(r.Name))
+                            .Select(r => r.Name)
+                            .ToHashSet(StringComparer.Ordinal);
+
+                    await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
+                    {
+                        ["action"] = "baseline_recheck",
+                        ["outcome"] = control.Outcome.ToString(),
+                        ["sha"] = baseline.OntoSha,
+                        ["checks"] = (IReadOnlyList<string>)recheckSpecs.Select(s => s.Name).ToList(),
+                        ["confirmed_failing_on_base"] = (IReadOnlyList<string>)confirmedOnBase.OrderBy(n => n, StringComparer.Ordinal).ToList(),
+                        ["check_evidence"] = BuildCheckEvidence(control.CheckResults),
+                        ["detail"] = control.Detail ?? ""
+                    }, ct).ConfigureAwait(false);
+
+                    if (confirmedOnBase.Count > 0)
+                    {
+                        var corrected = new HashSet<string>(baselineFailures, StringComparer.Ordinal);
+                        corrected.UnionWith(confirmedOnBase);
+                        _shipOptions.BaselineCache.Set(baseline.OntoSha, corrected);
+                        ReportProgress($"[ship] baseline was wrong for: {string.Join(", ", confirmedOnBase)} - reclassified as pre-existing");
+                        preExisting.AddRange(regressions.Where(r => confirmedOnBase.Contains(r.Name)));
+                        regressions = regressions.Where(r => !confirmedOnBase.Contains(r.Name)).ToList();
+                    }
+                }
 
                 if (preExisting.Count > 0)
                 {
@@ -552,6 +616,18 @@ public class ShipPhase : IWorkflowPhase
                         ["names"] = (IReadOnlyList<string>)fixNames
                     }, ct).ConfigureAwait(false);
                     ReportProgress($"[ship] fixed by this branch: {string.Join(", ", fixNames)}");
+                }
+
+                if (advisoryRegressions.Count > 0)
+                {
+                    var advisoryNames = advisoryRegressions.Select(r => r.Name).ToList();
+                    await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
+                    {
+                        ["action"] = "advisory_regressions_noted",
+                        ["count"] = advisoryRegressions.Count,
+                        ["names"] = (IReadOnlyList<string>)advisoryNames
+                    }, ct).ConfigureAwait(false);
+                    ReportProgress($"[ship] advisory regressions (never block ship): {string.Join(", ", advisoryNames)}");
                 }
 
                 if (regressions.Count > 0)
@@ -581,7 +657,8 @@ public class ShipPhase : IWorkflowPhase
                     {
                         ["kind"] = "regression_checks",
                         ["regressions"] = (IReadOnlyList<string>)regressionNames,
-                        ["pre_existing"] = (IReadOnlyList<string>)preExistingNamesList
+                        ["pre_existing"] = (IReadOnlyList<string>)preExistingNamesList,
+                        ["advisory_regressions"] = (IReadOnlyList<string>)advisoryRegressions.Select(r => r.Name).ToList()
                     }, ct).ConfigureAwait(false);
                     return (new ShipResult(false, ticketId, null,
                         $"regression checks introduced failures: {string.Join(", ", regressionNames)}", ShipFailureStage.RegressionChecks), worktreeNames, null);
@@ -615,7 +692,23 @@ public class ShipPhase : IWorkflowPhase
                 }
             }
 
-            var checksFailed = checkResults.Where(r => !r.Passed).ToList();
+            // Advisory checks never block ship, mirroring the gate's semantics; without a
+            // baseline there is no regression-vs-pre-existing distinction, so they are
+            // simply noted.
+            var advisoryFailed = checkResults.Where(r => !r.Passed && r.Role == CheckRole.Advisory).ToList();
+            if (advisoryFailed.Count > 0)
+            {
+                var advisoryNames = advisoryFailed.Select(r => r.Name).ToList();
+                await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
+                {
+                    ["action"] = "advisory_failures_noted",
+                    ["count"] = advisoryFailed.Count,
+                    ["names"] = (IReadOnlyList<string>)advisoryNames
+                }, ct).ConfigureAwait(false);
+                ReportProgress($"[ship] advisory failures (never block ship): {string.Join(", ", advisoryNames)}");
+            }
+
+            var checksFailed = checkResults.Where(r => !r.Passed && r.Role != CheckRole.Advisory).ToList();
             if (checksFailed.Count > 0)
             {
                 var namesList = string.Join(", ", checksFailed.Select(r => r.Name));
@@ -816,7 +909,11 @@ public class ShipPhase : IWorkflowPhase
         return new ShipResult(true, ticketId, null, null, null);
     }
 
-    private async Task<IReadOnlySet<string>?> ComputeBaselineAsync(
+    // Carries the resolved base SHA alongside the failing set so the contradiction re-check
+    // can probe the same commit and correct the cache entry it came from.
+    private sealed record BaselineComputation(string OntoSha, IReadOnlySet<string> Failing);
+
+    private async Task<BaselineComputation?> ComputeBaselineAsync(
         string ticketId,
         string ontoRef,
         string workingDirectory,
@@ -825,7 +922,7 @@ public class ShipPhase : IWorkflowPhase
         var ontoSha = await _git.RevParseAsync(ontoRef, workingDirectory, ct).ConfigureAwait(false);
         var cache = _shipOptions.BaselineCache!;
         if (cache.TryGet(ontoSha, out var cached))
-            return cached;
+            return new BaselineComputation(ontoSha, cached);
 
         var baselinePath = Path.Combine(workingDirectory, ".worktrees", $"baseline-{ontoSha[..8]}");
         var createResult = await _git.CreateDetachedWorktreeAsync(baselinePath, ontoSha, workingDirectory, ct).ConfigureAwait(false);
@@ -848,7 +945,9 @@ public class ShipPhase : IWorkflowPhase
         {
             ["action"] = "baseline_computed",
             ["sha"] = ontoSha,
-            ["failing_count"] = failing.Count
+            ["failing_count"] = failing.Count,
+            ["failing"] = (IReadOnlyList<string>)failing.OrderBy(n => n, StringComparer.Ordinal).ToList(),
+            ["check_evidence"] = BuildCheckEvidence(baselineResults)
         }, ct).ConfigureAwait(false);
 
         try
@@ -860,8 +959,28 @@ public class ShipPhase : IWorkflowPhase
             // fire-and-forget: baseline worktree cleanup failure does not block ship
         }
 
-        return failingSet;
+        return new BaselineComputation(ontoSha, failingSet);
     }
+
+    // Per-check evidence for the event log: a wrong baseline must be diagnosable from the
+    // JSONL alone (name + exit code + output tails), without exhuming tool caches or build
+    // activity logs after the fact. Tails are re-capped below CheckResult's ~4 KB so a
+    // multi-check event stays a readable single line.
+    private static List<Dictionary<string, object>> BuildCheckEvidence(IReadOnlyList<CheckResult> results)
+    {
+        return results.Select(r => new Dictionary<string, object>
+        {
+            ["name"] = r.Name,
+            ["role"] = r.Role.ToString(),
+            ["passed"] = r.Passed,
+            ["exit_code"] = r.ExitCode,
+            ["stdout_tail"] = TailOf(r.StdoutTail),
+            ["stderr_tail"] = TailOf(r.StderrTail)
+        }).ToList();
+    }
+
+    private static string TailOf(string? text, int maxChars = 2000) =>
+        string.IsNullOrEmpty(text) ? "" : text.Length <= maxChars ? text : text[^maxChars..];
 
     private async Task EmitAsync(EventKind kind, string ticketId, IReadOnlyDictionary<string, object> data, CancellationToken ct)
     {

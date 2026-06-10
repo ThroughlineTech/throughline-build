@@ -154,4 +154,76 @@ public class JsonlEventSinkListValueTests
                 Directory.Delete(tempDir, recursive: true);
         }
     }
+
+    [Fact]
+    public async Task EmitAsync_WithCheckEvidenceListOfDictionaries_RoundTripsUnderAot()
+    {
+        // AOT regression guard for the List<Dictionary<string, object>> registration used by the
+        // ship phase's baseline_computed / baseline_recheck per-check evidence payloads.
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var options = new EventLogOptions { BaseDirectory = tempDir, SessionId = "test-check-evidence" };
+
+        try
+        {
+            var sink = new JsonlEventSink(options);
+            try
+            {
+                var data = new Dictionary<string, object>
+                {
+                    ["action"] = "baseline_computed",
+                    ["check_evidence"] = new List<Dictionary<string, object>>
+                    {
+                        new()
+                        {
+                            ["name"] = "lint",
+                            ["passed"] = false,
+                            ["exit_code"] = 2,
+                            ["stdout_tail"] = "Found 2 violations, 2 serious"
+                        }
+                    }
+                };
+
+                var evt = new WorkflowEvent(
+                    SessionId: "test-check-evidence",
+                    Timestamp: DateTimeOffset.UtcNow,
+                    Kind: EventKind.TicketWrite,
+                    TicketId: "TLB-540",
+                    Phase: Phase.Ship,
+                    Data: data
+                );
+
+                await sink.EmitAsync(evt, CancellationToken.None);
+                await sink.FlushAsync(CancellationToken.None);
+            }
+            finally
+            {
+                await sink.DisposeAsync();
+            }
+
+            var filePath = Path.Combine(tempDir, "test-check-evidence.jsonl");
+            Assert.True(File.Exists(filePath));
+
+            var lines = File.ReadAllText(filePath).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            Assert.Single(lines);
+
+            var json = JsonDocument.Parse(lines[0]);
+            Assert.True(json.RootElement.TryGetProperty("Data", out var dataElement),
+                "Expected Data property in serialized JSON");
+
+            var evidence = dataElement.GetProperty("check_evidence");
+            Assert.Equal(1, evidence.GetArrayLength());
+            var entry = evidence.EnumerateArray().Single();
+            Assert.Equal("lint", entry.GetProperty("name").GetString());
+            Assert.False(entry.GetProperty("passed").GetBoolean());
+            Assert.Equal(2, entry.GetProperty("exit_code").GetInt32());
+            Assert.Equal("Found 2 violations, 2 serious", entry.GetProperty("stdout_tail").GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
 }
