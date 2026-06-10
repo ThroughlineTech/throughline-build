@@ -37,10 +37,12 @@ public sealed class ScaffoldProfileDeriver
         string opDocMarkdown,
         string workingDirectory,
         TimeSpan timeout,
+        string? debugCaptureDirectory,
         CancellationToken ct)
     {
         var brief = BuildBrief(opDocMarkdown);
-        var options = new WorkerOptions(timeout, AllowedTools: ReadOnlyTools, Size: WorkerSize.Small);
+        var options = new WorkerOptions(timeout, AllowedTools: ReadOnlyTools,
+            DebugCaptureDirectory: debugCaptureDirectory, Size: WorkerSize.Small);
 
         WorkerResult result;
         try

@@ -1072,8 +1072,15 @@ static async Task<int> RunAsync(string[] args)
             bool ticketsCreated = tag == ScaffoldExitCategory.Clean || tag == ScaffoldExitCategory.PartialCreation;
             if (ticketsCreated && !validateOnlyFlag && !dryRunFlag && !noProfile)
             {
+                // Under --debug, capture the derivation worker's raw stdin/stdout/stderr and
+                // structured transcript like any phase worker. Without it, a derivation failure
+                // (e.g. a missing PROJECT_PROFILE block) leaves no diagnosable artifact.
+                string? scaffoldDebugDir = debugMode
+                    ? Path.GetFullPath(Path.Combine(resolvedCwd, ".build", "sessions",
+                        $"scaffold-profile-{DateTimeOffset.Now:yyyy-MM-dd-HHmmss}"))
+                    : null;
                 await ScaffoldProfileRunner.RunAsync(
-                    args[1], resolvedCwd, config2.Workers, forceProfile, scaffoldCts.Token);
+                    args[1], resolvedCwd, config2.Workers, forceProfile, scaffoldDebugDir, scaffoldCts.Token);
             }
             else if (noProfile)
             {

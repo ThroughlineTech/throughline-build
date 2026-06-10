@@ -62,7 +62,7 @@ public class ScaffoldProfileDeriverTests
 
         var result = await deriver.DeriveAsync(
             "# Operation: demo\nBuild with npm run build / npm test.",
-            "/tmp", TimeSpan.FromMinutes(5), CancellationToken.None);
+            "/tmp", TimeSpan.FromMinutes(5), null, CancellationToken.None);
 
         Assert.True(result.Success, result.FailureReason);
         Assert.NotNull(result.Profile);
@@ -81,7 +81,7 @@ public class ScaffoldProfileDeriverTests
             new Dictionary<string, object>(), null);
         var deriver = new ScaffoldProfileDeriver(new FakeWorker(failed));
 
-        var result = await deriver.DeriveAsync("op", "/tmp", TimeSpan.FromMinutes(5), CancellationToken.None);
+        var result = await deriver.DeriveAsync("op", "/tmp", TimeSpan.FromMinutes(5), null, CancellationToken.None);
 
         Assert.False(result.Success);
         Assert.Contains("agent crashed", result.FailureReason);
@@ -92,7 +92,7 @@ public class ScaffoldProfileDeriverTests
     {
         var deriver = new ScaffoldProfileDeriver(new FakeWorker(OkWith(null)));
 
-        var result = await deriver.DeriveAsync("op", "/tmp", TimeSpan.FromMinutes(5), CancellationToken.None);
+        var result = await deriver.DeriveAsync("op", "/tmp", TimeSpan.FromMinutes(5), null, CancellationToken.None);
 
         Assert.False(result.Success);
         Assert.Contains("PROJECT_PROFILE", result.FailureReason);
@@ -103,7 +103,7 @@ public class ScaffoldProfileDeriverTests
     {
         var deriver = new ScaffoldProfileDeriver(new FakeWorker(OkWith("{ not valid }")));
 
-        var result = await deriver.DeriveAsync("op", "/tmp", TimeSpan.FromMinutes(5), CancellationToken.None);
+        var result = await deriver.DeriveAsync("op", "/tmp", TimeSpan.FromMinutes(5), null, CancellationToken.None);
 
         Assert.False(result.Success);
         Assert.Contains("invalid", result.FailureReason);
