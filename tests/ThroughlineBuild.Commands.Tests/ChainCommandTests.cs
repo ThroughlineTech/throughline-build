@@ -456,6 +456,60 @@ public class ChainCommandTests
 
     // --- outcome: StoppedAtShip ---
 
+    // TLB-538: environment gate failure gets its own final line and triage - the operator must
+    // learn the failure is the environment's, what the evidence was, and that a re-run resumes.
+    [Fact]
+    public async Task GateEnvironmentFailure_returns_failure_with_triage()
+    {
+        var (cmd, runner, _) = BuildCommand();
+        runner.Result = new ChainResult(
+            TicketId: "TLB-1",
+            Steps: Array.Empty<ChainStep>(),
+            Outcome: ChainOutcome.GateEnvironmentFailure,
+            TotalDuration: TimeSpan.FromSeconds(5),
+            FinalRationale: "gate: build, test failed - environment failure: the same gating check(s) also fail on the untouched base ref (abc12345)");
+
+        var (result, output) = await RunCapturingStdout(cmd, MakeCtx());
+
+        Assert.False(result.Success);
+        Assert.Contains("environment gate failure", output);
+        Assert.Contains("Operator triage", output);
+        // The gate evidence is surfaced inside the triage with the right framing - it is gate
+        // output, not reviewer output, so the generic reviewer header must not appear.
+        Assert.Contains("untouched base ref (abc12345)", output);
+        Assert.DoesNotContain("Final reviewer rationale", output);
+        Assert.Contains(".build/config.toml", output);
+        Assert.Contains("re-run: build chain TLB-1", output);
+    }
+
+    [Fact]
+    public async Task ParentStoppedEarly_with_env_child_calls_out_environment_and_skips()
+    {
+        var (cmd, runner, _) = BuildCommand();
+        runner.Result = new ChainResult(
+            TicketId: "TLB-1",
+            Steps: Array.Empty<ChainStep>(),
+            Outcome: ChainOutcome.ParentStoppedEarly,
+            TotalDuration: TimeSpan.FromSeconds(9),
+            FinalRationale: "Environment gate failure: TLB-2 stopped because the gate also fails on the untouched base ref; remaining children were skipped.",
+            ChildResults: new[]
+            {
+                new ChainResult("TLB-2", Array.Empty<ChainStep>(), ChainOutcome.GateEnvironmentFailure,
+                    TimeSpan.FromSeconds(8), "gate: build failed - environment failure"),
+                new ChainResult("TLB-3", Array.Empty<ChainStep>(), ChainOutcome.Skipped,
+                    TimeSpan.Zero, null,
+                    SkipReason: "environment gate failure in a sibling; fix the environment once and re-run the chain")
+            });
+
+        var (result, output) = await RunCapturingStdout(cmd, MakeCtx());
+
+        Assert.False(result.Success);
+        Assert.Contains("Operator triage", output);
+        Assert.Contains("ENVIRONMENT gate failure", output);
+        // The skipped sibling appears with its reason, not as an unexplained failure.
+        Assert.Contains("TLB-3: Skipped - environment gate failure in a sibling", output);
+    }
+
     [Fact]
     public async Task StoppedAtShip_returns_failure_with_triage()
     {

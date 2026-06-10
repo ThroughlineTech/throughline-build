@@ -700,6 +700,20 @@ public class ChainPhase
                         return (new ChainResult(options.TicketId, steps, ChainOutcome.GateVacuous, TimeSpan.Zero, gateOutcome.HardFailReason), null);
                     }
 
+                    if (gateOutcome.EnvironmentFailure)
+                    {
+                        // Environment failure (TLB-538): the control run proved the same gating checks
+                        // fail on the untouched base ref, so reworking the implementer cannot fix it -
+                        // hard-fail WITHOUT a rework round. The gate left the ticket InReview (no
+                        // InProgress bounce), so a re-run after the environment fix resumes cleanly.
+                        // false_fails records how many gate hard-fails were proven environmental.
+                        var falseFails = gateOutcome.CheckResults
+                            .Count(r => r.Role == CheckRole.Gating && !r.Passed && !r.Skipped);
+                        if (gateWasEngaged)
+                            await EmitCostLedgerAsync(chainSessionId, options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct, falseFails: Math.Max(falseFails, 1)).ConfigureAwait(false);
+                        return (new ChainResult(options.TicketId, steps, ChainOutcome.GateEnvironmentFailure, TimeSpan.Zero, gateOutcome.HardFailReason), null);
+                    }
+
                     // Gate already transitioned InReview -> InProgress. Re-enter the rework loop
                     // with the gate failure as feedback so the next implement knows what broke.
                     var gatingFailedResults = gateOutcome.CheckResults
@@ -837,14 +851,18 @@ public class ChainPhase
         long gateAttributableReworkInputTokens,
         long gateAttributableReworkOutputTokens,
         bool gateAttributableReworkTokensTracked,
-        CancellationToken ct)
+        CancellationToken ct,
+        // Gate hard-fails proven environmental by the base-ref control run (TLB-538). Zero on
+        // every path except the GateEnvironmentFailure stop, where the failure was a false fail
+        // by construction - the same checks fail on code identical to the base.
+        int falseFails = 0)
     {
         var data = new Dictionary<string, object>
         {
             ["gate_wall_ms"] = gateWallMs,
             ["gate_attributable_rework_rounds"] = gateAttributableReworkRounds,
             ["cascade_caught"] = 0,
-            ["false_fails"] = 0
+            ["false_fails"] = falseFails
         };
         if (gateAttributableReworkRounds > 0 && gateAttributableReworkTokensTracked)
         {
@@ -2069,6 +2087,11 @@ public class ChainPhase
 
         var allChildResults = new List<ChainResult>();
         bool anyStoppedEarly = false;
+        // TLB-538: set when a stopped child's failure was an environment gate failure. Environment
+        // failures are global to the machine/config, so the remaining siblings are marked Skipped
+        // instead of silently omitted - the operator sees the full blast radius, and nothing else
+        // is dispatched into the same wall.
+        bool environmentFailureDetected = false;
 
         HashSet<string>? batchedTicketIds = null;
         if (options.BatchImplementGroup is not null
@@ -2357,6 +2380,7 @@ public class ChainPhase
                 if (!ok)
                 {
                     anyStoppedEarly = true;
+                    environmentFailureDetected = childResult.ContainsEnvironmentFailure();
                     break;
                 }
 
@@ -2395,6 +2419,20 @@ public class ChainPhase
             }
         }
 
+        // TLB-538: after an environment gate failure, mark every undispatched child Skipped with
+        // the reason. They were not failures and they were not silently dropped - the environment
+        // must be fixed once, then a re-run picks them all up.
+        if (environmentFailureDetected)
+        {
+            var dispatched = new HashSet<string>(allChildResults.Select(r => r.TicketId), StringComparer.Ordinal);
+            foreach (var level in levels)
+                foreach (var id in level)
+                    if (!dispatched.Contains(id) && (batchedTicketIds is null || !batchedTicketIds.Contains(id)))
+                        allChildResults.Add(new ChainResult(id, Array.Empty<ChainStep>(), ChainOutcome.Skipped,
+                            TimeSpan.Zero, null,
+                            SkipReason: "environment gate failure in a sibling; fix the environment once and re-run the chain"));
+        }
+
         var childResults = allChildResults;
 
         // Root-chain landing (TLB-492): a nested parent merges its integration branch up into
@@ -2422,9 +2460,11 @@ public class ChainPhase
         totalSw.Stop();
         var outcome = anyStoppedEarly ? ChainOutcome.ParentStoppedEarly : ChainOutcome.ParentCompleted;
         var finalRationale = landingRationale
-            ?? (anyStoppedEarly
-                ? $"One or more children did not complete: {string.Join(", ", childResults.Where(r => !IsChainSuccess(r.Outcome)).Select(r => r.TicketId))}"
-                : $"All {eligible.Count} eligible children completed.");
+            ?? (environmentFailureDetected
+                ? $"Environment gate failure: {string.Join(", ", childResults.Where(r => r.ContainsEnvironmentFailure()).Select(r => r.TicketId))} stopped because the gate also fails on the untouched base ref; remaining children were skipped. Fix the environment once, then re-run."
+                : anyStoppedEarly
+                    ? $"One or more children did not complete: {string.Join(", ", childResults.Where(r => !IsChainSuccess(r.Outcome) && r.Outcome != ChainOutcome.Skipped).Select(r => r.TicketId))}"
+                    : $"All {eligible.Count} eligible children completed.");
 
         if (options.ChainTargetBranch is null && IsChainSuccess(outcome))
             await SweepChainWorktreesAsync(options.TicketId, _sessionIdGenerator(), ct).ConfigureAwait(false);

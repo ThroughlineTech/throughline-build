@@ -248,6 +248,9 @@ public sealed class ChainCommand : ITicketCommand
             ChainOutcome.GateVacuous =>
                 $"[{ticketId}] chain stopped: gate vacuous - a gating check could not be proven to fail on broken input{(result.FinalRationale is not null ? " - " + result.FinalRationale : "")}",
 
+            ChainOutcome.GateEnvironmentFailure =>
+                $"[{ticketId}] chain stopped: environment gate failure - the gating checks also fail on the untouched base ref; fix the environment, not the ticket",
+
             _ => $"[{ticketId}] chain stopped: unknown outcome {result.Outcome}"
         };
     }
@@ -355,6 +358,9 @@ public sealed class ChainCommand : ITicketCommand
             ChainOutcome.StoppedAtShip =>
                 GetStoppedAtShipTriage(ticketId, result),
 
+            ChainOutcome.GateEnvironmentFailure =>
+                GetGateEnvironmentFailureTriage(ticketId, result),
+
             ChainOutcome.ParentHasGrandchildren =>
                 GetParentHasGrandchildrenTriage(result),
 
@@ -369,11 +375,14 @@ public sealed class ChainCommand : ITicketCommand
 
         // Include final rationale if available (for review-based stops). Skip for
         // RefusedDirtyTree and ParentStoppedEarly: no reviewer ran, and the triage text
-        // restates the detail itself (the child list, for parent stops).
+        // restates the detail itself (the child list, for parent stops). Skip for
+        // GateEnvironmentFailure too: its rationale is gate evidence, not reviewer output,
+        // and the triage prints it with the right framing.
         var output = new StringBuilder();
         if (!string.IsNullOrEmpty(result.FinalRationale)
             && result.Outcome != ChainOutcome.RefusedDirtyTree
-            && result.Outcome != ChainOutcome.ParentStoppedEarly)
+            && result.Outcome != ChainOutcome.ParentStoppedEarly
+            && result.Outcome != ChainOutcome.GateEnvironmentFailure)
         {
             output.AppendLine("Final reviewer rationale:");
             output.AppendLine();
@@ -431,9 +440,17 @@ public sealed class ChainCommand : ITicketCommand
                 .ToList();
             foreach (var c in failed)
             {
-                var detail = string.IsNullOrEmpty(c.FinalRationale) ? "" : $" - {c.FinalRationale}";
+                var detail = !string.IsNullOrEmpty(c.FinalRationale) ? $" - {c.FinalRationale}"
+                    : !string.IsNullOrEmpty(c.SkipReason) ? $" - {c.SkipReason}"
+                    : "";
                 output.AppendLine($"- {c.TicketId}: {c.Outcome}{detail}");
             }
+        }
+        if (result.ChildResults?.Any(c => c.ContainsEnvironmentFailure()) == true)
+        {
+            output.AppendLine("At least one child hit an ENVIRONMENT gate failure: the gate also fails on the untouched");
+            output.AppendLine("base ref, so reworking tickets cannot fix it. Fix the environment or .build/config.toml");
+            output.AppendLine("once, then re-run - the remaining children were skipped, not failed.");
         }
         output.AppendLine("Completed children are already shipped and are skipped on a re-run.");
         output.Append($"Resume a stopped child directly ('build chain <child-id>'), or fix it ('build review'/'build ship <child-id>'), then re-run: build chain {ticketId}");
@@ -581,6 +598,26 @@ public sealed class ChainCommand : ITicketCommand
     private static string GetStoppedAtShipTriage(string ticketId, ChainResult result)
     {
         return $"Operator triage: Ship gate failed; ticket remains in InReview state. Options:\n- Review the gate failure (rebase conflict, regression checks, state consistency).\n- Resolve the failure manually if possible.\n- Retry ship via 'build ship {ticketId}' after resolving.\n- Transition ticket to Cancelled if unable to resolve.";
+    }
+
+    private static string GetGateEnvironmentFailureTriage(string ticketId, ChainResult result)
+    {
+        var output = new StringBuilder();
+        output.AppendLine("Operator triage: the deterministic gate failed on this ticket's worktree AND on the");
+        output.AppendLine("untouched base ref - an environment problem (toolchain update, missing SDK/simulator,");
+        output.AppendLine("stale check commands in .build/config.toml), NOT this ticket's code. No rework rounds");
+        output.AppendLine("were spent on it, and the ticket's commits are intact.");
+        if (!string.IsNullOrEmpty(result.FinalRationale))
+        {
+            output.AppendLine();
+            output.AppendLine(result.FinalRationale);
+        }
+        output.AppendLine();
+        output.AppendLine("Next steps:");
+        output.AppendLine("- Reproduce from the main checkout: run the [[review.checks]] commands from .build/config.toml by hand.");
+        output.AppendLine("- Fix the environment (toolchain/SDK), or update the check commands in .build/config.toml.");
+        output.Append($"- Then re-run: build chain {ticketId} - the ticket is still InReview and resumes cleanly; skipped siblings are picked up by the same re-run.");
+        return output.ToString();
     }
 
     private static PhaseWorktreeNames? GetWorktreeLayoutBestEffort(string ticketId)

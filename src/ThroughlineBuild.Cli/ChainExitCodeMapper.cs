@@ -29,6 +29,7 @@ public static class ChainExitCodeMapper
         ChainOutcome.StoppedAtShip => 7,
         ChainOutcome.GateVacuous => 8,
         ChainOutcome.ReviewUnavailable => 9,
+        ChainOutcome.GateEnvironmentFailure => 10,
         _ => 1
     };
 }

@@ -29,7 +29,9 @@ public class GatePhaseTests
         IReadOnlyList<CheckResult>? checkResults = null,
         FakeGateGitClient? git = null,
         IReadOnlyList<CheckSpec>? specs = null,
-        GateVacuityProver? prover = null) =>
+        GateVacuityProver? prover = null,
+        GateControlProber? controlProber = null,
+        Func<IReadOnlyList<CheckSpec>?>? gateChecksReloader = null) =>
         new GatePhase(
             ticketing ?? new FakeGateTicketing(),
             events ?? new FakeGateEventSink(),
@@ -37,7 +39,9 @@ public class GatePhaseTests
             new GateOptions(specs ?? Array.Empty<CheckSpec>()),
             git ?? new FakeGateGitClient(),
             new PreComputedChecksRunner(checkResults ?? Array.Empty<CheckResult>()),
-            prover);
+            prover,
+            controlProber,
+            gateChecksReloader);
 
     // A gating CheckSpec carrying a dummy canary so the prover loop reaches the prover.
     // The fake prover ignores the canary; the canary only matters for the real prover.
@@ -48,6 +52,9 @@ public class GatePhaseTests
     private static CheckSpec AdvisorySpec(string name = "lint") =>
         new CheckSpec(name, "noop", Array.Empty<string>(), TimeSpan.FromMinutes(1),
             CheckRole.Advisory, new[] { new CanaryFile("p", "c") });
+
+    private static CheckSpec SetupSpec(string name = "xcodegen") =>
+        new CheckSpec(name, "noop", Array.Empty<string>(), TimeSpan.FromMinutes(1), CheckRole.Setup);
 
     // Deterministic fake prover: returns a fixed verdict without touching disk or git.
     private sealed class FakeVacuityProver : GateVacuityProver
@@ -396,6 +403,263 @@ public class GatePhaseTests
 
         Assert.True(outcome.Passed);
         Assert.False(outcome.Vacuous);
+    }
+
+    // -------------------------------------------------------------------------
+    // TLB-538: environment-failure classification (base-ref control run)
+    // -------------------------------------------------------------------------
+
+    // Deterministic fake control prober: returns a fixed verdict, records what it was asked to run.
+    private sealed class FakeControlProber : GateControlProber
+    {
+        private readonly GateControlVerdict _verdict;
+        public int Calls { get; private set; }
+        public IReadOnlyList<CheckSpec>? ReceivedChecks { get; private set; }
+        public FakeControlProber(GateControlOutcome outcome, IReadOnlyList<CheckResult>? controlResults = null)
+            => _verdict = new GateControlVerdict(outcome, "b1b2b3b4b5b6b7b8",
+                controlResults ?? Array.Empty<CheckResult>());
+        public override Task<GateControlVerdict> ProbeAsync(IReadOnlyList<CheckSpec> checks, string baseRef,
+            string mainWorktreePath, AutomatedChecksRunner runner, IGitClient git, CancellationToken ct)
+        {
+            Calls++;
+            ReceivedChecks = checks;
+            return Task.FromResult(_verdict);
+        }
+    }
+
+    // Returns a different result set per RunAsync call, for the config-reload re-run path.
+    private sealed class SequencedChecksRunner : AutomatedChecksRunner
+    {
+        private readonly Queue<IReadOnlyList<CheckResult>> _sequence;
+        public int Calls { get; private set; }
+        public SequencedChecksRunner(params IReadOnlyList<CheckResult>[] sequence)
+            => _sequence = new Queue<IReadOnlyList<CheckResult>>(sequence);
+        public override Task<IReadOnlyList<CheckResult>> RunAsync(IReadOnlyList<CheckSpec> specs,
+            string workingDirectory, CancellationToken ct)
+        {
+            Calls++;
+            return Task.FromResult(_sequence.Count > 0
+                ? _sequence.Dequeue()
+                : (IReadOnlyList<CheckResult>)Array.Empty<CheckResult>());
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_GatingFails_ControlBaseFails_EnvironmentFailure_NoReworkTransition()
+    {
+        var ticketing = new FakeGateTicketing();
+        var events = new FakeGateEventSink();
+        var prober = new FakeControlProber(GateControlOutcome.BaseFails,
+            controlResults: new[] { Fail("build") });
+        var gate = MakeGate(ticketing, events,
+            checkResults: new[] { Fail("build") },
+            specs: new[] { GatingSpec("build") },
+            controlProber: prober);
+
+        var outcome = await gate.RunAsync(
+            TicketId, "/fake/worktree", "ticket/tlb-1", MainSha, "/fake/working",
+            claim: null, CancellationToken.None);
+
+        Assert.False(outcome.Passed);
+        Assert.True(outcome.EnvironmentFailure);
+        Assert.False(outcome.Vacuous);
+        Assert.Equal(1, prober.Calls);
+        Assert.NotNull(outcome.HardFailReason);
+        Assert.Contains("environment failure", outcome.HardFailReason);
+        // Evidence carries the control run's output tail.
+        Assert.NotNull(outcome.ControlEvidence);
+        Assert.Contains("error output", outcome.ControlEvidence);
+        // No rework transition: the ticket stays InReview so a re-run after the env fix resumes cleanly.
+        Assert.DoesNotContain((TicketId, TicketState.InProgress), ticketing.Transitions);
+        Assert.Contains(events.Events, e => e.Kind == EventKind.GateFailure
+            && e.Data.TryGetValue("kind", out var k) && (string)k == "gate_control_run");
+        Assert.Contains(events.Events, e => e.Kind == EventKind.GateFailure
+            && e.Data.TryGetValue("kind", out var k) && (string)k == "gate_environment_failure");
+    }
+
+    [Fact]
+    public async Task RunAsync_GatingFails_ControlBasePasses_NormalReworkPath()
+    {
+        var ticketing = new FakeGateTicketing();
+        var events = new FakeGateEventSink();
+        var prober = new FakeControlProber(GateControlOutcome.BasePasses,
+            controlResults: new[] { Pass("build") });
+        var gate = MakeGate(ticketing, events,
+            checkResults: new[] { Fail("build") },
+            specs: new[] { GatingSpec("build") },
+            controlProber: prober);
+
+        var outcome = await gate.RunAsync(
+            TicketId, "/fake/worktree", "ticket/tlb-1", MainSha, "/fake/working",
+            claim: null, CancellationToken.None);
+
+        Assert.False(outcome.Passed);
+        Assert.False(outcome.EnvironmentFailure);
+        // Base is green, so the failure is the ticket's: the ordinary rework bounce applies.
+        Assert.Contains((TicketId, TicketState.InProgress), ticketing.Transitions);
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.GateFailure
+            && e.Data.TryGetValue("kind", out var k) && (string)k == "gate_environment_failure");
+    }
+
+    [Fact]
+    public async Task RunAsync_GatingFails_ControlInconclusive_NormalReworkPath()
+    {
+        // A broken prober must never misclassify a real code failure as environmental.
+        var ticketing = new FakeGateTicketing();
+        var prober = new FakeControlProber(GateControlOutcome.Inconclusive);
+        var gate = MakeGate(ticketing,
+            checkResults: new[] { Fail("build") },
+            specs: new[] { GatingSpec("build") },
+            controlProber: prober);
+
+        var outcome = await gate.RunAsync(
+            TicketId, "/fake/worktree", "ticket/tlb-1", MainSha, "/fake/working",
+            claim: null, CancellationToken.None);
+
+        Assert.False(outcome.Passed);
+        Assert.False(outcome.EnvironmentFailure);
+        Assert.Contains((TicketId, TicketState.InProgress), ticketing.Transitions);
+    }
+
+    [Fact]
+    public async Task RunAsync_ControlRun_ReceivesOnlyFailedGatingChecksPlusSetup()
+    {
+        var prober = new FakeControlProber(GateControlOutcome.BasePasses);
+        var gate = MakeGate(
+            checkResults: new[]
+            {
+                Pass("xcodegen", CheckRole.Setup),
+                Fail("build"),
+                Pass("test"),
+                Fail("lint", CheckRole.Advisory)
+            },
+            specs: new[] { SetupSpec("xcodegen"), GatingSpec("build"), GatingSpec("test"), AdvisorySpec("lint") },
+            controlProber: prober);
+
+        await gate.RunAsync(
+            TicketId, "/fake/worktree", "ticket/tlb-1", MainSha, "/fake/working",
+            claim: null, CancellationToken.None);
+
+        Assert.NotNull(prober.ReceivedChecks);
+        // Setup prerequisites + the failed gating check only - not the green gating check,
+        // not the advisory check.
+        Assert.Equal(new[] { "xcodegen", "build" }, prober.ReceivedChecks!.Select(s => s.Name).ToArray());
+    }
+
+    [Fact]
+    public async Task RunAsync_GatePasses_ControlProberNeverRuns()
+    {
+        var prober = new FakeControlProber(GateControlOutcome.BaseFails);
+        var gate = MakeGate(
+            checkResults: new[] { Pass("build") },
+            specs: new[] { GatingSpec("build") },
+            controlProber: prober);
+
+        var outcome = await gate.RunAsync(
+            TicketId, "/fake/worktree", "ticket/tlb-1", MainSha, "/fake/working",
+            claim: null, CancellationToken.None);
+
+        Assert.True(outcome.Passed);
+        Assert.Equal(0, prober.Calls);
+    }
+
+    [Fact]
+    public async Task RunAsync_EnvFailure_ConfigChangedOnDisk_RerunGreen_Recovers()
+    {
+        // The incident shape (TLB-538): the gate fails on a stale config, a worker/operator fixed
+        // .build/config.toml mid-run, and the orchestrator - which loaded config once at startup -
+        // must pick up the fix and continue instead of stopping.
+        var ticketing = new FakeGateTicketing();
+        var events = new FakeGateEventSink();
+        var staleSpecs = new[] { GatingSpec("build") };
+        var freshSpecs = new[] { new CheckSpec("build", "noop", new[] { "fixed-destination" },
+            TimeSpan.FromMinutes(1), CheckRole.Gating) };
+        var runner = new SequencedChecksRunner(
+            new[] { Fail("build") },   // first run: stale specs fail
+            new[] { Pass("build") });  // re-run with fresh specs: green
+        var prober = new FakeControlProber(GateControlOutcome.BaseFails,
+            controlResults: new[] { Fail("build") });
+        var gate = new GatePhase(ticketing, events, MakeBuildOptions(),
+            new GateOptions(staleSpecs), new FakeGateGitClient(), runner,
+            vacuityProver: null, controlProber: prober, gateChecksReloader: () => freshSpecs);
+
+        var outcome = await gate.RunAsync(
+            TicketId, "/fake/worktree", "ticket/tlb-1", MainSha, "/fake/working",
+            claim: null, CancellationToken.None);
+
+        Assert.True(outcome.Passed);
+        Assert.False(outcome.EnvironmentFailure);
+        Assert.Equal(2, runner.Calls);
+        Assert.Empty(ticketing.Transitions);
+        Assert.Contains(events.Events, e => e.Kind == EventKind.GateFailure
+            && e.Data.TryGetValue("kind", out var k) && (string)k == "gate_config_reloaded"
+            && e.Data.TryGetValue("recovered", out var rec) && (bool)rec);
+    }
+
+    [Fact]
+    public async Task RunAsync_EnvFailure_ConfigUnchangedOnDisk_NoRerun_EnvironmentFailure()
+    {
+        var staleSpecs = new[] { GatingSpec("build") };
+        var runner = new SequencedChecksRunner(new[] { Fail("build") });
+        var prober = new FakeControlProber(GateControlOutcome.BaseFails,
+            controlResults: new[] { Fail("build") });
+        var gate = new GatePhase(new FakeGateTicketing(), new FakeGateEventSink(), MakeBuildOptions(),
+            new GateOptions(staleSpecs), new FakeGateGitClient(), runner,
+            vacuityProver: null, controlProber: prober, gateChecksReloader: () => staleSpecs);
+
+        var outcome = await gate.RunAsync(
+            TicketId, "/fake/worktree", "ticket/tlb-1", MainSha, "/fake/working",
+            claim: null, CancellationToken.None);
+
+        Assert.True(outcome.EnvironmentFailure);
+        // Equivalent on-disk specs must not trigger a wasted re-run.
+        Assert.Equal(1, runner.Calls);
+    }
+
+    [Fact]
+    public async Task RunAsync_EnvFailure_ConfigChangedButStillRed_EnvironmentFailure()
+    {
+        var events = new FakeGateEventSink();
+        var staleSpecs = new[] { GatingSpec("build") };
+        var freshSpecs = new[] { new CheckSpec("build", "noop", new[] { "still-broken" },
+            TimeSpan.FromMinutes(1), CheckRole.Gating) };
+        var runner = new SequencedChecksRunner(
+            new[] { Fail("build") },
+            new[] { Fail("build") });
+        var prober = new FakeControlProber(GateControlOutcome.BaseFails,
+            controlResults: new[] { Fail("build") });
+        var gate = new GatePhase(new FakeGateTicketing(), events, MakeBuildOptions(),
+            new GateOptions(staleSpecs), new FakeGateGitClient(), runner,
+            vacuityProver: null, controlProber: prober, gateChecksReloader: () => freshSpecs);
+
+        var outcome = await gate.RunAsync(
+            TicketId, "/fake/worktree", "ticket/tlb-1", MainSha, "/fake/working",
+            claim: null, CancellationToken.None);
+
+        Assert.True(outcome.EnvironmentFailure);
+        Assert.Equal(2, runner.Calls);
+        Assert.Contains(events.Events, e => e.Kind == EventKind.GateFailure
+            && e.Data.TryGetValue("kind", out var k) && (string)k == "gate_config_reloaded"
+            && e.Data.TryGetValue("recovered", out var rec) && !(bool)rec);
+    }
+
+    [Fact]
+    public async Task RunAsync_NoControlProber_GatingFails_NormalReworkPath_Unchanged()
+    {
+        // Null prober disables classification entirely (the pre-TLB-538 behavior).
+        var ticketing = new FakeGateTicketing();
+        var gate = MakeGate(ticketing,
+            checkResults: new[] { Fail("build") },
+            specs: new[] { GatingSpec("build") },
+            controlProber: null);
+
+        var outcome = await gate.RunAsync(
+            TicketId, "/fake/worktree", "ticket/tlb-1", MainSha, "/fake/working",
+            claim: null, CancellationToken.None);
+
+        Assert.False(outcome.Passed);
+        Assert.False(outcome.EnvironmentFailure);
+        Assert.Contains((TicketId, TicketState.InProgress), ticketing.Transitions);
     }
 
     // -------------------------------------------------------------------------

@@ -46,6 +46,32 @@ public class ChainExitCodeMapperTests
             ChainExitCodeMapper.GetExitCode(ChainOutcome.ReviewUnavailable));
     }
 
+    [Fact]
+    public void GateEnvironmentFailure_MapsToDedicatedExitCode()
+    {
+        // Distinct from GateVacuous (8) and the generic stop codes: the operator's next action
+        // (fix the environment, re-run everything) is different. See TLB-538.
+        Assert.Equal(10, ChainExitCodeMapper.GetExitCode(ChainOutcome.GateEnvironmentFailure));
+    }
+
+    [Fact]
+    public void MultiTicketEnvironmentFailure_PreservedOutcome_MapsToDedicatedExitCode()
+    {
+        var dispatchResult = new ParallelDispatchResult(
+            Success: false,
+            Results: new[]
+            {
+                new ChainResult("TLB-24", Array.Empty<ChainStep>(), ChainOutcome.GateEnvironmentFailure,
+                    TimeSpan.Zero, "gate: build failed - environment failure"),
+                new ChainResult("TLB-28", Array.Empty<ChainStep>(), ChainOutcome.Skipped,
+                    TimeSpan.Zero, null, SkipReason: "environment gate failure in TLB-24")
+            },
+            FailureReason: "ticket TLB-24 stopped with outcome GateEnvironmentFailure",
+            PreservedOutcome: ChainOutcome.GateEnvironmentFailure);
+
+        Assert.Equal(10, ChainExitCodeMapper.GetExitCode(dispatchResult));
+    }
+
     private static ChainResult MakeDirtyResult(string ticketId) => new(
         TicketId: ticketId,
         Steps: Array.Empty<ChainStep>(),

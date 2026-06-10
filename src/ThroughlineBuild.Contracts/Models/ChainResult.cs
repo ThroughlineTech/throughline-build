@@ -13,4 +13,13 @@ public record ChainResult(
     // Provides declared by the completion claim of the shipped ticket.
     // Populated only for leaf tickets with Outcome=Completed; null otherwise.
     // Used by ChainPhase to accumulate upstream provides for the consumes-provides preflight.
-    IReadOnlyList<string>? ShippedProvides = null);
+    IReadOnlyList<string>? ShippedProvides = null)
+{
+    // True when this result - or any descendant in a parent chain - stopped with
+    // GateEnvironmentFailure. An environment failure is global to the machine/config,
+    // so dispatch layers use this to skip remaining siblings/roots instead of running
+    // every one of them into the same wall (TLB-538).
+    public bool ContainsEnvironmentFailure() =>
+        Outcome == ChainOutcome.GateEnvironmentFailure
+        || (ChildResults is not null && ChildResults.Any(c => c.ContainsEnvironmentFailure()));
+}

@@ -1803,10 +1803,28 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
     // One shared prover instance per chain run so its per-check-once state persists across every
     // gate invocation (each gating check is probed at most once per chain). Null disables the probe.
     var gateVacuityProver = config2.Review.VerifyGateVacuity ? new GateVacuityProver() : null;
+    // TLB-538: environment-failure classification. The control prober re-runs failed gating
+    // checks against the untouched base ref so a broken environment is never attributed to the
+    // ticket; the reloader re-reads the gate checks from disk (config is otherwise loaded once
+    // at startup) so a config fixed mid-run recovers without restarting the chain. Best-effort:
+    // any reload failure returns null and the gate behaves as if nothing changed.
+    var gateControlProber = new GateControlProber();
+    Func<IReadOnlyList<CheckSpec>?> gateChecksReloader = () =>
+    {
+        try
+        {
+            var freshPath = BuildConfigLoader.FindConfigFile(cwd);
+            if (freshPath is null) return null;
+            var freshConfig = BuildConfigLoader.Load(freshPath, branchExists: _ => true);
+            return freshConfig.Review.Checks;
+        }
+        catch { return null; }
+    };
     var gatePhaseFactory = (BuildOptions buildOpts) =>
     {
         var gateOptions = new GateOptions(config2.Review.Checks);
-        return new GatePhase(ticketing, eventSink, buildOpts, gateOptions, vacuityProver: gateVacuityProver);
+        return new GatePhase(ticketing, eventSink, buildOpts, gateOptions, vacuityProver: gateVacuityProver,
+            controlProber: gateControlProber, gateChecksReloader: gateChecksReloader);
     };
 
     var reviewPhaseFactory = (BuildOptions buildOpts, GateOutcome? gateOutcome) =>

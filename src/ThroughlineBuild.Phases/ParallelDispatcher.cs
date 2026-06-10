@@ -77,6 +77,11 @@ public sealed class ParallelDispatcher
         var allResults = new List<ChainResult>();
         bool failed = false;
         string? failureReason = null;
+        // TLB-538: once any root's subtree hits an environment gate failure, every root dispatched
+        // after it would fail the same way (the environment is global). Remaining roots return
+        // Skipped without running. Width is pinned to 1, so the flag is observed in dispatch order.
+        bool environmentFailed = false;
+        string? environmentFailedTicket = null;
 
         foreach (var level in levels)
         {
@@ -101,8 +106,20 @@ public sealed class ParallelDispatcher
                 await semaphore.WaitAsync(ct).ConfigureAwait(false);
                 try
                 {
+                    if (environmentFailed)
+                    {
+                        return new ChainResult(id, Array.Empty<ChainStep>(), ChainOutcome.Skipped,
+                            TimeSpan.Zero, null,
+                            SkipReason: $"environment gate failure in {environmentFailedTicket}; fix the environment once and re-run");
+                    }
                     var opts = baseOptions with { TicketId = id };
-                    return await _runChain(opts, ct).ConfigureAwait(false);
+                    var result = await _runChain(opts, ct).ConfigureAwait(false);
+                    if (result.ContainsEnvironmentFailure())
+                    {
+                        environmentFailed = true;
+                        environmentFailedTicket = id;
+                    }
+                    return result;
                 }
                 finally
                 {
@@ -144,12 +161,29 @@ public sealed class ParallelDispatcher
 
         totalSw.Stop();
 
+        // TLB-538: roots in levels never reached (the loop breaks after a failed level) get the
+        // same Skipped marker as same-level roots, so the report shows the full blast radius.
+        if (environmentFailed)
+        {
+            var seen = new HashSet<string>(allResults.Select(r => r.TicketId), StringComparer.OrdinalIgnoreCase);
+            foreach (var id in ticketIds)
+                if (!seen.Contains(id))
+                    allResults.Add(new ChainResult(id, Array.Empty<ChainStep>(), ChainOutcome.Skipped,
+                        TimeSpan.Zero, null,
+                        SkipReason: $"environment gate failure in {environmentFailedTicket}; fix the environment once and re-run"));
+        }
+
         ChainOutcome? preservedOutcome = failed && allResults.Count > 0
             && allResults.All(r => r.Outcome == ChainOutcome.RefusedDirtyTree)
             ? ChainOutcome.RefusedDirtyTree
             : null;
-        var dispatchOutcome = preservedOutcome == ChainOutcome.RefusedDirtyTree
-            ? ChainOutcome.RefusedDirtyTree.ToString()
+        // TLB-538: surface the environment failure in the dispatch outcome and exit code - the
+        // operator's next action (fix the environment, re-run everything) differs from a normal
+        // partial failure (triage the one stopped ticket).
+        if (preservedOutcome is null && environmentFailed)
+            preservedOutcome = ChainOutcome.GateEnvironmentFailure;
+        var dispatchOutcome = preservedOutcome is { } po
+            ? po.ToString()
             : failed ? "partial" : "ok";
 
         // Emit DispatchEnd

@@ -19,5 +19,6 @@ public enum ChainOutcome
     BatchImplemented,   // ticket built, reviewed, and shipped into the integration branch as part of a warm batch session
     DryRunPreview,      // ticket was included in a dry-run schedule; no phases executed
     GateVacuous,        // a gating check could not be proven to fail on broken input (vacuous), or its canary could not be cleaned up - a config/setup defect; hard-fail without rework
-    ReviewUnavailable   // the verifier worker was blocked by a transient provider error (quota/rate-limit/auth); review never ran - NOT a review rejection; ticket left cleanly InReview and resumable via 'build review <id>'. See TLB-527.
+    ReviewUnavailable,  // the verifier worker was blocked by a transient provider error (quota/rate-limit/auth); review never ran - NOT a review rejection; ticket left cleanly InReview and resumable via 'build review <id>'. See TLB-527.
+    GateEnvironmentFailure // a gating check fails on the ticket worktree AND on the untouched base ref - the environment/config is broken, not the ticket's code; hard-fail without rework, remaining siblings/roots are skipped. Ticket left InReview and resumable. See TLB-538.
 }

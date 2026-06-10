@@ -274,6 +274,64 @@ public class ChainPhaseTests
             => Task.FromResult(_verdict);
     }
 
+    // TLB-538: the gate's control run proved the failure reproduces on the untouched base ref ->
+    // the chain must stop with GateEnvironmentFailure, spend no rework round, and record the
+    // false fail in the cost ledger.
+    [Fact]
+    public async Task RunAsync_GateEnvironmentFailure_HardFailsChain_NoRework_FalseFailsInLedger()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        // No verifier is dequeued: the environment failure returns before review runs.
+        var verifiers = new Queue<IVerifier>();
+
+        var git = new FakeGitClientChain();
+        var events = new FakeEventSinkChain();
+        Func<BuildOptions, GatePhase> gateFactory = opts =>
+            new GatePhase(
+                ticketing, events, opts,
+                new GateOptions(new[]
+                {
+                    new CheckSpec("build", "noop", Array.Empty<string>(), TimeSpan.FromMinutes(1), CheckRole.Gating)
+                }),
+                git,
+                new PreComputedChecksRunner(new[]
+                {
+                    new CheckResult("build", Passed: false, ExitCode: 1, StdoutTail: "",
+                        StderrTail: "Unable to find a destination", Elapsed: TimeSpan.Zero, Role: CheckRole.Gating)
+                }),
+                vacuityProver: null,
+                controlProber: new FakeControlProberChain());
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            git: git, eventSink: events, gateFactory: gateFactory);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.GateEnvironmentFailure, result.Outcome);
+        Assert.NotNull(result.FinalRationale);
+        Assert.Contains("environment failure", result.FinalRationale);
+        // The environment path never reworks and never ships.
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.ReworkRound);
+        Assert.DoesNotContain(result.Steps, s => s.PhaseName == "ship");
+        // The cost ledger records the proven false fail.
+        Assert.Contains(events.Events, e => e.Kind == EventKind.CostLedger
+            && e.Data.TryGetValue("false_fails", out var ff) && (int)ff >= 1);
+    }
+
+    // Deterministic fake control prober for chain routing: base ref fails the same checks.
+    private sealed class FakeControlProberChain : GateControlProber
+    {
+        public override Task<GateControlVerdict> ProbeAsync(IReadOnlyList<CheckSpec> checks, string baseRef,
+            string mainWorktreePath, AutomatedChecksRunner runner, IGitClient git, CancellationToken ct)
+            => Task.FromResult(new GateControlVerdict(GateControlOutcome.BaseFails, "feedfeedfeedfeed",
+                new[]
+                {
+                    new CheckResult("build", Passed: false, ExitCode: 1, StdoutTail: "",
+                        StderrTail: "Unable to find a destination", Elapsed: TimeSpan.Zero, Role: CheckRole.Gating)
+                }));
+    }
+
     [Fact]
     public async Task RunAsync_HappyPath_EmitsStartMarkerBeforeEachPhaseCompletion()
     {
