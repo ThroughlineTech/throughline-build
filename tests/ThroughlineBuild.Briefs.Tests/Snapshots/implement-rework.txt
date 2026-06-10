@@ -37,6 +37,7 @@ The ticket description (raw HTML) contains the planning output from the prior ph
 - Do NOT write outside the worktree
 - Do NOT use git stash or the shared stash stack; the stash stack is repo-global and leaks across worktrees, which can corrupt a later ticket's working tree. If you need a clean state to build, build in place rather than stashing.
 
+
 ## Golden and snapshot tests
 
 For golden/snapshot tests, use record-then-justify. Write the production code first, then run the code or test harness and capture its actual output as the golden fixture. If the project has a record/update flag or fixture-regeneration command, use that convention; if it does not, capture the real output verbatim and write that captured output to the fixture. Do NOT hand-author the expected string and iterate until it matches.

@@ -27,6 +27,14 @@ public record ProjectContext(
     /// </summary>
     public bool PreloadContext { get; init; } = true;
 
+    /// <summary>
+    /// When true, S-effort implement briefs get lightweight-planning hygiene (a prompt line plus a
+    /// restricted tool set). Default false: an opt-in, unproven lever - off leaves the implement brief
+    /// and argv byte-identical to today (the ablation control). Set <c>[project].context_hygiene = true</c>
+    /// to enable. Gated to S-effort briefs only in the phase; never M or L.
+    /// </summary>
+    public bool ContextHygiene { get; init; } = false;
+
     public static ProjectContext Empty { get; } = new(
         Language: string.Empty,
         Framework: string.Empty,

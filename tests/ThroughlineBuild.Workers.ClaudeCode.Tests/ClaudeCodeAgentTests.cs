@@ -1509,3 +1509,31 @@ public class ClaudeCodeAgentBypassPermissionsTests
         Assert.DoesNotContain("--dangerously-skip-permissions", args);
     }
 }
+
+public class ClaudeCodeAgentLeanPlanningTests
+{
+    [Fact]
+    public void BuildArgs_LeanPlanningTrue_AppendsDisallowedTools()
+    {
+        var options = new ClaudeCodeOptions { BypassPermissions = true };
+        var workerOptions = new WorkerOptions(TimeSpan.FromSeconds(30), LeanPlanning: true);
+
+        var args = ClaudeCodeAgent.BuildArgs(options, workerOptions);
+
+        // assert the flag and its value are present as adjacent argv tokens
+        var i = args.IndexOf("--disallowedTools");
+        Assert.True(i >= 0, "expected --disallowedTools in argv");
+        Assert.Equal("TodoWrite,Task", args[i + 1]);
+    }
+
+    [Fact]
+    public void BuildArgs_LeanPlanningFalse_OmitsDisallowedTools()
+    {
+        var options = new ClaudeCodeOptions { BypassPermissions = true };
+        var workerOptions = new WorkerOptions(TimeSpan.FromSeconds(30));
+
+        var args = ClaudeCodeAgent.BuildArgs(options, workerOptions);
+
+        Assert.DoesNotContain("--disallowedTools", args);
+    }
+}

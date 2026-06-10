@@ -267,7 +267,7 @@ public static class BuildConfigLoader
     {
         "language", "framework", "package_manager", "build_command", "test_command",
         "install_command", "dev_command", "plane_project_url", "workflow_tool", "notes_file",
-        "convention_files", "preload_context"
+        "convention_files", "preload_context", "context_hygiene"
     };
 
     private static readonly HashSet<string> KnownBatchKeys = new(StringComparer.Ordinal)
@@ -906,6 +906,9 @@ public static class BuildConfigLoader
         // Pre-load gate: default ON; set false to ablate the lever (restore the pre-preload brief).
         var preloadContext = OptionalBool(t, "preload_context", true);
 
+        // Context-hygiene gate: default OFF (opt-in). Enables effort-gated lean planning for S briefs.
+        var contextHygiene = OptionalBool(t, "context_hygiene", false);
+
         return new ProjectContext(
             Language: language,
             Framework: framework,
@@ -919,7 +922,8 @@ public static class BuildConfigLoader
             WorkflowTool: workflowTool)
         {
             ConventionFiles = conventionFiles,
-            PreloadContext = preloadContext
+            PreloadContext = preloadContext,
+            ContextHygiene = contextHygiene
         };
     }
 }

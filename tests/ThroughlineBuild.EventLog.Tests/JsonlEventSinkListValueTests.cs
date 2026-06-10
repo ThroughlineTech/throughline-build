@@ -83,4 +83,75 @@ public class JsonlEventSinkListValueTests
                 Directory.Delete(tempDir, recursive: true);
         }
     }
+
+    [Fact]
+    public async Task EmitAsync_WithListLongValues_RoundTripsForContextAttribution()
+    {
+        // AOT regression guard for the List<long> source-gen registration: without it, serializing
+        // a boxed List<long> inside the event Data throws once reflection is disabled below.
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var options = new EventLogOptions { BaseDirectory = tempDir, SessionId = "test-list-long-values" };
+
+        try
+        {
+            var sink = new JsonlEventSink(options);
+            try
+            {
+                var data = new Dictionary<string, object>
+                {
+                    ["kind"] = "context_attribution",
+                    ["cache_read_series"] = new List<long> { 35000, 48000, 60000 },
+                    ["total_cache_read"] = (long)143000,
+                    ["slope_ratio"] = 1.7d,
+                    ["turns"] = 3
+                };
+
+                var evt = new WorkflowEvent(
+                    SessionId: "test-list-long-values",
+                    Timestamp: DateTimeOffset.UtcNow,
+                    Kind: EventKind.CostLedger,
+                    TicketId: "TLB-130",
+                    Phase: Phase.Implement,
+                    Data: data
+                );
+
+                await sink.EmitAsync(evt, CancellationToken.None);
+                await sink.FlushAsync(CancellationToken.None);
+            }
+            finally
+            {
+                await sink.DisposeAsync();
+            }
+
+            var filePath = Path.Combine(tempDir, "test-list-long-values.jsonl");
+            Assert.True(File.Exists(filePath));
+
+            var content = File.ReadAllText(filePath);
+            var lines = content.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+            Assert.Single(lines);
+
+            var json = JsonDocument.Parse(lines[0]);
+
+            Assert.True(json.RootElement.TryGetProperty("Data", out var dataElement),
+                "Expected Data property in serialized JSON");
+
+            var cacheReadSeries = dataElement.GetProperty("cache_read_series");
+            Assert.Equal(3, cacheReadSeries.GetArrayLength());
+            var seriesArray = cacheReadSeries.EnumerateArray().ToList();
+            Assert.Equal(35000, seriesArray[0].GetInt64());
+            Assert.Equal(48000, seriesArray[1].GetInt64());
+            Assert.Equal(60000, seriesArray[2].GetInt64());
+
+            Assert.Equal(143000, dataElement.GetProperty("total_cache_read").GetInt64());
+            Assert.Equal("context_attribution", dataElement.GetProperty("kind").GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
 }

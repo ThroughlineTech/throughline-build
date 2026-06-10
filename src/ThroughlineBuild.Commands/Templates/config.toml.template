@@ -214,6 +214,9 @@ plane_project_url = "https://plane.example.com/workspace/browse/PROJ/"
 # Pre-load named-input + convention file contents into the implement brief (default true).
 # Set false to ablate the lever and restore the pre-preload brief.
 # preload_context = true
+# Effort-gated planning hygiene for S-effort implement briefs only (default false; opt-in). When true,
+# S briefs get a lightweight-planning prompt line plus a restricted tool set; M and L briefs are untouched.
+# context_hygiene = false
 
 # [plan] mode controls the plan phase:
 # "investigate" - spawn a worker to investigate the ticket and write the plan.

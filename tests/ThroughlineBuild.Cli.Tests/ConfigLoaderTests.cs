@@ -1664,4 +1664,53 @@ verify_gate_vacuity = false
             File.Delete(path);
         }
     }
+
+    [Fact]
+    public void Load_ContextHygiene_DefaultsFalseWhenAbsent()
+    {
+        var toml = ValidToml + "\n[project]\nlanguage = \"typescript\"";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.False(config.Project.ContextHygiene);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_ContextHygiene_ParsesTrue()
+    {
+        var toml = ValidToml + "\n[project]\ncontext_hygiene = true";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.True(config.Project.ContextHygiene);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_ContextHygiene_DoesNotWarnAsUnknownKey()
+    {
+        var toml = ValidToml + "\n[project]\ncontext_hygiene = true";
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            BuildConfigLoader.Load(path, w => captured.Add(w));
+            Assert.DoesNotContain(captured, w => w.Contains("context_hygiene"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }
