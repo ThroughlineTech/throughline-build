@@ -697,6 +697,53 @@ public class ImplementPhaseTests
         }
     }
 
+    [Fact]
+    public async Task RunAsync_WorkerReturnsContextTurns_EmitsContextAttributionCostLedger()
+    {
+        // Experiment 4: the worker stashed a flat per-turn context-attribution series on
+        // Metadata["context_turns"]; ImplementPhase re-emits it as a CostLedger event.
+        var workerResult = new WorkerResult(
+            Status.Ok, "implemented", new[] { "src/Foo.cs" }, null,
+            new Dictionary<string, object>
+            {
+                ["commit_sha"] = CommitSha,
+                ["files_changed"] = new[] { "src/Foo.cs" },
+                ["context_turns"] = new Dictionary<string, object>
+                {
+                    ["turns"] = (int)3,
+                    ["total_cache_read"] = (long)143000,
+                    ["slope_ratio"] = 1.7d,
+                    ["cache_read_series"] = new List<long> { 35000, 48000, 60000 },
+                    ["read_bytes"] = (long)1000,
+                    ["write_bytes"] = (long)2000,
+                    ["todo_bytes"] = (long)0,
+                    ["task_bytes"] = (long)0,
+                    ["bash_bytes"] = (long)0,
+                    ["other_bytes"] = (long)0,
+                    ["cache_creation_series"] = new List<long> { 10, 20, 30 },
+                    ["output_series"] = new List<long> { 1, 2, 3 }
+                }
+            });
+
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.Ready));
+        var worker = new FakeWorkerAgent(workerResult);
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha);
+        var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.True(result.Success);
+
+        var attr = Preload(events, EventKind.CostLedger, "context_attribution");
+        Assert.NotNull(attr);
+        Assert.Equal(143000L, (long)attr!.Data["total_cache_read"]);
+        Assert.Equal(3, (int)attr.Data["turns"]);
+        var series = Assert.IsType<List<long>>(attr.Data["cache_read_series"]);
+        Assert.Equal(new List<long> { 35000, 48000, 60000 }, series);
+        Assert.Equal("cache_creation lags tool_use ~1 turn; per-class split is approximate", (string)attr.Data["attribution_note"]);
+    }
+
     private sealed class FakeTicketing : ITicketing
     {
         private readonly Ticket _ticket;

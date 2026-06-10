@@ -369,6 +369,33 @@ public class ImplementPhase : IWorkflowPhase
             }
         }
 
+        // Step 13b (experiment 4): advisory per-turn context-attribution telemetry. The claude-code
+        // worker stashes a flat per-turn series on Metadata["context_turns"]; re-emit it as a
+        // CostLedger event so the intra-session cache_read ramp is derivable straight from the event
+        // log (mirrors the preload_summary advisory: emit and proceed). Stack-agnostic: this reads
+        // generic dictionary values by key and names no tool or stack. Runs for every brief,
+        // independent of effort or any flag.
+        if (workerResult.Metadata.TryGetValue("context_turns", out var ctxTurnsObj)
+            && ctxTurnsObj is IReadOnlyDictionary<string, object> ctxTurns)
+        {
+            var attribution = new Dictionary<string, object>
+            {
+                ["kind"] = "context_attribution",
+                ["attribution_note"] = "cache_creation lags tool_use ~1 turn; per-class split is approximate",
+            };
+            foreach (var key in new[]
+            {
+                "turns", "total_cache_read", "slope_ratio",
+                "cache_read_series", "cache_creation_series", "output_series",
+                "read_bytes", "write_bytes", "todo_bytes", "task_bytes", "bash_bytes", "other_bytes",
+            })
+            {
+                if (ctxTurns.TryGetValue(key, out var v) && v is not null)
+                    attribution[key] = v;
+            }
+            await EmitAsync(EventKind.CostLedger, ticketId, attribution, ct).ConfigureAwait(false);
+        }
+
         // Step 14: If worker failed, leave in InProgress - UNLESS the worker ran a clean
         // session that committed real work but failed to return a usable WORKER_RESULT envelope.
         // Two narrow, recoverable cases (both gated on clean worktree + HEAD advanced past base):

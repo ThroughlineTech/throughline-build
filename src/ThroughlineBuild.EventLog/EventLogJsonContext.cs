@@ -13,6 +13,7 @@ namespace ThroughlineBuild.EventLog;
 [JsonSerializable(typeof(bool))]
 [JsonSerializable(typeof(double))]
 [JsonSerializable(typeof(List<string>))]
+[JsonSerializable(typeof(List<long>))]
 [JsonSerializable(typeof(IReadOnlyList<string>))]
 [JsonSerializable(typeof(string[]))]
 internal partial class EventLogJsonContext : JsonSerializerContext { }
