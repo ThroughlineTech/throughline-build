@@ -170,7 +170,66 @@ public sealed class ReviewFeedbackRetriever : IReviewFeedbackRetriever
                 }
             }
 
-            return new ReviewFeedback(rationale, checksFailed, ReworkRoundNumber: 1);
+            var failedCheckDetails = ParseFailedCheckDetails(dataProp);
+
+            return new ReviewFeedback(rationale, checksFailed, ReworkRoundNumber: 1,
+                FailedCheckDetails: failedCheckDetails);
         }
     }
+
+    // Reconstructs the cited failing checks' raw evidence (command, exit code, output tails)
+    // persisted by ReviewPhase under "checks_failed_details", so a rework resumed from the
+    // event log briefs the worker with the check's own output - not just names plus the
+    // reviewer's prose theory of the tool's rules. Absent/malformed entries degrade to null
+    // (names-only feedback), never to a parse failure: events written before this key existed
+    // must keep resuming.
+    private static IReadOnlyList<CheckResult>? ParseFailedCheckDetails(JsonElement dataProp)
+    {
+        if (!dataProp.TryGetProperty("checks_failed_details", out var detailsProp) ||
+            detailsProp.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var details = new List<CheckResult>();
+        foreach (var element in detailsProp.EnumerateArray())
+        {
+            if (element.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var name = GetStringOrNull(element, "name");
+            if (string.IsNullOrEmpty(name))
+                continue;
+
+            int exitCode = 0;
+            if (element.TryGetProperty("exit_code", out var exitProp) &&
+                exitProp.ValueKind == JsonValueKind.Number &&
+                exitProp.TryGetInt32(out var parsedExit))
+            {
+                exitCode = parsedExit;
+            }
+
+            var role = CheckRole.Gating;
+            var roleStr = GetStringOrNull(element, "role");
+            if (roleStr is not null && Enum.TryParse<CheckRole>(roleStr, ignoreCase: true, out var parsedRole))
+                role = parsedRole;
+
+            details.Add(new CheckResult(
+                Name: name,
+                Passed: false,
+                ExitCode: exitCode,
+                StdoutTail: GetStringOrNull(element, "stdout_tail") ?? "",
+                StderrTail: GetStringOrNull(element, "stderr_tail") ?? "",
+                Elapsed: TimeSpan.Zero,
+                Role: role,
+                CommandLine: GetStringOrNull(element, "command") ?? ""));
+        }
+
+        return details.Count > 0 ? details : null;
+    }
+
+    private static string? GetStringOrNull(JsonElement obj, string property) =>
+        obj.TryGetProperty(property, out var prop) && prop.ValueKind == JsonValueKind.String
+            ? prop.GetString()
+            : null;
 }

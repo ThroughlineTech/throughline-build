@@ -131,6 +131,17 @@ public sealed class WorkerAgentReviewer : IVerifier
 
         var checksFailed = ParseChecksFailed(metadata);
 
+        // Check role semantics are a cross-phase contract: advisory failures must never drive
+        // rework. The review brief already tells the verifier not to list advisory checks in
+        // checks_failed; this filter makes it true by construction even when the verifier
+        // ignores the framing, so an advisory-only finding can never burn a rework round
+        // downstream (ChainPhase feeds Verdict.ChecksFailed straight into ReviewFeedback).
+        var advisoryNames = new HashSet<string>(
+            _checkResults.Where(r => r.Role == CheckRole.Advisory).Select(r => r.Name),
+            StringComparer.Ordinal);
+        if (advisoryNames.Count > 0)
+            checksFailed = checksFailed.Where(name => !advisoryNames.Contains(name)).ToList();
+
         return new Verdict(kind, rationale, checksFailed);
     }
 

@@ -520,6 +520,98 @@ public class ReviewBriefBuilderTests
         Assert.Contains("FAIL_STDERR_SENTINEL_XYZ", brief.Instruction);
     }
 
+    // ---------------------------------------------------------------------------
+    // Advisory role split. Advisory failures are presented in their own explicitly-
+    // framed informational section, never mixed in with gating results: presenting
+    // a failing advisory check undifferentiated made the verifier Rework a chain to
+    // death over a cosmetic lint finding (a downstream repository chain 25). These tests pin
+    // the split and the framing.
+    // ---------------------------------------------------------------------------
+
+    [Fact]
+    public void Build_FailingAdvisoryCheck_RendersInAdvisorySectionWithFraming()
+    {
+        var checks = new[]
+        {
+            new CheckResult("build", true, 0, "", "", TimeSpan.FromSeconds(1)),
+            new CheckResult("lint", false, 1, "ADVISORY_STDOUT_SENTINEL", "", TimeSpan.FromSeconds(1), CheckRole.Advisory)
+        };
+
+        var brief = ReviewBriefBuilder.Build(
+            "claude-code",
+            MinimalTicket(),
+            MinimalDiff(),
+            MinimalImplementerResult(),
+            checks);
+
+        Assert.Contains("### Advisory checks (informational)", brief.Instruction);
+        Assert.Contains("do NOT list them in checks_failed", brief.Instruction);
+        Assert.Contains("lint: FAIL", brief.Instruction);
+        // The advisory failure's output is still shown (the verifier may note it).
+        Assert.Contains("ADVISORY_STDOUT_SENTINEL", brief.Instruction);
+        // The advisory check renders AFTER the advisory heading, not in the gating list.
+        var headingIdx = brief.Instruction.IndexOf("### Advisory checks (informational)", StringComparison.Ordinal);
+        var lintIdx = brief.Instruction.IndexOf("lint: FAIL", StringComparison.Ordinal);
+        Assert.True(lintIdx > headingIdx);
+    }
+
+    [Fact]
+    public void Build_NoAdvisoryChecks_NoAdvisorySection()
+    {
+        var checks = new[]
+        {
+            new CheckResult("build", false, 1, "broken", "", TimeSpan.FromSeconds(1))
+        };
+
+        var brief = ReviewBriefBuilder.Build(
+            "claude-code",
+            MinimalTicket(),
+            MinimalDiff(),
+            MinimalImplementerResult(),
+            checks);
+
+        Assert.DoesNotContain("### Advisory checks (informational)", brief.Instruction);
+    }
+
+    [Fact]
+    public void Build_AdvisoryOnlyChecks_MainSectionSaysNoGatingChecks()
+    {
+        var checks = new[]
+        {
+            new CheckResult("lint", false, 1, "warn", "", TimeSpan.FromSeconds(1), CheckRole.Advisory)
+        };
+
+        var brief = ReviewBriefBuilder.Build(
+            "claude-code",
+            MinimalTicket(),
+            MinimalDiff(),
+            MinimalImplementerResult(),
+            checks);
+
+        Assert.Contains("(no gating checks configured)", brief.Instruction);
+        Assert.Contains("### Advisory checks (informational)", brief.Instruction);
+    }
+
+    [Fact]
+    public void Build_SetupCheck_StaysInMainSection()
+    {
+        // Setup failures hard-fail the gate, so they present alongside gating results.
+        var checks = new[]
+        {
+            new CheckResult("codegen", false, 1, "setup broke", "", TimeSpan.FromSeconds(1), CheckRole.Setup)
+        };
+
+        var brief = ReviewBriefBuilder.Build(
+            "claude-code",
+            MinimalTicket(),
+            MinimalDiff(),
+            MinimalImplementerResult(),
+            checks);
+
+        Assert.Contains("codegen: FAIL", brief.Instruction);
+        Assert.DoesNotContain("### Advisory checks (informational)", brief.Instruction);
+    }
+
     // BatchReviewBriefBuilder.BuildAutomatedChecksSection uses the identical per-check
     // pattern; pin the same convention there. Wiring the batch inputs is a single ticket
     // plus its BatchTicketResult and a base ref.

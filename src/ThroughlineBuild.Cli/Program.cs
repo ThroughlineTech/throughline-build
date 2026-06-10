@@ -1633,7 +1633,8 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
         var gitClient = new ProcessGitClient(cwd);
         var checksRunner = new AutomatedChecksRunner();
         var shipProgress = quietMode || summaryJson ? null : Console.Error;
-        var phase = new ShipPhase(ticketing, eventSink, buildOptions, shipOptions, gitClient: gitClient, checksRunner: checksRunner, progressWriter: shipProgress, verbose: debugMode);
+        var phase = new ShipPhase(ticketing, eventSink, buildOptions, shipOptions, gitClient: gitClient, checksRunner: checksRunner, progressWriter: shipProgress, verbose: debugMode,
+            baselineProber: new GateControlProber());
         ShipResult result;
         try
         {
@@ -1815,6 +1816,7 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
     // ticket; the reloader re-reads the gate checks from disk (config is otherwise loaded once
     // at startup) so a config fixed mid-run recovers without restarting the chain. Best-effort:
     // any reload failure returns null and the gate behaves as if nothing changed.
+    // Also shared with the chain's ship phases as the baseline contradiction re-check prober.
     var gateControlProber = new GateControlProber();
     Func<IReadOnlyList<CheckSpec>?> gateChecksReloader = () =>
     {
@@ -1878,7 +1880,8 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             BaselineCache: skipBaseline ? null : chainBaselineCache);
         var gitClient = new ProcessGitClient(cwd);
         var checksRunner = new AutomatedChecksRunner();
-        return new ShipPhase(ticketing, eventSink, buildOpts, shipOptions, gitClient: gitClient, checksRunner: checksRunner, progressWriter: buildOpts.ProgressDigestSink, verbose: debugMode);
+        return new ShipPhase(ticketing, eventSink, buildOpts, shipOptions, gitClient: gitClient, checksRunner: checksRunner, progressWriter: buildOpts.ProgressDigestSink, verbose: debugMode,
+            baselineProber: gateControlProber);
     };
 
     var ratifierFactory = (BuildOptions ratifyBuildOpts) =>
@@ -1921,7 +1924,8 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             BaselineCache: skipBaseline ? null : chainBaselineCache);
         var gitClient = new ProcessGitClient(cwd);
         var checksRunner = new AutomatedChecksRunner();
-        return new ShipPhase(ticketing, eventSink, buildOpts, chainShipOptions, gitClient: gitClient, checksRunner: checksRunner, progressWriter: buildOpts.ProgressDigestSink, verbose: debugMode);
+        return new ShipPhase(ticketing, eventSink, buildOpts, chainShipOptions, gitClient: gitClient, checksRunner: checksRunner, progressWriter: buildOpts.ProgressDigestSink, verbose: debugMode,
+            baselineProber: gateControlProber);
     };
 
     // Wire the chain phase through the composition helper so the construction has a single
@@ -1944,7 +1948,10 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
         effectiveAgentFor,
         landingRemote: config2.Ship.Remote,
         landingPushEnabled: !(noPush || !config2.Ship.Push),
-        gateFactory: gatePhaseFactory);
+        gateFactory: gatePhaseFactory,
+        // Post-rework check re-run uses the same check set the gate and review run, so the
+        // recheck's verdict on a named check matches what the gate would conclude later.
+        reworkRecheckSpecs: config2.Review.Checks);
 
     ChainBatchImplementGroup? batchImplementGroup = null;
     if (batchImplementAllChildren)

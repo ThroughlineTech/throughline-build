@@ -154,6 +154,35 @@ public class AutomatedChecksRunnerTests
         Assert.Contains("timeout after", results[0].StderrTail, StringComparison.OrdinalIgnoreCase);
     }
 
+    // --- CommandLine carriage ---
+    // Every executed result records the exact launchable command line so rework briefs can
+    // instruct the worker to re-run the failing check verbatim and confirm exit 0.
+
+    [Fact]
+    public void FormatCommandLine_JoinsExecutableAndArguments()
+    {
+        var spec = Spec("lint", "swiftlint", new[] { "--strict", "--no-cache" });
+        Assert.Equal("swiftlint --strict --no-cache", AutomatedChecksRunner.FormatCommandLine(spec));
+    }
+
+    [Fact]
+    public void FormatCommandLine_NoArguments_ExecutableOnly()
+    {
+        var spec = Spec("fmt", "gofmt", Array.Empty<string>());
+        Assert.Equal("gofmt", AutomatedChecksRunner.FormatCommandLine(spec));
+    }
+
+    [Fact]
+    public async Task RunNamed_ExecutedCheck_CarriesCommandLine()
+    {
+        var runner = new AutomatedChecksRunner();
+        var specs = new[] { Spec("version", "dotnet", new[] { "--version" }) };
+
+        var result = await runner.RunNamedAsync("version", specs, Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.Equal("dotnet --version", result.CommandLine);
+    }
+
     // --- Tests (f-h): RunNamedAsync - gate-granularity ---
 
     // Test (f): Named check found, exits zero => Passed=true, Skipped=false, Elapsed>Zero

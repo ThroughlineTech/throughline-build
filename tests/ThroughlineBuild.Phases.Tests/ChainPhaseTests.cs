@@ -95,7 +95,10 @@ public class ChainPhaseTests
         List<string?>? reviewTargetBranches = null,
         // When set, replaces the default verifier-queue review factory. Lets a test drive review
         // through a real WorkerAgentReviewer (e.g. to exercise the provider-error path). See TLB-527.
-        Func<BuildOptions, GateOutcome?, ReviewPhase>? reviewFactoryOverride = null)
+        Func<BuildOptions, GateOutcome?, ReviewPhase>? reviewFactoryOverride = null,
+        // Post-rework deterministic check re-run: both must be set for the recheck to engage.
+        IReadOnlyList<CheckSpec>? reworkRecheckSpecs = null,
+        AutomatedChecksRunner? reworkRecheckRunner = null)
     {
         _sessionCounter = 0;
         var events = eventSink ?? new FakeEventSinkChain();
@@ -157,7 +160,9 @@ public class ChainPhaseTests
             batchWorker: batchWorker,
             landingRemote: "origin",
             landingPushEnabled: true,
-            gateFactory: gateFactory);
+            gateFactory: gateFactory,
+            reworkRecheckSpecs: reworkRecheckSpecs,
+            reworkRecheckRunner: reworkRecheckRunner);
     }
 
     [Fact]
@@ -466,6 +471,160 @@ public class ChainPhaseTests
         Assert.Equal("review", result.Steps[6].PhaseName);
         Assert.Equal(VerdictKind.Rework, result.Steps[6].Verdict);
         Assert.Empty(verifiers);
+    }
+
+    // -------------------------------------------------------------------------
+    // Post-rework deterministic check re-run. When a rework round was triggered
+    // by named failing checks, the chain re-runs exactly those checks after the
+    // worker reports done: a still-failing gating check loops the raw output
+    // straight back to the worker (bounded, no rework round consumed, no
+    // verifier call); a passing recheck proceeds; advisory results never
+    // short-circuit (role semantics are a cross-phase contract).
+    // -------------------------------------------------------------------------
+
+    private sealed class ScriptedRecheckRunner : AutomatedChecksRunner
+    {
+        private readonly Queue<CheckResult> _results;
+        public List<string> SeenNames { get; } = new();
+        public ScriptedRecheckRunner(params CheckResult[] results) { _results = new Queue<CheckResult>(results); }
+        public override Task<CheckResult> RunNamedAsync(string checkName, IReadOnlyList<CheckSpec> specs, string workingDirectory, CancellationToken ct)
+        {
+            SeenNames.Add(checkName);
+            return Task.FromResult(_results.Dequeue());
+        }
+    }
+
+    private static IReadOnlyList<CheckSpec> LintRecheckSpecs() => new[]
+    {
+        new CheckSpec("lint", "swiftlint", new[] { "--strict" }, TimeSpan.FromMinutes(1))
+    };
+
+    private static CheckResult LintRecheckResult(bool passed, CheckRole role = CheckRole.Gating) =>
+        new CheckResult("lint", passed, passed ? 0 : 1,
+            passed ? "" : "file.swift:2:8 sorted_imports", "",
+            TimeSpan.FromSeconds(1), role, CommandLine: "swiftlint --strict");
+
+    [Fact]
+    public async Task RunAsync_CheckRework_RecheckPasses_ProceedsToReview()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Rework, "lint fails", new[] { "lint" })));
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        var recheck = new ScriptedRecheckRunner(LintRecheckResult(passed: true));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            reworkRecheckSpecs: LintRecheckSpecs(), reworkRecheckRunner: recheck);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+        // Exactly the cited check was re-run, once - after the rework implement.
+        Assert.Equal(new[] { "lint" }, recheck.SeenNames);
+        // Normal rework shape: plan, impl0, review(Rework), impl1, review(Pass), ship.
+        Assert.Equal(6, result.Steps.Count);
+        Assert.Empty(verifiers);
+    }
+
+    [Fact]
+    public async Task RunAsync_CheckRework_RecheckStillFails_LoopsBackToWorkerWithoutVerifier()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        // Only TWO verifiers: the retry between them must consume zero verifier calls.
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Rework, "lint fails", new[] { "lint" })));
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        var recheck = new ScriptedRecheckRunner(LintRecheckResult(passed: false), LintRecheckResult(passed: true));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            reworkRecheckSpecs: LintRecheckSpecs(), reworkRecheckRunner: recheck);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+        Assert.Equal(new[] { "lint", "lint" }, recheck.SeenNames);
+        // plan, impl0, review(Rework), impl(round1), impl(round1 retry), review(Pass), ship.
+        Assert.Equal(7, result.Steps.Count);
+        Assert.Equal("implement", result.Steps[3].PhaseName);
+        Assert.Equal("implement", result.Steps[4].PhaseName);
+        // The retry re-enters the SAME rework round; the cap was not consumed.
+        Assert.Equal(1, result.Steps[3].ReworkRoundNumber);
+        Assert.Equal(1, result.Steps[4].ReworkRoundNumber);
+        Assert.Empty(verifiers);
+    }
+
+    [Fact]
+    public async Task RunAsync_CheckRework_RecheckFailsBeyondRetryCap_AbortsWithRawCheckOutput()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        // ONE verifier: every recheck retry runs without a verifier, and the abort consumes none.
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Rework, "lint fails", new[] { "lint" })));
+        var recheck = new ScriptedRecheckRunner(
+            LintRecheckResult(passed: false),
+            LintRecheckResult(passed: false),
+            LintRecheckResult(passed: false));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            reworkRecheckSpecs: LintRecheckSpecs(), reworkRecheckRunner: recheck);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ReworkCapExceeded, result.Outcome);
+        // Rework implement + 2 bounded retries, each followed by a recheck.
+        Assert.Equal(3, recheck.SeenNames.Count);
+        // The triage rationale carries the check's verbatim output and command, not a theory.
+        Assert.Contains("STILL FAIL", result.FinalRationale);
+        Assert.Contains("sorted_imports", result.FinalRationale);
+        Assert.Contains("swiftlint --strict", result.FinalRationale);
+        Assert.Empty(verifiers);
+    }
+
+    [Fact]
+    public async Task RunAsync_CheckRework_AdvisoryStillFailing_NeverShortCircuits()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        // Defense-in-depth: even if an advisory name leaks into ChecksFailed (the reviewer-side
+        // filter should prevent it), a still-failing advisory recheck must not retry-loop the
+        // worker - that would reintroduce the advisory-driven rework the role exists to prevent.
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Rework, "style notes", new[] { "lint" })));
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        var recheck = new ScriptedRecheckRunner(LintRecheckResult(passed: false, role: CheckRole.Advisory));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            reworkRecheckSpecs: LintRecheckSpecs(), reworkRecheckRunner: recheck);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+        Assert.Equal(new[] { "lint" }, recheck.SeenNames);
+        // No retry implement: one rework round, straight to review.
+        Assert.Equal(6, result.Steps.Count);
+        Assert.Empty(verifiers);
+    }
+
+    [Fact]
+    public async Task RunAsync_ProseOnlyRework_NoChecksCited_RecheckNeverRuns()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Rework, "missing edge case", Array.Empty<string>())));
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        var recheck = new ScriptedRecheckRunner();
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            reworkRecheckSpecs: LintRecheckSpecs(), reworkRecheckRunner: recheck);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+        Assert.Empty(recheck.SeenNames);
     }
 
     [Fact]

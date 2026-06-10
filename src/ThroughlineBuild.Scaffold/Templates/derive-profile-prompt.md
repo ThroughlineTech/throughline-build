@@ -74,6 +74,14 @@ Rules for checks:
   project-scoped runner like `dotnet test` is already hermetic and needs no exclusion. Same principle
   for every stack: tests run only over the project's real sources, never over the engine's scratch
   directories.
+- NO USER-GLOBAL TOOL CACHES: every check runs in a freshly-created throwaway worktree, and the
+  same check runs against different code in different worktrees (feature branch, ship baseline,
+  control re-runs). A tool that consults a USER-GLOBAL cache keyed by file path/mtime can replay a
+  result computed under different conditions and silently report the wrong outcome (e.g. SwiftLint's
+  ~/Library/Caches/SwiftLint replaying a falsely-clean entry into a baseline run). When the tool has
+  a cache-disabling flag, pass it - `swiftlint --no-cache` ALWAYS; never pass an opt-in `--cache`
+  flag to any linter. Warm caches buy nothing in throwaway worktrees; wrong results poison the
+  ship's regression baseline.
 
 Rules for convention_files:
 - These files are inlined into EVERY implementation brief so the worker does not re-read them turn

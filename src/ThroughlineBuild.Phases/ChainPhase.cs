@@ -6,6 +6,7 @@ using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Git;
 using ThroughlineBuild.Helpers;
+using ThroughlineBuild.Verification;
 using ThroughlineBuild.Workers.Common;
 
 namespace ThroughlineBuild.Phases;
@@ -58,6 +59,12 @@ public record ChainPhaseOptions(
 public class ChainPhase
 {
     private const int MaxReworkRounds = 2;
+    // Bound on the deterministic check-recheck loop: when a rework round was triggered by named
+    // failing checks and the worker's fix still fails the re-run, the raw output loops straight
+    // back to the worker up to this many times per rework round - without consuming a rework
+    // round or a verifier call. A check is an oracle; a subprocess re-run proves in seconds what
+    // a verifier LLM call rediscovers in minutes.
+    private const int MaxCheckRetriesPerReworkRound = 2;
     private static readonly object DebugIndexLock = new();
 
     private readonly ITicketing _ticketing;
@@ -88,6 +95,10 @@ public class ChainPhase
     // operator must push the target manually.
     private readonly string? _landingRemote;
     private readonly bool _landingPushEnabled;
+    // Optional: the configured check specs + runner for the post-rework deterministic re-run.
+    // When either is null the recheck is skipped and rework rounds flow exactly as before.
+    private readonly IReadOnlyList<CheckSpec>? _reworkRecheckSpecs;
+    private readonly AutomatedChecksRunner? _reworkRecheckRunner;
 
     public ChainPhase(
         ITicketing ticketing,
@@ -106,7 +117,9 @@ public class ChainPhase
         IWorkerAgent? batchWorker = null,
         string? landingRemote = null,
         bool landingPushEnabled = false,
-        Func<BuildOptions, GatePhase>? gateFactory = null)
+        Func<BuildOptions, GatePhase>? gateFactory = null,
+        IReadOnlyList<CheckSpec>? reworkRecheckSpecs = null,
+        AutomatedChecksRunner? reworkRecheckRunner = null)
     {
         _ticketing = ticketing;
         _events = events;
@@ -125,6 +138,8 @@ public class ChainPhase
         _batchWorker = batchWorker;
         _landingRemote = landingRemote;
         _landingPushEnabled = landingPushEnabled;
+        _reworkRecheckSpecs = reworkRecheckSpecs;
+        _reworkRecheckRunner = reworkRecheckRunner;
     }
 
     // Inert read-only accessors over the wired collaborators, for composition-root tests that
@@ -553,6 +568,12 @@ public class ChainPhase
         bool thisRoundIsGateAttributable = false;
         bool gateWasEngaged = false;
 
+        // Check-recheck retry state: retries within one rework round (does not consume `round`),
+        // plus whether the round being retried was gate-originated so the cost ledger keeps
+        // attributing the retry implements to the gate.
+        int checkRetriesThisRound = 0;
+        bool recheckRetryGateAttributable = false;
+
         while (true)
         {
             var implSessionId = _sessionIdGenerator();
@@ -641,6 +662,83 @@ public class ChainPhase
                     await EmitCostLedgerAsync(chainSessionId, options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
                 return (new ChainResult(options.TicketId, steps, ChainOutcome.StoppedAtImplement,
                     TimeSpan.Zero, null), null);
+            }
+
+            // Deterministic post-rework check re-run: when this implement round was rework
+            // triggered by named failing checks, re-run exactly those checks (pure subprocess,
+            // no LLM) before spending a gate run or a verifier call. The check is the oracle for
+            // a check-driven rework - a worker that "fixed" the violation without ever re-running
+            // the check is caught here in seconds instead of by the next verifier round. Still-
+            // failing gating/setup checks loop the raw output straight back to the worker
+            // (bounded by MaxCheckRetriesPerReworkRound, not consuming a rework round); advisory
+            // results never trigger the short-circuit (role semantics are a cross-phase contract).
+            if (feedback is not null && feedback.ChecksFailed.Count > 0
+                && _reworkRecheckSpecs is { Count: > 0 } && _reworkRecheckRunner is not null)
+            {
+                var recheckWorktree = implResult.WorktreePath ?? _workingDirectory;
+                var recheckResults = new List<CheckResult>();
+                foreach (var name in feedback.ChecksFailed.Distinct(StringComparer.Ordinal))
+                {
+                    recheckResults.Add(await _reworkRecheckRunner
+                        .RunNamedAsync(name, _reworkRecheckSpecs, recheckWorktree, ct).ConfigureAwait(false));
+                }
+                var stillFailing = recheckResults
+                    .Where(r => !r.Skipped && !r.Passed && r.Role != CheckRole.Advisory)
+                    .ToList();
+
+                if (stillFailing.Count > 0)
+                {
+                    var stillFailingNames = stillFailing.Select(r => r.Name).ToList();
+                    await _events.EmitAsync(new WorkflowEvent(
+                        SessionId: chainSessionId,
+                        Timestamp: DateTimeOffset.UtcNow,
+                        Kind: EventKind.GateFailure,
+                        TicketId: options.TicketId,
+                        Phase: Phase.Implement,
+                        Data: new Dictionary<string, object>
+                        {
+                            ["kind"] = "rework_recheck_failed",
+                            ["round"] = round,
+                            ["retry"] = checkRetriesThisRound + 1,
+                            ["checks_still_failing"] = stillFailingNames
+                        }), ct).ConfigureAwait(false);
+
+                    var recheckRationale =
+                        $"Post-rework re-run: the failing check(s) that triggered rework round {round} " +
+                        $"STILL FAIL after the changes: {string.Join(", ", stillFailingNames)}. " +
+                        "The previous fix attempt did not satisfy the check; its verbatim output follows.";
+
+                    if (checkRetriesThisRound < MaxCheckRetriesPerReworkRound)
+                    {
+                        // First retry inherits the round's gate attribution; later retries keep it.
+                        if (checkRetriesThisRound == 0)
+                            recheckRetryGateAttributable = feedback.GateFailedChecks is { Count: > 0 };
+                        thisRoundIsGateAttributable = recheckRetryGateAttributable;
+                        checkRetriesThisRound++;
+
+                        // Implement left the ticket InReview; a rework implement requires
+                        // InProgress (the gate does this same bounce on a hard-fail).
+                        await _ticketing.TransitionAsync(options.TicketId, TicketState.InProgress, ct).ConfigureAwait(false);
+
+                        feedback = new ReviewFeedback(recheckRationale, stillFailingNames, round,
+                            FailedCheckDetails: stillFailing);
+                        continue;
+                    }
+
+                    // Retries exhausted: surface the raw check output in the abort rationale (the
+                    // triage) instead of burning rework rounds or a verifier call on a fix the
+                    // checks already disprove.
+                    var failTail = string.Join("\n", stillFailing.Select(r =>
+                        $"- {r.Name} (exit {r.ExitCode}; command: {r.CommandLine}): " +
+                        (string.IsNullOrWhiteSpace(r.StderrTail) ? r.StdoutTail.Trim() : r.StderrTail.Trim())));
+                    if (gateWasEngaged)
+                        await EmitCostLedgerAsync(chainSessionId, options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
+                    return (new ChainResult(options.TicketId, steps, ChainOutcome.ReworkCapExceeded,
+                        TimeSpan.Zero, recheckRationale + "\n" + failTail), null);
+                }
+
+                checkRetriesThisRound = 0;
+                recheckRetryGateAttributable = false;
             }
 
             // Gate phase: run checks once on the warm worktree and collect smoke signals.
@@ -776,7 +874,8 @@ public class ChainPhase
 
             if (round < MaxReworkRounds)
             {
-                feedback = new ReviewFeedback(rv.Rationale, rv.ChecksFailed, round + 1);
+                feedback = new ReviewFeedback(rv.Rationale, rv.ChecksFailed, round + 1,
+                    FailedCheckDetails: MatchFailedCheckDetails(rv.ChecksFailed, reviewResult.checkResults));
                 await _events.EmitAsync(new WorkflowEvent(
                     SessionId: chainSessionId,
                     Timestamp: DateTimeOffset.UtcNow,
@@ -824,7 +923,8 @@ public class ChainPhase
             return (new ChainResult(options.TicketId, steps, ChainOutcome.StoppedAtReview,
                 TimeSpan.Zero, rv.Rationale), null);
 
-        var feedback = new ReviewFeedback(rv.Rationale, rv.ChecksFailed, round + 1);
+        var feedback = new ReviewFeedback(rv.Rationale, rv.ChecksFailed, round + 1,
+            FailedCheckDetails: MatchFailedCheckDetails(rv.ChecksFailed, reviewResult.checkResults));
         await _events.EmitAsync(new WorkflowEvent(
             SessionId: chainSessionId,
             Timestamp: DateTimeOffset.UtcNow,
@@ -882,7 +982,7 @@ public class ChainPhase
             Data: data), ct).ConfigureAwait(false);
     }
 
-    private async Task<(ChainResult? abort, Verdict? verdict)> RunOneReviewAsync(
+    private async Task<(ChainResult? abort, Verdict? verdict, IReadOnlyList<CheckResult>? checkResults)> RunOneReviewAsync(
         ChainPhaseOptions options,
         List<ChainStep> steps,
         int round,
@@ -924,7 +1024,7 @@ public class ChainPhase
                 ? ChainOutcome.ReviewUnavailable
                 : ChainOutcome.StoppedAtReview;
             return (new ChainResult(options.TicketId, steps, failOutcome,
-                TimeSpan.Zero, revResult.FailureReason), null);
+                TimeSpan.Zero, revResult.FailureReason), null, null);
         }
 
         var revStep = new ChainStep(
@@ -938,7 +1038,22 @@ public class ChainPhase
         steps.Add(revStep);
         options.OnStep?.Invoke(options.TicketId, revStep);
 
-        return (null, new Verdict(revResult.Verdict!.Value, revResult.VerdictRationale ?? "", revResult.ChecksFailed));
+        return (null, new Verdict(revResult.Verdict!.Value, revResult.VerdictRationale ?? "", revResult.ChecksFailed),
+            revResult.CheckResults);
+    }
+
+    // Raw results for the checks the verifier cited, so review-originated rework feedback carries
+    // the checks' own output (command, exit code, stdout/stderr) - not just names plus the
+    // reviewer's theory of why the tool failed, which can be confidently wrong.
+    private static IReadOnlyList<CheckResult>? MatchFailedCheckDetails(
+        IReadOnlyList<string> checksFailed,
+        IReadOnlyList<CheckResult>? checkResults)
+    {
+        if (checksFailed.Count == 0 || checkResults is null)
+            return null;
+        var named = new HashSet<string>(checksFailed, StringComparer.Ordinal);
+        var details = checkResults.Where(r => named.Contains(r.Name) && !r.Passed && !r.Skipped).ToList();
+        return details.Count > 0 ? details : null;
     }
 
     private static string FormatSubsumedRationale(SubsumedByEvidence? evidence)
