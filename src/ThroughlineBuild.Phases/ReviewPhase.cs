@@ -445,7 +445,7 @@ public class ReviewPhase : IWorkflowPhase
             .Where(r => r.Role == CheckRole.Advisory && !r.Passed && !r.Skipped)
             .Select(r => r.Name)
             .ToList();
-        return new Dictionary<string, object>
+        var data = new Dictionary<string, object>
         {
             ["kind"] = verdict.Kind.ToString(),
             ["checks_failed_count"] = verdict.ChecksFailed.Count,
@@ -453,7 +453,33 @@ public class ReviewPhase : IWorkflowPhase
             ["checks_failed"] = verdict.ChecksFailed,
             ["advisory_failed"] = advisoryFailed
         };
+
+        // Persist the cited failing checks' raw evidence (command, exit code, output tails) so a
+        // rework resumed from the event log (ReviewFeedbackRetriever -> `build rework`) rebuilds
+        // its brief from the check's own output, not just names plus the reviewer's prose. Same
+        // per-check evidence shape as the ship baseline events; tails re-capped so a multi-check
+        // event stays a readable single line.
+        var named = new HashSet<string>(verdict.ChecksFailed, StringComparer.Ordinal);
+        var details = checkResults
+            .Where(r => named.Contains(r.Name) && !r.Passed && !r.Skipped)
+            .Select(r => new Dictionary<string, object>
+            {
+                ["name"] = r.Name,
+                ["role"] = r.Role.ToString(),
+                ["exit_code"] = r.ExitCode,
+                ["command"] = r.CommandLine,
+                ["stdout_tail"] = TailOf(r.StdoutTail),
+                ["stderr_tail"] = TailOf(r.StderrTail)
+            })
+            .ToList();
+        if (details.Count > 0)
+            data["checks_failed_details"] = details;
+
+        return data;
     }
+
+    private static string TailOf(string? text, int maxChars = 2000) =>
+        string.IsNullOrEmpty(text) ? "" : text.Length <= maxChars ? text : text[^maxChars..];
 
     // Best-effort HEAD read: the shared-state guard treats an unreadable HEAD as "unknown"
     // and skips the comparison rather than false-failing the review.
