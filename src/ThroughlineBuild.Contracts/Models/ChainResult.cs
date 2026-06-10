@@ -22,4 +22,16 @@ public record ChainResult(
     public bool ContainsEnvironmentFailure() =>
         Outcome == ChainOutcome.GateEnvironmentFailure
         || (ChildResults is not null && ChildResults.Any(c => c.ContainsEnvironmentFailure()));
+
+    // True when this result - or any descendant - stopped with TicketingUnavailable: the
+    // ticketing backend itself was unreachable, so siblings/roots would fail identically (TLB-545).
+    public bool ContainsTicketingUnavailable() =>
+        Outcome == ChainOutcome.TicketingUnavailable
+        || (ChildResults is not null && ChildResults.Any(c => c.ContainsTicketingUnavailable()));
+
+    // Umbrella for the two environmental stop classes (broken gate environment, unreachable
+    // ticketing backend). Both are global to the machine, not the ticket's fault, so dispatch
+    // layers consult this one predicate when deciding to skip remaining siblings/roots.
+    public bool ContainsEnvironmentalStop() =>
+        ContainsEnvironmentFailure() || ContainsTicketingUnavailable();
 }

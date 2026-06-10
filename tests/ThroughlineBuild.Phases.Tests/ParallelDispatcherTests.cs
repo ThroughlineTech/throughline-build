@@ -42,6 +42,15 @@ public class ParallelDispatcherTests
             TotalDuration: TimeSpan.FromMilliseconds(5),
             FinalRationale: "gate: build failed - environment failure: also fails on the untouched base ref");
 
+    // TLB-545: the ticketing backend itself was unreachable - same environmental semantics.
+    private static ChainResult MakeTicketingUnavailableResult(string id) =>
+        new ChainResult(
+            TicketId: id,
+            Steps: Array.Empty<ChainStep>(),
+            Outcome: ChainOutcome.TicketingUnavailable,
+            TotalDuration: TimeSpan.FromMilliseconds(5),
+            FinalRationale: "Plane API unreachable (POST .../comments/, attempt 4): nodename nor servname provided");
+
     // A parent whose CHILD hit the environment failure - the dispatcher must detect it transitively.
     private static ChainResult MakeParentWithEnvFailedChild(string id) =>
         new ChainResult(
@@ -201,6 +210,73 @@ public class ParallelDispatcherTests
         var b = Assert.Single(outcome.Results, r => r.TicketId == "B");
         Assert.Equal(ChainOutcome.Skipped, b.Outcome);
         Assert.Contains("environment", b.SkipReason);
+    }
+
+    // -------------------------------------------------------------------------
+    // TLB-545: an unreachable ticketing backend short-circuits remaining roots
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task TicketingUnavailable_SameLevelRoots_RemainingSkippedWithoutRunning()
+    {
+        // A, B, C independent. A stops because the ticketing backend was unreachable; B and C
+        // must NOT run - they would each spend transport retries against the same dead backend.
+        var callOrder = new List<string>();
+        var results = new Dictionary<string, ChainResult>(StringComparer.Ordinal)
+        {
+            ["A"] = MakeTicketingUnavailableResult("A"),
+            ["B"] = MakeOkResult("B"),
+            ["C"] = MakeOkResult("C")
+        };
+        var g = new TicketGraph();
+        foreach (var id in new[] { "A", "B", "C" }) g.AddNode(id);
+
+        var (dispatcher, _) = MakeDispatcher(results, callOrder: callOrder);
+        var outcome = await dispatcher.RunAsync(new[] { "A", "B", "C" }, g, BaseOptions, CancellationToken.None);
+
+        Assert.False(outcome.Success);
+        Assert.Equal(new[] { "A" }, callOrder);
+        Assert.Equal(3, outcome.Results.Count);
+        var b = Assert.Single(outcome.Results, r => r.TicketId == "B");
+        Assert.Equal(ChainOutcome.Skipped, b.Outcome);
+        Assert.Contains("ticketing backend unreachable", b.SkipReason);
+        var c = Assert.Single(outcome.Results, r => r.TicketId == "C");
+        Assert.Equal(ChainOutcome.Skipped, c.Outcome);
+        Assert.Equal(ChainOutcome.TicketingUnavailable, outcome.PreservedOutcome);
+    }
+
+    [Fact]
+    public async Task TicketingUnavailable_InsideParentSubtree_DetectedTransitively()
+    {
+        // The dispatcher must detect the stop through ChildResults, exactly like the
+        // gate-environment case: a parent that stopped early because a child hit the
+        // dead backend short-circuits the remaining roots.
+        var callOrder = new List<string>();
+        var parentWithDeadBackendChild = new ChainResult(
+            TicketId: "A",
+            Steps: Array.Empty<ChainStep>(),
+            Outcome: ChainOutcome.ParentStoppedEarly,
+            TotalDuration: TimeSpan.FromMilliseconds(5),
+            FinalRationale: "One or more children did not complete",
+            ChildResults: new[] { MakeTicketingUnavailableResult("A-child") });
+        var results = new Dictionary<string, ChainResult>(StringComparer.Ordinal)
+        {
+            ["A"] = parentWithDeadBackendChild,
+            ["B"] = MakeOkResult("B")
+        };
+        var g = new TicketGraph();
+        g.AddNode("A");
+        g.AddNode("B");
+
+        var (dispatcher, _) = MakeDispatcher(results, callOrder: callOrder);
+        var outcome = await dispatcher.RunAsync(new[] { "A", "B" }, g, BaseOptions, CancellationToken.None);
+
+        Assert.False(outcome.Success);
+        Assert.Equal(new[] { "A" }, callOrder);
+        var b = Assert.Single(outcome.Results, r => r.TicketId == "B");
+        Assert.Equal(ChainOutcome.Skipped, b.Outcome);
+        Assert.Contains("ticketing backend unreachable", b.SkipReason);
+        Assert.Equal(ChainOutcome.TicketingUnavailable, outcome.PreservedOutcome);
     }
 
     [Fact]

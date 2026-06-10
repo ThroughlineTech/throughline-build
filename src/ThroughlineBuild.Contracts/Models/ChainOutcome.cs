@@ -20,5 +20,6 @@ public enum ChainOutcome
     DryRunPreview,      // ticket was included in a dry-run schedule; no phases executed
     GateVacuous,        // a gating check could not be proven to fail on broken input (vacuous), or its canary could not be cleaned up - a config/setup defect; hard-fail without rework
     ReviewUnavailable,  // the verifier worker was blocked by a transient provider error (quota/rate-limit/auth); review never ran - NOT a review rejection; ticket left cleanly InReview and resumable via 'build review <id>'. See TLB-527.
-    GateEnvironmentFailure // a gating check fails on the ticket worktree AND on the untouched base ref - the environment/config is broken, not the ticket's code; hard-fail without rework, remaining siblings/roots are skipped. Ticket left InReview and resumable. See TLB-538.
+    GateEnvironmentFailure, // a gating check fails on the ticket worktree AND on the untouched base ref - the environment/config is broken, not the ticket's code; hard-fail without rework, remaining siblings/roots are skipped. Ticket left InReview and resumable. See TLB-538.
+    TicketingUnavailable // the ticketing backend was unreachable at the transport level (DNS/connect/TLS/timeout) after client-side retries - environmental, not the ticket's fault; the work is committed on its branch and the chain resumes cleanly once connectivity is back. Remaining siblings/roots are skipped. See TLB-545.
 }

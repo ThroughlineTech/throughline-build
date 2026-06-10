@@ -251,6 +251,9 @@ public sealed class ChainCommand : ITicketCommand
             ChainOutcome.GateEnvironmentFailure =>
                 $"[{ticketId}] chain stopped: environment gate failure - the gating checks also fail on the untouched base ref; fix the environment, not the ticket",
 
+            ChainOutcome.TicketingUnavailable =>
+                $"[{ticketId}] chain stopped: ticketing backend unreachable - transport failure persisted through client retries; restore connectivity, not the ticket",
+
             _ => $"[{ticketId}] chain stopped: unknown outcome {result.Outcome}"
         };
     }
@@ -361,6 +364,9 @@ public sealed class ChainCommand : ITicketCommand
             ChainOutcome.GateEnvironmentFailure =>
                 GetGateEnvironmentFailureTriage(ticketId, result),
 
+            ChainOutcome.TicketingUnavailable =>
+                GetTicketingUnavailableTriage(ticketId, result),
+
             ChainOutcome.ParentHasGrandchildren =>
                 GetParentHasGrandchildrenTriage(result),
 
@@ -376,13 +382,15 @@ public sealed class ChainCommand : ITicketCommand
         // Include final rationale if available (for review-based stops). Skip for
         // RefusedDirtyTree and ParentStoppedEarly: no reviewer ran, and the triage text
         // restates the detail itself (the child list, for parent stops). Skip for
-        // GateEnvironmentFailure too: its rationale is gate evidence, not reviewer output,
-        // and the triage prints it with the right framing.
+        // GateEnvironmentFailure and TicketingUnavailable too: their rationale is gate
+        // evidence / a transport error, not reviewer output, and the triage prints it
+        // with the right framing.
         var output = new StringBuilder();
         if (!string.IsNullOrEmpty(result.FinalRationale)
             && result.Outcome != ChainOutcome.RefusedDirtyTree
             && result.Outcome != ChainOutcome.ParentStoppedEarly
-            && result.Outcome != ChainOutcome.GateEnvironmentFailure)
+            && result.Outcome != ChainOutcome.GateEnvironmentFailure
+            && result.Outcome != ChainOutcome.TicketingUnavailable)
         {
             output.AppendLine("Final reviewer rationale:");
             output.AppendLine();
@@ -451,6 +459,12 @@ public sealed class ChainCommand : ITicketCommand
             output.AppendLine("At least one child hit an ENVIRONMENT gate failure: the gate also fails on the untouched");
             output.AppendLine("base ref, so reworking tickets cannot fix it. Fix the environment or .build/config.toml");
             output.AppendLine("once, then re-run - the remaining children were skipped, not failed.");
+        }
+        if (result.ChildResults?.Any(c => c.ContainsTicketingUnavailable()) == true)
+        {
+            output.AppendLine("At least one child stopped because the TICKETING BACKEND was unreachable (DNS/connect/");
+            output.AppendLine("timeout persisted through client retries). The work is committed on its branch. Restore");
+            output.AppendLine("connectivity, then re-run - the remaining children were skipped, not failed.");
         }
         output.AppendLine("Completed children are already shipped and are skipped on a re-run.");
         output.Append($"Resume a stopped child directly ('build chain <child-id>'), or fix it ('build review'/'build ship <child-id>'), then re-run: build chain {ticketId}");
@@ -617,6 +631,26 @@ public sealed class ChainCommand : ITicketCommand
         output.AppendLine("- Reproduce from the main checkout: run the [[review.checks]] commands from .build/config.toml by hand.");
         output.AppendLine("- Fix the environment (toolchain/SDK), or update the check commands in .build/config.toml.");
         output.Append($"- Then re-run: build chain {ticketId} - the ticket is still InReview and resumes cleanly; skipped siblings are picked up by the same re-run.");
+        return output.ToString();
+    }
+
+    private static string GetTicketingUnavailableTriage(string ticketId, ChainResult result)
+    {
+        var output = new StringBuilder();
+        output.AppendLine("Operator triage: the ticketing backend could not be reached at the transport level");
+        output.AppendLine("(DNS resolution, connect, TLS, or timeout) and the failure persisted through the");
+        output.AppendLine("client's retries - an environmental problem (network, DNS, VPN/tailnet, or a Plane");
+        output.AppendLine("outage), NOT this ticket's code. Any work the chain completed is committed on the");
+        output.AppendLine("ticket's branch; nothing was lost.");
+        if (!string.IsNullOrEmpty(result.FinalRationale))
+        {
+            output.AppendLine();
+            output.AppendLine(result.FinalRationale);
+        }
+        output.AppendLine();
+        output.AppendLine("Next steps:");
+        output.AppendLine("- Check connectivity to the ticketing host (e.g. ping/curl the plane_base_url from .build/config.toml).");
+        output.Append($"- Then re-run: build chain {ticketId} - the chain resumes from the ticket's current state; skipped siblings are picked up by the same re-run.");
         return output.ToString();
     }
 

@@ -178,10 +178,7 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
         {"name":{"throughline_build_probe":true},"description_html":"<p>Throughline Build create-permission probe.</p>","label_ids":[]}
         """;
 
-        using var content = new StringContent(probeJson, System.Text.Encoding.UTF8, "application/json");
-        await _throttle.AcquireAsync(ct).ConfigureAwait(false);
-        var response = await _http.PostAsync(IssuesBase, content, ct).ConfigureAwait(false);
-        var responseBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        var (response, responseBody) = await SendWithTransportRetryAsync(HttpMethod.Post, IssuesBase, probeJson, ct).ConfigureAwait(false);
 
         if ((int)response.StatusCode is 400 or 422)
             return;
@@ -245,11 +242,104 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
         return null;
     }
 
+    /// <summary>
+    /// The single transport funnel: every Plane HTTP request is built, sent, and body-read here
+    /// so transient transport failures (DNS resolution, connect, TLS, reset, timeout) are retried
+    /// in ONE place and every call site inherits it (TLB-545). A fresh HttpRequestMessage (and
+    /// content) is built per attempt - a request message cannot be re-sent - and the throttle is
+    /// re-acquired so retries still respect the rate budget. The body read lives inside the retry
+    /// because a mid-response reset surfaces there, not at SendAsync. When retries are exhausted
+    /// the failure surfaces as TicketingUnavailableException so orchestration classifies it as
+    /// environmental instead of crashing the run. HTTP-status handling (429/5xx) stays with the
+    /// callers and the Polly pipeline - by the time a status exists, transport succeeded.
+    /// </summary>
+    private async Task<(HttpResponseMessage Response, string Body)> SendWithTransportRetryAsync(
+        HttpMethod method, string url, string? jsonBody, CancellationToken ct)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            await _throttle.AcquireAsync(ct).ConfigureAwait(false);
+            try
+            {
+                using var request = new HttpRequestMessage(method, url);
+                if (jsonBody is not null)
+                    request.Content = new StringContent(jsonBody, System.Text.Encoding.UTF8, "application/json");
+                var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
+                var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                return (response, body);
+            }
+            catch (Exception ex) when (IsTransportError(ex, ct))
+            {
+                // Every transport-class failure is classified (wrapped) so orchestration can
+                // treat it as environmental - but only retryable shapes get another attempt.
+                if (attempt >= _options.TransportRetryAttempts || !IsRetryableTransportError(ex, method))
+                    throw new TicketingUnavailableException(
+                        $"Plane API unreachable ({method} {url}, attempt {attempt + 1}): {ex.Message}", ex);
+                var delay = TransportBackoff(attempt);
+                Console.Error.WriteLine(
+                    $"[plane] transport error ({ex.Message}); retry {attempt + 1}/{_options.TransportRetryAttempts} in {delay.TotalSeconds:F1}s");
+                await Task.Delay(delay, ct).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>
+    /// True for any transport-class failure: an HttpRequestException (no HTTP status exists -
+    /// DNS, connect, TLS, reset, protocol fault) or HttpClient's own timeout, which surfaces as
+    /// a TaskCanceledException wrapping a TimeoutException. User cancellation is excluded - the
+    /// caller's token distinguishes it from the timeout, which arrives in the same exception shape.
+    /// </summary>
+    internal static bool IsTransportError(Exception ex, CancellationToken callerCt) =>
+        ex is HttpRequestException
+        || (ex is TaskCanceledException { InnerException: TimeoutException } && !callerCt.IsCancellationRequested);
+
+    /// <summary>
+    /// Whether a transport failure is safe to RETRY (distinct from classification - everything
+    /// transport-shaped is classified). Pre-send failures (DNS, connect, TLS, proxy) never
+    /// reached the server, so they retry for ANY verb. Failures after the request may have been
+    /// processed (mid-response reset, protocol error, timeout) retry only idempotent verbs: a
+    /// re-GET or re-PATCH (every PATCH here sets an absolute value) converges, but a re-POST
+    /// could double-create an issue or comment.
+    /// </summary>
+    internal static bool IsRetryableTransportError(Exception ex, HttpMethod method)
+    {
+        var idempotent = method == HttpMethod.Get || method == HttpMethod.Patch;
+
+        if (ex is HttpRequestException hre)
+        {
+            return hre.HttpRequestError switch
+            {
+                HttpRequestError.NameResolutionError => true,
+                HttpRequestError.ConnectionError => true,
+                HttpRequestError.SecureConnectionError => true,
+                HttpRequestError.ProxyTunnelError => true,
+                HttpRequestError.ResponseEnded => idempotent,
+                HttpRequestError.HttpProtocolError => idempotent,
+                HttpRequestError.InvalidResponse => idempotent,
+                // Unknown with a socket-level inner is an unclassified network fault; the
+                // request may have been in flight, so only idempotent verbs retry it.
+                _ => hre.InnerException is System.Net.Sockets.SocketException && idempotent
+            };
+        }
+
+        // HttpClient timeout: the request may have reached the server before the clock ran out.
+        return ex is TaskCanceledException { InnerException: TimeoutException } && idempotent;
+    }
+
+    // Exponential backoff for transport retries: base * 2^attempt, capped, with +/-25% jitter so
+    // two concurrent build instances do not hammer a recovering resolver in lockstep.
+    private TimeSpan TransportBackoff(int attempt)
+    {
+        var raw = _options.TransportRetryBaseDelay * Math.Pow(2, attempt);
+        var capped = raw > _options.TransportMaxRetryDelay ? _options.TransportMaxRetryDelay : raw;
+        if (capped < TimeSpan.Zero) capped = TimeSpan.Zero;
+        var jitter = 0.75 + Random.Shared.NextDouble() * 0.5;
+        return TimeSpan.FromMilliseconds(capped.TotalMilliseconds * jitter);
+    }
+
     private async Task<T> GetJsonAsync<T>(string url, JsonSerializerContext ctx, CancellationToken ct)
     {
-        await _throttle.AcquireAsync(ct).ConfigureAwait(false);
-        var response = await _http.GetAsync(url, ct).ConfigureAwait(false);
-        var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        var (response, body) = await SendWithTransportRetryAsync(HttpMethod.Get, url, null, ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
             throw new PlaneApiException((int)response.StatusCode, body, ParseRetryAfter(response));
 
@@ -260,10 +350,7 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
     private async Task<string> PatchJsonAsync<TBody>(string url, TBody body, JsonSerializerContext ctx, CancellationToken ct)
     {
         var json = JsonSerializer.Serialize(body, WriteTypeInfo<TBody>(ctx));
-        using var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
-        await _throttle.AcquireAsync(ct).ConfigureAwait(false);
-        var response = await _http.PatchAsync(url, content, ct).ConfigureAwait(false);
-        var responseBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        var (response, responseBody) = await SendWithTransportRetryAsync(HttpMethod.Patch, url, json, ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
             throw new PlaneApiException((int)response.StatusCode, responseBody, ParseRetryAfter(response));
         return responseBody;
@@ -272,10 +359,7 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
     private async Task<string> PostJsonAsync<TBody>(string url, TBody body, JsonSerializerContext ctx, CancellationToken ct)
     {
         var json = JsonSerializer.Serialize(body, WriteTypeInfo<TBody>(ctx));
-        using var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
-        await _throttle.AcquireAsync(ct).ConfigureAwait(false);
-        var response = await _http.PostAsync(url, content, ct).ConfigureAwait(false);
-        var responseBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        var (response, responseBody) = await SendWithTransportRetryAsync(HttpMethod.Post, url, json, ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
             throw new PlaneApiException((int)response.StatusCode, responseBody, ParseRetryAfter(response));
         return responseBody;

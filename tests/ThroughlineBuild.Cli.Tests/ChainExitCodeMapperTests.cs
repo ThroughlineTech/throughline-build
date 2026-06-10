@@ -72,6 +72,32 @@ public class ChainExitCodeMapperTests
         Assert.Equal(10, ChainExitCodeMapper.GetExitCode(dispatchResult));
     }
 
+    [Fact]
+    public void TicketingUnavailable_MapsToDedicatedExitCode()
+    {
+        // Distinct from the ticket-attributable stop codes: the operator's next action
+        // (restore connectivity, re-run) is environmental. See TLB-545.
+        Assert.Equal(11, ChainExitCodeMapper.GetExitCode(ChainOutcome.TicketingUnavailable));
+    }
+
+    [Fact]
+    public void MultiTicketTicketingUnavailable_PreservedOutcome_MapsToDedicatedExitCode()
+    {
+        var dispatchResult = new ParallelDispatchResult(
+            Success: false,
+            Results: new[]
+            {
+                new ChainResult("TLB-26", Array.Empty<ChainStep>(), ChainOutcome.TicketingUnavailable,
+                    TimeSpan.Zero, "Plane API unreachable (POST .../comments/, attempt 4): nodename nor servname provided"),
+                new ChainResult("TLB-27", Array.Empty<ChainStep>(), ChainOutcome.Skipped,
+                    TimeSpan.Zero, null, SkipReason: "ticketing backend unreachable in TLB-26; restore connectivity and re-run")
+            },
+            FailureReason: "ticket TLB-26 stopped with outcome TicketingUnavailable",
+            PreservedOutcome: ChainOutcome.TicketingUnavailable);
+
+        Assert.Equal(11, ChainExitCodeMapper.GetExitCode(dispatchResult));
+    }
+
     private static ChainResult MakeDirtyResult(string ticketId) => new(
         TicketId: ticketId,
         Steps: Array.Empty<ChainStep>(),

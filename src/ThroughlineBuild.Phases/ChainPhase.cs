@@ -151,6 +151,38 @@ public class ChainPhase
 
     public async Task<ChainResult> RunAsync(ChainPhaseOptions options, CancellationToken ct)
     {
+        // TLB-545: a ticketing backend that is unreachable at the transport level (after the
+        // client's own retries) is an environmental failure, not the ticket's fault - and the
+        // ticket's work is always committed to its branch before any ticketing write, so the
+        // chain is resumable. Classify it here, at the same per-ticket boundary the recursion
+        // uses for children, so one dead backend stops the run cleanly instead of crashing the
+        // process: the parent loop and dispatcher see a result (not an exception) and mark the
+        // remaining siblings/roots Skipped via ContainsEnvironmentalStop.
+        var classifySw = Stopwatch.StartNew();
+        try
+        {
+            return await RunChainCoreAsync(options, ct).ConfigureAwait(false);
+        }
+        catch (TicketingUnavailableException ex)
+        {
+            classifySw.Stop();
+            Console.Error.WriteLine(
+                $"[{options.TicketId}] chain stopped: ticketing backend unreachable - {ex.Message}");
+            var result = new ChainResult(options.TicketId, Array.Empty<ChainStep>(),
+                ChainOutcome.TicketingUnavailable, classifySw.Elapsed, ex.Message);
+            // Best-effort forensics: the event log is local (file sink), but never let a
+            // logging failure mask the classified result.
+            try
+            {
+                await EmitChainEndAsync(result, _sessionIdGenerator(), options.TicketId, ct).ConfigureAwait(false);
+            }
+            catch { /* non-fatal */ }
+            return result;
+        }
+    }
+
+    private async Task<ChainResult> RunChainCoreAsync(ChainPhaseOptions options, CancellationToken ct)
+    {
         var totalSw = Stopwatch.StartNew();
         var steps = new List<ChainStep>();
 
@@ -387,7 +419,8 @@ public class ChainPhase
                         var evidence = ExtractSubsumedByEvidence(planResult.EscalationWorkerResult);
                         var finalRationale = FormatSubsumedRationale(evidence);
                         await _ticketing.TransitionAsync(options.TicketId, TicketState.Done, ct).ConfigureAwait(false);
-                        await _ticketing.CreateCommentAsync(options.TicketId, "<p>" + WebUtility.HtmlEncode(finalRationale) + "</p>", ct).ConfigureAwait(false);
+                        await BestEffortTicketWriteAsync(chainSessionId, options.TicketId, "subsumed_rationale_comment",
+                            () => _ticketing.CreateCommentAsync(options.TicketId, "<p>" + WebUtility.HtmlEncode(finalRationale) + "</p>", ct), ct).ConfigureAwait(false);
                         await _events.EmitAsync(new WorkflowEvent(
                             SessionId: chainSessionId,
                             Timestamp: DateTimeOffset.UtcNow,
@@ -541,6 +574,50 @@ public class ChainPhase
             Data: data), ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Runs a non-state-bearing ticketing write (informational comment, label apply) without
+    /// letting its failure abort the run: on final failure (the client layer has already spent
+    /// its transport retries) the write is event-logged as <c>ticketing_write_failed</c> with a
+    /// stderr warning, and the chain continues (TLB-545). State-bearing writes - state
+    /// transitions and the [implemented_at:]/[planned_at:] marker comments downstream phases
+    /// parse to reconstruct state - must NOT route through here; their failure stops the ticket
+    /// with a resumable outcome instead. Batch-path writes that were already deliberately
+    /// non-fatal route through here too so their failures stop being silent.
+    /// </summary>
+    private async Task BestEffortTicketWriteAsync(
+        string sessionId, string ticketId, string operation, Func<Task> write, CancellationToken ct)
+    {
+        try
+        {
+            await write().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(
+                $"[{ticketId}] warning: ticketing write '{operation}' failed ({ex.Message}); continuing");
+            try
+            {
+                await _events.EmitAsync(new WorkflowEvent(
+                    SessionId: sessionId,
+                    Timestamp: DateTimeOffset.UtcNow,
+                    Kind: EventKind.TicketWrite,
+                    TicketId: ticketId,
+                    Phase: Phase.Chain,
+                    Data: new Dictionary<string, object>
+                    {
+                        ["action"] = "ticketing_write_failed",
+                        ["operation"] = operation,
+                        ["error"] = ex.Message
+                    }), ct).ConfigureAwait(false);
+            }
+            catch { /* the event log must never abort the run either */ }
+        }
+    }
+
     private async Task<(ChainResult? abort, IReadOnlyList<string>? successProvides)> RunImplementReviewLoopAsync(
         ChainPhaseOptions options,
         List<ChainStep> steps,
@@ -638,7 +715,8 @@ public class ChainPhase
                         var evidence = ExtractSubsumedByEvidence(implResult.EscalationWorkerResult);
                         var finalRationale = FormatSubsumedRationale(evidence);
                         await _ticketing.TransitionAsync(options.TicketId, TicketState.Done, ct).ConfigureAwait(false);
-                        await _ticketing.CreateCommentAsync(options.TicketId, "<p>" + WebUtility.HtmlEncode(finalRationale) + "</p>", ct).ConfigureAwait(false);
+                        await BestEffortTicketWriteAsync(chainSessionId, options.TicketId, "subsumed_rationale_comment",
+                            () => _ticketing.CreateCommentAsync(options.TicketId, "<p>" + WebUtility.HtmlEncode(finalRationale) + "</p>", ct), ct).ConfigureAwait(false);
                         await _events.EmitAsync(new WorkflowEvent(
                             SessionId: chainSessionId,
                             Timestamp: DateTimeOffset.UtcNow,
@@ -1387,17 +1465,11 @@ public class ChainPhase
                         var markerHtml =
                             $"<p>[implemented_at: {confirmedTicket.CommitSha}] (branch {batchBranchName})" +
                             $" (batch: stack_position={confirmedTicket.StackPosition})</p>{summaryHtml}";
-                        try
-                        {
-                            await _ticketing.CreateCommentAsync(batchTicket.Id, markerHtml, ct).ConfigureAwait(false);
-                        }
-                        catch { /* non-fatal */ }
+                        await BestEffortTicketWriteAsync(batchSessionId, batchTicket.Id, "batch_implemented_marker",
+                            () => _ticketing.CreateCommentAsync(batchTicket.Id, markerHtml, ct), ct).ConfigureAwait(false);
 
-                        try
-                        {
-                            await _ticketing.TransitionAsync(batchTicket.Id, TicketState.InReview, ct).ConfigureAwait(false);
-                        }
-                        catch { /* non-fatal */ }
+                        await BestEffortTicketWriteAsync(batchSessionId, batchTicket.Id, "batch_transition_in_review",
+                            () => _ticketing.TransitionAsync(batchTicket.Id, TicketState.InReview, ct), ct).ConfigureAwait(false);
                     }
 
                     // Post failure reason to the first incomplete ticket so the operator
@@ -1405,12 +1477,9 @@ public class ChainPhase
                     var firstIncomplete = batchTickets.FirstOrDefault(t => !confirmedIds.Contains(t.Id));
                     if (firstIncomplete is not null)
                     {
-                        try
-                        {
-                            var failHtml = $"<p>batch implement stopped: {WebUtility.HtmlEncode(failureReason)}</p>";
-                            await _ticketing.CreateCommentAsync(firstIncomplete.Id, failHtml, ct).ConfigureAwait(false);
-                        }
-                        catch { /* non-fatal */ }
+                        var failHtml = $"<p>batch implement stopped: {WebUtility.HtmlEncode(failureReason)}</p>";
+                        await BestEffortTicketWriteAsync(batchSessionId, firstIncomplete.Id, "batch_stopped_comment",
+                            () => _ticketing.CreateCommentAsync(firstIncomplete.Id, failHtml, ct), ct).ConfigureAwait(false);
                     }
 
                     // Return mixed results: confirmed tickets -> BatchImplemented,
@@ -1555,18 +1624,14 @@ public class ChainPhase
             var commentHtml =
                 $"<p>[implemented_at: {perTicket.CommitSha}] (branch {batchBranchName})" +
                 $" (batch: stack_position={perTicket.StackPosition})</p>{summaryHtml}";
-            try
-            {
-                await _ticketing.CreateCommentAsync(ticket.Id, commentHtml, ct).ConfigureAwait(false);
-            }
-            catch { /* non-fatal: marker posting failure must not block the batch result */ }
+            // Marker posting failure must not block the batch result.
+            await BestEffortTicketWriteAsync(batchSessionId, ticket.Id, "batch_implemented_marker",
+                () => _ticketing.CreateCommentAsync(ticket.Id, commentHtml, ct), ct).ConfigureAwait(false);
 
-            // Transition InProgress -> InReview to match single-ticket run observable state.
-            try
-            {
-                await _ticketing.TransitionAsync(ticket.Id, TicketState.InReview, ct).ConfigureAwait(false);
-            }
-            catch { /* non-fatal: transition failure must not block the batch result */ }
+            // Transition InProgress -> InReview to match single-ticket run observable state;
+            // its failure must not block the batch result either.
+            await BestEffortTicketWriteAsync(batchSessionId, ticket.Id, "batch_transition_in_review",
+                () => _ticketing.TransitionAsync(ticket.Id, TicketState.InReview, ct), ct).ConfigureAwait(false);
 
             var implStep = new ChainStep(
                 PhaseName: "batch-implement",
@@ -1785,18 +1850,15 @@ public class ChainPhase
         IReadOnlyList<string> checksFailed,
         CancellationToken ct)
     {
-        try
-        {
-            var checksNote = checksFailed.Count > 0
-                ? $" checks_failed: {string.Join(", ", checksFailed)}"
-                : "";
-            var passNote = pass > 1 ? $" (pass {pass})" : "";
-            var commentHtml =
-                $"<p>[batch_review{passNote}: {verdict}]{checksNote}</p>" +
-                $"<p>{System.Net.WebUtility.HtmlEncode(rationale)}</p>";
-            await _ticketing.CreateCommentAsync(ticketId, commentHtml, ct).ConfigureAwait(false);
-        }
-        catch { /* non-fatal */ }
+        var checksNote = checksFailed.Count > 0
+            ? $" checks_failed: {string.Join(", ", checksFailed)}"
+            : "";
+        var passNote = pass > 1 ? $" (pass {pass})" : "";
+        var commentHtml =
+            $"<p>[batch_review{passNote}: {verdict}]{checksNote}</p>" +
+            $"<p>{System.Net.WebUtility.HtmlEncode(rationale)}</p>";
+        await BestEffortTicketWriteAsync(_sessionIdGenerator(), ticketId, "batch_review_comment",
+            () => _ticketing.CreateCommentAsync(ticketId, commentHtml, ct), ct).ConfigureAwait(false);
     }
 
     private static string? TryGetBatchReviewMetadataString(
@@ -2098,18 +2160,10 @@ public class ChainPhase
             var markerHtml =
                 $"<p>[implemented_at: {confirmed.CommitSha}] (branch {batchBranchName})" +
                 $" (batch-rework: stack_position={confirmed.StackPosition})</p>";
-            try
-            {
-                await _ticketing.CreateCommentAsync(confirmed.TicketId, markerHtml, ct)
-                    .ConfigureAwait(false);
-            }
-            catch { /* non-fatal */ }
-            try
-            {
-                await _ticketing.TransitionAsync(confirmed.TicketId, TicketState.InReview, ct)
-                    .ConfigureAwait(false);
-            }
-            catch { /* non-fatal */ }
+            await BestEffortTicketWriteAsync(reworkSessionId, confirmed.TicketId, "batch_rework_marker",
+                () => _ticketing.CreateCommentAsync(confirmed.TicketId, markerHtml, ct), ct).ConfigureAwait(false);
+            await BestEffortTicketWriteAsync(reworkSessionId, confirmed.TicketId, "batch_transition_in_review",
+                () => _ticketing.TransitionAsync(confirmed.TicketId, TicketState.InReview, ct), ct).ConfigureAwait(false);
         }
 
         return verifyResult.ConfirmedTickets;
@@ -2202,11 +2256,12 @@ public class ChainPhase
 
         var allChildResults = new List<ChainResult>();
         bool anyStoppedEarly = false;
-        // TLB-538: set when a stopped child's failure was an environment gate failure. Environment
-        // failures are global to the machine/config, so the remaining siblings are marked Skipped
-        // instead of silently omitted - the operator sees the full blast radius, and nothing else
-        // is dispatched into the same wall.
+        // TLB-538/TLB-545: set when a stopped child's failure was environmental - an environment
+        // gate failure or an unreachable ticketing backend. Both are global to the machine/config,
+        // so the remaining siblings are marked Skipped instead of silently omitted - the operator
+        // sees the full blast radius, and nothing else is dispatched into the same wall.
         bool environmentFailureDetected = false;
+        string? environmentSkipReason = null;
 
         HashSet<string>? batchedTicketIds = null;
         if (options.BatchImplementGroup is not null
@@ -2495,7 +2550,11 @@ public class ChainPhase
                 if (!ok)
                 {
                     anyStoppedEarly = true;
-                    environmentFailureDetected = childResult.ContainsEnvironmentFailure();
+                    environmentFailureDetected = childResult.ContainsEnvironmentalStop();
+                    if (environmentFailureDetected)
+                        environmentSkipReason = childResult.ContainsTicketingUnavailable()
+                            ? "ticketing backend unreachable while running a sibling; restore connectivity and re-run the chain"
+                            : "environment gate failure in a sibling; fix the environment once and re-run the chain";
                     break;
                 }
 
@@ -2534,7 +2593,7 @@ public class ChainPhase
             }
         }
 
-        // TLB-538: after an environment gate failure, mark every undispatched child Skipped with
+        // TLB-538/TLB-545: after an environmental stop, mark every undispatched child Skipped with
         // the reason. They were not failures and they were not silently dropped - the environment
         // must be fixed once, then a re-run picks them all up.
         if (environmentFailureDetected)
@@ -2545,7 +2604,8 @@ public class ChainPhase
                     if (!dispatched.Contains(id) && (batchedTicketIds is null || !batchedTicketIds.Contains(id)))
                         allChildResults.Add(new ChainResult(id, Array.Empty<ChainStep>(), ChainOutcome.Skipped,
                             TimeSpan.Zero, null,
-                            SkipReason: "environment gate failure in a sibling; fix the environment once and re-run the chain"));
+                            SkipReason: environmentSkipReason
+                                ?? "environment gate failure in a sibling; fix the environment once and re-run the chain"));
         }
 
         var childResults = allChildResults;
@@ -2576,7 +2636,9 @@ public class ChainPhase
         var outcome = anyStoppedEarly ? ChainOutcome.ParentStoppedEarly : ChainOutcome.ParentCompleted;
         var finalRationale = landingRationale
             ?? (environmentFailureDetected
-                ? $"Environment gate failure: {string.Join(", ", childResults.Where(r => r.ContainsEnvironmentFailure()).Select(r => r.TicketId))} stopped because the gate also fails on the untouched base ref; remaining children were skipped. Fix the environment once, then re-run."
+                ? (childResults.Any(r => r.ContainsTicketingUnavailable())
+                    ? $"Ticketing backend unreachable: {string.Join(", ", childResults.Where(r => r.ContainsTicketingUnavailable()).Select(r => r.TicketId))} stopped because the ticketing service could not be reached after transport retries; remaining children were skipped. Restore connectivity, then re-run."
+                    : $"Environment gate failure: {string.Join(", ", childResults.Where(r => r.ContainsEnvironmentFailure()).Select(r => r.TicketId))} stopped because the gate also fails on the untouched base ref; remaining children were skipped. Fix the environment once, then re-run.")
                 : anyStoppedEarly
                     ? $"One or more children did not complete: {string.Join(", ", childResults.Where(r => !IsChainSuccess(r.Outcome) && r.Outcome != ChainOutcome.Skipped).Select(r => r.TicketId))}"
                     : $"All {eligible.Count} eligible children completed.");
@@ -2668,17 +2730,13 @@ public class ChainPhase
 
         foreach (var ticket in batchTickets)
         {
-            try
-            {
-                await _ticketing.CreateCommentAsync(ticket.Id,
-                    $"<p>[shipped_at: {shippedSha}] (batch into {integrationBranch})</p>", ct).ConfigureAwait(false);
-            }
-            catch { /* non-fatal: marker posting must not unwind the ship */ }
-            try
-            {
-                await _ticketing.TransitionAsync(ticket.Id, TicketState.Done, ct).ConfigureAwait(false);
-            }
-            catch { /* non-fatal: transition failure must not unwind the ship */ }
+            // The batch is already merged at this point, so neither the marker post nor the
+            // Done transition may unwind the ship.
+            await BestEffortTicketWriteAsync(_sessionIdGenerator(), ticket.Id, "batch_shipped_marker",
+                () => _ticketing.CreateCommentAsync(ticket.Id,
+                    $"<p>[shipped_at: {shippedSha}] (batch into {integrationBranch})</p>", ct), ct).ConfigureAwait(false);
+            await BestEffortTicketWriteAsync(_sessionIdGenerator(), ticket.Id, "batch_transition_done",
+                () => _ticketing.TransitionAsync(ticket.Id, TicketState.Done, ct), ct).ConfigureAwait(false);
             await _events.EmitAsync(new WorkflowEvent(
                 SessionId: _sessionIdGenerator(),
                 Timestamp: DateTimeOffset.UtcNow,

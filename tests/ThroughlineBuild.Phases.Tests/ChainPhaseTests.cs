@@ -189,6 +189,28 @@ public class ChainPhaseTests
         Assert.Null(result.FinalRationale);
     }
 
+    // TLB-545: when the ticketing backend is unreachable (the client layer already spent its
+    // transport retries), the chain must return a classified, resumable TicketingUnavailable
+    // result instead of letting the exception crash the whole process.
+    [Fact]
+    public async Task RunAsync_TicketingUnavailable_ReturnsClassifiedResumableOutcome_InsteadOfThrowing()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog))
+        {
+            FailGetWith = new TicketingUnavailableException(
+                "Plane API unreachable (GET .../issues/, attempt 4): nodename nor servname provided, or not known",
+                new HttpRequestException("dns failure"))
+        };
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, new Queue<IVerifier>());
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.TicketingUnavailable, result.Outcome);
+        Assert.Contains("unreachable", result.FinalRationale);
+    }
+
     // AC: "The gate runs after implement and before review for each chain ticket"
     [Fact]
     public async Task RunAsync_WithGateFactory_GateStepIsInsertedBetweenImplementAndReview()
@@ -1128,6 +1150,10 @@ public class ChainPhaseTests
 
         public ChainFakeTicketing(Ticket ticket) { _ticket = ticket; }
 
+        // TLB-545: when set, GetAsync throws this - simulates the ticketing backend being
+        // unreachable after the client layer exhausted its transport retries.
+        public Exception? FailGetWith { get; set; }
+
         public void SeedComment(string html) =>
             _seededComments.Add(new TicketComment(Guid.NewGuid().ToString(), html, DateTimeOffset.UtcNow));
 
@@ -1153,6 +1179,8 @@ public class ChainPhaseTests
 
         public Task<Ticket> GetAsync(string id, CancellationToken ct)
         {
+            if (FailGetWith is not null)
+                throw FailGetWith;
             if (_extraTickets.TryGetValue(id, out var extra))
                 return Task.FromResult(extra);
             return Task.FromResult(_ticket);

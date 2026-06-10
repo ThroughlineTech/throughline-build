@@ -77,11 +77,13 @@ public sealed class ParallelDispatcher
         var allResults = new List<ChainResult>();
         bool failed = false;
         string? failureReason = null;
-        // TLB-538: once any root's subtree hits an environment gate failure, every root dispatched
-        // after it would fail the same way (the environment is global). Remaining roots return
-        // Skipped without running. Width is pinned to 1, so the flag is observed in dispatch order.
+        // TLB-538/TLB-545: once any root's subtree hits an environmental stop (environment gate
+        // failure, or the ticketing backend unreachable), every root dispatched after it would
+        // fail the same way (the environment is global). Remaining roots return Skipped without
+        // running. Width is pinned to 1, so the flags are observed in dispatch order.
         bool environmentFailed = false;
-        string? environmentFailedTicket = null;
+        string? environmentSkipReason = null;
+        ChainOutcome environmentOutcome = ChainOutcome.GateEnvironmentFailure;
 
         foreach (var level in levels)
         {
@@ -110,14 +112,23 @@ public sealed class ParallelDispatcher
                     {
                         return new ChainResult(id, Array.Empty<ChainStep>(), ChainOutcome.Skipped,
                             TimeSpan.Zero, null,
-                            SkipReason: $"environment gate failure in {environmentFailedTicket}; fix the environment once and re-run");
+                            SkipReason: environmentSkipReason);
                     }
                     var opts = baseOptions with { TicketId = id };
                     var result = await _runChain(opts, ct).ConfigureAwait(false);
-                    if (result.ContainsEnvironmentFailure())
+                    if (result.ContainsEnvironmentalStop())
                     {
                         environmentFailed = true;
-                        environmentFailedTicket = id;
+                        if (result.ContainsTicketingUnavailable())
+                        {
+                            environmentOutcome = ChainOutcome.TicketingUnavailable;
+                            environmentSkipReason = $"ticketing backend unreachable in {id}; restore connectivity and re-run";
+                        }
+                        else
+                        {
+                            environmentOutcome = ChainOutcome.GateEnvironmentFailure;
+                            environmentSkipReason = $"environment gate failure in {id}; fix the environment once and re-run";
+                        }
                     }
                     return result;
                 }
@@ -161,8 +172,8 @@ public sealed class ParallelDispatcher
 
         totalSw.Stop();
 
-        // TLB-538: roots in levels never reached (the loop breaks after a failed level) get the
-        // same Skipped marker as same-level roots, so the report shows the full blast radius.
+        // TLB-538/TLB-545: roots in levels never reached (the loop breaks after a failed level)
+        // get the same Skipped marker as same-level roots, so the report shows the full blast radius.
         if (environmentFailed)
         {
             var seen = new HashSet<string>(allResults.Select(r => r.TicketId), StringComparer.OrdinalIgnoreCase);
@@ -170,18 +181,18 @@ public sealed class ParallelDispatcher
                 if (!seen.Contains(id))
                     allResults.Add(new ChainResult(id, Array.Empty<ChainStep>(), ChainOutcome.Skipped,
                         TimeSpan.Zero, null,
-                        SkipReason: $"environment gate failure in {environmentFailedTicket}; fix the environment once and re-run"));
+                        SkipReason: environmentSkipReason));
         }
 
         ChainOutcome? preservedOutcome = failed && allResults.Count > 0
             && allResults.All(r => r.Outcome == ChainOutcome.RefusedDirtyTree)
             ? ChainOutcome.RefusedDirtyTree
             : null;
-        // TLB-538: surface the environment failure in the dispatch outcome and exit code - the
-        // operator's next action (fix the environment, re-run everything) differs from a normal
-        // partial failure (triage the one stopped ticket).
+        // TLB-538/TLB-545: surface the environmental stop in the dispatch outcome and exit code -
+        // the operator's next action (fix the environment / restore connectivity, re-run
+        // everything) differs from a normal partial failure (triage the one stopped ticket).
         if (preservedOutcome is null && environmentFailed)
-            preservedOutcome = ChainOutcome.GateEnvironmentFailure;
+            preservedOutcome = environmentOutcome;
         var dispatchOutcome = preservedOutcome is { } po
             ? po.ToString()
             : failed ? "partial" : "ok";

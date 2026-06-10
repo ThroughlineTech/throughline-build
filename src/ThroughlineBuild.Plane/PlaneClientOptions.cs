@@ -36,4 +36,19 @@ public class PlaneClientOptions
     /// Plane's rate-limit window is one minute, so a longer Retry-After is clamped here.
     /// </summary>
     public TimeSpan MaxRetryDelay { get; init; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Retries for transient TRANSPORT failures - DNS resolution, connect, TLS handshake,
+    /// timeout - where no HTTP status exists yet (distinct from <see cref="MaxRetryAttempts"/>,
+    /// which governs 429/5xx responses). When exhausted the failure surfaces as a
+    /// <see cref="ThroughlineBuild.Contracts.TicketingUnavailableException"/> so orchestration
+    /// can classify it as environmental instead of crashing the run (TLB-545). 0 disables.
+    /// </summary>
+    public int TransportRetryAttempts { get; init; } = 3;
+
+    /// <summary>Base delay for the transport-retry exponential backoff (doubled per attempt, jittered).</summary>
+    public TimeSpan TransportRetryBaseDelay { get; init; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>Ceiling on a single transport-retry wait. Transient DNS/connect blips clear in seconds; anything longer is an outage the chain should classify, not sit out.</summary>
+    public TimeSpan TransportMaxRetryDelay { get; init; } = TimeSpan.FromSeconds(10);
 }
