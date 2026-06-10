@@ -3,6 +3,7 @@ using Tomlyn.Model;
 using ThroughlineBuild.Briefs;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Workers.ClaudeCode;
 
 namespace ThroughlineBuild.Cli;
 
@@ -638,6 +639,13 @@ public static class BuildConfigLoader
                     string? effort = null;
                     if (tierTable.TryGetValue("effort", out var effortVal) && effortVal is string effortStr && !string.IsNullOrEmpty(effortStr))
                         effort = effortStr;
+
+                    // claude-code only: reject model values the CLI cannot resolve (e.g. the
+                    // "fable" alias trap) at config load, instead of letting them fail as an
+                    // opaque is_error envelope deep inside a chain run.
+                    if (kv.Key == "claude-code" && ClaudeCodeModelValidator.Validate(modelStr) is string modelError)
+                        throw new ConfigException(
+                            $"[workers.{kv.Key}.sizes.{key}] model: {modelError}");
 
                     sizes[ws] = new ModelTier(modelStr, effort);
                 }

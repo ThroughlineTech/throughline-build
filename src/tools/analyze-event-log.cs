@@ -340,10 +340,24 @@ static List<string> ResolveFiles(string[] patterns)
         .ToList();
 }
 
+// Claude Code tier aliases can land in the event log verbatim (a run configured with an
+// alias echoes it in the init system event; an invalid-model failure records the raw
+// configured value). Map them to the slug of the model the alias currently resolves to
+// so those runs do not silently drop out of cost reporting.
+static string NormalizeModelAlias(string model) => model.Trim().ToLowerInvariant() switch
+{
+    "fable" => "claude-fable-5",
+    "opus" => "claude-opus-4-8",
+    "sonnet" => "claude-sonnet-4-6",
+    "haiku" => "claude-haiku-4-5",
+    _ => model,
+};
+
 static decimal? ComputeCost(
     JsonElement data, string model,
     Pricing[] pricing)
 {
+    model = NormalizeModelAlias(model);
     foreach (var p in pricing)
     {
         if (model.StartsWith(p.Prefix, StringComparison.Ordinal))

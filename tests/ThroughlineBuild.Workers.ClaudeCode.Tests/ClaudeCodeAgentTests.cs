@@ -406,6 +406,57 @@ public class ClaudeCodeAgentEnvelopeParserTests
     }
 
     [Fact]
+    public void EnvelopeParser_InvalidModelError_NamesModelAndConfigKey()
+    {
+        // The CLI rejects an unresolvable --model value (e.g. the "fable" alias trap) at
+        // session init with subtype "success" and is_error=true. That is a config problem;
+        // the failure reason must name the model and the config key, not just echo the
+        // opaque envelope fields.
+        var stdout = "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":true,"
+            + "\"result\":\"There's an issue with the selected model (fable). It may not exist or "
+            + "you may not have access to it. Run --model to pick a different model.\"}";
+
+        var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 1, stderr: "");
+
+        Assert.Equal(Status.Escalate, result.Status);
+        Assert.Equal("Claude Code rejected the configured model", result.Summary);
+        Assert.Contains("'fable'", result.FailureReason);
+        Assert.Contains("[workers.claude-code.sizes]", result.FailureReason);
+        Assert.Contains("claude-fable-5", result.FailureReason);
+        Assert.Contains("issue with the selected model", result.FailureReason);
+    }
+
+    [Fact]
+    public void EnvelopeParser_InvalidModelError_WithoutParenthesizedModel_StillClassified()
+    {
+        // Defensive: if the CLI message shape drops the "(model)" clause, classification
+        // must still fire on the stable signature and omit the model name gracefully.
+        var stdout = "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":true,"
+            + "\"result\":\"There's an issue with the selected model. Run --model to pick a different model.\"}";
+
+        var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 1, stderr: "");
+
+        Assert.Equal(Status.Escalate, result.Status);
+        Assert.Equal("Claude Code rejected the configured model", result.Summary);
+        Assert.Contains("[workers.claude-code.sizes]", result.FailureReason);
+    }
+
+    [Fact]
+    public void EnvelopeParser_OtherIsErrorMessages_KeepGenericEnvelopeShape()
+    {
+        // The invalid-model rewrite must not capture unrelated is_error envelopes - the
+        // usage-limit path (and ProviderErrorClassifier's signature match on it) depends
+        // on the generic "envelope has is_error=true" shape.
+        var stdout = "{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,"
+            + "\"result\":\"Claude AI usage limit reached|1717800000\"}";
+
+        var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 1, stderr: "");
+
+        Assert.Equal("Claude Code reported is_error=true", result.Summary);
+        Assert.Contains("is_error=true", result.FailureReason);
+    }
+
+    [Fact]
     public void EnvelopeParser_ValidEnvelope_NoWorkerResultMarker_ReturnsFailed()
     {
         // Valid envelope but inner result has no WORKER_RESULT block

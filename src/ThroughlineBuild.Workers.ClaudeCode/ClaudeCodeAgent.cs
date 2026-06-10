@@ -419,6 +419,14 @@ public class ClaudeCodeAgent : IWorkerAgent
 
         if (envelope.IsError)
         {
+            // The CLI rejects an unresolvable --model value at session init with this phrasing
+            // ("There's an issue with the selected model (fable). It may not exist or you may
+            // not have access to it."). That is a config problem, not a transient provider
+            // error - name the model and the config key so the operator fixes it in one step.
+            if (TryDescribeInvalidModelError(envelope.Result, stderr) is string invalidModelReason)
+                return new WorkerResult(Status.Escalate, "Claude Code rejected the configured model", Array.Empty<string>(),
+                    invalidModelReason, new Dictionary<string, object>());
+
             // The human-readable failure (e.g. "Claude AI usage limit reached|<ts>") lives in the
             // envelope's result field; include it so the reason is not just a subtype + blank stderr. See TLB-490.
             var message = string.IsNullOrWhiteSpace(envelope.Result) ? "" : $" Message: {envelope.Result}.";
@@ -559,6 +567,35 @@ public class ClaudeCodeAgent : IWorkerAgent
         foreach (var extra in options.ExtraArgs)
             args.Add(extra);
         return args;
+    }
+
+    // Recognizes the CLI's invalid-model session-init error and rewrites it into an
+    // operator-actionable failure reason naming the configured model and the config key
+    // to fix. Returns null for every other is_error message so the generic envelope
+    // path (and ProviderErrorClassifier's signature matching) is untouched.
+    internal static string? TryDescribeInvalidModelError(string? envelopeResult, string stderr)
+    {
+        if (string.IsNullOrWhiteSpace(envelopeResult))
+            return null;
+        const string signature = "issue with the selected model";
+        var idx = envelopeResult.IndexOf(signature, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0)
+            return null;
+
+        // Best-effort extraction of the model name from "...selected model (fable)...".
+        var modelClause = "";
+        var open = envelopeResult.IndexOf('(', idx);
+        if (open >= 0)
+        {
+            var close = envelopeResult.IndexOf(')', open + 1);
+            if (close > open + 1)
+                modelClause = $" '{envelopeResult.Substring(open + 1, close - open - 1)}'";
+        }
+
+        return $"Claude Code rejected the configured model{modelClause} at session init - the CLI only accepts " +
+               "the tier aliases haiku/sonnet/opus or a full claude-* model id (e.g. \"claude-fable-5\"). " +
+               $"Fix the model value under [workers.claude-code.sizes] in .build/config.toml. " +
+               $"Original message: {envelopeResult.Trim()} Stderr: {stderr}";
     }
 
     // Strips the "anthropic:" provider prefix from a configured model id so the

@@ -439,6 +439,127 @@ log_directory = ".build/events"
     }
 
     [Fact]
+    public void ClaudeCode_sizes_fable_alias_throws_ConfigException_with_full_slug_hint()
+    {
+        // "fable" is not a Claude Code tier alias; without load-time validation it only
+        // fails at session init deep inside a chain run ("There's an issue with the
+        // selected model (fable)"). The config loader must reject it up front and point
+        // at the full slug.
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "abc-123"
+plane_api_token_env = "PLANE_TOKEN"
+
+[workers]
+default_agent = "claude-code"
+
+[workers.claude-code]
+executable = "claude"
+
+[workers.claude-code.sizes]
+small  = { model = "haiku" }
+medium = { model = "fable" }
+large  = { model = "fable" }
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var ex = Assert.Throws<ConfigException>(() => BuildConfigLoader.Load(path));
+            Assert.Contains("workers.claude-code.sizes.medium", ex.Message);
+            Assert.Contains("claude-fable-5", ex.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ClaudeCode_sizes_full_fable_slug_and_aliases_load()
+    {
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "abc-123"
+plane_api_token_env = "PLANE_TOKEN"
+
+[workers]
+default_agent = "claude-code"
+
+[workers.claude-code]
+executable = "claude"
+
+[workers.claude-code.sizes]
+small  = { model = "haiku" }
+medium = { model = "claude-fable-5" }
+large  = { model = "anthropic:claude-fable-5" }
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            var sizes = config.Workers.Agents["claude-code"].Sizes;
+            Assert.Equal("haiku", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Small].Model);
+            Assert.Equal("claude-fable-5", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Medium].Model);
+            Assert.Equal("anthropic:claude-fable-5", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Large].Model);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void NonClaude_agents_are_not_subject_to_claude_model_validation()
+    {
+        // The model-shape rule is claude-code-specific; a codex block with OpenAI ids
+        // (which would fail the claude-* check) must load untouched.
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "abc-123"
+plane_api_token_env = "PLANE_TOKEN"
+
+[workers]
+default_agent = "codex"
+
+[workers.codex]
+executable = "codex"
+
+[workers.codex.sizes]
+small  = { model = "gpt-5.4-mini" }
+medium = { model = "gpt-5.4" }
+large  = { model = "gpt-5.5" }
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Equal("gpt-5.5", config.Workers.Agents["codex"].Sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Large].Model);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Missing_sizes_table_throws_ConfigException()
     {
         var toml = """
@@ -1100,15 +1221,15 @@ plane_project_id = "abc-123"
 plane_api_token_env = "PLANE_TOKEN"
 
 [workers]
-default_agent = "claude-code"
+default_agent = "codex"
 
-[workers.claude-code]
-executable = "claude"
+[workers.codex]
+executable = "codex"
 
-[workers.claude-code.sizes]
+[workers.codex.sizes]
 small  = { model = "gpt-5.4-mini", effort = "low" }
-medium = { model = "claude-sonnet-4-6" }
-large  = { model = "claude-opus-4-7" }
+medium = { model = "gpt-5.4" }
+large  = { model = "gpt-5.5" }
 
 [events]
 log_directory = ".build/events"
@@ -1118,7 +1239,7 @@ log_directory = ".build/events"
         {
             var config = BuildConfigLoader.Load(path);
 
-            var sizes = config.Workers.Agents["claude-code"].Sizes;
+            var sizes = config.Workers.Agents["codex"].Sizes;
             Assert.Equal("gpt-5.4-mini", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Small].Model);
             Assert.Equal("low", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Small].Effort);
         }
