@@ -2224,6 +2224,25 @@ public class ChainPhase
             if (createResult.Success)
             {
                 sharedWorktreePath = createResult.AbsolutePath ?? integrationWorktreePath;
+
+                // TLB-546: a retained chain/{slug} branch from a prior run stays frozen at the
+                // base tip it forked from. Reconcile it with the CURRENT base before any child
+                // dispatches - otherwise every child implements against a stale snapshot and the
+                // divergence only surfaces at the root landing, after all the work is burned.
+                var refreshFailure = await RefreshIntegrationBranchAsync(
+                    parentTicket.Id, integrationBranch, sharedWorktreePath,
+                    integrationBaseRef, ct).ConfigureAwait(false);
+                if (refreshFailure is not null)
+                {
+                    totalSw.Stop();
+                    return new ChainResult(
+                        options.TicketId,
+                        Array.Empty<ChainStep>(),
+                        ChainOutcome.ParentStoppedEarly,
+                        totalSw.Elapsed,
+                        refreshFailure,
+                        ChildResults: Array.Empty<ChainResult>());
+                }
             }
             else
             {
@@ -2976,6 +2995,103 @@ public class ChainPhase
             return await _git.CheckoutWorktreeAsync(worktreePath, branch, _workingDirectory, ct).ConfigureAwait(false);
 
         return createResult;
+    }
+
+    /// <summary>
+    /// Reconciles a (possibly reused) integration branch with the current tip of its base ref
+    /// BEFORE any child dispatches (TLB-546). Integration branches are intentionally retained
+    /// across runs so a failed or interrupted chain can resume its accumulated topology - but a
+    /// retained branch stays frozen at the base tip it forked from, while the base keeps moving
+    /// (other chains landing, tickets shipping directly). Reusing it verbatim makes every child
+    /// implement, gate, and review against a stale snapshot; the divergence then surfaces only
+    /// at the root landing, after all the work is done, where a semantic collision between the
+    /// chain's work and what landed on the base in the meantime cannot be resolved automatically.
+    /// Rebases - never resets - so commits accumulated by already-shipped children survive; a
+    /// branch with no commits of its own just fast-forwards to the base tip. Returns null when
+    /// the branch is fresh or successfully refreshed, or a human-readable rationale when the
+    /// refresh hit conflicts and the chain must stop before dispatching anything.
+    /// </summary>
+    private async Task<string?> RefreshIntegrationBranchAsync(
+        string ticketId,
+        string integrationBranch,
+        string integrationWorktreePath,
+        string baseRef,
+        CancellationToken ct)
+    {
+        string chainSha;
+        string baseSha;
+        try
+        {
+            chainSha = await _git.RevParseAsync(integrationBranch, _workingDirectory, ct).ConfigureAwait(false);
+            baseSha = await _git.RevParseAsync(baseRef, _workingDirectory, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Probe failure (e.g. an unborn base in a fixture repo) is not staleness evidence.
+            // Proceed exactly as the chain did before this guard existed.
+            return null;
+        }
+
+        if (string.Equals(chainSha, baseSha, StringComparison.Ordinal))
+            return null; // freshly created, or already at the base tip
+
+        var baseIsAncestor = await _git.IsAncestorAsync(baseSha, chainSha, _workingDirectory, ct).ConfigureAwait(false);
+        if (baseIsAncestor)
+            return null; // chain is strictly ahead (accumulated child work); base unmoved
+
+        // The base advanced after this branch forked. Replay the chain's commits onto the
+        // current tip so children build on reality instead of the fork-time snapshot.
+        var rebase = await _git.RebaseAsync(baseRef, integrationWorktreePath, ct).ConfigureAwait(false);
+        if (rebase.HadConflicts)
+        {
+            await _git.RebaseAbortAsync(integrationWorktreePath, ct).ConfigureAwait(false);
+            var paths = string.Join(", ", rebase.ConflictingPaths);
+            await EmitChainGateFailureAsync(ticketId, "chain_refresh_rebase_conflicts", new Dictionary<string, object>
+            {
+                ["integration_branch"] = integrationBranch,
+                ["base_ref"] = baseRef,
+                ["conflicting_paths"] = rebase.ConflictingPaths
+            }, ct).ConfigureAwait(false);
+            return $"{integrationBranch} forked from an older {baseRef} and rebasing it onto the " +
+                $"current tip hit conflicts in: {paths}. No child was dispatched. Resolve the rebase " +
+                $"manually (the accumulated work is safe on {integrationBranch}), or delete the " +
+                $"branch to restart the chain from the current {baseRef}, then re-run.";
+        }
+        if (!rebase.Success)
+        {
+            await EmitChainGateFailureAsync(ticketId, "chain_refresh_rebase_failed", new Dictionary<string, object>
+            {
+                ["integration_branch"] = integrationBranch,
+                ["base_ref"] = baseRef,
+                ["detail"] = rebase.FailureReason ?? "unknown"
+            }, ct).ConfigureAwait(false);
+            return $"refreshing {integrationBranch} onto {baseRef} failed: {rebase.FailureReason}. " +
+                $"No child was dispatched; the accumulated work is safe on {integrationBranch}.";
+        }
+
+        string refreshedSha;
+        try { refreshedSha = await _git.HeadShaAsync(integrationWorktreePath, ct).ConfigureAwait(false); }
+        catch { refreshedSha = "(unknown)"; }
+
+        Console.WriteLine(
+            $"[{ticketId}] {integrationBranch} was behind {baseRef}; rebased onto the current tip " +
+            "before dispatching children.");
+        await _events.EmitAsync(new WorkflowEvent(
+            SessionId: _sessionIdGenerator(),
+            Timestamp: DateTimeOffset.UtcNow,
+            Kind: EventKind.TicketWrite,
+            TicketId: ticketId,
+            Phase: Phase.Chain,
+            Data: new Dictionary<string, object>
+            {
+                ["action"] = "chain_refresh_rebased",
+                ["integration_branch"] = integrationBranch,
+                ["base_ref"] = baseRef,
+                ["old_tip"] = chainSha,
+                ["new_tip"] = refreshedSha
+            }), ct).ConfigureAwait(false);
+
+        return null;
     }
 
     private sealed record DryRunItem(
