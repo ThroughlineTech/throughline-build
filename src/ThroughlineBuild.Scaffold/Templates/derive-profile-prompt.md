@@ -139,7 +139,7 @@ First emit the profile as a single fenced block named PROJECT_PROFILE containing
 
 (The block above is an EXAMPLE of the shape; fill it with values derived from THIS op-doc.)
 
-Then emit exactly one WORKER_RESULT envelope:
+Then emit exactly one WORKER_RESULT envelope. Emit the PROJECT_PROFILE block and the envelope together in your final message - do not split them across separate messages, and write nothing after the envelope JSON:
 
 WORKER_RESULT
 {"status":"Ok","summary":"Derived project toolchain profile","files_changed":[],"failure_reason":null,"metadata":{}}

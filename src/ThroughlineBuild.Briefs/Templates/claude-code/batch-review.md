@@ -24,7 +24,7 @@ Before emitting the WORKER_RESULT envelope, emit your review critique as a named
 Write your detailed review rationale here. For each ticket, assess its acceptance criteria against the commits in its range. Also assess cross-ticket integration: do the seams between commits hold together? Name specific tickets when identifying issues.
 <<<REVIEW_CRITIQUE_END
 
-Then emit exactly one WORKER_RESULT block at the end of your response:
+Then emit exactly one WORKER_RESULT block at the end of your response. Emit the critique block and the envelope together in your final message - do not split them across separate messages, and write nothing after the envelope JSON:
 
 WORKER_RESULT
 {{worker_result_json}}

@@ -75,7 +75,7 @@ Your drafted content here. Can include code blocks, backticks, quotes, shell com
 Optional notes.
 <<<DRAFT_BODY_END
 
-Then emit the WORKER_RESULT envelope:
+Then emit the WORKER_RESULT envelope. Emit the DRAFT_BODY block and the envelope together in your final message - do not split them across separate messages, and write nothing after the envelope JSON:
 
 WORKER_RESULT
 {"status":"Ok","summary":"<one-line summary of the draft>","filesChanged":[],"failureReason":null,"metadata":{"body_markdown_ref":"DRAFT_BODY"}}

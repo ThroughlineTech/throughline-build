@@ -89,7 +89,7 @@ Then emit a completion claim that describes what this implementation delivers:
 - `ac_bindings`: array of {"ac_ref":"<label>","kind":"<kind>"} objects binding AC items to verifier kinds; allowed kinds: Test, GrepPresent, GrepAbsent, File, Exit, Golden, Smoke (may be empty)
 - `tests_added`: test names or test file paths added in this implementation (may be empty)
 
-Then emit the WORKER_RESULT envelope:
+Then emit the WORKER_RESULT envelope. Emit the fenced blocks and the envelope together in your final message - do not split them across separate messages, and write nothing after the envelope JSON:
 
 WORKER_RESULT
 {"status":"Ok","summary":"Implemented TLB-SNAP","files_changed":["path/to/changed/file"],"failure_reason":null,"metadata":{"commit_sha":"<HEAD SHA of feature branch after all commits>","files_changed":["path/to/changed/file"],"summary_ref":"IMPLEMENT_SUMMARY","completion_claim_ref":"COMPLETION_CLAIM"}}

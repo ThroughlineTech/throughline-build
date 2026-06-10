@@ -183,7 +183,7 @@ If investigation reveals the ticket is invalid or already fixed (not obsolete): 
 
 ## WORKER_RESULT envelope
 
-When investigation, discipline passes, and size inference are complete, emit the PLAN_BODY fenced block followed by the WORKER_RESULT envelope as the LAST output. A bare `WORKER_RESULT` marker on its own line, followed by JSON:
+When investigation, discipline passes, and size inference are complete, emit the PLAN_BODY fenced block followed by the WORKER_RESULT envelope as the LAST output. Emit the fenced block and the envelope together in your final message - do not split them across separate messages, and write nothing after the envelope JSON. A bare `WORKER_RESULT` marker on its own line, followed by JSON:
 
 WORKER_RESULT
 {

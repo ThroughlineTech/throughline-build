@@ -58,7 +58,7 @@ Write your detailed review rationale here. This can include:
 - Any characters including backticks, quotes, backslashes - no JSON escaping needed
 <<<REVIEW_CRITIQUE_END
 
-Then emit exactly one WORKER_RESULT block at the end of your response:
+Then emit exactly one WORKER_RESULT block at the end of your response. Emit the critique block and the envelope together in your final message - do not split them across separate messages, and write nothing after the envelope JSON:
 
 WORKER_RESULT
 {"status":"Ok","summary":"Review for TLB-SNAP","files_changed":[],"failure_reason":null,"metadata":{"verdict":"Pass|Rework|Fail","rationale_ref":"REVIEW_CRITIQUE","checks_failed":["check_name_if_applicable"]}}

@@ -34,7 +34,7 @@ Write your detailed review rationale here. This can include:
 - Any characters including backticks, quotes, backslashes - no JSON escaping needed
 <<<REVIEW_CRITIQUE_END
 
-Then emit exactly one WORKER_RESULT block at the end of your response:
+Then emit exactly one WORKER_RESULT block at the end of your response. Emit the critique block and the envelope together in your final message - do not split them across separate messages, and write nothing after the envelope JSON:
 
 WORKER_RESULT
 {{worker_result_json}}
