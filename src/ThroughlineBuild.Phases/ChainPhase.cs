@@ -2937,6 +2937,12 @@ public class ChainPhase
     // .worktrees/: it never removes the main worktree or an unrelated checkout. Dispatch is serial
     // (concurrency pinned to 1), so no concurrent chain owns a ticket/ or chain/ worktree here.
     // A cleanup miss must NEVER fail an otherwise-successful chain - it is swallowed/advisory only.
+    //
+    // This removes WORKTREES only and deliberately leaves the ticket/ and chain/ BRANCHES in place:
+    // the integration branch is the accumulated subtree and an interrupted/retried chain resumes by
+    // checking it out (see SequentialChainTests.ParentChain_LeftoverChainBranch_*). Tearing the
+    // branches down is the operator's explicit call once the operation is truly finished - that is
+    // what `build sweep` (ChainWorktreeSweeper) does, merged-gated so it never drops resumable work.
     internal async Task SweepChainWorktreesAsync(string ticketId, string sessionId, CancellationToken ct)
     {
         try

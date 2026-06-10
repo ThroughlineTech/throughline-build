@@ -471,6 +471,51 @@ static async Task<int> RunAsync(string[] args)
         WorkspaceSlug: config2.Ticketing.PlaneWorkspaceSlug,
         BuildVersion: BuildVersion.Current);
 
+    // 'build sweep' removes leftover chain worktrees and merged branches that a prior
+    // 'build chain' left behind - the recovery path when a chain was interrupted or
+    // preserved-on-failure and so never reached its own end-of-chain sweep. Stack-agnostic:
+    // pure git + filesystem, no worker, no Plane. Branch deletion is merged-gated against the
+    // target (or --target), so it never discards unshipped commits; --force additionally removes
+    // worktrees whose branch is not merged (the branch itself is still kept).
+    if (verb == "sweep")
+    {
+        var sweepTarget = CliArgParser.GetFlagValue(args, "--target") ?? config2.ResolveTargetBranch();
+        var sweepForce = Array.IndexOf(args, "--force") >= 0;
+        var sweepGit = new ProcessGitClient(cwd2);
+        var sweeper = new ChainWorktreeSweeper(sweepGit);
+        try
+        {
+            using var sweepCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; sweepCts.Cancel(); };
+            var sweepResult = await sweeper.SweepAsync(cwd2, sweepTarget, sweepForce, sweepCts.Token);
+
+            Console.WriteLine($"Swept chain artifacts (merge target: {sweepTarget}):");
+            Console.WriteLine($"  worktrees removed: {sweepResult.WorktreesRemoved.Count}");
+            Console.WriteLine($"  branches deleted:  {sweepResult.BranchesDeleted.Count}");
+            foreach (var b in sweepResult.BranchesDeleted)
+                Console.WriteLine($"    - {b}");
+            if (sweepResult.BranchesKeptUnmerged.Count > 0)
+            {
+                Console.WriteLine("  kept (not merged into target - left intact):");
+                foreach (var b in sweepResult.BranchesKeptUnmerged)
+                    Console.WriteLine($"    - {b}");
+            }
+            if (sweepResult.WorktreesHalted.Count > 0)
+            {
+                Console.Error.WriteLine("  worktrees that could not be removed:");
+                foreach (var h in sweepResult.WorktreesHalted)
+                    Console.Error.WriteLine($"    - {h}");
+                return 1;
+            }
+            return 0;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+    }
+
     if (verb == "list")
     {
         var http2 = new HttpClient();
