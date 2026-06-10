@@ -173,6 +173,8 @@ public class ClaudeCodeAgent : IWorkerAgent
         var fallbackModel = NormalizeModel(tier?.Model);
         var result = ParseStdoutEnvelope(stdout, process.ExitCode, stderr, stopwatch.ElapsedMilliseconds, fallbackModel);
 
+        result = AttachContextTurns(result, stdout);
+
         if (options.DebugCaptureDirectory is not null)
         {
             // Same envelope-parse fallback chain as ParseStdoutEnvelope: try single
@@ -189,6 +191,40 @@ public class ClaudeCodeAgent : IWorkerAgent
         }
 
         return result;
+    }
+
+    // Behavior-inert telemetry: after the worker exits, parse the already-captured NDJSON stream
+    // for per-turn context attribution and stash it on Metadata["context_turns"] as a flat dict of
+    // scalar + List<long> values (a flat shape so the event-log AOT context needs only List<long>).
+    // Best-effort: any parse failure leaves the result untouched. Attaches nothing when no turns parsed.
+    internal static WorkerResult AttachContextTurns(WorkerResult result, string stdout)
+    {
+        try
+        {
+            var series = ClaudeCodeTurnParser.Parse(stdout);
+            if (series.Turns == 0) return result;
+            var ctx = new Dictionary<string, object>
+            {
+                ["cache_read_series"] = new List<long>(series.CacheReadSeries),
+                ["cache_creation_series"] = new List<long>(series.CacheCreationSeries),
+                ["output_series"] = new List<long>(series.OutputSeries),
+                ["turns"] = series.Turns,
+                ["total_cache_read"] = series.TotalCacheRead,
+                ["slope_ratio"] = series.SlopeRatio,
+                ["read_bytes"] = series.ReadBytes,
+                ["write_bytes"] = series.WriteBytes,
+                ["todo_bytes"] = series.TodoBytes,
+                ["task_bytes"] = series.TaskBytes,
+                ["bash_bytes"] = series.BashBytes,
+                ["other_bytes"] = series.OtherBytes,
+            };
+            var merged = new Dictionary<string, object>(result.Metadata) { ["context_turns"] = ctx };
+            return result with { Metadata = merged };
+        }
+        catch
+        {
+            return result;
+        }
     }
 
     // Scans the NDJSON stream for the first "system" event and returns its

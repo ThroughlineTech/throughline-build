@@ -491,13 +491,13 @@ internal static class WorkerTranscriptWriter
         public long CacheCreation { get; init; }
     }
 
-    private static UsageTokens ReadUsage(JsonElement usage) => new()
+    // Delegates to ClaudeCodeTurnParser.ReadUsage so the usage field-name knowledge lives in
+    // exactly one place. Byte-output-preserving: maps the returned tuple into UsageTokens unchanged.
+    private static UsageTokens ReadUsage(JsonElement usage)
     {
-        Input = LongOrZero(usage, "input_tokens"),
-        Output = LongOrZero(usage, "output_tokens"),
-        CacheRead = LongOrZero(usage, "cache_read_input_tokens"),
-        CacheCreation = LongOrZero(usage, "cache_creation_input_tokens"),
-    };
+        var (input, output, cacheRead, cacheCreation) = ClaudeCodeTurnParser.ReadUsage(usage);
+        return new UsageTokens { Input = input, Output = output, CacheRead = cacheRead, CacheCreation = cacheCreation };
+    }
 
     private static long LongOrZero(JsonElement obj, string name)
         => obj.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt64() : 0L;
