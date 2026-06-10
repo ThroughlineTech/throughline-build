@@ -477,6 +477,13 @@ public class ClaudeCodeAgent : IWorkerAgent
             args.Add("--dangerously-skip-permissions");
         if (workerOptions.AllowedTools is { Count: > 0 })
             args.AddRange(new[] { "--allowedTools", string.Join(",", workerOptions.AllowedTools) });
+        // Experiment 4 (L2b): lean planning drops the planning tools from the child's context. The
+        // phase expresses a stack-agnostic LeanPlanning intent; this adapter is the ONE place the
+        // claude-code tool-name literals live (mirrors the review phase's --allowedTools list).
+        // --disallowedTools removes the tools (--allowedTools only auto-approves, so disallow is the
+        // correct flag to actually disable them).
+        if (workerOptions.LeanPlanning)
+            args.AddRange(new[] { "--disallowedTools", "TodoWrite,Task" });
         options.Sizes.TryGetValue(workerOptions.Size, out var tier);
         var modelArg = NormalizeModel(tier?.Model);
         if (modelArg is not null)

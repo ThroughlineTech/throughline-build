@@ -335,12 +335,17 @@ public class ImplementPhase : IWorkflowPhase
         }, ct).ConfigureAwait(false);
 
         // Step 11: Execute worker inside the worktree
+        // Experiment 4 (L2b): lean planning is gated on the opt-in flag AND S-effort only. Never M or L
+        // (complex briefs legitimately need to plan; stripping their tools backfires). The brief's L2a
+        // prompt line is gated on the same predicate inside ImplementBriefBuilder.
+        var lean = _project.ContextHygiene && ticket.Size == Size.S;
         var workerOptions = new WorkerOptions(_options.WorkerTimeout, _options.WorkerAllowedTools,
             DebugCaptureDirectory: _options.DebugCaptureDirectory,
             LiveStdoutSink: _options.LiveStdoutSink,
             LiveStderrSink: _options.LiveStderrSink,
             ProgressDigestSink: _options.ProgressDigestSink,
             Size: WorkerSizeMapper.FromTicketSize(ticket.Size),
+            LeanPlanning: lean,
             DebugTranscript: new DebugTranscriptContext(
                 BuildVersion: _options.BuildVersion,
                 SessionId: _options.SessionId,

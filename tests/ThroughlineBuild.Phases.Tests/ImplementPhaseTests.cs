@@ -744,6 +744,30 @@ public class ImplementPhaseTests
         Assert.Equal("cache_creation lags tool_use ~1 turn; per-class split is approximate", (string)attr.Data["attribution_note"]);
     }
 
+    [Fact]
+    public async Task RunAsync_LeanPlanning_SetTrueOnlyForSEffortWithFlagOn()
+    {
+        async Task<bool> LeanFor(Size size, bool hygieneOn)
+        {
+            var ticket = MakeTicket(TicketState.Ready) with { Size = size };
+            var worker = new OptionCapturingWorkerAgent(OkWorkerResult());
+            var project = ProjectContext.Empty with { ContextHygiene = hygieneOn };
+            var phase = new ImplementPhase(new FakeTicketing(ticket), worker, new FakeEventSink(),
+                MakeOptions(), new FakeGitClient(MainSha, CommitSha), project);
+
+            var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+            Assert.True(result.Success, result.FailureReason);
+            Assert.NotNull(worker.LastOptions);
+            return worker.LastOptions!.LeanPlanning;
+        }
+
+        // Lean ONLY when S-effort AND the flag is on.
+        Assert.True(await LeanFor(Size.S, hygieneOn: true));
+        Assert.False(await LeanFor(Size.S, hygieneOn: false));
+        Assert.False(await LeanFor(Size.M, hygieneOn: true));
+        Assert.False(await LeanFor(Size.L, hygieneOn: true));
+    }
+
     private sealed class FakeTicketing : ITicketing
     {
         private readonly Ticket _ticket;
@@ -821,6 +845,20 @@ public class ImplementPhaseTests
         public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
         {
             WasInvoked = true;
+            return Task.FromResult(_result);
+        }
+    }
+
+    private sealed class OptionCapturingWorkerAgent : IWorkerAgent
+    {
+        private readonly WorkerResult _result;
+        public WorkerOptions? LastOptions { get; private set; }
+        public OptionCapturingWorkerAgent(WorkerResult result) { _result = result; }
+        public string Name => "claude-code";
+        public IWorkerProgressDigester? Digester => null;
+        public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
+        {
+            LastOptions = options;
             return Task.FromResult(_result);
         }
     }
