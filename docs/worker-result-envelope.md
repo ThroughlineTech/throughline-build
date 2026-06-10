@@ -31,6 +31,10 @@ The WORKER_RESULT envelope is the primary mechanism for workers to communicate c
 
 If multiple `WORKER_RESULT` markers appear in the output, the last valid envelope wins. Earlier envelopes are ignored. This allows workers to output intermediate status messages or diagnostic data without affecting the final result.
 
+### Payload Extent and Trailing Content
+
+The payload is the FIRST complete JSON value following the marker. Content after the closing brace (e.g. a worker narrating "the plan above is complete" after the envelope, or a fresh assistant message appended after it) is tolerated and ignored. Workers should still emit the envelope last - the tolerance exists because models that split output across several messages (observed with Fable) sometimes narrate after the envelope, and a sign-off must not void an otherwise valid result.
+
 ### Metadata: Escalation Sub-Schema
 
 When `status` is `Escalate`, the worker may include an `escalation` object within `metadata`:
@@ -101,6 +105,8 @@ WORKER_RESULT
 ```
 
 **Critical rule**: No fenced blocks may appear after the WORKER_RESULT marker. The envelope must always be last.
+
+**Parser tolerance** (the rule above is the worker-facing contract; the parser is deliberately more lenient): the fence scan runs up to the LAST `WORKER_RESULT` marker - the one whose envelope wins - so blocks emitted after an intermediate envelope are still captured, and a literal `WORKER_RESULT` line inside a block body is ordinary content. Workers whose output spans several messages may re-emit a block or an envelope; the final emission wins.
 
 ### Block Content
 
@@ -192,9 +198,9 @@ The parser validates fenced blocks and reports clear, actionable errors:
 
 | Failure Mode | Condition | Parser Response |
 |---|---|---|
-| **Unclosed fence** | `<<<NAME_START` found with no matching `<<<NAME_END` before EOF or before WORKER_RESULT marker | `Error: unclosed fenced block: NAME` |
+| **Unclosed fence** | `<<<NAME_START` found with no matching `<<<NAME_END` before the last WORKER_RESULT marker or EOF | `Error: unclosed fenced block: NAME` |
 | **Mismatched fence names** | `<<<FOO_START` opened but `<<<BAR_END` found | `Error: mismatched fence: expected <<<FOO_END, found <<<BAR_END` |
-| **Duplicate block names** | Two or more blocks with the same NAME in one output | `Error: duplicate block name: NAME` |
+| **Duplicate block names** | Two or more blocks with the same NAME in one output | Not an error: last block wins (mirrors the envelope's last-wins rule) |
 | **Missing referenced block** | Metadata has `plan_body_ref: "PLAN_BODY"` but no PLAN_BODY block exists | `Error: referenced block not found: PLAN_BODY` |
 | **Invalid block name** | NAME does not match `^[A-Z][A-Z0-9_]*$` (e.g., lowercase, starting with digit, or special chars) | `Error: invalid block name: NAME` |
 

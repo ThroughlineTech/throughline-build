@@ -5,6 +5,13 @@
 the NDJSON stream, and emits a one-line progress digest
 (`WorkerProgressDigest` / `ClaudeCodeProgressDigester`).
 
+WORKER_RESULT + fenced blocks are parsed from the FULL assistant transcript
+reconstructed from the stream (`TryExtractAssistantTranscript`), not from the
+terminal envelope's `result` field alone - that field carries only the final
+assistant message, and models that split output across messages (Fable) would
+otherwise lose blocks emitted in earlier messages. `result` remains the
+fallback for the legacy single-blob shape and the source of usage/cost.
+
 This is the reference pattern for the other three vendors
 (`Workers.Codex`, `Workers.Gemini`, `Workers.Copilot`). To add or change a vendor:
 1. Implement `IWorkerAgent` (unique `Name`, spawn the CLI, parse its output to a

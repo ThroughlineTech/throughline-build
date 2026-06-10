@@ -680,8 +680,11 @@ public class WorkerResultParserFencedBlockTests
         Assert.Contains("mismatched", outcome.DeserializeErrorMessage);
     }
 
+    // Duplicate block names are last-wins, mirroring the envelope's last-wins rule. A worker
+    // whose output spans multiple messages (observed with Fable) may re-emit a corrected
+    // block; the re-emission supersedes the first rather than failing the whole parse.
     [Fact]
-    public void TryParse_DuplicateBlockName_FenceScanFailed_ErrorContainsDuplicate()
+    public void TryParse_DuplicateBlockName_LastWins_EnvelopeParsed()
     {
         var stdout =
             "<<<PLAN_START\n" +
@@ -694,10 +697,69 @@ public class WorkerResultParserFencedBlockTests
 
         var outcome = WorkerResultParser.TryParse(stdout);
 
-        Assert.Null(outcome.Result);
-        Assert.Equal("FenceScanError", outcome.DeserializeErrorType);
-        Assert.NotNull(outcome.DeserializeErrorMessage);
-        Assert.Contains("duplicate", outcome.DeserializeErrorMessage);
+        Assert.NotNull(outcome.Result);
+        Assert.Equal(Status.Ok, outcome.Result.Status);
+        Assert.Equal("second", outcome.Blocks["PLAN"]);
+    }
+
+    // The fence scan runs to the LAST WORKER_RESULT marker (whose envelope wins), so a block
+    // emitted after an intermediate envelope - e.g. a worker correcting itself in a later
+    // message - is still captured.
+    [Fact]
+    public void TryParse_BlockAfterIntermediateEnvelope_CapturedUpToLastMarker()
+    {
+        var stdout =
+            MinimalWorkerResult +
+            "<<<PLAN_START\n" +
+            "late block\n" +
+            "<<<PLAN_END\n" +
+            MinimalWorkerResult;
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.NotNull(outcome.Result);
+        Assert.Equal("late block", outcome.Blocks["PLAN"]);
+    }
+
+    // Narration after the envelope JSON (a worker signing off in prose, or a fresh message
+    // appended after the envelope) must not break deserialization: the payload is the first
+    // complete JSON value after the marker, not everything to end-of-input.
+    [Fact]
+    public void TryParse_NarrationAfterEnvelopeJson_EnvelopeAndBlocksParsed()
+    {
+        var stdout =
+            "<<<PLAN_START\n" +
+            "plan body\n" +
+            "<<<PLAN_END\n" +
+            MinimalWorkerResult +
+            "The plan above is complete; let me know if anything needs adjusting.\n";
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.NotNull(outcome.Result);
+        Assert.Equal(Status.Ok, outcome.Result.Status);
+        Assert.Equal("plan body", outcome.Blocks["PLAN"]);
+    }
+
+    // A literal WORKER_RESULT line inside a block body (e.g. a review critique quoting the
+    // envelope) is ordinary content for the fence scan; only the LAST marker terminates it.
+    [Fact]
+    public void TryParse_WorkerResultLiteralInsideBlockBody_TreatedAsContent()
+    {
+        var stdout =
+            "<<<CRITIQUE_START\n" +
+            "the worker emitted:\n" +
+            "WORKER_RESULT\n" +
+            "{\"status\":\"Ok\"} (missing summary)\n" +
+            "<<<CRITIQUE_END\n" +
+            MinimalWorkerResult;
+
+        var outcome = WorkerResultParser.TryParse(stdout);
+
+        Assert.NotNull(outcome.Result);
+        Assert.Equal(Status.Ok, outcome.Result.Status);
+        Assert.Contains("WORKER_RESULT", outcome.Blocks["CRITIQUE"]);
+        Assert.Contains("missing summary", outcome.Blocks["CRITIQUE"]);
     }
 
     [Fact]

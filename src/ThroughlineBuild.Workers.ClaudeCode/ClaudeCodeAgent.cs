@@ -255,6 +255,61 @@ public class ClaudeCodeAgent : IWorkerAgent
         return null;
     }
 
+    // Reconstructs the complete assistant-visible output of the session from the NDJSON
+    // stream: every `text` content block of every type=assistant event, concatenated in
+    // stream order. Each assistant NDJSON line carries the NEW content block(s) of its
+    // message (lines of one message share a message id; content is additive across lines,
+    // never cumulative - same shape ClaudeCodeTurnParser and WorkerTranscriptWriter rely on),
+    // so plain in-order concatenation is the faithful transcript. Thinking blocks and
+    // tool_use blocks are skipped: the WORKER_RESULT protocol lives in assistant text only.
+    // Returns null when the stream carries no assistant text at all (e.g. the legacy
+    // --output-format json single-blob shape), so callers can fall back to the envelope's
+    // own result field. AOT-safe: JsonDocument reads only, best-effort per line.
+    internal static string? TryExtractAssistantTranscript(string stdout)
+    {
+        if (string.IsNullOrEmpty(stdout)) return null;
+        var sb = new StringBuilder();
+        foreach (var rawLine in stdout.Split('\n'))
+        {
+            var trimmed = rawLine.Trim();
+            if (trimmed.Length == 0) continue;
+
+            JsonDocument doc;
+            try { doc = JsonDocument.Parse(trimmed); }
+            catch (JsonException) { continue; }
+
+            using (doc)
+            {
+                var root = doc.RootElement;
+                if (root.ValueKind != JsonValueKind.Object) continue;
+                if (!root.TryGetProperty("type", out var typeEl)
+                    || typeEl.ValueKind != JsonValueKind.String
+                    || typeEl.GetString() != "assistant")
+                    continue;
+                if (!root.TryGetProperty("message", out var msg) || msg.ValueKind != JsonValueKind.Object)
+                    continue;
+                if (!msg.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array)
+                    continue;
+
+                foreach (var block in content.EnumerateArray())
+                {
+                    if (block.ValueKind != JsonValueKind.Object) continue;
+                    if (!block.TryGetProperty("type", out var btEl)
+                        || btEl.ValueKind != JsonValueKind.String
+                        || btEl.GetString() != "text")
+                        continue;
+                    if (!block.TryGetProperty("text", out var textEl) || textEl.ValueKind != JsonValueKind.String)
+                        continue;
+                    var text = textEl.GetString();
+                    if (string.IsNullOrEmpty(text)) continue;
+                    if (sb.Length > 0) sb.Append('\n');
+                    sb.Append(text);
+                }
+            }
+        }
+        return sb.Length == 0 ? null : sb.ToString();
+    }
+
     // Try to extract the terminal "result" envelope from stdout. Returns null when
     // no envelope can be located; on a hard JSON parse failure, sets parseError to
     // the deserializer message. Tries single-object parse first (legacy
@@ -382,8 +437,21 @@ public class ClaudeCodeAgent : IWorkerAgent
         // Extract model from the NDJSON system event; fall back to the configured default.
         var model = TryExtractModelFromStream(stdout) ?? fallbackModel;
 
-        // Route the inner result text through the existing WORKER_RESULT marker parser.
-        var outcome = WorkerResultParser.TryParse(envelope.Result);
+        // Parse the FULL assistant transcript, not just the envelope's result field. Claude
+        // Code's `result` carries only the FINAL assistant message, so a worker that emits a
+        // fenced block in one message and the WORKER_RESULT envelope in a later message (or
+        // narrates in a fresh message after the envelope) loses content if `result` alone is
+        // parsed. Fable splits output across messages far more often than Opus/Sonnet, which
+        // surfaced this as a nondeterministic blocks-missing failure in scaffold profile
+        // derivation. The transcript is a superset of `result`; when the stream carries no
+        // assistant lines (legacy --output-format json single-blob), fall back to `result`.
+        // If the transcript parse fails outright, retry on `result` so behavior is never
+        // worse than the pre-transcript path (e.g. a malformed fence echoed early in the
+        // session must not poison an otherwise clean final message).
+        var transcript = TryExtractAssistantTranscript(stdout);
+        var outcome = WorkerResultParser.TryParse(transcript ?? envelope.Result);
+        if (transcript is not null && outcome.Result is null)
+            outcome = WorkerResultParser.TryParse(envelope.Result);
         if (outcome.Result != null)
         {
             // Merge llm_usage metadata on success path
