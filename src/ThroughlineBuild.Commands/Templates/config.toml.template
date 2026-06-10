@@ -13,7 +13,8 @@ plane_api_token = "REQUIRED_PLANE_API_TOKEN"  # REQUIRED: your Plane API token
 # default_model is no longer used for worker-model selection. Worker models come
 # from [workers.<agent>.sizes] below. It remains here only for the close/defer/
 # reopen reason translator; setting it does NOT change which model a worker runs.
-# default_model = "anthropic:claude-opus-4-8"           # Opus 4.8  - most capable
+# default_model = "anthropic:claude-fable-5"            # Fable 5   - most powerful
+# default_model = "anthropic:claude-opus-4-8"           # Opus 4.8  - most capable Opus
 # default_model = "anthropic:claude-sonnet-4-6"         # Sonnet 4.6 - balanced
 # default_model = "anthropic:claude-haiku-4-5-20251001" # Haiku 4.5 - fastest
 # anthropic_api_key = "your-anthropic-key-here"         # optional; plan phase uses Claude Code OAuth instead
@@ -30,7 +31,8 @@ executable = "claude"
 
 # Claude tiers use stable aliases (haiku/sonnet/opus) that auto-track the current
 # model - never pin a Claude version here. The actually-resolved model still lands
-# in the event log.
+# in the event log. For a model outside the alias tiers (e.g. Fable), use its full
+# slug: large = { model = "claude-fable-5" }.
 [workers.claude-code.sizes]
 small  = { model = "haiku" }
 medium = { model = "sonnet" }

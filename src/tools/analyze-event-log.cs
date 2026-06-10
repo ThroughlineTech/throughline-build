@@ -32,6 +32,14 @@ if (args.Length == 0 || (args.Length > 0 && (args[0] == "--help" || args[0] == "
 // input_tokens, so the estimator subtracts them before applying the full input rate.
 var pricing = new Pricing[]
 {
+    // First prefix match wins: specific rows must precede the generic "claude-opus-4" row,
+    // which catches only the older dated IDs (claude-opus-4-20250514, claude-opus-4-1-...)
+    // still priced at $15/$75. Opus was repriced to $5/$25 from 4.5 onward.
+    new("claude-fable-5",   10.00m, 50.00m, 1.00m, 12.50m, CachedTokensIncludedInInput: false),
+    new("claude-opus-4-5",   5.00m, 25.00m, 0.50m,  6.25m, CachedTokensIncludedInInput: false),
+    new("claude-opus-4-6",   5.00m, 25.00m, 0.50m,  6.25m, CachedTokensIncludedInInput: false),
+    new("claude-opus-4-7",   5.00m, 25.00m, 0.50m,  6.25m, CachedTokensIncludedInInput: false),
+    new("claude-opus-4-8",   5.00m, 25.00m, 0.50m,  6.25m, CachedTokensIncludedInInput: false),
     new("claude-opus-4",    15.00m, 75.00m, 1.50m, 18.75m, CachedTokensIncludedInInput: false),
     new("claude-sonnet-4",   3.00m, 15.00m, 0.30m,  3.75m, CachedTokensIncludedInInput: false),
     new("claude-haiku-4",    1.00m,  5.00m, 0.10m,  1.25m, CachedTokensIncludedInInput: false),
