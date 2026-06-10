@@ -7,14 +7,18 @@ namespace ThroughlineBuild.Workers.ClaudeCode;
 
 // Instance class that converts a single parsed NDJSON stream-event line from the
 // Claude Code CLI into a one-line human-readable digest, or returns null when
-// the event is uninteresting (rate_limit_event, unknown subtype, ...).
+// the event is uninteresting (rate_limit_event, unknown system subtype, ...).
 //
 // Output format:
 //   [m:ss] kind      payload
 // where:
 //   m:ss     is the wall-clock offset from worker start (tracked via ResetStart)
-//   kind     is one of: system, assistant, tool_use, result (left-padded to 10)
+//   kind     is one of: system, thinking, assistant, tool_use, result (left-padded to 10)
 //   payload  is a short summary, with paths/args truncated to 80 chars
+//
+// System events are filtered by subtype: "init" renders the session/model line,
+// "thinking_tokens" renders a throttled thinking ticker (the CLI emits one every
+// few seconds while the model thinks), everything else is dropped.
 //
 // The public FormatLine(string) implements IWorkerProgressDigester and is best-effort:
 // it will not throw on malformed input. The internal overloads are used by tests.
@@ -22,9 +26,18 @@ public sealed class ClaudeCodeProgressDigester : IWorkerProgressDigester
 {
     internal const int MaxPayloadChars = 120;
 
-    private DateTimeOffset _startTime = DateTimeOffset.UtcNow;
+    // Emit a thinking ticker line only once per this many estimated thinking
+    // tokens, so a long think reads as a slow ticker instead of a flood.
+    internal const long ThinkingTokensEmitStep = 5000;
 
-    public void ResetStart() => _startTime = DateTimeOffset.UtcNow;
+    private DateTimeOffset _startTime = DateTimeOffset.UtcNow;
+    private long _lastThinkingTokens;
+
+    public void ResetStart()
+    {
+        _startTime = DateTimeOffset.UtcNow;
+        _lastThinkingTokens = 0;
+    }
 
     // IWorkerProgressDigester - best-effort, never throws.
     public string? FormatLine(string rawNdjsonLine)
@@ -78,13 +91,38 @@ public sealed class ClaudeCodeProgressDigester : IWorkerProgressDigester
         };
     }
 
-    private static string FormatSystem(JsonElement el, string offset)
+    private string? FormatSystem(JsonElement el, string offset)
+    {
+        return TryGetString(el, "subtype") switch
+        {
+            "init" => FormatInit(el, offset),
+            "thinking_tokens" => FormatThinkingTokens(el, offset),
+            // hook events, compact_boundary, future subtypes: not digest-worthy.
+            _ => null
+        };
+    }
+
+    private static string FormatInit(JsonElement el, string offset)
     {
         var sessionId = TryGetString(el, "session_id") ?? "";
         var shortId = sessionId.Length >= 8 ? sessionId[..8] : sessionId;
         var model = TryGetString(el, "model") ?? "";
         var payload = $"init session {shortId} model {model}".TrimEnd();
         return $"[{offset}] {PadKind("system")} {Truncate(payload)}";
+    }
+
+    // Throttled ticker for system/thinking_tokens events. The event carries a
+    // cumulative estimated_tokens count; emit a line each time it grows past the
+    // next ThinkingTokensEmitStep boundary since the last emitted line.
+    private string? FormatThinkingTokens(JsonElement el, string offset)
+    {
+        if (!el.TryGetProperty("estimated_tokens", out var est) || est.ValueKind != JsonValueKind.Number)
+            return null;
+        var tokens = est.TryGetInt64(out var l) ? l : (long)est.GetDouble();
+        if (tokens < _lastThinkingTokens + ThinkingTokensEmitStep) return null;
+        _lastThinkingTokens = tokens;
+        var payload = string.Format(CultureInfo.InvariantCulture, "~{0:0.0}k tokens", tokens / 1000.0);
+        return $"[{offset}] {PadKind("thinking")} {Truncate(payload)}";
     }
 
     private static string? FormatAssistant(JsonElement el, string offset)

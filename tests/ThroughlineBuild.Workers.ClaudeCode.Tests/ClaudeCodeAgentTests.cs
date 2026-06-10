@@ -1097,6 +1097,72 @@ public class ClaudeCodeProgressDigesterTests
     }
 
     [Fact]
+    public void FormatLine_SystemUnknownSubtype_ReturnsNull()
+    {
+        // Non-init system subtypes (hooks, compact_boundary, future additions)
+        // must not render as a bogus init line.
+        var el = Parse("{\"type\":\"system\",\"subtype\":\"compact_boundary\",\"session_id\":\"abc12345-6789-aaaa-bbbb-ccccddddeeee\"}");
+
+        var line = new ClaudeCodeProgressDigester().FormatLine(el, TimeSpan.FromSeconds(3));
+
+        Assert.Null(line);
+    }
+
+    [Fact]
+    public void FormatLine_SystemMissingSubtype_ReturnsNull()
+    {
+        var el = Parse("{\"type\":\"system\",\"session_id\":\"abc12345-6789-aaaa-bbbb-ccccddddeeee\"}");
+
+        var line = new ClaudeCodeProgressDigester().FormatLine(el, TimeSpan.FromSeconds(3));
+
+        Assert.Null(line);
+    }
+
+    [Fact]
+    public void FormatLine_ThinkingTokensBelowStep_ReturnsNull()
+    {
+        // The CLI emits thinking_tokens every few seconds while the model thinks;
+        // below the first 5k boundary nothing is rendered.
+        var el = Parse("{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"session_id\":\"abc12345-6789-aaaa-bbbb-ccccddddeeee\",\"estimated_tokens\":1200,\"estimated_tokens_delta\":600}");
+
+        var line = new ClaudeCodeProgressDigester().FormatLine(el, TimeSpan.FromSeconds(9));
+
+        Assert.Null(line);
+    }
+
+    [Fact]
+    public void FormatLine_ThinkingTokens_EmitsThrottledTicker()
+    {
+        // One digester instance across the stream: a line at each 5k boundary
+        // crossing, silence in between.
+        var digester = new ClaudeCodeProgressDigester();
+        static string Ev(int tokens) =>
+            $"{{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"session_id\":\"abc12345-6789-aaaa-bbbb-ccccddddeeee\",\"estimated_tokens\":{tokens}}}";
+
+        var first = digester.FormatLine(Parse(Ev(5200)), TimeSpan.FromSeconds(10));
+        Assert.NotNull(first);
+        Assert.Contains("thinking", first);
+        Assert.Contains("~5.2k tokens", first);
+
+        // Grows, but not by another full step: stays quiet.
+        Assert.Null(digester.FormatLine(Parse(Ev(7300)), TimeSpan.FromSeconds(14)));
+
+        var second = digester.FormatLine(Parse(Ev(10400)), TimeSpan.FromSeconds(19));
+        Assert.NotNull(second);
+        Assert.Contains("~10.4k tokens", second);
+    }
+
+    [Fact]
+    public void FormatLine_ThinkingTokensMissingCount_ReturnsNull()
+    {
+        var el = Parse("{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"session_id\":\"abc12345-6789-aaaa-bbbb-ccccddddeeee\"}");
+
+        var line = new ClaudeCodeProgressDigester().FormatLine(el, TimeSpan.FromSeconds(2));
+
+        Assert.Null(line);
+    }
+
+    [Fact]
     public void FormatLine_AssistantToolUseRead_EmitsToolUseLineWithFilePath()
     {
         var el = Parse("{\"type\":\"assistant\",\"message\":{\"model\":\"x\",\"content\":[{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{\"file_path\":\"docs/foo.md\"}}]}}");

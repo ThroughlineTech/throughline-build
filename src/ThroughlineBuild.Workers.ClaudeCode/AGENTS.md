@@ -3,7 +3,7 @@
 `ClaudeCodeAgent : IWorkerAgent` (`Name => "claude-code"`). Spawns
 `claude --print --output-format stream-json` with the brief on stdin, parses
 the NDJSON stream, and emits a one-line progress digest
-(`WorkerProgressDigest` / `ClaudeCodeProgressDigester`).
+(`ClaudeCodeProgressDigester`).
 
 WORKER_RESULT + fenced blocks are parsed from the FULL assistant transcript
 reconstructed from the stream (`TryExtractAssistantTranscript`), not from the
