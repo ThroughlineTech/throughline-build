@@ -51,7 +51,12 @@ public static class ImplementBriefBuilder
             // the phase from the live worktree. Empty "" => the placeholder substitutes inert, leaving
             // the brief byte-identical to the pre-preload baseline (the ablation / review-reconstruct
             // case). The leading newline lives inside the section string (see PreloadedContextBuilder).
-            ["preloaded_context_section"] = preloadedContextSection
+            ["preloaded_context_section"] = preloadedContextSection,
+            // Experiment 4 (L2a): an effort-gated planning-hygiene bullet appended to Constraints, only
+            // when [project].context_hygiene is on AND the brief is S-effort. Empty "" otherwise, which
+            // the placeholder renders inert (off and M/L stay on the blessed empty-token baseline). The
+            // leading newline lives inside the section string (same convention as preloaded_context_section).
+            ["context_hygiene_section"] = BuildContextHygieneSection(proj, ticket)
         };
 
         var instruction = TemplateLoader.Load(agentName, "implement.md").Substitute(vars);
@@ -188,5 +193,20 @@ public static class ImplementBriefBuilder
         return reviewFeedback is not null
             ? TemplateLoader.LoadShared("implement-obsolete-rework.md")
             : TemplateLoader.LoadShared("implement-obsolete-initial.md");
+    }
+
+    // Experiment 4 (L2a): the planning-hygiene Constraints bullet, rendered only for S-effort briefs
+    // when [project].context_hygiene is enabled. Stack-agnostic prose: no language, extension, or tool
+    // name. The leading newline makes the section own its placement after the prior Constraints bullet;
+    // empty string leaves the brief byte-identical to the flag-off baseline. Never rendered for M or L.
+    private static string BuildContextHygieneSection(ProjectContext proj, Ticket ticket)
+    {
+        var lean = proj.ContextHygiene && ticket.Size == Size.S;
+        if (!lean)
+            return "";
+        return "\n- Planning hygiene (this is a small, single-area brief): keep planning lightweight. Do not maintain an"
+             + "\n  elaborate, continuously-rewritten task list for a change this focused. Do not re-read files whose contents"
+             + "\n  are already provided to you above. Prefer targeted reads of the specific symbols you need over reading whole"
+             + "\n  large files.";
     }
 }

@@ -250,4 +250,27 @@ public class ImplementBriefBuilderTests
         Assert.True(plan >= 0 && preload > plan && worktree > preload,
             $"order plan={plan} preload={preload} worktree={worktree}");
     }
+
+    [Fact]
+    public void Build_ContextHygiene_BulletAppearsOnlyForSEffortWithFlagOn()
+    {
+        const string marker = "Planning hygiene (this is a small, single-area brief)";
+
+        var sTicket = SnapshotFixtures.Ticket() with { Size = Size.S };
+        var mTicket = SnapshotFixtures.Ticket() with { Size = Size.M };
+        var lTicket = SnapshotFixtures.Ticket() with { Size = Size.L };
+        var flagOn = ProjectContext.Empty with { ContextHygiene = true };
+        var flagOff = ProjectContext.Empty with { ContextHygiene = false };
+
+        string Build(Ticket t, ProjectContext p) => ImplementBriefBuilder.Build(
+            "claude-code", t, SnapshotFixtures.Repo(),
+            SnapshotFixtures.FixtureBranch, SnapshotFixtures.FixtureWorktree, p).Instruction;
+
+        // Present: S-effort AND flag on.
+        Assert.Contains(marker, Build(sTicket, flagOn));
+        // Absent: flag off (even for S), and M/L (even with flag on).
+        Assert.DoesNotContain(marker, Build(sTicket, flagOff));
+        Assert.DoesNotContain(marker, Build(mTicket, flagOn));
+        Assert.DoesNotContain(marker, Build(lTicket, flagOn));
+    }
 }
