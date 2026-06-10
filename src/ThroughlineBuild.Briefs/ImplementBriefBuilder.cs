@@ -1,4 +1,5 @@
 using System.Text;
+using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Helpers;
 
@@ -123,23 +124,45 @@ public static class ImplementBriefBuilder
             ? string.Join("\n", reviewFeedback.ChecksFailed.Select(c => $"- {c}"))
             : "(none)";
 
-        return $"\n## Rework round {reviewFeedback.ReworkRoundNumber} - reviewer feedback\n\n{reviewFeedback.Rationale}\n\nChecks failed:\n{checksList}{priorContextSection}";
+        var checkDetails = "";
+        if (reviewFeedback.FailedCheckDetails is { Count: > 0 })
+        {
+            var sb = new StringBuilder();
+            AppendFailedCheckDetails(sb, reviewFeedback.FailedCheckDetails);
+            checkDetails = sb.ToString();
+        }
+
+        return $"\n## Rework round {reviewFeedback.ReworkRoundNumber} - reviewer feedback\n\n{reviewFeedback.Rationale}\n\nChecks failed:\n{checksList}{checkDetails}{priorContextSection}";
     }
 
     private static string BuildGateFailureFeedbackSection(ReviewFeedback reviewFeedback, string priorContextSection)
     {
         var sb = new StringBuilder();
         sb.Append($"\n## Rework round {reviewFeedback.ReworkRoundNumber} - gate failure\n\n{reviewFeedback.Rationale}");
-        foreach (var check in reviewFeedback.GateFailedChecks!)
+        AppendFailedCheckDetails(sb, reviewFeedback.GateFailedChecks!);
+        sb.Append(priorContextSection);
+        return sb.ToString();
+    }
+
+    // The failing check's own output is the oracle for the fix. A reviewer's prose about WHY a
+    // check fails can confidently describe rules the tool does not have (and prescribe a "fix"
+    // that also fails), so the brief carries the verbatim command, exit code, and output, and
+    // tells the worker to validate against the command - not against anyone's theory of it.
+    private static void AppendFailedCheckDetails(StringBuilder sb, IReadOnlyList<CheckResult> checks)
+    {
+        foreach (var check in checks)
         {
             sb.Append($"\n\n### Failed check: {check.Name} (exit {check.ExitCode})");
+            if (!string.IsNullOrWhiteSpace(check.CommandLine))
+                sb.Append($"\n\nCommand: `{check.CommandLine}`");
             if (!string.IsNullOrWhiteSpace(check.StdoutTail))
                 sb.Append($"\n\nstdout:\n```\n{check.StdoutTail.TrimEnd()}\n```");
             if (!string.IsNullOrWhiteSpace(check.StderrTail))
                 sb.Append($"\n\nstderr:\n```\n{check.StderrTail.TrimEnd()}\n```");
         }
-        sb.Append(priorContextSection);
-        return sb.ToString();
+        sb.Append("\n\nThe check output above is authoritative. Before committing, re-run each failed check's");
+        sb.Append(" exact command in your worktree and confirm it exits 0. If any prose in this brief about");
+        sb.Append(" how the check's rules work contradicts the check's own output, trust the output.");
     }
 
     private static string BuildPriorImplementContextSection(ReworkBriefContext? reworkContext)

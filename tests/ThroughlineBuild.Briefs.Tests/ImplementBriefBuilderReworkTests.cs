@@ -331,4 +331,96 @@ public class ImplementBriefBuilderReworkTests
         Assert.Contains("tests output", section);
         Assert.Contains("Rework round 2", section);
     }
+
+    // --- check-failure briefs carry the oracle, not the theory ---
+    // A reviewer's prose about WHY a check fails can confidently describe rules the tool
+    // does not have (the a downstream repository chain-25 reviewer prescribed an import order that
+    // ALSO failed the linter). The brief must carry the exact command, exit code, and
+    // verbatim output, plus the instruction to re-run the command and trust its output.
+
+    [Fact]
+    public void Build_GateFailedChecks_RendersCommandLineAndRerunInstruction()
+    {
+        var feedback = new ReviewFeedback(
+            Rationale: "gate: lint failed",
+            ChecksFailed: new[] { "lint" },
+            ReworkRoundNumber: 1,
+            GateFailedChecks: new[]
+            {
+                new CheckResult("lint", Passed: false, ExitCode: 1,
+                    StdoutTail: "file.swift:2:8 sorted_imports", StderrTail: "",
+                    Elapsed: TimeSpan.FromSeconds(2),
+                    CommandLine: "swiftlint --strict --no-cache")
+            });
+
+        var brief = ImplementBriefBuilder.Build("claude-code", MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: feedback);
+
+        var section = brief.Context["review_feedback_section"];
+        Assert.Contains("Command: `swiftlint --strict --no-cache`", section);
+        Assert.Contains("re-run each failed check's exact command", section);
+        Assert.Contains("confirm it exits 0", section);
+        Assert.Contains("trust the output", section);
+    }
+
+    [Fact]
+    public void Build_GateFailedChecks_EmptyCommandLine_OmitsCommandLine()
+    {
+        var feedback = new ReviewFeedback(
+            Rationale: "gate: build failed",
+            ChecksFailed: new[] { "build" },
+            ReworkRoundNumber: 1,
+            GateFailedChecks: new[]
+            {
+                new CheckResult("build", Passed: false, ExitCode: 1,
+                    StdoutTail: "broken", StderrTail: "",
+                    Elapsed: TimeSpan.FromSeconds(1))
+            });
+
+        var brief = ImplementBriefBuilder.Build("claude-code", MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: feedback);
+
+        Assert.DoesNotContain("Command:", brief.Context["review_feedback_section"]);
+    }
+
+    [Fact]
+    public void Build_ReviewFeedbackWithFailedCheckDetails_RendersDetailsAndInstruction()
+    {
+        var feedback = new ReviewFeedback(
+            Rationale: "reviewer: the linter rejects the new file's import order",
+            ChecksFailed: new[] { "lint" },
+            ReworkRoundNumber: 1,
+            FailedCheckDetails: new[]
+            {
+                new CheckResult("lint", Passed: false, ExitCode: 1,
+                    StdoutTail: "file.swift:2:8 sorted_imports", StderrTail: "",
+                    Elapsed: TimeSpan.FromSeconds(2),
+                    CommandLine: "swiftlint --strict --no-cache")
+            });
+
+        var brief = ImplementBriefBuilder.Build("claude-code", MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: feedback);
+
+        var section = brief.Context["review_feedback_section"];
+        // Review-originated rework keeps its heading and rationale...
+        Assert.Contains("## Rework round 1 - reviewer feedback", section);
+        Assert.Contains("the linter rejects the new file's import order", section);
+        // ...and now carries the failing check's own evidence plus the re-run contract.
+        Assert.Contains("### Failed check: lint (exit 1)", section);
+        Assert.Contains("file.swift:2:8 sorted_imports", section);
+        Assert.Contains("Command: `swiftlint --strict --no-cache`", section);
+        Assert.Contains("re-run each failed check's exact command", section);
+    }
+
+    [Fact]
+    public void Build_ReviewFeedbackWithoutFailedCheckDetails_NoDetailBlocks()
+    {
+        var feedback = new ReviewFeedback(
+            Rationale: "reviewer says fix it",
+            ChecksFailed: new[] { "tests" },
+            ReworkRoundNumber: 1);
+
+        var brief = ImplementBriefBuilder.Build("claude-code", MinimalTicket(), MinimalRepo(), Branch, Worktree, reviewFeedback: feedback);
+
+        var section = brief.Context["review_feedback_section"];
+        Assert.DoesNotContain("### Failed check:", section);
+        Assert.DoesNotContain("re-run each failed check's exact command", section);
+    }
 }

@@ -1948,7 +1948,10 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
         effectiveAgentFor,
         landingRemote: config2.Ship.Remote,
         landingPushEnabled: !(noPush || !config2.Ship.Push),
-        gateFactory: gatePhaseFactory);
+        gateFactory: gatePhaseFactory,
+        // Post-rework check re-run uses the same check set the gate and review run, so the
+        // recheck's verdict on a named check matches what the gate would conclude later.
+        reworkRecheckSpecs: config2.Review.Checks);
 
     ChainBatchImplementGroup? batchImplementGroup = null;
     if (batchImplementAllChildren)

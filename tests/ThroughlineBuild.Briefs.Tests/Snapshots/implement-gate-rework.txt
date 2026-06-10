@@ -30,6 +30,8 @@ Failed  FooTests.ParseTest [12ms]
 Failed! - Failed: 1, Passed: 0
 ```
 
+The check output above is authoritative. Before committing, re-run each failed check's exact command in your worktree and confirm it exits 0. If any prose in this brief about how the check's rules work contradicts the check's own output, trust the output.
+
 ## Plan (from ticket description)
 The ticket description (raw HTML) contains the planning output from the prior phase. Read it directly; do not re-render.
 

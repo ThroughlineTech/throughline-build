@@ -193,6 +193,13 @@ public static class ReviewBriefBuilder
         sb.Append('\n');
     }
 
+    // Check role semantics are a cross-phase contract: advisory failures must never hard-fail
+    // the gate, drive a Rework verdict, or block ship. The gate and ship enforce this on their
+    // side; here we enforce it at the verifier's INPUT by splitting advisory results into a
+    // separate, explicitly-framed informational section instead of presenting them
+    // undifferentiated. Presenting a failing advisory check as just another failed check made
+    // the verifier return Rework for a cosmetic lint finding twice and kill the chain at the
+    // rework cap with every acceptance criterion passing (a downstream repository chain 25, 2026-06-10).
     private static string BuildAutomatedChecksSection(IReadOnlyList<CheckResult> checkResults)
     {
         var sb = new StringBuilder();
@@ -203,23 +210,41 @@ public static class ReviewBriefBuilder
         }
         else
         {
-            foreach (var check in checkResults)
-            {
-                var status = check.Passed ? "PASS" : "FAIL";
-                sb.Append($"- {check.Name}: {status} (exit {check.ExitCode}, elapsed {check.Elapsed.TotalSeconds.ToString("F1", CultureInfo.InvariantCulture)}s)\n");
+            var nonAdvisory = checkResults.Where(c => c.Role != CheckRole.Advisory).ToList();
+            var advisory = checkResults.Where(c => c.Role == CheckRole.Advisory).ToList();
 
-                if (!check.Passed)
-                {
-                    // Many toolchains write fatal errors to stdout, not stderr (e.g. dotnet's
-                    // MSB1003, tsc, vite). Surfacing only stderr left such failures invisible to the
-                    // verifier, turning a one-line misconfig into a silent rework loop. Emit both.
-                    AppendStream(sb, "stdout", check.StdoutTail, StdoutTailBudgetPerFailure);
-                    AppendStream(sb, "stderr", check.StderrTail, StderrTailBudgetPerFailure);
-                }
+            if (nonAdvisory.Count == 0)
+                sb.Append("(no gating checks configured)\n");
+            foreach (var check in nonAdvisory)
+                AppendCheckResult(sb, check);
+
+            if (advisory.Count > 0)
+            {
+                sb.Append("\n### Advisory checks (informational)\n");
+                sb.Append("The checks below are configured as advisory (cosmetic, auto-fixable findings). ");
+                sb.Append("They never block: do NOT list them in checks_failed, and a Rework or Fail verdict ");
+                sb.Append("must not rest solely on advisory findings. You may mention them in your rationale as notes.\n");
+                foreach (var check in advisory)
+                    AppendCheckResult(sb, check);
             }
         }
         sb.Append('\n');
         return sb.ToString();
+    }
+
+    private static void AppendCheckResult(StringBuilder sb, CheckResult check)
+    {
+        var status = check.Passed ? "PASS" : "FAIL";
+        sb.Append($"- {check.Name}: {status} (exit {check.ExitCode}, elapsed {check.Elapsed.TotalSeconds.ToString("F1", CultureInfo.InvariantCulture)}s)\n");
+
+        if (!check.Passed)
+        {
+            // Many toolchains write fatal errors to stdout, not stderr (e.g. dotnet's
+            // MSB1003, tsc, vite). Surfacing only stderr left such failures invisible to the
+            // verifier, turning a one-line misconfig into a silent rework loop. Emit both.
+            AppendStream(sb, "stdout", check.StdoutTail, StdoutTailBudgetPerFailure);
+            AppendStream(sb, "stderr", check.StderrTail, StderrTailBudgetPerFailure);
+        }
     }
 
     // Emit the tail of a captured stream as a labeled fenced block, keeping only the last

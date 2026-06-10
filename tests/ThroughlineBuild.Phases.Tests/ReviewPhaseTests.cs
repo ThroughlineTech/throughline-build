@@ -463,6 +463,38 @@ public class ReviewPhaseTests
     }
 
     [Fact]
+    public async Task RunAsync_AdvisoryFailure_VerifierVerdictEventReportsItUnderAdvisoryFailed()
+    {
+        // Role semantics are a cross-phase contract: an event-log consumer counting
+        // checks_failed must see only failures that may legitimately drive rework, so
+        // advisory failures are reported under their own key.
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        ticketing.SeedComment($"<p>[implemented_at: {ImplementedSha}]</p>");
+        var worker = new FakeWorkerAgent();
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, includeWorktreeMatching: true);
+        var verifier = new FakeVerifier(new Verdict(VerdictKind.Pass, "all good", Array.Empty<string>()));
+        var checks = new[]
+        {
+            new CheckResult("build", true, 0, "", "", TimeSpan.Zero, CheckRole.Gating),
+            new CheckResult("lint", false, 1, "style", "", TimeSpan.Zero, CheckRole.Advisory)
+        };
+        var phase = new ReviewPhase(ticketing, worker, events, MakeBuildOptions(), MakeReviewOptions(),
+            git, verifierOverride: verifier, checksRunner: new ThroughlineBuild.Verification.PreComputedChecksRunner(checks));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        var data = events.Events.Single(e => e.Kind == EventKind.VerifierVerdict).Data;
+        var advisoryFailed = data["advisory_failed"] as IReadOnlyList<string>;
+        Assert.NotNull(advisoryFailed);
+        Assert.Equal(new[] { "lint" }, advisoryFailed);
+        // The check results (with roles) flow back to the caller for rework-feedback embedding.
+        Assert.NotNull(result.CheckResults);
+        Assert.Equal(2, result.CheckResults!.Count);
+    }
+
+    [Fact]
     public async Task RunAsync_PassVerdict_VerifierVerdictEventContainsRationaleAndEmptyChecksFailed()
     {
         var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));

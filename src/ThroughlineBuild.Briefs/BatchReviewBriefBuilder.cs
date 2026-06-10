@@ -222,6 +222,10 @@ public static class BatchReviewBriefBuilder
         sb.Append('\n');
     }
 
+    // Same advisory/gating split as ReviewBriefBuilder: advisory results are informational and
+    // must never be presented to the verifier as just another failed check (role semantics are
+    // a cross-phase contract). The batch path currently passes no check results, but any future
+    // wiring inherits the correct presentation.
     private static string BuildAutomatedChecksSection(IReadOnlyList<CheckResult> checkResults)
     {
         var sb = new StringBuilder();
@@ -232,19 +236,37 @@ public static class BatchReviewBriefBuilder
         }
         else
         {
-            foreach (var check in checkResults)
+            var nonAdvisory = checkResults.Where(c => c.Role != CheckRole.Advisory).ToList();
+            var advisory = checkResults.Where(c => c.Role == CheckRole.Advisory).ToList();
+
+            if (nonAdvisory.Count == 0)
+                sb.Append("(no gating checks configured)\n");
+            foreach (var check in nonAdvisory)
+                AppendCheckResult(sb, check);
+
+            if (advisory.Count > 0)
             {
-                var status = check.Passed ? "PASS" : "FAIL";
-                sb.Append($"- {check.Name}: {status} (exit {check.ExitCode}, elapsed {check.Elapsed.TotalSeconds.ToString("F1", CultureInfo.InvariantCulture)}s)\n");
-                if (!check.Passed)
-                {
-                    AppendStream(sb, "stdout", check.StdoutTail, StdoutTailBudgetPerFailure);
-                    AppendStream(sb, "stderr", check.StderrTail, StderrTailBudgetPerFailure);
-                }
+                sb.Append("\n### Advisory checks (informational)\n");
+                sb.Append("The checks below are configured as advisory (cosmetic, auto-fixable findings). ");
+                sb.Append("They never block: do NOT list them in checks_failed, and a Rework or Fail verdict ");
+                sb.Append("must not rest solely on advisory findings. You may mention them in your rationale as notes.\n");
+                foreach (var check in advisory)
+                    AppendCheckResult(sb, check);
             }
         }
         sb.Append('\n');
         return sb.ToString();
+    }
+
+    private static void AppendCheckResult(StringBuilder sb, CheckResult check)
+    {
+        var status = check.Passed ? "PASS" : "FAIL";
+        sb.Append($"- {check.Name}: {status} (exit {check.ExitCode}, elapsed {check.Elapsed.TotalSeconds.ToString("F1", CultureInfo.InvariantCulture)}s)\n");
+        if (!check.Passed)
+        {
+            AppendStream(sb, "stdout", check.StdoutTail, StdoutTailBudgetPerFailure);
+            AppendStream(sb, "stderr", check.StderrTail, StderrTailBudgetPerFailure);
+        }
     }
 
     private static void AppendStream(StringBuilder sb, string label, string? stream, int budget)

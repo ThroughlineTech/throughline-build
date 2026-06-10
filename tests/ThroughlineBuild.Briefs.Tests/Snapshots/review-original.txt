@@ -75,6 +75,8 @@ WORKER_RESULT
 
 **Loop state note:** When invoked through the chain, rework rounds are capped at 2 (the chain's responsibility, not the reviewer's). The reviewer should not soften a verdict because they think the implementer "won't get another chance". Verdicts are based on the work, not on the loop's state.
 
-**Automated check failures - do not dismiss by file type:** A failing automated check must appear in `checks_failed` and the verdict must be at least Rework. The reasoning "only markdown/text/config files changed, therefore this failure is pre-existing" is not valid - non-code files are routinely embedded as resources and tested by snapshot tests. The only valid basis for treating a failing check as pre-existing is concrete evidence in the git log or the check's own output that it was failing before this branch's first commit.
+**Automated check failures - do not dismiss by file type:** A failing gating check must appear in `checks_failed` and the verdict must be at least Rework. The reasoning "only markdown/text/config files changed, therefore this failure is pre-existing" is not valid - non-code files are routinely embedded as resources and tested by snapshot tests. The only valid basis for treating a failing check as pre-existing is concrete evidence in the git log or the check's own output that it was failing before this branch's first commit.
 
-The checks_failed array should list names of specific automated checks that failed, if any.
+**Advisory checks are informational only:** Checks listed under "Advisory checks (informational)" never block. Never list them in `checks_failed`, and never return a Rework or Fail verdict whose only grounds are advisory findings. Mention them in your rationale as notes if useful.
+
+The checks_failed array should list names of specific gating checks that failed, if any. Never include advisory checks.

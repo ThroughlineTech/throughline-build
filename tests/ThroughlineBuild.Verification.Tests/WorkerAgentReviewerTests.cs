@@ -644,4 +644,87 @@ public class WorkerAgentReviewerTests
         Assert.Contains("src/Bar.cs", instruction, StringComparison.Ordinal);
         Assert.Contains("FAIL", instruction, StringComparison.Ordinal);
     }
+
+    // -------------------------------------------------------------------------
+    // Advisory role enforcement at the verifier boundary: a verifier that lists
+    // an advisory check in checks_failed must not be able to drive check-rework
+    // for it. The incident chain (a downstream repository 25) died at the rework cap with
+    // every acceptance criterion passing because a cosmetic lint failure flowed
+    // through checks_failed undifferentiated. Filtered by construction here.
+    // -------------------------------------------------------------------------
+
+    private static WorkerAgentReviewer BuildReviewerWithChecks(StubWorkerAgent agent, IReadOnlyList<CheckResult> checks) =>
+        new WorkerAgentReviewer(agent, BuildTicket(), checks, new WorkerOptions(TimeSpan.FromMinutes(5)), "/repo");
+
+    [Fact]
+    public async Task ReworkVerdict_AdvisoryCheckInChecksFailed_IsFilteredOut()
+    {
+        var checks = new[]
+        {
+            new CheckResult("build", true, 0, "", "", TimeSpan.Zero, CheckRole.Gating),
+            new CheckResult("lint", false, 1, "file.swift:2:8 sorted_imports", "", TimeSpan.Zero, CheckRole.Advisory)
+        };
+        var metadata = new Dictionary<string, object>
+        {
+            ["verdict"] = "Rework",
+            ["rationale"] = "import ordering violates the linter",
+            ["checks_failed"] = new List<string> { "lint" }
+        };
+        var agent = new StubWorkerAgent(OkResultWithMetadata(metadata));
+        var reviewer = BuildReviewerWithChecks(agent, checks);
+
+        var verdict = await reviewer.VerifyAsync(
+            BuildImplementerBrief(), BuildDiff(), BuildImplementerResult(), CancellationToken.None);
+
+        // The verdict kind is the verifier's call; the advisory name must not survive into
+        // ChecksFailed, so downstream consumers never see advisory-driven check-rework.
+        Assert.Equal(VerdictKind.Rework, verdict.Kind);
+        Assert.Empty(verdict.ChecksFailed);
+    }
+
+    [Fact]
+    public async Task ReworkVerdict_MixedAdvisoryAndGatingChecksFailed_KeepsGatingOnly()
+    {
+        var checks = new[]
+        {
+            new CheckResult("test", false, 1, "1 failed", "", TimeSpan.Zero, CheckRole.Gating),
+            new CheckResult("lint", false, 1, "style warning", "", TimeSpan.Zero, CheckRole.Advisory)
+        };
+        var metadata = new Dictionary<string, object>
+        {
+            ["verdict"] = "Rework",
+            ["rationale"] = "tests fail and lint complains",
+            ["checks_failed"] = new List<string> { "test", "lint" }
+        };
+        var agent = new StubWorkerAgent(OkResultWithMetadata(metadata));
+        var reviewer = BuildReviewerWithChecks(agent, checks);
+
+        var verdict = await reviewer.VerifyAsync(
+            BuildImplementerBrief(), BuildDiff(), BuildImplementerResult(), CancellationToken.None);
+
+        Assert.Equal(new[] { "test" }, verdict.ChecksFailed);
+    }
+
+    [Fact]
+    public async Task ReworkVerdict_GatingNameSharedWithNoAdvisoryConfig_PassesThroughUnchanged()
+    {
+        // No advisory checks configured: the filter must be a no-op (zero behavior drift).
+        var checks = new[]
+        {
+            new CheckResult("build", false, 1, "broken", "", TimeSpan.Zero, CheckRole.Gating)
+        };
+        var metadata = new Dictionary<string, object>
+        {
+            ["verdict"] = "Rework",
+            ["rationale"] = "build broken",
+            ["checks_failed"] = new List<string> { "build" }
+        };
+        var agent = new StubWorkerAgent(OkResultWithMetadata(metadata));
+        var reviewer = BuildReviewerWithChecks(agent, checks);
+
+        var verdict = await reviewer.VerifyAsync(
+            BuildImplementerBrief(), BuildDiff(), BuildImplementerResult(), CancellationToken.None);
+
+        Assert.Equal(new[] { "build" }, verdict.ChecksFailed);
+    }
 }

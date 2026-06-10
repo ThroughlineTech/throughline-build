@@ -23,7 +23,10 @@ public record ReviewResult(
     // Set when review could not run because the verifier worker was blocked by a transient provider
     // error (quota/rate-limit/auth). Success is false; the ticket is left cleanly InReview and is
     // resumable via `build review <id>`. Distinct from a Fail verdict. See TLB-527.
-    ProviderError? ProviderUnavailable = null);
+    ProviderError? ProviderUnavailable = null,
+    // The automated check results the verifier saw, so a caller turning this verdict into rework
+    // feedback can embed the failing checks' raw output (not just their names) in the brief.
+    IReadOnlyList<CheckResult>? CheckResults = null);
 
 public class ReviewPhase : IWorkflowPhase
 {
@@ -256,13 +259,7 @@ public class ReviewPhase : IWorkflowPhase
         if (reviewDirtyPaths.Count > 0)
         {
             // Emit VerifierVerdict first so the operator can see what verdict the verifier produced
-            await EmitAsync(EventKind.VerifierVerdict, ticketId, new Dictionary<string, object>
-            {
-                ["kind"] = verdict.Kind.ToString(),
-                ["checks_failed_count"] = verdict.ChecksFailed.Count,
-                ["rationale"] = verdict.Rationale,
-                ["checks_failed"] = verdict.ChecksFailed
-            }, ct).ConfigureAwait(false);
+            await EmitAsync(EventKind.VerifierVerdict, ticketId, VerdictEventData(verdict, checkResults), ct).ConfigureAwait(false);
             var dirtyReason = FormatDirtyWorktreeReason("Review", reviewDirtyPaths);
             await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
             {
@@ -283,13 +280,7 @@ public class ReviewPhase : IWorkflowPhase
         if (stashDelta != 0 || headMoved)
         {
             // Surface the verdict the verifier produced before failing on the guard.
-            await EmitAsync(EventKind.VerifierVerdict, ticketId, new Dictionary<string, object>
-            {
-                ["kind"] = verdict.Kind.ToString(),
-                ["checks_failed_count"] = verdict.ChecksFailed.Count,
-                ["rationale"] = verdict.Rationale,
-                ["checks_failed"] = verdict.ChecksFailed
-            }, ct).ConfigureAwait(false);
+            await EmitAsync(EventKind.VerifierVerdict, ticketId, VerdictEventData(verdict, checkResults), ct).ConfigureAwait(false);
 
             // Drop the stash entries the verifier pushed. Dispatch is serial, so the top
             // stashDelta entries are exactly the verifier's. Best-effort.
@@ -314,13 +305,7 @@ public class ReviewPhase : IWorkflowPhase
         }
 
         // Step 11: Emit VerifierVerdict
-        await EmitAsync(EventKind.VerifierVerdict, ticketId, new Dictionary<string, object>
-        {
-            ["kind"] = verdict.Kind.ToString(),
-            ["checks_failed_count"] = verdict.ChecksFailed.Count,
-            ["rationale"] = verdict.Rationale,
-            ["checks_failed"] = verdict.ChecksFailed
-        }, ct).ConfigureAwait(false);
+        await EmitAsync(EventKind.VerifierVerdict, ticketId, VerdictEventData(verdict, checkResults), ct).ConfigureAwait(false);
 
         // Step 12: LlmCall event if verifier worker reported usage
         if (_verifierOverride is null && verifier is WorkerAgentReviewer ccr && ccr.LastWorkerResult is { } verifierResult && verifierResult.Metadata.TryGetValue("llm_usage", out var usageObj))
@@ -375,7 +360,8 @@ public class ReviewPhase : IWorkflowPhase
         }
 
         // Step 14: Return success
-        return new ReviewResult(true, ticketId, verdict.Kind, verdict.Rationale, verdict.ChecksFailed, null);
+        return new ReviewResult(true, ticketId, verdict.Kind, verdict.Rationale, verdict.ChecksFailed, null,
+            CheckResults: checkResults);
     }
 
     async Task<PhaseResult> IWorkflowPhase.RunAsync(string ticketId, string workingDirectory, CancellationToken ct)
@@ -448,6 +434,25 @@ public class ReviewPhase : IWorkflowPhase
         }
 
         return new ReviewResult(true, ticketId, kind, rationale, Array.Empty<string>(), null);
+    }
+
+    // VerifierVerdict event payload. Advisory failures are reported under their own key, not
+    // mixed into checks_failed: role semantics are a cross-phase contract, and an event-log
+    // consumer counting checks_failed must see only failures that may legitimately drive rework.
+    private static IReadOnlyDictionary<string, object> VerdictEventData(Verdict verdict, IReadOnlyList<CheckResult> checkResults)
+    {
+        var advisoryFailed = checkResults
+            .Where(r => r.Role == CheckRole.Advisory && !r.Passed && !r.Skipped)
+            .Select(r => r.Name)
+            .ToList();
+        return new Dictionary<string, object>
+        {
+            ["kind"] = verdict.Kind.ToString(),
+            ["checks_failed_count"] = verdict.ChecksFailed.Count,
+            ["rationale"] = verdict.Rationale,
+            ["checks_failed"] = verdict.ChecksFailed,
+            ["advisory_failed"] = advisoryFailed
+        };
     }
 
     // Best-effort HEAD read: the shared-state guard treats an unreadable HEAD as "unknown"
