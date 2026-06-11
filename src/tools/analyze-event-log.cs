@@ -180,17 +180,16 @@ static Bucket AnalyzeAndReport(
             TryGetString(data, "subsumed_by_commit", out var subCommit);
             subsumedEvents.Add((subTicketId ?? ticketId ?? "n/a", subCommit ?? ""));
         }
-        else if (kind == 3) // VerifierVerdict
+        else if (kind == 8) // ReworkRound
         {
-            var data = root.GetProperty("Data");
-            if (TryGetString(data, "kind", out var verdictKind)
-                && string.Equals(verdictKind, "Rework", StringComparison.Ordinal))
-            {
-                var verdictTicketId = root.GetProperty("TicketId").GetString() ?? "n/a";
-                reworkByTicket[verdictTicketId] = reworkByTicket.TryGetValue(verdictTicketId, out var count)
-                    ? count + 1
-                    : 1;
-            }
+            // Emitted once per rework round that actually runs, whether triggered
+            // by a verifier Rework verdict or a gate failure. Counting verifier
+            // verdicts instead would miss gate-triggered rounds entirely and count
+            // a Rework verdict at the round cap that never executes.
+            var reworkTicketId = ticketId ?? "n/a";
+            reworkByTicket[reworkTicketId] = reworkByTicket.TryGetValue(reworkTicketId, out var count)
+                ? count + 1
+                : 1;
         }
 
         if (!byPhase.TryGetValue(phase, out var bucket))
