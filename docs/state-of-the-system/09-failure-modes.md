@@ -1,6 +1,10 @@
 # 09 - Failure Modes and Idempotency
 
+Last refreshed: 2026-06-11 (HEAD 3a73eb9)
+
 For each major operation, how it fails and whether re-running is safe. Exit codes summarized in [06-public-surfaces.md](06-public-surfaces.md); chain/dispatch outcomes in [10-lifecycle-orchestration.md](10-lifecycle-orchestration.md).
+
+The headline change since the last refresh is **failure classification**: the system now distinguishes *the ticket's fault* (rework/fail) from *the environment's fault* (resumable, no rework, siblings skipped) across review (provider quota, TLB-527), gate checks (base-ref control run, TLB-538), and ticketing transport (TLB-545), and proves its own gating checks are non-vacuous (da544ff).
 
 ---
 
@@ -8,24 +12,22 @@ For each major operation, how it fails and whether re-running is safe. Exit code
 
 | Operation | Pre-flight gates | Common failures | Failed-at state | Idempotent on rerun? |
 |---|---|---|---|---|
-| `plan` | ticket exists; not a parent; state == `Backlog`; `git rev-parse main` resolves | worker non-Ok status; unresolvable `plan_body_ref` -> `PLAN_BODY` fenced block; missing scalar metadata keys (`risk_label`, `size_label`, `planned_at_sha`) | ticket left in `Planning` once the worker has run (transition precedes the status check) | partial - rerun fails the `Backlog` guard once parked in `Planning`; operator must reset state |
-| `implement` | ticket exists; not a parent; state == `Ready` (initial) or `InProgress` (rework); hygiene gate (no conflicts / unrelated stashes); `git worktree add` succeeds | hygiene-gate block (`hygiene_gate`); worktree creation fails; worker non-Ok; missing `commit_sha` metadata; dirty worktree after worker exit (one bounded retry) | `Ready` if pre-worker; `InProgress` if worker ran but didn't deliver | yes if worktree was created (rerun reuses it via the rework path) |
-| `review` | ticket exists; state == `InReview`; worktree locatable (reconstructed from branch if missing); `[implemented_at]` marker present | check timeout (non-fatal); verifier subprocess crash; missing verdict metadata; dirty worktree after verifier exit (hard fail, `dirty_worktree_after_review`) | state unchanged (only `Rework` changes it) | yes - rerun re-runs checks and verifier; one extra verdict comment posted |
-| `ship` | ticket exists; state == `InReview`; worktree locatable; build.exe not inside it; both worktrees clean (hygiene gate); main worktree on target branch (not detached); bases not diverged-with-conflict; rebase succeeds; no conflict markers; no regressions; FF merge + push succeed | listed at each stage via `ShipFailureStage` | enum value identifies stage (`StateCheck`, `PreFlight`, `Fetch`, `Rebase`, `ConflictMarkerScan`, `RegressionChecks`, `FastForwardMerge`, `Push`, `Decruft`) | partially - rebase + checks idempotent; post-merge transitions not retried by `ship` itself |
-| `decompose` | ticket exists; `git rev-parse main` resolves | worker non-Ok; malformed / <2 `child_specs`; `DecomposeVerdict` quality-gate failure; all child creates fail | no parent transition (decompose never moves the parent state) | no - rerun creates duplicate child sub-issues |
-| `chain` | any non-terminal state (`Backlog`/`Ready`/`InReview` route directly; `Planning`/`InProgress` are reconciled and resumed), or has children (parent path); only `Done`/`Cancelled` refuse | any inner phase failure propagates as `StoppedAt*`; rework cap; obsolete escalation; parent-tree refusals | `ChainOutcome` value identifies stop point | yes - rerunning starts at whatever state the ticket landed in; an interrupted-implement `InProgress` ticket is resumed rather than refused |
-| `chain` (multi-ticket / parent) | per-ticket as above; dependency graph acyclic; parent tree at most one level deep | cycle in `blocked_by` graph; a level/child fails; grandchildren present | `ParallelDispatchResult.FailureReason` / `ParentHasGrandchildren` / `ParentStoppedEarly` | yes - completed tickets are skipped on re-entry by their state |
-| `rework` | state == `InProgress`; manual `--feedback` or a `Rework` verdict in event log | feedback retrieval fails; underlying `ImplementPhase` fails | `ImplementFailed`, `NoFeedbackAvailable`, `TicketNotInProgress` | yes |
-| `new` (file mode) | body file readable; title present | validation throws on missing title / empty body | nothing to roll back | yes - duplicates the Plane ticket on rerun |
-| `new` (draft mode) | worker dispatchable | draft worker fails / wrong shape; user quits review loop | nothing posted | yes |
-| `scaffold` | op-doc parses; validation passes (or `--accept-warnings`) | per-ticket create or parent-link failures collected in `ScaffoldFailure[]` | partial creation possible (operation/plan/brief tree) | no - rerun creates duplicates; nothing is matched back by content |
-| `amend` | state not terminal; at least one of `--size` / `--note` | invalid size value; terminal state | nothing | yes - replacing labels is idempotent; appending notes accumulates |
-| `close` / `defer` | state not terminal; reason supplied | child cascade failure (soft); rollup failure (soft); decruft failure (soft) | nothing pre-transition; `Cancelled` after transition (+ cascaded children) | no - rerunning on a `Cancelled` ticket fails the state check |
-| `reopen` | state is `Done` or `Cancelled` | ambiguous target defaults to `Backlog` | nothing pre-transition | yes once back in active state - rerun fails the state check |
+| `plan` (promote mode, default) | ticket exists; not a parent; state == `Backlog`; base ref resolves | ticketing write failure | partial transitions possible | rerun refuses once out of `Backlog` |
+| `plan` (`mode = "investigate"`) | same | worker non-Ok; unresolvable `plan_body_ref`; missing scalar metadata keys | `Planning` once the worker has run (transition lands after the worker, before the status check) | partial - rerun fails the `Backlog` guard; operator must reset state |
+| `implement` | ticket exists; not a parent; state == `Ready` (initial) or `InProgress` (rework); hygiene gate; worktree/branch create succeeds | hygiene block; worktree creation fails; worker non-Ok; missing `commit_sha`; dirty worktree after exit (one bounded retry) | `Ready` if pre-worker; `InProgress` if worker ran but did not deliver | yes - rerun resumes via the rework path; a missing rework worktree is recreated from the branch |
+| `gate` (chain-only, TLB-506) | runs after implement, before review | setup-check failure; gating-check failure; invalid completion claim; vacuous gating check; environment failure on base ref | gating fail -> `InProgress` (rework); vacuity/environment fail -> stays `InReview`, resumable | yes - checks re-run; vacuity probes are once-per-check-per-run |
+| `review` | ticket exists; state == `InReview`; worktree locatable (reconstructed from branch if missing); `[implemented_at]` marker | provider quota/auth block (-> `ReviewUnavailable`, no verdict posted); verifier crash; missing verdict metadata; dirty worktree after verifier (hard fail) | state unchanged (only `Rework` changes it) | yes - rerun re-runs checks and verifier |
+| `ship` | state == `InReview`; worktree locatable; exe not inside it; both worktrees clean; main worktree on target; bases reconcilable; rebase, marker scan, regression checks, FF merge, push | per stage via `ShipFailureStage` | enum value identifies stage | partially - rebase + checks idempotent; post-merge transitions not retried |
+| `decompose` | ticket exists; base ref resolves | worker non-Ok; malformed / <2 `child_specs`; `DecomposeVerdict` quality gate; all child creates fail | no parent transition | no - rerun duplicates child sub-issues |
+| `chain` | non-terminal state (reconciled and resumed); main worktree on target branch; clean tree | inner-phase failures as `StoppedAt*`; rework cap; vacuous gate; environment failure; ticketing unreachable | `ChainOutcome` identifies the stop | yes - resumes from landed state; integration branch refreshed on reuse |
+| `chain` (multi-ticket / parent) | dependency graph acyclic; tree at most one level deep | cycle; a child fails; environmental stop skips remaining siblings | `ParallelDispatchResult` / parent outcomes | yes - completed tickets skipped by state |
+| `rework` | state == `InProgress`; `--feedback` or a `Rework` verdict in the log | feedback retrieval fails; implement fails | `ImplementFailed` / `NoFeedbackAvailable` / `TicketNotInProgress` | yes |
+| `new` / `scaffold` / `amend` / `close` / `defer` / `reopen` | unchanged shapes | unchanged | unchanged | `scaffold` still duplicates on rerun |
+| `sweep` (NEW, TLB-531) | config resolves a target branch | a worktree removal halts mid-ladder | nothing transitioned; partial removal possible | yes - merged-gated; safe to re-run |
 
 ### Loose ends
 
-- The `plan` idempotency posture changed: the `Backlog -> Planning` transition now happens *before* the worker-status check ([src/ThroughlineBuild.Phases/PlanPhase.cs:98](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L98)), so a failed plan no longer leaves the ticket cleanly re-runnable in `Backlog`.
+- The investigate-mode `plan` idempotency caveat stands: the `Planning` transition lands after the worker but before the status check ([src/ThroughlineBuild.Phases/PlanPhase.cs:124-134](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L124-L134)), so a failed plan parks the ticket in `Planning`. The chain reconciles this (`Planning -> Backlog` reset); the standalone verb does not.
 
 ---
 
@@ -33,220 +35,181 @@ For each major operation, how it fails and whether re-running is safe. Exit code
 
 ### `plan` (`PlanPhase`)
 
-- **Parent ticket:** returns failure "is a parent ticket with N children: ... plan each child individually" ([src/ThroughlineBuild.Phases/PlanPhase.cs:60-63](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L60-L63)).
-- **Wrong state:** "ticket not in Backlog state" ([src/ThroughlineBuild.Phases/PlanPhase.cs:65-66](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L65-L66)). CLI exit 1.
-- **`git rev-parse` failure:** "git rev-parse failed: ..." ([src/ThroughlineBuild.Phases/PlanPhase.cs:73-76](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L73-L76)).
-- **Worker failure:** worker `Status != Ok` returns the envelope reason ([src/ThroughlineBuild.Phases/PlanPhase.cs:105-108](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L105-L108)). The ticket is already in `Planning` at this point. If the status is `Escalate`, the `WorkerResult` is returned as `EscalationWorkerResult` so the chain can run obsolete-claim ratification.
-- **Unresolvable plan body / missing metadata keys:** the plan body now arrives as the `PLAN_BODY` fenced block referenced by `plan_body_ref`; an unresolvable ref fails with "worker metadata missing or unresolvable plan_body_ref: ..." and the scalar keys (`risk_label`, `size_label`, `planned_at_sha`) are still required ([src/ThroughlineBuild.Phases/PlanPhase.cs:120-125](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L120-L125)). The resolved markdown is rendered to HTML by `MarkdownRenderer` before the description append.
-- **Idempotency caveat:** a prior run that posted the description but died before the marker comment will append the description a second time on rerun - the append is `existing + html` so duplication is visible.
+- **Parent ticket:** "is a parent ticket with N children: ... plan each child individually" ([src/ThroughlineBuild.Phases/PlanPhase.cs:81-84](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L81-L84)).
+- **Wrong state:** "ticket not in Backlog state" (:86-87).
+- **Base-ref resolution failure:** "git rev-parse failed: ..." (:88-97); resolution now goes through `BaseRefResolver` with the configured target, not a literal `main`.
+- **Promote mode (default, TLB-495):** `_options.PromotePlan` short-circuits to `RunPromoteAsync` (:99-100, :224-250) - no worker at all; labels + `[planned_at: <base-sha>]` + `Backlog -> Planning -> Ready`. Failure modes reduce to ticketing-write failures. `[plan] mode` accepts only `"promote"` or `"investigate"` ([src/ThroughlineBuild.Cli/Config.cs:828-840](../../src/ThroughlineBuild.Cli/Config.cs#L828-L840)).
+- **Worker failure (investigate mode):** non-Ok returns the envelope reason after the `Planning` transition (:131-134); `Escalate` is carried back as `EscalationWorkerResult` for chain ratification.
+- **Unresolvable plan body / missing metadata:** `plan_body_ref` -> `PLAN_BODY` fenced block (:145-148); scalar keys `risk_label` / `size_label` / `planned_at_sha` still required (:152-155).
 
 ### `implement` (`ImplementPhase`)
 
-- **Parent ticket:** refuses with "is a parent ticket with N children: work child-by-child ..."; writes `phase-status.json` via `EarlyExitManifest` ([src/ThroughlineBuild.Phases/ImplementPhase.cs:69-76](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L69-L76)).
-- **Wrong state:** writes `phase-status.json` and returns. For an initial round the message is state-specific (InReview -> "run `build review`/`build ship`"; InProgress -> "run `build rework` or reset to Ready"; Backlog/Planning -> "plan it first"; Done/Cancelled -> "nothing to implement") via `InitialRoundStateGuidance`; a rework round against a non-InProgress ticket returns "rework round invoked but ticket is in X" ([src/ThroughlineBuild.Phases/ImplementPhase.cs:78-91](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L78-L91)).
-- **Hygiene gate (Step 2b):** before any worktree work, `WorkingTreeHygieneGate.CheckAsync` refuses on conflicted/unmerged paths or stash entries unrelated to the ticket branch, emitting a `GateFailure` with `kind = hygiene_gate` and returning "working tree is not clean: ..." ([src/ThroughlineBuild.Phases/ImplementPhase.cs:93-106](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L93-L106), [src/ThroughlineBuild.Phases/WorkingTreeHygieneGate.cs:24-62](../../src/ThroughlineBuild.Phases/WorkingTreeHygieneGate.cs#L24-L62)). The gate ignores ordinary uncommitted modifications - those are handled separately.
-- **Worktree creation fails (initial):** returns "worktree create failed: ..." (or "branch create in shared worktree failed: ..." on the chain shared-worktree path) ([src/ThroughlineBuild.Phases/ImplementPhase.cs:236-247](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L236-L247)). Common cause: branch already exists.
-- **Missing rework worktree:** rework requires the existing worktree on disk; absence is a hard early-exit ([src/ThroughlineBuild.Phases/ImplementPhase.cs:198-203](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L198-L203)).
-- **Worker fails after worktree created:** ticket already `InProgress`; stays `InProgress`. Rerun goes through the rework path. `Escalate` is carried back as `EscalationWorkerResult` ([src/ThroughlineBuild.Phases/ImplementPhase.cs:296-299](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L296-L299)).
-- **Missing `commit_sha`:** "worker metadata missing commit_sha" ([src/ThroughlineBuild.Phases/ImplementPhase.cs:344-348](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L344-L348)).
-- **`commit_sha` mismatch with actual HEAD:** actual HEAD wins; a discrepancy note is folded into the `implemented_at` comment ([src/ThroughlineBuild.Phases/ImplementPhase.cs:357-369](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L357-L369)). Informational only.
-- **Drift warning:** emitted as `GateFailure` but does not block ([src/ThroughlineBuild.Phases/ImplementPhase.cs:114-122](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L114-L122)). The drift check selects the freshest `[planned_at]` marker by comment creation time, not list order, so a chain re-run does not read a stale prior-run marker (TLB-412, [src/ThroughlineBuild.Phases/CommentMarkers.cs:19-37](../../src/ThroughlineBuild.Phases/CommentMarkers.cs#L19-L37)).
-- **Post-worker dirty-worktree check (Step 14b, TLB-400):** after a successful worker exit, any uncommitted tracked files trigger one bounded retry - the brief is re-issued with an instruction to commit, and a second dirty result hard-fails with `dirty_worktree_retry_failed` ([src/ThroughlineBuild.Phases/ImplementPhase.cs:301-333](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L301-L333)).
+- **Parent ticket / wrong state:** refusals write `phase-status.json` via `EarlyExitManifest` ([src/ThroughlineBuild.Phases/ImplementPhase.cs:113-123](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L113-L123)); state-specific guidance via `InitialRoundStateGuidance`; a rework round against a non-InProgress ticket returns "rework round invoked but ticket is in X" (:128).
+- **Hygiene gate:** conflicted paths or unrelated stash entries refuse with `GateFailure` kind `hygiene_gate` (:139-142).
+- **Worktree creation fails (initial):** "worktree create failed: ..." or "branch create in shared worktree failed: ..." on the chain integration-worktree path (:283-306).
+- **Missing rework worktree (CHANGED):** rework now attempts to *recreate* the worktree from the ticket branch; only when recreation also fails does it hard-exit with "rework expected existing worktree ... could not recreate it from branch ..." (:254).
+- **Worker fails after worktree created:** ticket stays `InProgress`; rerun resumes via rework. `Escalate` carried back as `EscalationWorkerResult` (:420, :457).
+- **Missing `commit_sha`:** "worker metadata missing commit_sha" (:478). A `commit_sha` mismatch with actual HEAD is informational - actual HEAD wins, discrepancy folded into the `implemented_at` comment.
+- **Drift warning:** `GateFailure` kind `drift_warning`, non-blocking (:177); freshest-marker selection per TLB-412.
+- **Post-worker dirty-worktree check:** one bounded retry with an injected "commit before returning" note (`dirty_worktree_first_attempt` :437); a second dirty result hard-fails (`dirty_worktree_retry_failed` :464).
+- **Preload advisories (NEW):** `preload_file_not_found` / `preload_empty` are advisory `GateFailure`s; preload problems never fail the phase (:670-684).
+
+### `gate` (`GatePhase`, NEW - TLB-503/505/506/507/538)
+
+Runs inside the chain between implement and review ([src/ThroughlineBuild.Phases/GatePhase.cs](../../src/ThroughlineBuild.Phases/GatePhase.cs); wired via the `gateFactory` in `ChainPhase`). It re-runs the configured checks itself (deterministic), validates the implementer's `CompletionClaim` (parsed by `CompletionClaimParser.TryParse`, [src/ThroughlineBuild.Workers.Common/CompletionClaimParser.cs:37](../../src/ThroughlineBuild.Workers.Common/CompletionClaimParser.cs#L37)), runs the consumes-provides preflight (the ticket's `consumes` must be a subset of accumulated upstream `provides`; result is an advisory `SmokeSignal`, [GatePhase.cs:120-131](../../src/ThroughlineBuild.Phases/GatePhase.cs#L120-L131)), and collects diff-fact smoke signals via `SmokeCollector.CollectDiffFacts` ([src/ThroughlineBuild.Verification/SmokeCollector.cs:17](../../src/ThroughlineBuild.Verification/SmokeCollector.cs#L17)). Smoke signals and the preflight are **advisory - they never fail the gate**.
+
+Check `role` drives gating: `Setup` failures and `Gating` failures hard-fail; `Advisory` failures are recorded only. Failure paths, each a `GateFailure` event with the named kind:
+
+- `claim_schema_invalid` ([GatePhase.cs:92](../../src/ThroughlineBuild.Phases/GatePhase.cs#L92)) - malformed completion claim; hard-fail, feeds rework.
+- `setup_failed` (:151) - a Setup-role prerequisite failed; hard-fail, feeds rework (worker-fixable, rework cap bounds it).
+- `gating_checks_failed` (:263) - a Gating-role check failed on the ticket worktree; normally hard-fail -> `InReview -> InProgress` rework with structured evidence.
+- **Environment classification (TLB-538):** before blaming the ticket, `GateControlProber.ProbeAsync` re-runs the failed checks in a throwaway worktree at the base SHA ([src/ThroughlineBuild.Verification/GateControlProber.cs:34](../../src/ThroughlineBuild.Verification/GateControlProber.cs#L34); `gate_control_run` event at [GatePhase.cs:189](../../src/ThroughlineBuild.Phases/GatePhase.cs#L189)). If the base also fails, the gate tries one recovery arm - reloading the check config from disk (`gate_config_reloaded`, :209) - and otherwise emits `gate_environment_failure` (:235) and hard-fails **without** the rework transition: the ticket stays `InReview`, the chain returns `GateEnvironmentFailure`, and remaining siblings are skipped.
+- **Vacuity proving (da544ff):** on a gating check's first green, `GateVacuityProver.ProveAsync` materializes the check's configured canary (broken input), re-runs only that check, and requires it to fail ([src/ThroughlineBuild.Verification/GateVacuityProver.cs:42](../../src/ThroughlineBuild.Verification/GateVacuityProver.cs#L42); once per check per run). A check that passes with the canary present is structurally vacuous: `gate_vacuous` hard-fail, no rework transition, chain outcome `GateVacuous` ([GatePhase.cs:303-311](../../src/ThroughlineBuild.Phases/GatePhase.cs#L303-L311)). A canary that cannot be cleaned up is `gate_canary_cleanup_failed` (same handling). A gating check with **no** canary emits advisory `gate_unverified` (:295) and never blocks.
 
 ### `review` (`ReviewPhase`)
 
-- **Parent ticket:** takes the aggregate-review branch instead of failing - see "Parent-tree failure modes".
-- **Wrong state:** "ticket not in InReview state" ([src/ThroughlineBuild.Phases/ReviewPhase.cs:73-75](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L73-L75)).
-- **Worktree not found:** before failing, review now tries to reconstruct the worktree from the ticket branch if the branch still exists on disk (e.g. a parent chain tore down its shared worktree, or a prior run was interrupted) (TLB-407, [src/ThroughlineBuild.Phases/ReviewPhase.cs:110-129](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L110-L129)). Only if the branch is also gone does it return "feature worktree not found at ...".
-- **No `[implemented_at]` marker:** "no implemented_at marker found - ..." ([src/ThroughlineBuild.Phases/ReviewPhase.cs:162-164](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L162-L164)). The marker is selected by freshest creation time (TLB-412), and review attributes to the worktree branch HEAD rather than the marker SHA: if HEAD differs from the marker (an implementer amended/squashed after posting it), a `GateFailure` with `kind = implemented_at_superseded` is emitted and the review, diff, and checks all run against HEAD (TLB-414, [src/ThroughlineBuild.Phases/ReviewPhase.cs:152-181](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L152-L181)).
-- **Dirty worktree after verifier (Step 10b, TLB-400):** any uncommitted tracked file left after the verifier exits is a HARD failure with no retry - the verifier verdict is emitted first, then a `GateFailure` with `kind = dirty_worktree_after_review` ([src/ThroughlineBuild.Phases/ReviewPhase.cs:217-235](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L217-L235)).
-- **Check timeout:** the check is marked failed; the verifier sees it in the brief. The phase does not abort.
-- **Verifier subprocess crash:** propagates as a phase infra failure (CLI maps to exit 4 on the standalone `review` verb).
-- **Verdict `Pass`:** no transition; ticket stays `InReview` for `ship`.
-- **Verdict `Rework`:** transitions back to `InProgress` ([src/ThroughlineBuild.Phases/ReviewPhase.cs:268-279](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L268-L279)).
-- **Verdict `Fail`:** no transition; operator decides.
-
-The default verifier is `WorkerAgentReviewer` ([src/ThroughlineBuild.Phases/ReviewPhase.cs:204-205](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L204-L205)); it runs the verifier worker inside the feature worktree so it cannot dirty tracked files in main and block the subsequent ship pre-flight. (The former `ClaudeCodeReviewer` class no longer exists.)
+- **Parent ticket:** aggregate-review branch (`RunParentReviewAsync`, [src/ThroughlineBuild.Phases/ReviewPhase.cs:381-416](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L381-L416)): in-flight children -> `Rework`; stalled children -> `Fail` ("children not Done: ..."); all Done -> `Pass`.
+- **Worktree not found:** reconstructed from the ticket branch via `CheckoutWorktreeAsync` before failing (:129-136, TLB-407).
+- **No `[implemented_at]` marker:** hard fail (:174). Review attributes to worktree HEAD; a superseded marker emits `implemented_at_superseded` and proceeds against HEAD (:185, TLB-414).
+- **Provider unavailable (NEW, TLB-527):** when `WorkerAgentReviewer.LastProviderError` is set (classified by `ProviderErrorClassifier.Classify` from the worker's failure reason/summary - quota/rate-limit/429/529 -> `RateLimitOrQuota`, 401/auth phrases -> `Auth`; [src/ThroughlineBuild.Workers.Common/ProviderErrorClassifier.cs:60-111](../../src/ThroughlineBuild.Workers.Common/ProviderErrorClassifier.cs#L60-L111)), review posts **no verdict comment and no transition** - that would record a rejection the reviewer never made. It emits `GateFailure` kind `review_provider_unavailable` (provider, error kind, optional `retry_at`) and returns a typed `ProviderUnavailable` result ([src/ThroughlineBuild.Phases/ReviewPhase.cs:242-255](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L242-L255)). The chain maps it to `ReviewUnavailable` (exit 9) instead of `StoppedAtReview` ([src/ThroughlineBuild.Phases/ChainPhase.cs:1097-1102](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1097-L1102)); the ticket stays cleanly `InReview`, resumable via `build review <id>`.
+- **Advisory checks never drive rework (d30dbac):** the verdict event separates `checks_failed` (gating/setup) from `advisory_failed`, and only the former feeds the rework loop; failed-check evidence is persisted as `checks_failed_details` (:444-476) so rework briefs carry the check's own output. After rework, cited checks are re-run.
+- **Dirty worktree after verifier:** hard fail, no retry (`dirty_worktree_after_review`, :266).
+- **Verdicts:** `Pass` no transition; `Rework` -> `InProgress`; `Fail` no transition.
 
 ### `ship` (`ShipPhase`)
 
-By stage ([src/ThroughlineBuild.Phases/ShipPhase.cs:23-34](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L23-L34)):
+By stage (`ShipFailureStage`, [src/ThroughlineBuild.Phases/ShipPhase.cs:29-40](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L29-L40)):
 
 | Stage | Trigger | Recovery |
 |---|---|---|
-| `StateCheck` | ticket not `InReview`; worktree not found; (parent) children not Done | fix state via `review`/`implement`; recreate worktree; finish children |
-| `PreFlight` | build.exe running from inside the worktree; either worktree dirty/conflicted/stash-polluted (`ShipPreflightAsync`, `pre_flight_hygiene` / `pre_flight_dirty`); main worktree not checked out on the target branch *or detached* (`wrong_worktree_branch`, now unconditional - applies when targeting main too) | move binary; commit or stash; `git checkout <target>`; rerun |
-| `Fetch` | `git fetch` failed; target branch diverged-with-conflict, or diverged and `--no-auto-merge`, or auto-rebase raced to conflict (the raced rebase is aborted unconditionally so the main worktree never lands detached, [ShipPhase.cs:382-386](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L382-L386)) | resolve local `<target>` vs `<remote>/<target>` manually; rerun |
-| `Rebase` | rebase conflicts; rebase fails otherwise. Aborted by `RebaseAbortAsync` | resolve conflicts on the feature branch; rerun |
-| `ConflictMarkerScan` | leftover `<<<<<<<` / `=======` / `>>>>>>>` in committed files | clean up; recommit; rerun |
-| `RegressionChecks` | a *regression* (a check that newly fails relative to the baseline) - pre-existing failures and fixes do not block (see below) | fix on the feature branch; rerun |
-| `FastForwardMerge` | merge failed, or HEAD is not on the target branch after the FF merge (post-merge assertion inside the lock, [ShipPhase.cs:655-667](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L655-L667)) | refetch; rerun |
-| `Push` | `git push <remote> <target>` failed after the local FF merge already landed | the merge is local-only until push succeeds; push manually or rerun |
-| `Decruft` | post-merge worktree cleanup failed | merge already landed; clean up manually |
+| `StateCheck` | not `InReview`; worktree not found; (parent) children not Done | fix state; recreate worktree; finish children |
+| `PreFlight` | exe inside the worktree (:186-203); worktree dirty/conflicted/stash-polluted (`ShipPreflightAsync` :209); main worktree not on target or detached (`wrong_worktree_branch` :260-275, unconditional) | move binary; clean tree; `git switch <target>` |
+| `Fetch` | fetch failed; target diverged-with-conflict; `--no-auto-merge`; raced auto-rebase (aborted, never leaves detached HEAD) | reconcile local vs remote target manually |
+| `Rebase` | rebase conflicts (aborted via `RebaseAbortAsync`) | resolve on the feature branch; rerun |
+| `ConflictMarkerScan` | leftover conflict markers in committed files | clean up; recommit |
+| `RegressionChecks` | a *gating regression* - newly failing vs baseline; advisory failures and pre-existing failures never block (see below) | fix on the feature branch |
+| `FastForwardMerge` | merge failed, or post-merge HEAD assertion inside the lock failed | refetch; rerun |
+| `Push` | `git push` failed after the local FF merge landed | push manually or rerun |
+| `Decruft` | post-merge cleanup failed (non-fatal, post-`Done`) | clean up manually / `build sweep` |
 
-The fetch, the target-branch auto-rebase, and the FF merge run under `MainWorktreeLock` so concurrent chains do not race on the shared main worktree ([src/ThroughlineBuild.Phases/ShipPhase.cs:301, 364, 652](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L301)). The post-FF-merge HEAD assertion runs inside the same lock so no other ship can move HEAD between the merge and the check.
+**Baseline-aware regression checks, advisory-aware and self-correcting (TLB-401, 22a79ab):** regressions are computed against the baseline failing-set from the detached `.worktrees/baseline-<sha>` run. Two refinements since the last refresh:
 
-**Baseline-aware regression checks (TLB-401):** with a `BaselineCache`, ship first runs the same checks against a detached worktree at the onto-ref (`ComputeBaselineAsync`), caches the set of failing check names, then partitions the feature-branch results: *regressions* (newly failing, not in the baseline set) BLOCK at `RegressionChecks` with `kind = regression_checks`; *pre-existing* failures are noted non-blocking (`pre_existing_failures_noted`); checks that the branch *fixes* emit `fixes_detected` ([src/ThroughlineBuild.Phases/ShipPhase.cs:489-646](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L489-L646)). `--skip-baseline` (or a failed baseline computation) falls through to the legacy gate where *any* failing check blocks.
+- **Advisory regressions never block ship** - they are reported via a `ship` event with action `advisory_regressions_noted` and a console line "advisory regressions (never block ship)" ([src/ThroughlineBuild.Phases/ShipPhase.cs:538-539](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L538-L539), :621-630); the legacy (no-baseline) gate likewise exempts advisory failures (:698-708), mirroring gate semantics.
+- **Contradictory-baseline recheck:** "fails on feature, passed on baseline" can also mean the cached baseline was wrong (tool-cache leak). Ship re-runs the contested checks in a fresh control worktree on the same base SHA via the baseline prober; checks confirmed failing on base are reclassified as pre-existing and the `BaselineCache` entry is corrected in place (:544-595, cache fix at :590). A failed Setup step on the pristine base makes the control run inconclusive-conservative.
 
-**Failed ship leaves the worktree and the feature branch on disk by design** for inspection.
-
-**Once `Done` transition lands, push has already succeeded; decruft and branch-delete failures are non-fatal** ([src/ThroughlineBuild.Phases/ShipPhase.cs:418-452](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L418-L452)) - the merge+push is the load-bearing operation. Note that a `Push` failure occurs *before* the `Done` transition, so a push-blocked ship leaves the ticket in `InReview` with the merge present locally.
+**Push failure still leaves a local-only merge** with the ticket `InReview`; once the `Done` transition lands (:792), decruft and branch-delete failures are non-fatal. Parent ship blocks at `StateCheck` with `parent_children_not_done` (:888) unless every child is `Done`, then transitions only the parent (:895).
 
 ### `decompose` (`DecomposePhase`)
 
-- **`git rev-parse` failure:** "git rev-parse failed: ..." ([src/ThroughlineBuild.Phases/DecomposePhase.cs:61-64](../../src/ThroughlineBuild.Phases/DecomposePhase.cs#L61-L64)).
-- **Worker non-Ok:** returns the envelope reason ([src/ThroughlineBuild.Phases/DecomposePhase.cs:91-93](../../src/ThroughlineBuild.Phases/DecomposePhase.cs#L91-L93)).
-- **Missing / malformed `child_specs`:** "worker metadata missing or malformed child_specs array" ([src/ThroughlineBuild.Phases/DecomposePhase.cs:102-105](../../src/ThroughlineBuild.Phases/DecomposePhase.cs#L102-L105)).
-- **Fewer than 2 specs:** "worker returned N child spec(s); at least 2 are required" ([src/ThroughlineBuild.Phases/DecomposePhase.cs:106-108](../../src/ThroughlineBuild.Phases/DecomposePhase.cs#L106-L108)).
-- **Quality-gate failure:** `DecomposeVerdict.Check` runs `coverage_check` (every child needs `scope_boundary`), `uniqueness_check` (no duplicate titles), `size_check` (size in S/M/L). On any failure it emits a `VerifierVerdict status=VerdictFailed` and returns the joined failures with `VerdictFailures` populated; **no child tickets are created** ([src/ThroughlineBuild.Phases/DecomposePhase.cs:110-121](../../src/ThroughlineBuild.Phases/DecomposePhase.cs#L110-L121), [src/ThroughlineBuild.Phases/DecomposeVerdict.cs:5-29](../../src/ThroughlineBuild.Phases/DecomposeVerdict.cs#L5-L29)).
-- **All child creates fail:** "all child ticket creations failed: ..." ([src/ThroughlineBuild.Phases/DecomposePhase.cs:139-141](../../src/ThroughlineBuild.Phases/DecomposePhase.cs#L139-L141)). A *partial* create (some children made) is treated as success and a `[decomposed_at]` comment is posted.
-- **CLI:** ticket-not-found returns exit 2; phase failure returns exit 1; multiple ticket ids are rejected up front ([src/ThroughlineBuild.Cli/Program.cs:90, 1515-1569](../../src/ThroughlineBuild.Cli/Program.cs#L90)).
-- **Not idempotent.** A successful or partially-successful run creates child sub-issues with no content-match guard; rerun duplicates them.
+Unchanged shape: worker non-Ok; malformed / <2 `child_specs`; `DecomposeVerdict.Check` quality gate ([src/ThroughlineBuild.Phases/DecomposePhase.cs:113](../../src/ThroughlineBuild.Phases/DecomposePhase.cs#L113)); "all child ticket creations failed" (:143); partial create still posts `[decomposed_at]` (:147). Not idempotent - rerun duplicates children.
 
 ### `chain` (`ChainPhase`)
 
-Wraps the others. Single-ticket exit codes are remapped from `ChainOutcome` ([src/ThroughlineBuild.Cli/Program.cs:1657-1673](../../src/ThroughlineBuild.Cli/Program.cs#L1657-L1673)):
+Wraps the others. Outcome -> exit-code mapping now lives in `ChainExitCodeMapper.GetExitCode` ([src/ThroughlineBuild.Cli/ChainExitCodeMapper.cs:13-35](../../src/ThroughlineBuild.Cli/ChainExitCodeMapper.cs#L13-L35)); `ChainOutcome` ([src/ThroughlineBuild.Contracts/Models/ChainOutcome.cs](../../src/ThroughlineBuild.Contracts/Models/ChainOutcome.cs)) has grown to 20 values. Success (0): `Completed`, `RatifiedObsolete`, `ParentCompleted`, `DryRunPreview`. Refusals (2): `RefusedInitialState`, `RefusedDirtyTree`, **`RefusedWrongBranch` (NEW)**, `ParentHasGrandchildren`. Stops: `StoppedAtPlan`/`ParentStoppedEarly`/`Skipped` (3), `StoppedAtImplement` (4), `StoppedAtReview` (5), `ReworkCapExceeded` (6, cap still `MaxReworkRounds = 2` at [src/ThroughlineBuild.Phases/ChainPhase.cs:61](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L61)), `StoppedAtShip` (7). New classified stops: `GateVacuous` (8), `ReviewUnavailable` (9), `GateEnvironmentFailure` (10), `TicketingUnavailable` (11). `BatchImplemented` is an internal per-ticket outcome of the warm-batch path, not a process exit.
 
-| Outcome | Exit | Meaning |
-|---|---|---|
-| `Completed` | 0 | shipped |
-| `RatifiedObsolete` | 0 | obsolete claim ratified -> Done |
-| `ParentCompleted` | 0 | all eligible children completed |
-| `RefusedInitialState` | 2 | state is `Done` or `Cancelled` (the only refused states - see resume below) |
-| `RefusedDirtyTree` | 2 | chain preflight found a conflicted / stash-polluted tree or tracked changes in the main checkout |
-| `ParentHasGrandchildren` | 2 | tree deeper than one level |
-| `StoppedAtPlan` | 3 | planning failed |
-| `ParentStoppedEarly` | 3 | a child did not complete |
-| `Skipped` | 3 | ancestor failed and `--continue-past-failure` absent |
-| `StoppedAtImplement` | 4 | implementation failed |
-| `StoppedAtReview` | 5 | review returned `Fail` (or review infra failure) |
-| `ReworkCapExceeded` | 6 | more than `MaxReworkRounds` (2) reworks |
-| `StoppedAtShip` | 7 | ship gate failed |
+**Preflight (outermost entry only):**
 
-The chain emits `ChainStart`/`ChainEnd` around every run, `ReworkRound` per rework, and `TicketSubsumed` when an obsolete claim is ratified. See [10-lifecycle-orchestration.md](10-lifecycle-orchestration.md) for the full sequence.
+- **Wrong-branch guard (NEW):** main worktree not on the target branch (or detached) refuses before any planning with `GateFailure` kind `chain_preflight_wrong_branch` -> `RefusedWrongBranch` ([ChainPhase.cs:198-236](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L198-L236)) - the same invariant ship would enforce at the end, checked up front.
+- **Hygiene:** `hygiene_gate_preflight` (:250) and tracked-dirt `chain_preflight_dirty` (:282) -> `RefusedDirtyTree`, as before.
+- **Integration worktree:** creation failure stops the parent chain with `integration_worktree_unavailable` -> `ParentStoppedEarly` (:2247-2275); there is no longer a per-ticket-worktree fallback. A *reused* integration branch is refreshed by rebase onto the current base ref before any child dispatch; a conflicted refresh stops the chain before work is burned (TLB-546, :2229-2245).
 
-**Preflight (once, at the outermost chain start):** for a non-shared (single-ticket) entry, the chain runs `WorkingTreeHygieneGate.CheckAsync` against the working directory *before any planning*, emitting a `GateFailure` with `kind = hygiene_gate_preflight` and returning `ChainOutcome.RefusedDirtyTree` (exit 2) on a conflicted/stash-polluted tree. It then checks ordinary tracked changes in the main checkout with `GetTrackedChangesAsync`; tracked dirt emits `GateFailure` kind `chain_preflight_dirty` and also returns `RefusedDirtyTree` before ticket transitions or worker spawn. Untracked files are ignored, matching ShipPhase's dirty policy ([src/ThroughlineBuild.Phases/ChainPhase.cs:86-140](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L86-L140)). For a parent chain, if the shared worktree cannot be created the chain degrades loudly to per-ticket worktrees (`GateFailure kind = shared_worktree_unavailable`) rather than aborting ([src/ThroughlineBuild.Phases/ChainPhase.cs:762-782](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L762-L782)).
+**Chain resume (`ResolveEntryAsync`, [ChainPhase.cs:3315-3345](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L3315-L3345)):** unchanged model - `Backlog`/`Ready`/`InReview` enter directly; `Planning` resets to `Backlog`; `InProgress` is reconciled by `ResolveInProgressAsync` (orphan branch pruned -> `Ready`; real commits -> resumed as a rework round, recovering the last `Rework` verdict - now including `checks_failed_details` evidence - from the event log). Only `Done`/`Cancelled` refuse.
 
-**Chain resume (`ResolveEntryAsync`, [src/ThroughlineBuild.Phases/ChainPhase.cs:960-1065](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L960-L1065)):** the chain no longer refuses non-`Backlog` states. `Backlog` -> plan, `Ready` -> implement, `InReview` -> review enter directly. A `Planning` ticket (plan started but never appended an artifact) is reset to `Backlog` and replanned. An `InProgress` ticket is reconciled by `ResolveInProgressAsync`: a branch with zero commits beyond base is an orphan - the branch/worktree are pruned and the ticket reset to `Ready` for a clean implement; a branch *with* commits is resumed in place as a rework round (recovering the last `Rework` verdict from the event log, else synthesizing a neutral resume note). Resume transitions emit `StateTransition` with `reason = chain_resume`. Only `Done`/`Cancelled` fall through to `RefusedInitialState`.
+**Environmental stops skip siblings (TLB-538/545):** when a child stops with `GateEnvironmentFailure` or `TicketingUnavailable`, `ContainsEnvironmentalStop` marks every undispatched sibling `Skipped` with an explanatory rationale instead of silently omitting them ([ChainPhase.cs:2615-2624](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2615-L2624), summary rationale at :2655-2662).
 
-### Parent-tree failure modes (chain on a parent)
+**Root landing failures (TLB-492/494):** the outermost chain lands the integration branch onto the target via `LandRootIntegrationBranchAsync` ([ChainPhase.cs:2782](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2782)). Distinct failure kinds, all leaving the work safe on the integration branch: `chain_landing_wrong_branch` (:2794), rebase/FF failure from the shared `RebaseThenFastForwardAsync` helper, and `chain_landing_push_failed` (push failed after a successful local land - reconcile and push manually). A missing remote is *not* a failure: the land completes locally and emits `chain_landing_push_skipped` with reason `no_remote` (:2818-2848).
 
-- **Grandchildren present:** if any eligible child has live children of its own, the chain returns `ParentHasGrandchildren` (exit 2) without dispatching anything; the operator must chain the intermediate ticket directly ([src/ThroughlineBuild.Phases/ChainPhase.cs:665-684](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L665-L684)). This guard (f3953f7) prevents the runaway recursion that previously hammered Plane's rate limiter.
-- **A child stops early:** the parent chain runs all leaf children serially (dispatch semaphore `SemaphoreSlim(1, 1)` since op-29 - one child at a time, even within a dependency level); if any child outcome is not in the success set, the parent returns `ParentStoppedEarly`. Children that already completed are not retried.
-- **Aggregate review of a parent:** any child still `InProgress`/`InReview` yields `Rework`; some children not Done (and not in-flight) yields `Fail`; all Done yields `Pass` ([src/ThroughlineBuild.Phases/ReviewPhase.cs:317-373](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L317-L373)).
-- **Parent ship gate:** blocks at `StateCheck` with "children not Done: ..." (GateFailure `kind = parent_children_not_done`) unless every child is `Done`, then transitions the parent straight to `Done` ([src/ThroughlineBuild.Phases/ShipPhase.cs:769-801](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L769-L801)).
+**Sweep:** on success the chain sweeps its own `ticket/`/`chain/` worktrees best-effort; halts surface as `worktree_sweep_incomplete` and never fail the chain (:3275-3308). Failures preserve everything; `build sweep` is the recovery verb (see 05).
+
+### Batch implement (`--batch` path) failure modes
+
+When batching is configured and a parent chain has eligible leaf siblings, one warm worker session implements them as a commit stack on a single branch in the integration worktree (`RunBatchImplementSessionAsync`, [ChainPhase.cs:1326](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1326), dispatch at :2412).
+
+- **Loud downgrade (e76ac5d):** when batch preconditions are not met (no batch worker configured, no shared worktree), the chain emits `batch_implement_unavailable` (:2486) and runs the per-ticket path - the previous *silent* downgrade was the bug.
+- **Commit verification:** `BatchCommitVerifier` confirms the worktree is clean and that each self-reported commit exists in declared stack order; when the worker omitted its self-report, `ReconstructFromGitAsync` maps commits 1:1 onto tickets by stack position and fails on a count mismatch ([src/ThroughlineBuild.Phases/BatchCommitVerifier.cs:133](../../src/ThroughlineBuild.Phases/BatchCommitVerifier.cs#L133), used at [ChainPhase.cs:1549](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1549)).
+- **Partial failure:** a worker that died mid-stack has its confirmed commits verified and those tickets advanced (`BatchImplemented`); unconfirmed tickets return `StoppedAtImplement`.
 
 ### Multi-ticket / parallel dispatch failure modes
 
-- **Cycle in dependency graph:** `TopologicalSorter.ComputeLevels` throws `InvalidOperationException` listing the cycle members; `ParallelDispatcher` catches it and returns `ParallelDispatchResult(Success=false, ...)` with the message - no tickets run ([src/ThroughlineBuild.Phases/ParallelDispatcher.cs:44-52](../../src/ThroughlineBuild.Phases/ParallelDispatcher.cs#L44-L52), [src/ThroughlineBuild.Phases/TicketGraph.cs:86-90](../../src/ThroughlineBuild.Phases/TicketGraph.cs#L86-L90)).
-- **Partial failure of one ticket in a level:** the dispatcher is **not** continue-past-failure. After each level, if any ticket's outcome is outside the success set (`Completed`/`RatifiedObsolete`/`ParentCompleted`), it records the first failure and stops dispatching *subsequent* levels; the current level's already-running tickets finish ([src/ThroughlineBuild.Phases/ParallelDispatcher.cs:118-133](../../src/ThroughlineBuild.Phases/ParallelDispatcher.cs#L118-L133)). The CLI returns 1.
-- **Ancestor-skip (sequential fallback):** `AncestorSkipFilter` walks blocker edges; if an ancestor failed and `--continue-past-failure` is absent, the ticket gets a synthesized `Skipped` result and is never dispatched ([src/ThroughlineBuild.Phases/AncestorSkipFilter.cs:28-88](../../src/ThroughlineBuild.Phases/AncestorSkipFilter.cs#L28-L88)). `--continue-past-failure` disables the skip and lets later tickets run anyway.
-- **Recovery mid-batch:** completed tickets re-entered on a rerun resume at their landed state (Done -> chain refuses; InReview -> resumes at review/ship), so re-running the same batch is safe and naturally idempotent at the ticket level.
+- **Cycle:** `TopologicalSorter` throws; `ParallelDispatcher` returns `Success=false`, no tickets run.
+- **Partial failure:** the dispatcher stops dispatching subsequent levels after the first failure; the current level finishes (`failureReason` set, [src/ThroughlineBuild.Phases/ParallelDispatcher.cs:155-168](../../src/ThroughlineBuild.Phases/ParallelDispatcher.cs#L155-L168)). Exit code comes from `ChainExitCodeMapper.GetExitCode(ParallelDispatchResult)`, which preserves the first failing outcome's code.
+- **Ancestor-skip:** unchanged (`AncestorSkipFilter`, `--continue-past-failure`).
+- **Cancellation:** dispatcher records `failureReason = "cancelled"` (:93, :149).
 
-### `rework` (`ReworkPhase`)
+### `rework` / `new` / `scaffold` / `amend` / `close` / `defer` / `reopen`
 
-- **Wrong state:** `TicketNotInProgress` (exit 2). Ticket must be `InProgress` ([src/ThroughlineBuild.Phases/ReworkPhase.cs:62-70](../../src/ThroughlineBuild.Phases/ReworkPhase.cs#L62-L70)).
-- **No feedback available:** `NoFeedbackAvailable` (exit 3). Supply `--feedback "..."` or run a `review` first to produce a `Rework` verdict in the event log ([src/ThroughlineBuild.Phases/ReworkPhase.cs:83-92](../../src/ThroughlineBuild.Phases/ReworkPhase.cs#L83-L92)).
-- **Implement fails:** `ImplementFailed` (exit 4).
-- Multiple ticket ids are rejected up front for `rework` ([src/ThroughlineBuild.Cli/Program.cs:90](../../src/ThroughlineBuild.Cli/Program.cs#L90)).
-
-### `new` (`NewPhase`)
-
-- **Body file missing / unreadable:** `NewPhaseValidationException` with the IO error.
-- **Title missing:** `NewPhaseValidationException` "No title found: ...".
-- **Body empty:** `NewPhaseValidationException` "Body is empty".
-- **Non-fatal warnings** (missing Acceptance / Out of scope / Type, short body) are surfaced but do not block.
-- Draft-mode failure paths add: draft worker non-Ok, an unresolvable `body_markdown_ref` -> `DRAFT_BODY` fenced block with no legacy `body_markdown` fallback, missing required sections ([src/ThroughlineBuild.Phases/DraftPhase.cs:70-84](../../src/ThroughlineBuild.Phases/DraftPhase.cs#L70-L84)).
-
-### `scaffold` (`ScaffoldPhase`)
-
-- **Parse errors** (hard, e.g. missing H1): abort with `WasAbortedByParseErrors` ([src/ThroughlineBuild.Scaffold/ScaffoldPhase.cs:43-55](../../src/ThroughlineBuild.Scaffold/ScaffoldPhase.cs#L43-L55)).
-- **Validation errors:** abort with `WasAbortedByValidationErrors`.
-- **Warnings without `--accept-warnings`:** abort with `WasBlockedByWarnings`.
-- **Operation-ticket create failure:** collected as a `ScaffoldFailure(op_create, ...)`; processing continues but plans cannot be parented ([src/ThroughlineBuild.Scaffold/ScaffoldPhase.cs:124-152](../../src/ThroughlineBuild.Scaffold/ScaffoldPhase.cs#L124-L152)).
-- **Per-plan / per-brief create or parent-link failures:** collected in `ScaffoldFailure[]`; processing continues. Orphaned briefs are left visible for manual cleanup.
-- **`--dry-run`** previews counts without API calls.
-- **Not idempotent.** Reruns create duplicate operation/plan/brief tickets - no content-match against existing Plane tickets.
-
-### `amend` / `close` / `defer` / `reopen`
-
-Each rejects terminal state (or non-terminal for `reopen`) up front. `close`/`defer`/`reopen` build a `ReasonTranslator` lazily from `LlmClientFactory`; a missing Anthropic key **no longer fails the verb** (TLB-371). The `ConfigException` is caught, a `WARNING: LLM unavailable (...); recording reason verbatim without translation.` is logged, and an `EchoLlmClient` substitutes - the reason is recorded verbatim and the state transition still runs ([src/ThroughlineBuild.Cli/Program.cs:1727-1737](../../src/ThroughlineBuild.Cli/Program.cs#L1727-L1737)). Reason translation is now the only LLM consumer in the deterministic CLI and is fully optional.
-
-`close`/`defer` **cascade** the lifecycle transition to non-terminal children unless `--no-cascade`; a child cascade failure is logged to stderr and does not abort the parent ([src/ThroughlineBuild.Commands/CloseCommand.cs:48-64](../../src/ThroughlineBuild.Commands/CloseCommand.cs#L48-L64), [src/ThroughlineBuild.Commands/DeferCommand.cs:48-64](../../src/ThroughlineBuild.Commands/DeferCommand.cs#L48-L64)). They also produce **soft failures** for parent rollup and worktree decruft. `reopen` only notes a parent ticket - it does NOT reopen children ([src/ThroughlineBuild.Commands/ReopenCommand.cs:38-43](../../src/ThroughlineBuild.Commands/ReopenCommand.cs#L38-L43)).
+Shapes unchanged: `ReworkOutcome` enum (`Implemented` / `NoFeedbackAvailable` / `TicketNotInProgress` / `ImplementFailed`, [src/ThroughlineBuild.Phases/ReworkPhase.cs:8](../../src/ThroughlineBuild.Phases/ReworkPhase.cs#L8)); `new` validation exceptions; scaffold's collected `ScaffoldFailure[]` with duplicate-on-rerun; close/defer cascade soft-failures; reopen never reopens children. A missing Anthropic key degrades `close`/`defer`/`reopen` to verbatim-reason recording via `EchoLlmClient` with a stderr warning ([src/ThroughlineBuild.Cli/Program.cs:2255-2263](../../src/ThroughlineBuild.Cli/Program.cs#L2255-L2263), TLB-371).
 
 ### Loose ends
 
-- Decompose's "partial create is success" rule means a half-created fan-out still stamps `[decomposed_at]`; a rerun then duplicates whatever did get created.
-- The `ParallelDispatcher` "stop after level" behavior is coarser than the sequential `AncestorSkipFilter`; an unrelated ticket in a failed ticket's level may still have run.
+- Decompose's "partial create is success" rule still stamps `[decomposed_at]` over a half-created fan-out.
+- The `ParallelDispatcher` stop-after-level rule remains coarser than the sequential ancestor skip.
+- Gate vacuity proving covers only checks that declare a `canary` in config; un-canaried gating checks are advisory-`gate_unverified` forever.
 
 ---
 
 ## Cross-cutting failure modes
 
-### Worker CLI missing
+### Worker CLI missing or misconfigured
 
-- The worker subprocess launch (`process.Start()`) catches `Win32Exception` and returns a soft `WorkerResult(Status.Failed, "Worker executable not found: '<path>'. Verify it is on PATH or set workers.claude-code.executable in config.toml ...")` rather than crashing the process (0f9d114) ([src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs:89-96](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L89-L96)). The owning phase then fails normally.
+- `process.Start()` catches `Win32Exception` in all four agents and returns a soft `Status.Failed` `WorkerResult` ([src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs:106](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L106)).
+- **Unresolvable claude-code model fails fast (NEW, TLB-544):** `ClaudeCodeModelValidator.Validate` rejects anything that is not a tier alias (`haiku`/`sonnet`/`opus`) or a `claude-*` slug at config load with an operator-actionable `Config error` - the canonical trap being `model = "fable"`, which must be the full slug `claude-fable-5` ([src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeModelValidator.cs:22-47](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeModelValidator.cs#L22-L47), wired at [src/ThroughlineBuild.Cli/Config.cs:646](../../src/ThroughlineBuild.Cli/Config.cs#L646)). Previously this surfaced as a generic envelope error deep inside a chain.
+- **Undefined agent fails fast (NEW, TLB-512):** `default_agent` (or a `[workers.phases]` entry) naming an agent with no `[workers.<name>]` sub-table throws a `ConfigException` at load - "...there is no [workers.X] sub-table in config. Uncomment or add ... Configured agents: ..." ([src/ThroughlineBuild.Cli/Config.cs:679-686](../../src/ThroughlineBuild.Cli/Config.cs#L679-L686), message at :702-713) - instead of an unhandled exception at agent-resolution time. Exit 2 via the friendly handler.
 
-### Plane unreachable / throttled
+### Provider quota / rate-limit / auth during a worker session
 
-- Every Plane HTTP call first awaits `RequestThrottle.AcquireAsync` - a hard rate gate admitting at most `RequestsPerMinute` (default 40) calls per rolling minute, blocking when the budget is spent so the process stays well under Plane's server-side 60/min limit ([src/ThroughlineBuild.Plane/RequestThrottle.cs](../../src/ThroughlineBuild.Plane/RequestThrottle.cs), [src/ThroughlineBuild.Plane/PlaneClientOptions.cs:20](../../src/ThroughlineBuild.Plane/PlaneClientOptions.cs#L20)). The 40/min default leaves headroom for a second `build` instance sharing the same token. The throttle is process-wide, so parallel dispatch and parent chains stay under budget. The TLB-366 per-run snapshot cache further cuts call volume: the project is paginated once, then `FindIssueAsync`/`QueryAsync` answer from memory instead of re-paginating per ticket (the root cause of the throttle pressure that grew with the project).
-- On top of the gate, a Polly retry strategy retries up to `MaxRetryAttempts` (default 5) times on `PlaneApiException` with `Status == 429 || Status >= 500`, honoring a `Retry-After` header when present; other statuses throw immediately ([src/ThroughlineBuild.Plane/PlaneClientOptions.cs:26](../../src/ThroughlineBuild.Plane/PlaneClientOptions.cs#L26)). Unauthenticated (401/403) is not retried - it throws `PlaneApiException` and the CLI surfaces exit 1.
-- **Snapshot truncation:** the snapshot load is capped at `MaxListPages = 50` (5000 issues); hitting the cap with a live cursor writes a loud stderr warning that the snapshot is truncated and out-of-cap lookups will throw "not found" ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:819-826](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L819-L826)).
-- **Unknown ticket id in a multi-ticket chain:** `FindIssueAsync` throws `KeyNotFoundException` for a seq absent from the snapshot; the chain multi-ticket batch path catches it and exits 2 ("Ticket not found") rather than crashing unhandled ([src/ThroughlineBuild.Cli/Program.cs:1226-1231](../../src/ThroughlineBuild.Cli/Program.cs#L1226-L1231)).
+- `ProviderErrorClassifier.Classify` pattern-matches the worker's failure reason + summary into `RateLimitOrQuota` (usage/rate limit, quota, overloaded, 429/529) or `Auth` (invalid key, login/session expired, 401), with an optional `RetryAt` parsed from the message ([src/ThroughlineBuild.Workers.Common/ProviderErrorClassifier.cs:60-111](../../src/ThroughlineBuild.Workers.Common/ProviderErrorClassifier.cs#L60-L111)). Timeouts and cancellations are deliberately not provider errors.
+- Today only the **review** path consumes the classification (`ReviewUnavailable`, exit 9). A quota-blocked *implement* still surfaces as a plain `StoppedAtImplement`.
+
+### Plane unreachable / throttled (layered, TLB-545)
+
+Three layers, innermost first:
+
+1. **Rate gate:** every call awaits `RequestThrottle.AcquireAsync` - at most `RequestsPerMinute` (default 40) per rolling minute ([src/ThroughlineBuild.Plane/RequestThrottle.cs:49](../../src/ThroughlineBuild.Plane/RequestThrottle.cs#L49), [src/ThroughlineBuild.Plane/PlaneClientOptions.cs:20](../../src/ThroughlineBuild.Plane/PlaneClientOptions.cs#L20)).
+2. **HTTP-status retry:** Polly retries up to `MaxRetryAttempts` (default 5) on 429/5xx honoring `Retry-After` ([PlaneClientOptions.cs:26](../../src/ThroughlineBuild.Plane/PlaneClientOptions.cs#L26)); 401/403 throw immediately.
+3. **Transport retry (NEW):** `SendWithTransportRetryAsync` retries DNS/connect/TLS/timeout failures - errors where no HTTP status exists yet - up to `TransportRetryAttempts` (default 3) with exponential backoff (base 2s, cap 10s, +-25% jitter) ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:256-284](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L256-L284); options at [PlaneClientOptions.cs:47-53](../../src/ThroughlineBuild.Plane/PlaneClientOptions.cs#L47-L53)). Mid-flight failures (response ended, protocol error, client timeout) retry only **idempotent verbs** (GET/PATCH); POST never retries mid-flight (:300-326). Exhausted retries throw `TicketingUnavailableException` ([src/ThroughlineBuild.Contracts/TicketingUnavailableException.cs:11-16](../../src/ThroughlineBuild.Contracts/TicketingUnavailableException.cs#L11-L16)).
+
+`ChainPhase.RunAsync` catches `TicketingUnavailableException` at the per-ticket boundary and classifies it as the environmental outcome `TicketingUnavailable` (exit 11) instead of crashing the process ([src/ThroughlineBuild.Phases/ChainPhase.cs:154-181](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L154-L181)); the ticket's work is already committed on its branch, the chain is resumable once connectivity returns, and remaining siblings/roots are marked `Skipped`.
+
+Snapshot truncation is unchanged: the per-run snapshot load caps at `MaxListPages = 50` ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:1082](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L1082)) with a loud stderr warning; unknown ticket ids in a multi-ticket chain surface as "Ticket not found", exit 2.
 
 ### Anthropic rate-limited / key absent
 
-- Polly retries inside `AnthropicClient`; failures propagate as `AnthropicApiException`. The Anthropic key is used only for `close`/`defer`/`reopen`'s `ReasonTranslator`; the `LlmClientFactory` is invoked lazily for just those verbs, so an absent key is **soft** for the worker-driven phases (plan/implement/review/ship/chain/decompose), which use the worker CLI's own auth, not the Anthropic SDK (TLB-227). Since TLB-371 the key is no longer hard-required even for those three verbs - an absent key degrades to an `EchoLlmClient` that records the reason verbatim rather than failing ([src/ThroughlineBuild.Cli/LlmClientFactory.cs:8-29](../../src/ThroughlineBuild.Cli/LlmClientFactory.cs#L8-L29), [src/ThroughlineBuild.Cli/Program.cs:1727-1737](../../src/ThroughlineBuild.Cli/Program.cs#L1727-L1737)).
+Soft everywhere: worker-driven phases use the worker CLI's own auth; `close`/`defer`/`reopen` degrade to `EchoLlmClient` verbatim recording (TLB-371).
 
 ### git divergence / conflict
 
-- `ship` probes the diverged local/remote target branch via `ProbeDivergenceAsync` (`git merge-tree`). `DivergedNoConflict` auto-rebases the local target onto `<remote>/<target>` (unless `--no-auto-merge`), emitting `TargetAutoRebased`; `DivergedWithConflict`, a raced auto-rebase, or `--no-auto-merge` produce a `GateFailure` and fail at `Fetch` ([src/ThroughlineBuild.Phases/ShipPhase.cs:305-345](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L305-L345)). See [10-lifecycle-orchestration.md](10-lifecycle-orchestration.md) "Divergence and merge orchestration".
+Unchanged at the ship layer (`ProbeDivergenceAsync`, auto-rebase, `TargetAutoRebased`); the chain adds the integration-branch refresh (conflicted refresh stops before dispatch) and the landing's rebase-then-fast-forward (conflict stops with work preserved on the integration branch).
 
-### MainWorktreeLock contention
+### MainWorktreeLock contention / Ctrl-C / worker hangs / disk full / kill failures
 
-- The in-process `SemaphoreSlim` keyed on the normalized main-worktree path serializes the fetch / main-rebase / FF-merge across concurrent chains ([src/ThroughlineBuild.Helpers/MainWorktreeLock.cs:6-29](../../src/ThroughlineBuild.Helpers/MainWorktreeLock.cs#L6-L29)). Contention manifests as one chain waiting (not failing) for another's git op. It does NOT coordinate across separate `build` processes, so two concurrent invocations on the same repo can still race.
-
-### Claude Code worker hangs
-
-- `WorkerOptions.Timeout` (default 30 min via `workers.timeout_minutes`, verifier default 15 via `verifier_timeout_minutes`) triggers `CancellationTokenSource.CancelAfter` ([src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs:51](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L51), [src/ThroughlineBuild.Cli/Config.cs:218, 311](../../src/ThroughlineBuild.Cli/Config.cs#L218)). On cancellation the process tree is killed via `Process.Kill(entireProcessTree: true)` ([src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs:111](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L111)). Phase returns `Status.Failed`.
-
-### Ctrl-C
-
-- Every verb installs `Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };`. The active phase observes cancellation, kills worker subprocesses, and exits 1. Multi-ticket/parent dispatch also surfaces "Cancelled." and the dispatcher breaks with `failureReason = "cancelled"` ([src/ThroughlineBuild.Phases/ParallelDispatcher.cs:74-79, 109-114](../../src/ThroughlineBuild.Phases/ParallelDispatcher.cs#L74-L79)).
-
-### Disk full
-
-- Event-log writes fail; the sink throws. The phase observes the exception and surfaces a phase failure.
-
-### Process tree kill fails
-
-- `process.Kill(entireProcessTree: true)` is wrapped in `try { ... } catch { }`; the exception is swallowed ([src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs:111](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L111)). A stale subprocess can leak; the operator cleans up manually.
+Unchanged: in-process lock only (two `build` processes can still race); every verb installs a Ctrl-C handler that cancels the phase and kills worker process trees (`Process.Kill(entireProcessTree: true)`, swallowed on failure); worker timeouts via `WorkerOptions.Timeout` (default 30 min, verifier 15); event-sink write failures surface as phase failures.
 
 ### Loose ends
 
-- Since TLB-371 a missing/misconfigured Anthropic key is never a hard failure - even `close`/`defer`/`reopen` degrade to verbatim-reason recording - so a bad key surfaces only as a stderr warning, never an error exit.
-- `RequestThrottle` (40/min) + Polly are process-scoped; they do not protect against multiple `build` processes collectively exceeding Plane's server-side 60/min. The snapshot cache only sees this process's own writes, so a concurrent second `build` mutating the same project is invisible until the next run reloads.
+- `RequestThrottle` + retries remain process-scoped; concurrent `build` processes can collectively exceed Plane's server-side budget.
+- Provider-error classification is regex/phrase-based over worker output; a vendor wording change silently reverts `ReviewUnavailable` to `Fail`-shaped review failures.
+- `TicketingUnavailableException` is only caught at the chain boundary; standalone verbs (`plan`, `implement`, `ship`, ...) let it propagate as an ordinary error exit.
 
 ---
 
 ## Idempotency posture summary
 
-`build`'s rerun safety is **state-driven**: each phase enforces a precondition on the ticket state, and SHA markers (`[planned_at]` / `[implemented_at]` / `[shipped_at]` / `[decomposed_at]`) act as forward-progress guards rather than de-dup keys.
+`build`'s rerun safety is **state-driven**: each phase enforces a ticket-state precondition, and SHA markers act as forward-progress guards rather than de-dup keys.
 
-- A phase that already transitioned the ticket will fail its state guard on rerun (exit 1/2). The notable change: a failed `plan` now leaves the ticket in `Planning` (not `Backlog`), so its rerun is no longer a clean replay.
-- A phase that failed *before* transitioning is safe to rerun and replays the brief; Plane may accumulate duplicate comments / description appends if it died between writes - markers are not de-duplicated.
-- **Chain / multi-ticket / parent chain** are safe to re-run: each ticket resumes from its landed state, and completed tickets are skipped by their own guards. The chain now actively *reconciles* stuck states rather than refusing them - an interrupted `Planning` ticket is reset and replanned, and an `InProgress` ticket either resumes its rework or has its orphan branch pruned and reset to `Ready` (only `Done`/`Cancelled` refuse).
-- **Marker staleness no longer mis-triggers rework** (resolved). Both the implement drift check and the review reconstruction select the *freshest* marker by comment creation time rather than list order (TLB-412), and review attributes to the worktree HEAD when an implementer amended past its `[implemented_at]` marker (TLB-414) - previously a chain re-run could read a stale prior-run SHA and spuriously rework or review the wrong commit.
-- The most expensive non-idempotent verbs are `scaffold` (duplicate operation/plan/brief tree) and `decompose` (duplicate child sub-issues) - both must be cleaned up by hand in Plane.
+- A phase that already transitioned fails its state guard on rerun. Investigate-mode `plan` still parks failed runs in `Planning`; promote-mode `plan` (the default) has almost no window to fail mid-flight.
+- **Chain / multi-ticket / parent chain are safe to re-run** and now stronger than before: stuck states are reconciled (`Planning` reset, `InProgress` resumed with persisted check evidence), a reused integration branch is refreshed against its moved base (TLB-546) so resumed children never implement against a stale snapshot, and environmental stops (`GateEnvironmentFailure`, `TicketingUnavailable`, `ReviewUnavailable`) leave tickets cleanly resumable with no rework round burned.
+- **Cleanup is idempotent:** the chain success sweep and `build sweep` are merged-gated - re-running them can only remove already-merged artifacts; `--force` widens worktree removal but never branch deletion.
+- **Marker staleness** remains solved by freshest-marker selection (TLB-412) and HEAD attribution (TLB-414).
+- The most expensive non-idempotent verbs are still `scaffold` and `decompose` (duplicate ticket trees, hand cleanup in Plane).
 
 ---
 
 ## Loose ends
 
-- **No transactional Plane writes.** A phase interrupted between two writes leaves a partial state visible.
-- **No rollback verb.** There is no `build undo`.
-- **`scaffold` and `decompose` idempotency** are the biggest sharp edges - both create ticket trees with no content-match guard. Use `--dry-run` for scaffold.
-- **Push failure leaves a local-only merge.** A `Push`-stage failure lands the FF merge in the local base branch but leaves the ticket `InReview` and the remote behind; the operator must push manually or rerun.
-- **Decruft / branch-delete failures during ship are non-fatal** (post-`Done`) but only visible on stderr - scripted callers might miss them.
-- **`Status.Escalate`** is now differentially handled in the chain (obsolete-claim ratification) but not in standalone `plan`/`implement` verbs, which just return the failure.
-- **Ctrl-C in the middle of a Plane write** can leave the ticket half-updated because each HTTP call is atomic but a phase makes several.
+- **No transactional Plane writes; no rollback verb.** Unchanged.
+- **`scaffold` / `decompose` duplication** remains the sharpest edge; use `--dry-run`.
+- **Push failure leaves a local-only merge** (ship `Push` stage; chain `chain_landing_push_failed`) - operator pushes manually or reruns.
+- **`Status.Escalate`** is handled by the chain (obsolete-claim ratification) but standalone `plan`/`implement` still just fail.
+- **Ctrl-C between Plane writes** can still leave a half-updated ticket.
+- **Exit codes 8-11 are new public surface** (`GateVacuous`, `ReviewUnavailable`, `GateEnvironmentFailure`, `TicketingUnavailable`); scripted callers written against the old 0-7 range will misclassify them as generic failures.

@@ -1,19 +1,24 @@
 # tests/ - xUnit test suites
 
-One test project mirrors each `src/` library (19 projects, all net10.0,
-~1200 `[Fact]`/`[Theory]` across ~230 files). Run all: `dotnet test`.
+One test project mirrors each `src/` library (19 in the sln; ignore untracked
+local dirs), all net10.0, ~2200 `[Fact]`/`[Theory]` across ~200 files. Run
+all: `dotnet test` (tests/Directory.Build.props defaults to test.runsettings:
+quiet on green, full output on failure).
 
-AOT discipline: test projects do NOT inherit `PublishAot=true` from the Cli
-project, so AOT-sensitive paths flip reflection off explicitly before exercising
-the parser:
+AOT discipline: test projects do NOT inherit `PublishAot=true`, so
+AOT-sensitive paths flip reflection off explicitly first:
 `AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false)`.
-Keep this when adding parser/serialization tests, or they pass under reflection
-and miss the AOT regression they exist to catch. Coverage is concentrated in
-`Workers.ClaudeCode.Tests` and `Workers.Common.Tests`.
+Keep this when adding parser/serialization tests, or they pass under
+reflection and miss the AOT regression they exist to catch.
 
-Shared doubles (stubs/fakes) cover ticketing, workers, sinks, console, git, and
-LLM clients - reuse them rather than rolling new ones.
+Doubles are per-project copies, not a shared library: most projects carry
+their own `FakeTicketing`, `FakeEventSink`, `FakeGitClient`,
+`FakeWorkerAgent`, etc. Reuse the project-local ones. Console/diagnostic
+muting is assembly-wide via `[ModuleInitializer]` (`TestConsoleSilencer`,
+`TestDiagnosticsSilencer`); tests that assert on output capture it locally
+with `Console.SetOut`.
 
-Snapshot infrastructure lives in `ThroughlineBuild.Briefs.Tests`
-(`Templates/` + `Snapshots/`, both pinned to LF via `.gitattributes`). A brief
-or template change will require a snapshot update.
+Snapshot infrastructure lives in `ThroughlineBuild.Briefs.Tests` (`Snapshots/`
++ `Templates/`, LF-pinned via `.gitattributes`) - template changes need a
+snapshot update. Fable stream-json NDJSON fixtures live in
+`Workers.ClaudeCode.Tests/Fixtures/`.

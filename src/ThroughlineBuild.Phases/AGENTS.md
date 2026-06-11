@@ -1,26 +1,27 @@
 # ThroughlineBuild.Phases - workflow phases + orchestration
 
-Nine phase classes implementing the lifecycle: `PlanPhase`, `ImplementPhase`,
-`ReviewPhase`, `ShipPhase`, `ChainPhase`, `ReworkPhase`, `DecomposePhase`,
-`NewPhase`, `DraftPhase`.
-
-Multi-ticket orchestration also lives here: `ParallelDispatcher`, `TicketGraph`
-(+ `TopologicalSorter` in the same file), `AncestorSkipFilter`,
-`EarlyExitManifest`. The old `TicketDependencyGraph` was REMOVED (op-29); only
-`TicketGraph` remains.
+Ten phase classes: `PlanPhase`, `ImplementPhase`, `GatePhase`, `ReviewPhase`,
+`ShipPhase`, `ChainPhase`, `ReworkPhase`, `DecomposePhase`, `NewPhase`,
+`DraftPhase`. `GatePhase` runs between implement and review in the chain loop;
+its check running, vacuity proof, and base-ref control run live in
+`Verification`. Multi-ticket orchestration: `ParallelDispatcher` (concurrency
+pinned to 1), `TicketGraph` (+ `TopologicalSorter` in the same file),
+`AncestorSkipFilter`, `EarlyExitManifest`, `ReworkRoundManifest` (--debug
+side-channel), `BatchCommitVerifier` (re-derives batch commit attribution
+from git state - never trust worker-reported SHAs).
 
 Things that bite:
-- Dispatch is SERIAL end to end. `ParallelDispatcher` pins concurrency to 1
-  (op-29; `--max-parallel`/ForceParallel gone). `ChainPhase` parent recursion
-  bypasses the dispatcher and runs its own `SemaphoreSlim(1,1)` level loop;
-  children run in dependency-ordered levels, one at a time.
-- Parent chain creates ONE shared worktree on placeholder branch `chain/{slug}`;
-  each child cuts its `ticket/{id}` branch in place, torn down once at chain end.
-- `ChainPhase` runs the implement->review loop with `MaxReworkRounds = 2`, then
-  ships. Hygiene gates (`WorkingTreeHygieneGate`) run pre-implement, at chain
-  preflight, and pre-ship, plus post-phase worktree-cleanliness checks.
-- `ShipPhase` mutates and PUSHES the target branch in the main worktree, with a
-  preflight guard against shipping onto the wrong branch.
+- Everything is SERIAL. Parent chains run children level-by-level in
+  dependency order inside ONE shared integration worktree on `chain/{slug}`;
+  a reused integration branch is refreshed against its base ref first
+  (TLB-546). Children cut `ticket/{id}` branches in place; root landing
+  rebases + fast-forwards the integration branch onto the target.
+- `--batch-implement` sends all Ready/Backlog LEAF children to one worker
+  session; internal nodes fall through to per-child parent recursion.
+- Implement->review rework loop caps at `MaxReworkRounds = 2`. Environmental
+  failures (gate control run, ticketing unavailable) skip remaining siblings.
+- `ShipPhase` mutates and PUSHES the target branch in the main worktree, with
+  `WorkingTreeHygieneGate` preflights (also pre-implement and chain preflight).
+- `ChainPhase` construction lives in Cli's `ChainPhaseComposition`.
 
-State transitions and full lifecycle:
-[../../docs/state-of-the-system/10-lifecycle-orchestration.md](../../docs/state-of-the-system/10-lifecycle-orchestration.md).
+Lifecycle detail: [../../docs/state-of-the-system/10-lifecycle-orchestration.md](../../docs/state-of-the-system/10-lifecycle-orchestration.md).

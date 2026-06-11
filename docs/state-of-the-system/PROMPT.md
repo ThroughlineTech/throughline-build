@@ -26,6 +26,11 @@ what it was given, so the set stays reproducible and updatable on later runs.
    reads the existing `PROMPT.md`, updates docs in place, and appends to the
    refresh history. If the prompt text itself changed, it updates the verbatim
    copy in `PROMPT.md` and notes what changed.
+4. Between refreshes, any agent whose change alters a documented surface
+   updates the affected doc sections in the same change set as the code,
+   following "Keeping the set current (update-as-you-go)" in the PROMPT body.
+   Full refreshes reconcile drift; update-as-you-go keeps the set trustworthy
+   in between.
 
 ---
 
@@ -61,14 +66,27 @@ Write it for where the repo is **today**, broken into logical sections.
 - **Code-true.** Read from source, not from existing docs or specs. Where a
   doc and the code disagree, the code wins, and note the disagreement.
 - **Cite `file:line` for every claim.** No assertion about behavior without a
-  reference.
-- **Point to schemas and contracts, do not reproduce them.** Reference schema
-  files, type definitions, and contract files by path. Keep the prose at the
-  level of what they mean and how they are used.
+  reference. Every citation must carry the symbol it points at (type, member,
+  config key, or section heading) alongside the line number - line numbers
+  drift within days of a refresh; symbol names survive. Never emit a bare
+  line-number column in an inventory table: cite the registration site once
+  in the prose above the table instead.
+- **Point to schemas, contracts, and registries - do not reproduce them.**
+  Reference schema files, type definitions, and contract files by path. Keep
+  the prose at the level of what they mean and how they are used. The same
+  rule covers any enumerable surface declared in one source location -
+  endpoint maps, metric catalogs, parser registries, options classes: point
+  at the declaration site, summarize its shape and count, and transcribe only
+  the entries the surrounding prose actually discusses. A transcribed table
+  is stale the day the registry changes; a pointer is not.
 - **Status-tag every command and major code path** as one of: Functional,
   Partial, Legacy, Aspirational, Broken.
 - **End every section with a "loose ends" call-out** - declared but unused
   capabilities, dead references, planned-but-not-shipped behavior, known gaps.
+- **Stamp freshness on every doc.** Each doc in the set carries a header line
+  `Last refreshed: <date> (HEAD <sha>)`, updated whenever that doc is touched
+  for any reason. A reader must always be able to bound the staleness of what
+  they are reading.
 - If a CONFIG question has no implementation, answer it explicitly as "not
   implemented" and name the boundary where it would live.
 
@@ -121,6 +139,46 @@ index/README that carries a short architectural map and a one-line summary of
 each doc. Standalone-readable documents - one per logical section. Split into
 several documents rather than one long file.
 
+The `00` index must also carry two short standing notes:
+
+- **"Trusting this set"** - every claim is point-in-time at the HEAD in each
+  doc's header. Before relying on a claim about code that may have moved, run
+  `git log <docHEAD>..HEAD --oneline -- <cited paths>` and treat claims about
+  changed files as unverified until re-checked. Say plainly that a stale
+  status tag (e.g. Aspirational) may have inverted since the stamp.
+- **"Keeping this set current"** - a pointer to the update-as-you-go contract
+  below, so an agent that lands here during feature work learns the duty to
+  update affected sections in the same change set as the code.
+
+### Keeping the set current (update-as-you-go)
+
+The set has two maintenance modes, and both are first-class:
+
+- **Refresh** - a session run from this prompt. Full refreshes re-verify the
+  whole set against HEAD; targeted refreshes re-verify only the docs named in
+  the request.
+- **Update-as-you-go** - any agent whose change alters a documented surface
+  updates the affected doc sections in the same change set as the code. Doc
+  updates are part of the change, not deferred to the next refresh.
+
+A change alters a documented surface when it adds, removes, or re-shapes
+anything the set inventories: an endpoint or its auth requirements, a database
+table or migration, a background worker, a page or route, a tool or script, a
+config key or secret file, a cross-process contract - or anything that flips
+a status tag (e.g. Aspirational work landing as Functional).
+
+The update-as-you-go contract:
+
+1. Edit only the sections the change affects; do not re-verify unrelated
+   docs.
+2. Update the `Last refreshed` header of every doc touched to the current
+   date and HEAD.
+3. Append a row to the refresh history in `PROMPT.md` with scope `targeted`,
+   naming the docs touched and the change that drove the edit.
+4. If landed code is tagged Aspirational, Partial, or Broken in an existing
+   doc, fix the tag in the same change. An inverted status tag is the most
+   damaging form of staleness, because the set claims verification.
+
 ### PROMPT.md (required deliverable)
 
 Write a `PROMPT.md` alongside the doc set containing:
@@ -134,8 +192,11 @@ Write a `PROMPT.md` alongside the doc set containing:
 - **How the prompt was interpreted.** Any judgment calls made - what "main
   focus" was taken to mean, what was deliberately covered lightly, how
   ambiguous instructions were resolved.
-- **Refresh history.** A table: date, branch / HEAD commit, notes on what
-  changed in that pass.
+- **Refresh history.** A table: date, branch / HEAD commit, scope (`full` or
+  `targeted`), notes on what changed in that pass. Every edit to the set
+  appends a row - full refreshes, targeted refreshes, and update-as-you-go
+  edits made during feature work. An edit without a history row makes the
+  recorded history unreliable, which defeats its purpose.
 
 On every later run, update `PROMPT.md` in place: refresh the verbatim prompt
 if it changed, update the document set list, and append a row to the refresh
@@ -167,6 +228,8 @@ src/ThroughlineBuild.Workers.ClaudeCode/  - vendor-worker template, adding a ven
 src/ThroughlineBuild.Briefs/Templates/    - per-agent templates, LF/snapshot trap
 src/ThroughlineBuild.Plane/               - sole ITicketing, snapshot cache, throttle
 src/ThroughlineBuild.Phases/              - phases + multi-ticket orchestration
+src/ThroughlineBuild.Scaffold/            - op-doc parsing + profile derivation
+src/ThroughlineBuild.Verification/        - gate provers, stack-agnostic rule
 tests/                                    - AOT-switch discipline, shared doubles, snapshots
 ```
 
@@ -192,16 +255,16 @@ prose, `file:line` references throughout.
 | File | Description |
 |---|---|
 | `00-index.md` | Architectural map + one-line summary per doc + status legend. |
-| `01-inventory.md` | The 17 CLI verbs (incl. `settarget` and `user-guide`), 19 src projects (1 entry + 18 libraries), 2 AOT tools (`token-audit`, `analyze-event-log`), scripts and CI - what each is, what it reads/writes, status. |
+| `01-inventory.md` | The 21 CLI verbs (incl. `setup`, `sweep`, `models refresh`, `op-doc`), 19 src projects (1 entry + 18 libraries), 2 AOT tools (`token-audit`, `analyze-event-log`), scripts and CI - what each is, what it reads/writes, status. |
 | `02-install-build-run.md` | Toolchain, `build.sh`, `dotnet publish` flow, host requirements, update / uninstall. |
 | `03-external-dependencies.md` | Plane REST API, Anthropic REST API, `claude` CLI, NuGet packages, handshake on missing dependency. |
 | `04-configuration.md` | `.build/config.toml` sections, env vars, secrets, precedence. |
 | `05-state-and-persistence.md` | `.build/`, `.worktrees/`, Plane writes, in-process caches, cleanup. |
-| `06-public-surfaces.md` | CLI surface, library-level public types, stability call-outs (`WORKER_RESULT` envelope, marker comments, JSONL schema). |
+| `06-public-surfaces.md` | CLI surface (incl. the tiered help system), library-level public types, stability call-outs (`WORKER_RESULT` envelope + fenced blocks + `COMPLETION_CLAIM`, marker comments, JSONL schema). |
 | `07-contracts.md` | Inter-project contracts within this repo, shared artifacts with Plane / Claude Code / the older claude-config flow. |
 | `08-workspace-assumptions.md` | Branch conventions, required tooling, OS specifics, CI matrix, worktree-aware behavior. |
 | `09-failure-modes.md` | Per-phase failure modes, idempotency posture, cross-cutting failure modes. |
-| `10-lifecycle-orchestration.md` | The state machine, per-phase step sequences, chain rework loop (`MaxReworkRounds = 2`), event kinds emitted. |
+| `10-lifecycle-orchestration.md` | The state machine, per-phase step sequences (incl. `GatePhase`), integration-branch chain traversal, batch implement, chain rework loop (`MaxReworkRounds = 2`), event kinds emitted. |
 | `11-llm-architecture.md` | The two LLM layers - the wired four-vendor worker layer (`IWorkerAgent`) and the built-but-unwired model-client layer (`ILlmClient` / `IModelClient`) - vendor-specific code map, what it takes to add a new provider. Added 2026-05-28 by request to support multi-provider planning; rewritten 2026-05-30 once the multi-provider worker set actually landed. |
 | `PROMPT.md` | This file. |
 
@@ -213,8 +276,9 @@ sibling `CLAUDE.md` (`@AGENTS.md` import shim): `src/`,
 `src/ThroughlineBuild.Cli/`, `src/ThroughlineBuild.Contracts/`,
 `src/ThroughlineBuild.Workers.Common/`, `src/ThroughlineBuild.Workers.ClaudeCode/`,
 `src/ThroughlineBuild.Briefs/Templates/`, `src/ThroughlineBuild.Plane/`,
-`src/ThroughlineBuild.Phases/`, `tests/`. They point back into this set and are
-re-verified against HEAD on each refresh.
+`src/ThroughlineBuild.Phases/`, `src/ThroughlineBuild.Scaffold/`,
+`src/ThroughlineBuild.Verification/`, `tests/`. They point back into this set
+and are re-verified against HEAD on each refresh.
 
 Set evolution:
 - 2026-05-28 - initial publication (12 documents: 00-index, 01-10, PROMPT.md).
@@ -223,6 +287,7 @@ Set evolution:
 - 2026-06-02 - added the "Nested AGENTS.md breadcrumbs" deliverable to the verbatim prompt and created the first set of breadcrumb files (9 `AGENTS.md` + 9 `CLAUDE.md` shims listed above). This is the first change to the verbatim PROMPT body since publication: a new required-deliverable subsection was appended; no existing prompt rules were reworded or removed. No numbered docs were added or rewritten.
 - 2026-06-01 - code-true refresh against HEAD `e8d9a95` (52 commits past `68d6fa2`). No documents added or removed; the same 13-file set was updated in place. Major deltas absorbed: the new `settarget` verb and `[work].target_branch` config; target-branch-aware ship (configurable merge destination, preflight wrong-branch guard, `MainAutoRebased` -> `TargetAutoRebased`, progress/`--debug` stderr output); the op-27 fenced-block payload protocol (parser pre-pass + `FencedBlockResolver` + new AOT `MarkdownRenderer`, migrating plan/implement/review/draft bodies out of JSON-string metadata); the TLB-366 per-run Plane issue snapshot cache with `next_page_results` pagination and write-through updates (throttle re-confirmed at 40/min); the AOT ILC OOM mitigation; TLB-329 sibling-`blocked_by` dependency-ordered parent-chain levels with the `--max-parallel` override; and state-aware implement guidance.
 - 2026-06-02 - code-true refresh against HEAD `420d9c4` (57 commits past `e8d9a95`). No documents added or removed; the same 13-file set was updated in place and all 9 breadcrumb `AGENTS.md` files re-verified against HEAD. Major deltas absorbed: the net10 SDK upgrade across all 19 projects (and CI/build.sh paths); the new `user-guide` verb (TLB-322) and interactive `build init` prompting (TLB-370); the op-29 chain rework (one shared `chain/{slug}` worktree per parent chain with `ticket/{id}`-only child branches, `ParallelDispatcher` concurrency hard-pinned to 1 so dispatch is serial and the `--max-parallel`/`ForceParallel` surface is gone, removal of `TicketDependencyGraph` leaving the single live `TicketGraph`, working-tree hygiene gates before implement/chain/ship plus post-phase cleanliness validation, the repo-global `git stash` ban for workers and verifiers, chain-commit-range handoff into the implement brief, per-phase START notices, sibling lowest-number-first ordering, and chain resume of Planning/InProgress states); ship target/push changes (`--no-push` local-only merge, baseline-aware regression checks, unconditional detached-HEAD guard); freshest-marker-by-timestamp selection and review-attributes-to-HEAD (TLB-412/414); config validation (unknown-key warnings TLB-405, required-field annotations TLB-369); the PlanPhase promote path (TLB-374, `--from-brief`); and the default-agent split (shipped template/`build init` default `claude-code`, checked-in operator `.build/config.toml` default `codex`). The verbatim prompt above was unchanged from the prior run.
+- 2026-06-11 - full code-true refresh against HEAD `3a73eb9` (~250 commits past `420d9c4`). No numbered docs added or removed; all 13 files updated in place. The verbatim PROMPT body changed upstream on 2026-06-10 (commit `202ba8d` to `state-of-the-system-prompt.md`): symbol-bearing citations (no bare line-number table columns), registry-pointer rule for enumerable surfaces, per-doc `Last refreshed` freshness headers, two standing notes in the `00` index ("Trusting this set", "Keeping this set current"), a new "Keeping the set current (update-as-you-go)" section, and a `scope` column in the refresh history. All of these were applied across the set this pass, and the scope column was backfilled onto prior rows. Two breadcrumb pairs added (`src/ThroughlineBuild.Scaffold/`, `src/ThroughlineBuild.Verification/`), bringing the breadcrumb set to 11 directories.
 
 ---
 
@@ -283,15 +348,26 @@ Set evolution:
 - **Default-agent split stated both ways.** The shipped template and `.example` (and therefore `build init`) still default to `claude-code`; the checked-in operator `.build/config.toml` defaults to `codex`. There is no hardcoded vendor default in C# (`default_agent` is required config). The docs state both rather than picking one, and flag the template-vs-live drift as a loose end in `04`.
 - **Stale `CliUsage.cs` ship string re-checked.** The prior refresh recorded `CliUsage.cs:12` as wrongly describing ship as local-only/no-push; at HEAD that string has been corrected (it documents push plus `--no-push`). The remaining documented disagreement is `docs/throughline-build-architecture.md`, which still posits never-push semantics; the code wins.
 
+**2026-06-11 refresh judgment calls.**
+
+- **Prompt-source merge.** The generic prompt file ([state-of-the-system-prompt.md](state-of-the-system-prompt.md), updated 2026-06-10 in `202ba8d`) now carries `Repo: tradetrack2` in its CONFIG - it was re-filled for use on another repository. The CONFIG in this set's verbatim copy stays `latticeflow`; only the PROMPT body changes were adopted. The "Nested AGENTS.md breadcrumbs" subsection, which is latticeflow-specific and was never in the generic source, is retained in this set's verbatim prompt.
+- **No new documents.** The ~250-commit interim was the largest yet (the gate ecosystem, the integration-branch chain rework, batch implement, four new verbs, the tiered help system, the connected `init` bootstrap, the worker telemetry layer) but every delta maps onto the existing ten-question structure: the gate into `09`/`10`, its contracts into `06`/`07`, the new verbs into `01`/`02`/`06`, config growth into `04`, worktree/sweep lifecycle into `05`/`08`, worker changes into `03`/`11`.
+- **Parallel sub-agent execution.** This pass was executed by six concurrent sub-agents over disjoint doc groups, with cross-doc facts (EventKind 14, Phase 11, ChainOutcome 20, chain exit codes 0-11, plan promote-by-default, the `default_agent` re-convergence to `claude-code`) reconciled centrally before the index and this file were written. One agent died mid-run on a transient API error and was resumed; its first pass had completed `10` and not touched `11`, and both were verified complete after the resume.
+- **Scope-column backfill.** The new refresh-history `scope` column was backfilled onto prior rows: the two whole-set passes and the two code-true refreshes as `full`, the `11-llm-architecture.md` addition and the breadcrumb-creation pass as `targeted`.
+- **`CliUsage.UsageText` flipped to Legacy.** The tiered help registry under `src/ThroughlineBuild.Cli/Help/` is what `build help`/`-h` actually serves; `CliUsage.UsageText` has zero production references and already lags the code (it documents chain exit codes only through 9 while `ChainExitCodeMapper` emits 10 and 11). Recorded as a source-side staleness, not a doc one.
+- **Untracked Linear debris.** `src/ThroughlineBuild.Linear/` (and two test directories) exist on disk as untracked `bin/`/`obj/` output only - no tracked sources, not in the solution. Documented as debris with the project count held at 19 rather than counted as a 20th project.
+- **`ParentHasGrandchildren` tagged Legacy.** The enum value, exit mapping, and triage text survive, but the depth-capped recursion (`MaxDepth=16`) means the outcome is no longer produced. The docs keep the value documented (it is public surface) and tag the path Legacy.
+
 ---
 
 ## Refresh history
 
-| Date | HEAD commit | Notes |
-|---|---|---|
-| 2026-05-28 | `164e733` on `main` | First publication. 12 documents created (00-index, 01-10, PROMPT.md). Doc set built from `Program.cs`, the 14 `ThroughlineBuild.*` projects, `tests/`, `docs/throughline-build-architecture.md`, `.build/config.toml.example`, `.claude/plane-config.md`, `.claude/ticket-config.md`, `.github/workflows/build.yml`, `build.sh`, `.gitignore`, `.gitattributes`. |
-| 2026-05-28 | `164e733` on `main` | Added [11-llm-architecture.md](11-llm-architecture.md) at operator request: a dedicated map of LLM interfaces (`ILlmClient`, `IWorkerAgent`), vendor-specific code locations, and the architectural choices required to add a second provider. Updated `00-index.md` and this `PROMPT.md` to reference the new doc. No other docs touched. |
-| 2026-05-30 | `68d6fa2` on `main` | Full code-true refresh; baseline `164e733` was ~150 commits behind. All 13 files rewritten in place against HEAD source (no docs added/removed). Major code deltas absorbed: project count 14 -> 19 (`ModelClient`, `Workers.Common`, `Workers.Codex`, `Workers.Gemini`, `Workers.Copilot`); four wired worker agents replacing the claude-only worker (`WorkerAgentFactory`, per-agent config/sizes/templates, `WorkerSize`); `ClaudeCodeReviewer` -> `WorkerAgentReviewer`; `WorkerResultParser` relocated to `Workers.Common`; new verbs `decompose`/`init`/`list`; multi-ticket and tree-aware chain (`ParallelDispatcher`, `TopologicalSorter`, `AncestorSkipFilter`, parent recursion, all-children-Done ship gate, cascade close/defer); obsolete-claim ratification (`ObsoleteRatifier`, `TicketSubsumed`); divergence probe + auto-rebase + push-after-FF (`DivergenceState`, `MainAutoRebased`, `MainWorktreeLock`); Plane surface extensions (`QueryAsync`/`TransitionLifecycleAsync`/`UpdateDescriptionAsync`/`CreateChildTicketsAsync`, issue-type name->UUID, `RequestThrottle` 60/min, `?next_path=` deep-link); `EventKind` 9 -> 13, `Phase` 9 -> 10; `ANTHROPIC_API_KEY` hard gate removed (lazy `LlmClientFactory`); `IModelClient`/`AnthropicModelClient` SSE streaming built and tested but unwired. The verbatim prompt above was unchanged from the prior run. |
-| 2026-06-02 | `80b07a3` on `main` | Breadcrumb pass (no numbered-doc rewrite). Added the "Nested AGENTS.md breadcrumbs" required-deliverable subsection to the verbatim prompt and created the first breadcrumb set: 9 `AGENTS.md` files (`src/`, `Cli`, `Contracts`, `Workers.Common`, `Workers.ClaudeCode`, `Briefs/Templates`, `Plane`, `Phases`, `tests/`) each with a sibling `CLAUDE.md` `@AGENTS.md` import shim so Claude Code loads them. First change to the verbatim PROMPT body since publication; the change is additive (new subsection only). Root `AGENTS.md`/`CLAUDE.md` left untouched (ticket-workflow files). |
-| 2026-06-01 | `e8d9a95` on `main` | Code-true refresh; 52 commits past `68d6fa2`. All 13 files updated in place (no docs added/removed). Major code deltas absorbed: new `settarget` verb (`SetTargetCommand`, dispatched pre-config-load) + `[work].target_branch` config + `BuildConfig.ResolveTargetBranch()`; target-branch-aware ship (`ShipOptions.TargetBranch`, target-aware `BaseRefResolver`, preflight `wrong_worktree_branch` guard, `MainAutoRebased` -> `TargetAutoRebased` rename at ordinal 10, FF-merge+push to the configured target, `--debug`/progress stderr output, worktree create-from-local-branch fallback); op-27 fenced-block payload protocol (TLB-333..342: `WorkerResultParser` fenced pre-pass + `FencedBlockResolver`, new AOT `MarkdownRenderer` in `Workers.Common`, `WorkerResult.Blocks`, plan/implement/review/draft bodies migrated to `PLAN_BODY`/`IMPLEMENT_SUMMARY`/`REVIEW_CRITIQUE`/`DRAFT_BODY` blocks via `*_ref` metadata); TLB-366 per-run Plane issue snapshot cache (`_seqToUuid`/`_issueByUuid`, single-flight load, write-through `AddOrUpdate`, `next_page_results` pagination, loud truncation warning at `MaxListPages=50`, `KeyNotFoundException` catch in the chain batch path) - throttle re-confirmed at 40/min; AOT ILC OOM mitigation (`IlcOptimizationPreference=Size`, `IlcMaxParallelism=1`, `RunAsync` split); TLB-329 sibling-`blocked_by` dependency-ordered parent-chain levels + `--max-parallel`/`ForceParallel` override; state-aware implement guidance on non-Ready tickets; embedded-but-unsurfaced user-guide template (TLB-320). `EventKind` stays at 13 (rename only), `Phase` stays at 10. Verbatim prompt unchanged. Note: `PlaneTicketingClient.cs` cites in `03`/`05` shifted ~+300 lines; snapshot/pagination references re-verified, some untouched prose cites left at prior neighborhood. |
-| 2026-06-02 | `420d9c4` on `main` | Code-true refresh; 57 commits past `e8d9a95`. All 13 files updated in place (no docs added/removed) and all 9 breadcrumb `AGENTS.md` files re-verified against HEAD. Major code deltas absorbed: **net10 upgrade** (97e6a87) retargeting all 19 `csproj` to `net10.0` (CI `setup-dotnet 10.x`, `build.sh`/CI publish from `net10.0/` paths); **new `user-guide` verb** (TLB-322, `UserGuideCommand`/`UserGuideLoader`, writes `docs/throughline_build_userguide.md`) and **interactive `build init`** (TLB-370, TTY-gated prompting); the **op-29 chain rework** - one shared `chain/{slug}` worktree per parent chain with in-place `ticket/{id}`-only child branches (TLB-408), `ParallelDispatcher` concurrency hard-pinned to 1 (dispatch now serial; `--max-parallel`/`ForceParallel` removed), `TicketDependencyGraph` deleted (single live `TicketGraph` + `TopologicalSorter` remains, resolving the prior two-type overlap), `WorkingTreeHygieneGate` preflight before implement/chain/ship + post-phase cleanliness validation (TLB-396/400/402/407), repo-global `git stash` ban for workers and read-only verifier, chain-commit-range handoff into the implement brief (`ChainCommitRange`/`HandoffPointerEnabled`), per-phase START notices (TLB-415), sibling lowest-number-first ordering (TLB-397), children stacking on the accumulating base (TLB-411), and chain resume of Planning/InProgress states (652682d); **ship** `--no-push` local-only merge + `[ship].push` (TLB-409), resolved-target surfacing + `[work].target_branch` validation (TLB-410), baseline-aware regression checks (TLB-401, `.worktrees/baseline-{sha}`), unconditional detached-HEAD guard (TLB-402); **markers** freshest-by-timestamp selection (TLB-412) and review-attributes-to-worktree-HEAD (TLB-414, `implemented_at_superseded`); **config** unknown-key warnings (TLB-405), required-field annotations (TLB-369), `[plan].mode` promote + PlanPhase promote path (TLB-374, `--from-brief`), `[llm] default_model` deprecated for worker-model selection; **close/defer/reopen** degrade to verbatim reason via `EchoLlmClient` when no LLM key (TLB-371); **default-agent split** (template/`build init` -> `claude-code`, checked-in `.build/config.toml` -> `codex`, 420d9c4). `EventKind` stays at 13, `Phase` stays at 10. Verbatim prompt unchanged. Note: `Config.cs` cites in `04` shifted ~+250 lines and `Program.cs` cites moved throughout; changed cites were re-verified against HEAD, a few untouched-prose cites left at prior neighborhood. |
+| Date | HEAD commit | Scope | Notes |
+|---|---|---|---|
+| 2026-05-28 | `164e733` on `main` | full | First publication. 12 documents created (00-index, 01-10, PROMPT.md). Doc set built from `Program.cs`, the 14 `ThroughlineBuild.*` projects, `tests/`, `docs/throughline-build-architecture.md`, `.build/config.toml.example`, `.claude/plane-config.md`, `.claude/ticket-config.md`, `.github/workflows/build.yml`, `build.sh`, `.gitignore`, `.gitattributes`. |
+| 2026-05-28 | `164e733` on `main` | targeted | Added [11-llm-architecture.md](11-llm-architecture.md) at operator request: a dedicated map of LLM interfaces (`ILlmClient`, `IWorkerAgent`), vendor-specific code locations, and the architectural choices required to add a second provider. Updated `00-index.md` and this `PROMPT.md` to reference the new doc. No other docs touched. |
+| 2026-05-30 | `68d6fa2` on `main` | full | Full code-true refresh; baseline `164e733` was ~150 commits behind. All 13 files rewritten in place against HEAD source (no docs added/removed). Major code deltas absorbed: project count 14 -> 19 (`ModelClient`, `Workers.Common`, `Workers.Codex`, `Workers.Gemini`, `Workers.Copilot`); four wired worker agents replacing the claude-only worker (`WorkerAgentFactory`, per-agent config/sizes/templates, `WorkerSize`); `ClaudeCodeReviewer` -> `WorkerAgentReviewer`; `WorkerResultParser` relocated to `Workers.Common`; new verbs `decompose`/`init`/`list`; multi-ticket and tree-aware chain (`ParallelDispatcher`, `TopologicalSorter`, `AncestorSkipFilter`, parent recursion, all-children-Done ship gate, cascade close/defer); obsolete-claim ratification (`ObsoleteRatifier`, `TicketSubsumed`); divergence probe + auto-rebase + push-after-FF (`DivergenceState`, `MainAutoRebased`, `MainWorktreeLock`); Plane surface extensions (`QueryAsync`/`TransitionLifecycleAsync`/`UpdateDescriptionAsync`/`CreateChildTicketsAsync`, issue-type name->UUID, `RequestThrottle` 60/min, `?next_path=` deep-link); `EventKind` 9 -> 13, `Phase` 9 -> 10; `ANTHROPIC_API_KEY` hard gate removed (lazy `LlmClientFactory`); `IModelClient`/`AnthropicModelClient` SSE streaming built and tested but unwired. The verbatim prompt above was unchanged from the prior run. |
+| 2026-06-02 | `80b07a3` on `main` | targeted | Breadcrumb pass (no numbered-doc rewrite). Added the "Nested AGENTS.md breadcrumbs" required-deliverable subsection to the verbatim prompt and created the first breadcrumb set: 9 `AGENTS.md` files (`src/`, `Cli`, `Contracts`, `Workers.Common`, `Workers.ClaudeCode`, `Briefs/Templates`, `Plane`, `Phases`, `tests/`) each with a sibling `CLAUDE.md` `@AGENTS.md` import shim so Claude Code loads them. First change to the verbatim PROMPT body since publication; the change is additive (new subsection only). Root `AGENTS.md`/`CLAUDE.md` left untouched (ticket-workflow files). |
+| 2026-06-01 | `e8d9a95` on `main` | full | Code-true refresh; 52 commits past `68d6fa2`. All 13 files updated in place (no docs added/removed). Major code deltas absorbed: new `settarget` verb (`SetTargetCommand`, dispatched pre-config-load) + `[work].target_branch` config + `BuildConfig.ResolveTargetBranch()`; target-branch-aware ship (`ShipOptions.TargetBranch`, target-aware `BaseRefResolver`, preflight `wrong_worktree_branch` guard, `MainAutoRebased` -> `TargetAutoRebased` rename at ordinal 10, FF-merge+push to the configured target, `--debug`/progress stderr output, worktree create-from-local-branch fallback); op-27 fenced-block payload protocol (TLB-333..342: `WorkerResultParser` fenced pre-pass + `FencedBlockResolver`, new AOT `MarkdownRenderer` in `Workers.Common`, `WorkerResult.Blocks`, plan/implement/review/draft bodies migrated to `PLAN_BODY`/`IMPLEMENT_SUMMARY`/`REVIEW_CRITIQUE`/`DRAFT_BODY` blocks via `*_ref` metadata); TLB-366 per-run Plane issue snapshot cache (`_seqToUuid`/`_issueByUuid`, single-flight load, write-through `AddOrUpdate`, `next_page_results` pagination, loud truncation warning at `MaxListPages=50`, `KeyNotFoundException` catch in the chain batch path) - throttle re-confirmed at 40/min; AOT ILC OOM mitigation (`IlcOptimizationPreference=Size`, `IlcMaxParallelism=1`, `RunAsync` split); TLB-329 sibling-`blocked_by` dependency-ordered parent-chain levels + `--max-parallel`/`ForceParallel` override; state-aware implement guidance on non-Ready tickets; embedded-but-unsurfaced user-guide template (TLB-320). `EventKind` stays at 13 (rename only), `Phase` stays at 10. Verbatim prompt unchanged. Note: `PlaneTicketingClient.cs` cites in `03`/`05` shifted ~+300 lines; snapshot/pagination references re-verified, some untouched prose cites left at prior neighborhood. |
+| 2026-06-02 | `420d9c4` on `main` | full | Code-true refresh; 57 commits past `e8d9a95`. All 13 files updated in place (no docs added/removed) and all 9 breadcrumb `AGENTS.md` files re-verified against HEAD. Major code deltas absorbed: **net10 upgrade** (97e6a87) retargeting all 19 `csproj` to `net10.0` (CI `setup-dotnet 10.x`, `build.sh`/CI publish from `net10.0/` paths); **new `user-guide` verb** (TLB-322, `UserGuideCommand`/`UserGuideLoader`, writes `docs/throughline_build_userguide.md`) and **interactive `build init`** (TLB-370, TTY-gated prompting); the **op-29 chain rework** - one shared `chain/{slug}` worktree per parent chain with in-place `ticket/{id}`-only child branches (TLB-408), `ParallelDispatcher` concurrency hard-pinned to 1 (dispatch now serial; `--max-parallel`/`ForceParallel` removed), `TicketDependencyGraph` deleted (single live `TicketGraph` + `TopologicalSorter` remains, resolving the prior two-type overlap), `WorkingTreeHygieneGate` preflight before implement/chain/ship + post-phase cleanliness validation (TLB-396/400/402/407), repo-global `git stash` ban for workers and read-only verifier, chain-commit-range handoff into the implement brief (`ChainCommitRange`/`HandoffPointerEnabled`), per-phase START notices (TLB-415), sibling lowest-number-first ordering (TLB-397), children stacking on the accumulating base (TLB-411), and chain resume of Planning/InProgress states (652682d); **ship** `--no-push` local-only merge + `[ship].push` (TLB-409), resolved-target surfacing + `[work].target_branch` validation (TLB-410), baseline-aware regression checks (TLB-401, `.worktrees/baseline-{sha}`), unconditional detached-HEAD guard (TLB-402); **markers** freshest-by-timestamp selection (TLB-412) and review-attributes-to-worktree-HEAD (TLB-414, `implemented_at_superseded`); **config** unknown-key warnings (TLB-405), required-field annotations (TLB-369), `[plan].mode` promote + PlanPhase promote path (TLB-374, `--from-brief`), `[llm] default_model` deprecated for worker-model selection; **close/defer/reopen** degrade to verbatim reason via `EchoLlmClient` when no LLM key (TLB-371); **default-agent split** (template/`build init` -> `claude-code`, checked-in `.build/config.toml` -> `codex`, 420d9c4). `EventKind` stays at 13, `Phase` stays at 10. Verbatim prompt unchanged. Note: `Config.cs` cites in `04` shifted ~+250 lines and `Program.cs` cites moved throughout; changed cites were re-verified against HEAD, a few untouched-prose cites left at prior neighborhood. |
+| 2026-06-11 | `3a73eb9` on `main` | full | Full code-true refresh; ~250 commits past `420d9c4` (~38k insertions). All 13 files updated in place; all 11 breadcrumb `AGENTS.md` re-verified (2 pairs added: `Scaffold`, `Verification`). Major code deltas absorbed: **CLI 17 -> 21 verbs** (`setup` TLB-369-adjacent provisioning incl. `WorkspaceSchema` states/labels + git init + welcome commit; `sweep` TLB-531 merged-gated worktree/branch recovery via `ChainWorktreeSweeper`; `models refresh` rewriting `[workers.codex.sizes]` via `CodexModelProbe`/`CodexTierMapper`; `op-doc spec|new` via `OpDocSkeletonGenerator`), `-V/--version` (`BuildVersion.Current` stamped by MSBuild), and the **tiered help system** (`HelpRegistryFactory`/`Tier0Renderer`/`Tier1Renderer` + 4 topics; `CliUsage.UsageText` flipped Legacy, test-only, lags exit codes 10/11); **the gate ecosystem** - `GatePhase` (TLB-506) between implement and review in the chain, `CompletionClaim` (TLB-500/505, `CompletionClaimParser`, `completion_claim_ref` fenced block), consumes-provides preflight (TLB-507), smoke signals (TLB-503, `SmokeCollector`), `GateVacuityProver` canaries (vacuous = hard-fail), `GateControlProber` base-ref control runs classifying environment failures (TLB-538), structured-failure-to-rework (TLB-509) with `FailedCheckDetails` evidence persisted in `VerifierVerdict` (7af36fb), advisory checks excluded from rework (d30dbac) and from the ship regression gate (22a79ab); **chain rework** - integration-branch model (`chain/<slug>` accumulates child ships, root landing via `LandRootIntegrationBranchAsync`, TLB-546 stale-branch refresh), depth-capped recursion (`MaxDepth=16`) retiring `ParentHasGrandchildren` (now Legacy), `--batch-implement` (`BatchImplementBriefBuilder`/`BatchReviewBriefBuilder`/`BatchCommitVerifier`, wiring fixes e76ac5d), sweep-on-success/preserve-on-failure, `ChainPhaseComposition` + `ChainExitCodeMapper` (new exit codes 8 GateVacuous, 9 ReviewUnavailable, 10 GateEnvironmentFailure, 11 TicketingUnavailable), `RefusedWrongBranch` preflight, `MaxCheckRetriesPerReworkRound=2` check-recheck loop (`MaxReworkRounds` still 2); **Plane** - client now implements `ITicketing`/`ITicketingProvisioner`/`ITicketingConnectivity`/`IProjectDiscovery`, transport retry + environmental classification raising `TicketingUnavailableException` (TLB-545), `ProjectResolver`; **connected `build init`** (creds file via `CredsFileParser`, create-or-pick project menu, `WelcomeCommit`, Codex tier probe); **config** - `ModelTier` sizes hard-break (`{ model, effort }` inline tables), `[batch]`, `[review].verify_gate_vacuity`, check `role`/`canary`, `[project].convention_files`/`preload_context`/`context_hygiene`, TLB-512 undefined-agent and TLB-544 claude-code-model fail-fast at load, `.build/config.toml.example` deleted, `default_agent` re-converged to `claude-code` (prior split resolved); **workers** - full-transcript `WORKER_RESULT`+fenced-block parsing (945f4b4), blocks+envelope in one final message (3cbf64c), `ClaudeCodeTurnParser`/`ClaudeCodeModelValidator`/`WorkerTranscriptWriter` (`WorkerProgressDigest` deleted), codex `exec --json -` stdin invocation, `ProviderErrorClassifier` -> `ReviewUnavailable` (TLB-527), `ProcessStreamEncoding` UTF-8 pinning, `WorkerDiagnostics`; **plan promote is the default mode** (no worker spawned; investigate is opt-in); **telemetry** - `CostLedger` event kind (TLB-510), `context_attribution`/`preload_summary`, per-turn usage (d484d2a), analyze-event-log claude-fable-5 pricing + all-chain aggregation preferring the pricing table (TLB-547); **implement preload** - `PreloadedContextBuilder` convention/named-input inlining with preload events. Counts: `EventKind` 13 -> 14, `Phase` 10 -> 11, `ChainOutcome` 20, projects stay 19 (`ThroughlineBuild.Linear/` is untracked debris). The verbatim PROMPT body changed this pass (see set evolution); its new rules (symbol-bearing cites, registry pointers, freshness headers, index standing notes, update-as-you-go contract, scope column) were applied set-wide. |

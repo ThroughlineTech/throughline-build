@@ -1,27 +1,23 @@
 # ThroughlineBuild.Workers.ClaudeCode - vendor worker (template)
 
 `ClaudeCodeAgent : IWorkerAgent` (`Name => "claude-code"`). Spawns
-`claude --print --output-format stream-json` with the brief on stdin, parses
-the NDJSON stream, and emits a one-line progress digest
+`claude --print --verbose --output-format stream-json` with the brief on
+stdin, parses the NDJSON stream, and emits a one-line progress digest
 (`ClaudeCodeProgressDigester`).
 
 WORKER_RESULT + fenced blocks are parsed from the FULL assistant transcript
 reconstructed from the stream (`TryExtractAssistantTranscript`), not from the
-terminal envelope's `result` field alone - that field carries only the final
-assistant message, and models that split output across messages (Fable) would
-otherwise lose blocks emitted in earlier messages. `result` remains the
-fallback for the legacy single-blob shape and the source of usage/cost.
+terminal envelope's `result` field alone - models that split output across
+messages (Fable, especially) would otherwise lose earlier blocks. `result`
+stays as legacy fallback and the source of usage/cost.
+`ClaudeCodeModelValidator` rejects bad `[workers.claude-code.sizes]` values at
+config load: only tier aliases haiku/sonnet/opus or a full claude-* slug -
+`model = "fable"` must be `"claude-fable-5"`. `WorkerTranscriptWriter` emits a
+stable JSONL transcript under --debug (pure observation, post-exit only).
 
-This is the reference pattern for the other three vendors
-(`Workers.Codex`, `Workers.Gemini`, `Workers.Copilot`). To add or change a vendor:
-1. Implement `IWorkerAgent` (unique `Name`, spawn the CLI, parse its output to a
-   `WorkerResult` via `Workers.Common`, optional `IWorkerProgressDigester`).
-2. Register it in the name->IWorkerAgent dictionary wired in
-   `ThroughlineBuild.Cli/Program.cs` (resolved by `WorkerAgentFactory`).
-
-CLI invocation shape differs per vendor: ClaudeCode = brief on stdin;
-Codex = brief as positional prompt (`codex exec`); Copilot = `-p "<brief>"`
-with per-tool `--allow-tool` flags; Gemini = JSON DTO parsing. Copilot has no
-digester. Size->model mapping comes from config (`[workers.<name>.sizes]`).
-
-AOT regression coverage is concentrated here - keep new parsing AOT-safe.
+Reference pattern for the other vendors. To add/change one: implement
+`IWorkerAgent` (parse via `Workers.Common`), then add the name -> class arm in
+`ThroughlineBuild.Cli/WorkerAgentBuilder.cs` (NOT Program.cs). Invocation
+shapes differ: ClaudeCode + Codex (`codex exec --json -`) take the brief on
+stdin; Copilot = `-p "<brief>"` + per-tool `--allow-tool`; Gemini = JSON DTOs.
+Copilot has no digester. Keep new parsing AOT-safe.

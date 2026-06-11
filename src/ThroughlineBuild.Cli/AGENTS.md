@@ -1,22 +1,24 @@
 # ThroughlineBuild.Cli - the `build` entry point
 
-`Program.cs` is ~1774 lines: verb dispatch is a chain of `if (verb == ...)`
-blocks, not a registry. 18 names = 17 action verbs + help (init, settarget,
-user-guide, plan, implement, review, ship, chain, rework, decompose, new,
-scaffold, list, amend, close, defer, reopen, help). Unknown token -> exit 2.
+`Program.cs` is ~2300 lines: verb dispatch is a chain of `if (verb == ...)`
+blocks, not a registry. 21 action verbs (init, settarget, setup, user-guide,
+op-doc new|spec, models refresh, sweep, scaffold, new, list, amend, close,
+defer, reopen, plan, implement, review, ship, chain, rework, decompose) plus
+tiered help. Unknown token -> exit 2.
 
-Three arg pre-passes run before dispatch:
-1. bare bool flags stripped (`--debug`, `--quiet`, `--summary-json`, ...).
-2. `--agent` / `--agent-plan|implement|review` pairs extracted (`CliArgParser`).
-3. ticket IDs extracted for phase verbs (`CliArgParser`).
+Three arg pre-passes run before dispatch: bare bool flags stripped; `--agent` /
+`--agent-<phase>` pairs extracted (`CliArgParser`); ticket IDs extracted for
+phase verbs.
 
-To add a verb: dispatch block in `Program.cs` + usage text in `CliUsage.cs`
-(the only help text) + any arg handling in `CliArgParser.cs`.
+Help is the `Help/` subsystem: `Tier0Renderer` (verb list), `Tier1Renderer`
+(`build <verb> --help`), topics in `Help/Topics/`, all fed by
+`HelpRegistryFactory`. `CliUsage.cs` is legacy (tests only). `models` and
+`sweep` are not in the help registry. To add a verb: dispatch block in
+`Program.cs` + entry in `Help/HelpRegistryFactory.cs`.
 
-`init`, `settarget`, and `user-guide` run BEFORE config load (they edit or
-ignore the config itself). DI wiring lives in `Program.cs`; the worker registry
-(name -> IWorkerAgent) is built there (~767-808) and resolved by
-`WorkerAgentFactory`. Config loading + secret resolution is `Config.cs`.
-
-Verb-by-verb behavior, inputs, side effects, exit codes:
-[../../docs/state-of-the-system/01-inventory.md](../../docs/state-of-the-system/01-inventory.md).
+`init`, `settarget`, `user-guide`, `op-doc`, and `models refresh` run BEFORE
+config load. Worker wiring: config agent names -> `WorkerAgentBuilder.Create`
+(name -> vendor class lives THERE, not in Program.cs), resolved via
+`WorkerAgentFactory`. `ChainPhaseComposition` is the test-coverable seam that
+news up `ChainPhase`; `ChainExitCodeMapper` maps outcomes to exit codes.
+Verb-by-verb detail: [../../docs/state-of-the-system/01-inventory.md](../../docs/state-of-the-system/01-inventory.md).
