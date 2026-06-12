@@ -1078,6 +1078,56 @@ log_directory = ".build/events"
     }
 
     [Fact]
+    public void Load_TransportInNonClaudeAgent_EmitsWarning()
+    {
+        var toml = ValidToml.Replace("[events]", """
+[workers.codex]
+executable = "codex"
+transport = "print"
+
+[workers.codex.sizes]
+small  = { model = "gpt-5.4-mini" }
+medium = { model = "gpt-5.5" }
+large  = { model = "gpt-5.5" }
+
+[events]
+""");
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            BuildConfigLoader.Load(path, captured.Add);
+
+            Assert.Contains(captured, w =>
+                w.Contains("workers.codex.transport") && w.Contains("ignored"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_TransportInClaudeAgent_DoesNotWarn()
+    {
+        var toml = ValidToml.Replace(
+            "executable = \"claude\"",
+            "executable = \"claude\"\ntransport = \"print\"");
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            BuildConfigLoader.Load(path, captured.Add);
+
+            Assert.DoesNotContain(captured, w => w.Contains("workers.claude-code.transport"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Load_UnknownTopLevelSection_EmitsWarning()
     {
         var toml = ValidToml + "\n[plans]\nsome_key = \"value\"";

@@ -224,7 +224,7 @@ public static class BuildConfigLoader
 
     private static readonly HashSet<string> KnownAgentKeys = new(StringComparer.Ordinal)
     {
-        "executable", "max_output_tokens", "bypass_permissions", "transport", "sizes"
+        "executable", "max_output_tokens", "bypass_permissions", "sizes"
     };
 
     private static readonly HashSet<string> KnownSizesKeys = new(StringComparer.Ordinal)
@@ -344,7 +344,8 @@ public static class BuildConfigLoader
                                 }
                             }
                         }
-                        else if (!KnownAgentKeys.Contains(agentKv.Key))
+                        else if (!KnownAgentKeys.Contains(agentKv.Key)
+                                 && !(kv.Key == "claude-code" && agentKv.Key == "transport"))
                         {
                             warnings.Add($"warning: unknown config key workers.{kv.Key}.{agentKv.Key} - ignored");
                         }
