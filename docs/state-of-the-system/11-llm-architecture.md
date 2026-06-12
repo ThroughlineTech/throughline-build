@@ -1,6 +1,6 @@
 # 11 - LLM Architecture
 
-Last refreshed: 2026-06-12 (heartbeat Stage 02 working tree)
+Last refreshed: 2026-06-12 (HEAD `130e61a` on `heartbeat`)
 
 How `build` talks to LLMs today, the interfaces it uses, where vendor-specific code lives, and what it takes to add a new provider. The framing is unchanged since the last refresh: the **worker layer is genuinely multi-vendor and wired** (four agents selected at runtime), while the **model-client layer carries a richer abstraction that is built and tested but still not wired**. What changed inside the worker layer is substantial: tiered model selection (`ModelTier`), fail-fast model validation, full-transcript output parsing (driven by Fable's multi-message output), per-turn usage telemetry, provider-error classification, and a structured transcript side channel.
 
