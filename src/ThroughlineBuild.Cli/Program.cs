@@ -891,7 +891,8 @@ static async Task<int> RunAsync(string[] args)
                 {
                     ExecutablePath = draftAgentCfg.Executable,
                     MaxOutputTokens = draftAgentCfg.MaxOutputTokens,
-                    Sizes = draftAgentCfg.Sizes
+                    Sizes = draftAgentCfg.Sizes,
+                    Transport = draftAgentCfg.Transport,
                 })
             });
         var draftWorker = draftWorkerFactory.Create(draftImplementAgentName);

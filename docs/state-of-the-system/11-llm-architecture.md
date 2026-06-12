@@ -1,6 +1,6 @@
 # 11 - LLM Architecture
 
-Last refreshed: 2026-06-11 (HEAD 3a73eb9)
+Last refreshed: 2026-06-12 (heartbeat Stage 02 working tree)
 
 How `build` talks to LLMs today, the interfaces it uses, where vendor-specific code lives, and what it takes to add a new provider. The framing is unchanged since the last refresh: the **worker layer is genuinely multi-vendor and wired** (four agents selected at runtime), while the **model-client layer carries a richer abstraction that is built and tested but still not wired**. What changed inside the worker layer is substantial: tiered model selection (`ModelTier`), fail-fast model validation, full-transcript output parsing (driven by Fable's multi-message output), per-turn usage telemetry, provider-error classification, and a structured transcript side channel.
 
@@ -51,7 +51,7 @@ All four live in their own `ThroughlineBuild.Workers.<Vendor>` project and share
 
 | Agent | `Name` / vendor string | Invocation + brief delivery | Auth env handling | Output parsing | Digester |
 |---|---|---|---|---|---|
-| `ClaudeCodeAgent` | `claude-code` / `anthropic` | `claude --print --verbose --output-format stream-json [...]`, brief on stdin | removes `ANTHROPIC_API_KEY`, sets `CLAUDE_CODE_MAX_OUTPUT_TOKENS` | NDJSON stream: full assistant transcript reassembled, then envelope fallback (see below) | `ClaudeCodeProgressDigester` |
+| `ClaudeCodeAgent` | `claude-code` / `anthropic` | Default `print` transport: `claude --print --verbose --output-format stream-json [...]`, brief on stdin | removes `ANTHROPIC_API_KEY`, sets `CLAUDE_CODE_MAX_OUTPUT_TOKENS` | NDJSON stream: full assistant transcript reassembled, then envelope fallback (see below) | `ClaudeCodeProgressDigester` |
 | `CodexAgent` | `codex` / `openai` | `codex exec --json [...] -`, brief on stdin | removes `CODEX_API_KEY`, `OPENAI_API_KEY` | JSON event stream from `--json` | `CodexProgressDigester` |
 | `GeminiAgent` | `gemini` / `google` | `gemini -p <brief> --output-format json [--yolo]` | removes `GEMINI_API_KEY`, `GOOGLE_API_KEY` | JSON envelope; `WORKER_RESULT` inside `.response`, raw-stdout fallback | `GeminiProgressDigester` |
 | `CopilotAgent` | `copilot` / `github` | `copilot -p <brief> -s --no-ask-user [--allow-tool <t>]*` | additive only - sets `GH_TOKEN` if passed, else inherits the gh keyring credential | plain stdout scanned directly | none (returns null) |
@@ -70,6 +70,8 @@ Common across all four:
 ### Claude Code specifics (the deep path)
 
 Status: **Functional**. The claude-code worker accumulated the most change this cycle:
+
+- **Claude-only transport selection.** `ClaudeCodeAgent.ExecuteAsync` remains the `IWorkerAgent` entry point and provider identity owner, while process execution is delegated through internal `IClaudeCodeTransport` to `ClaudeCodePrintTransport` ([src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeTransport.cs](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeTransport.cs)). `ClaudeCodeOptions.Transport` defaults to `Print`, preserving the existing argv, environment stripping, streaming, cancellation, parsing, and debug capture. `InteractiveHook` deliberately returns a clear unsupported result before the print transport is called; the Stop-hook run store and interactive process host belong to later stages.
 
 - **Full-transcript parsing.** `ParseStdoutEnvelope` ([ClaudeCodeAgent.cs:398-497](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L398-L497)) no longer trusts only the terminal `type=result` envelope's `.Result` string: `TryExtractAssistantTranscript` ([ClaudeCodeAgent.cs:268-311](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L268-L311)) reassembles the complete assistant text from all `type=assistant` NDJSON events and parses `WORKER_RESULT` + fenced blocks from that, falling back to the envelope `result` field. The driver was Fable: claude-fable-5 splits its final output across messages far more often than Opus/Sonnet (split block/envelope, trailing narration after the envelope) - shapes pinned by fixtures in `ClaudeCodeFableStreamTests` ([tests/ThroughlineBuild.Workers.ClaudeCode.Tests/ClaudeCodeFableStreamTests.cs](../../tests/ThroughlineBuild.Workers.ClaudeCode.Tests/ClaudeCodeFableStreamTests.cs)), including a verbatim 2026-06-10 capture. Envelope metadata (cost, usage) is still sourced from the terminal result line only.
 - **Fail-fast model validation (TLB-544).** `ClaudeCodeModelValidator.Validate` ([src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeModelValidator.cs:22](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeModelValidator.cs#L22)) runs at config load ([src/ThroughlineBuild.Cli/Config.cs:646](../../src/ThroughlineBuild.Cli/Config.cs#L646)): it accepts tier aliases (`haiku`/`sonnet`/`opus`) and `claude-*` ids (optional `anthropic:` prefix), and rejects unresolvable values - canonically `model = "fable"`, which must be `claude-fable-5` - with an actionable `ConfigException` instead of a mid-chain CLI session-init failure. At runtime the agent additionally recognizes the CLI's unresolvable-model phrasing in the stream and classifies it clearly ([ClaudeCodeAgent.cs:422](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L422)).
@@ -107,7 +109,7 @@ Brief builders load per-agent templates via `TemplateLoader.Load(agentName, temp
 
 ### Worker selection (the wiring)
 
-Construction is now centralized: `WorkerAgentBuilder.Create(name, AgentConfig)` ([src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs:16-45](../../src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs#L16-L45)) is a single switch mapping agent name to a constructed agent with its `ExecutablePath` / `MaxOutputTokens` / `Sizes` / `BypassPermissions` (except Copilot), so the phase-verb factory wiring and the scaffold profile-derivation path build agents identically. `Program.cs` populates a name-keyed registry of closures over it ([Program.cs:1132-1141](../../src/ThroughlineBuild.Cli/Program.cs#L1132-L1141)), with a fail-fast `ConfigException` when a referenced agent has no `[workers.<name>]` sub-table - including `default_agent` itself (TLB-512, [Program.cs:1118](../../src/ThroughlineBuild.Cli/Program.cs#L1118)) - and wraps it in `WorkerAgentFactory`.
+Construction is now centralized: `WorkerAgentBuilder.Create(name, AgentConfig)` ([src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs](../../src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs)) is a single switch mapping agent name to a constructed agent with its `ExecutablePath` / `MaxOutputTokens` / `Sizes` / `BypassPermissions` (except Copilot), plus the Claude-only transport selection. The phase-verb factory wiring and scaffold profile-derivation path therefore build Claude agents with the same transport. `Program.cs` populates a name-keyed registry of closures over it, with a fail-fast `ConfigException` when a referenced agent has no `[workers.<name>]` sub-table, and wraps it in `WorkerAgentFactory`.
 
 Selection precedence is `EffectiveAgentFor` ([Program.cs:1149-1153](../../src/ThroughlineBuild.Cli/Program.cs#L1149-L1153)): per-phase CLI flag (`--agent-plan`/`--agent-implement`/`--agent-review`) beats `--agent`, which beats the `[workers.phases]` config entry, which falls back to `default_agent`. Per-phase agent picking is implemented; the chain's batch worker is created from the implement-phase agent inside `ChainPhaseComposition`.
 
@@ -174,7 +176,7 @@ Model identifiers follow the `vendor:model` convention; every model-resolving si
 
 ### Worker layer (per agent)
 
-The common subprocess shape is still duplicated across the four agents rather than abstracted; `Workers.Common` holds the shared parsing and plumbing (`WorkerResultParser`, `CompletionClaimParser`, `ProviderErrorClassifier`, `ProcessStreamEncoding`, `WorkerDiagnostics`, `MarkdownRenderer`).
+The common subprocess shape is still duplicated across providers rather than generalized; `Workers.Common` holds the shared parsing and plumbing (`WorkerResultParser`, `CompletionClaimParser`, `ProviderErrorClassifier`, `ProcessStreamEncoding`, `WorkerDiagnostics`, `MarkdownRenderer`). Claude now has its own narrow transport abstraction, deliberately not shared with Codex, Gemini, or Copilot.
 
 | Project | Vendor specifics |
 |---|---|

@@ -22,7 +22,12 @@ public record LlmConfig(
     string AnthropicApiKeyEnv,
     string? AnthropicApiKey = null);
 
-public record AgentConfig(string Executable, int? MaxOutputTokens, IReadOnlyDictionary<WorkerSize, ModelTier> Sizes, bool BypassPermissions = true);
+public record AgentConfig(
+    string Executable,
+    int? MaxOutputTokens,
+    IReadOnlyDictionary<WorkerSize, ModelTier> Sizes,
+    bool BypassPermissions = true,
+    ClaudeCodeTransport Transport = ClaudeCodeTransport.Print);
 
 public record WorkersConfig(
     string DefaultAgent,
@@ -219,7 +224,7 @@ public static class BuildConfigLoader
 
     private static readonly HashSet<string> KnownAgentKeys = new(StringComparer.Ordinal)
     {
-        "executable", "max_output_tokens", "bypass_permissions", "sizes"
+        "executable", "max_output_tokens", "bypass_permissions", "transport", "sizes"
     };
 
     private static readonly HashSet<string> KnownSizesKeys = new(StringComparer.Ordinal)
@@ -619,6 +624,21 @@ public static class BuildConfigLoader
             if (subTable.TryGetValue("bypass_permissions", out var bpVal) && bpVal is bool bp)
                 bypassPermissions = bp;
 
+            var transport = ClaudeCodeTransport.Print;
+            if (kv.Key == "claude-code" && subTable.TryGetValue("transport", out var transportValue))
+            {
+                if (transportValue is not string transportName)
+                    throw new ConfigException(
+                        "[workers.claude-code] transport must be a string: print or interactive-hook");
+                transport = transportName switch
+                {
+                    "print" => ClaudeCodeTransport.Print,
+                    "interactive-hook" => ClaudeCodeTransport.InteractiveHook,
+                    _ => throw new ConfigException(
+                        $"unknown [workers.claude-code] transport '{transportName}'; supported values are: print, interactive-hook"),
+                };
+            }
+
             var sizes = new Dictionary<WorkerSize, ModelTier>();
             if (!subTable.TryGetValue("sizes", out var sizesVal) || sizesVal is not TomlTable sizesTable)
                 throw new ConfigException(
@@ -664,7 +684,7 @@ public static class BuildConfigLoader
             if (missing.Count > 0)
                 throw new ConfigException(
                     $"[workers.{kv.Key}.sizes] is missing required size keys: {string.Join(", ", missing)}");
-            agents[kv.Key] = new AgentConfig(executable, maxOutputTokens, sizes.AsReadOnly(), bypassPermissions);
+            agents[kv.Key] = new AgentConfig(executable, maxOutputTokens, sizes.AsReadOnly(), bypassPermissions, transport);
         }
 
         // Validate that default_agent and every phase agent resolve to a defined

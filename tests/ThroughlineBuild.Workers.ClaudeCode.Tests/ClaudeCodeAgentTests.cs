@@ -1605,6 +1605,20 @@ public class WriteCancellationCaptureTests
 public class ClaudeCodeAgentBypassPermissionsTests
 {
     [Fact]
+    public void BuildArgs_DefaultPrintTransport_PreservesExistingArgv()
+    {
+        var args = ClaudeCodeAgent.BuildArgs(
+            new ClaudeCodeOptions(),
+            new WorkerOptions(TimeSpan.FromSeconds(30)));
+
+        Assert.Equal(new[]
+        {
+            "--print", "--verbose", "--output-format", "stream-json",
+            "--dangerously-skip-permissions",
+        }, args);
+    }
+
+    [Fact]
     public void BuildArgs_BypassPermissionsTrue_IncludesDangerouslySkipPermissions()
     {
         var options = new ClaudeCodeOptions { BypassPermissions = true };
@@ -1624,6 +1638,44 @@ public class ClaudeCodeAgentBypassPermissionsTests
         var args = ClaudeCodeAgent.BuildArgs(options, workerOptions);
 
         Assert.DoesNotContain("--dangerously-skip-permissions", args);
+    }
+}
+
+public class ClaudeCodeAgentTransportTests
+{
+    [Fact]
+    public async Task ExecuteAsync_InteractiveHook_ReturnsUnsupportedWithoutCallingPrintTransport()
+    {
+        var transport = new RecordingTransport();
+        var agent = new ClaudeCodeAgent(
+            new ClaudeCodeOptions { Transport = ClaudeCodeTransport.InteractiveHook },
+            transport);
+
+        var result = await agent.ExecuteAsync(
+            new Brief("TLB-test", Phase.Implement, "test", Array.Empty<string>(),
+                Array.Empty<string>(), new Dictionary<string, string>()),
+            Path.GetTempPath(),
+            new WorkerOptions(TimeSpan.FromSeconds(30)),
+            CancellationToken.None);
+
+        Assert.Equal(Status.Failed, result.Status);
+        Assert.Contains("interactive-hook", result.FailureReason);
+        Assert.False(transport.Called);
+    }
+
+    private sealed class RecordingTransport : IClaudeCodeTransport
+    {
+        public bool Called { get; private set; }
+
+        public Task<WorkerResult> ExecuteAsync(
+            Brief brief,
+            string workingDirectory,
+            WorkerOptions options,
+            CancellationToken ct)
+        {
+            Called = true;
+            throw new InvalidOperationException("print transport must not be called");
+        }
     }
 }
 

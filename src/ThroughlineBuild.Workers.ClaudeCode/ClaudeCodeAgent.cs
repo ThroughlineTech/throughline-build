@@ -12,185 +12,36 @@ public class ClaudeCodeAgent : IWorkerAgent
 {
     private readonly ClaudeCodeOptions _options;
     private readonly ClaudeCodeProgressDigester _digester = new();
+    private readonly IClaudeCodeTransport _transport;
 
-    public ClaudeCodeAgent(ClaudeCodeOptions options) => _options = options;
+    public ClaudeCodeAgent(ClaudeCodeOptions options)
+    {
+        _options = options;
+        _transport = new ClaudeCodePrintTransport(options, _digester);
+    }
+
+    internal ClaudeCodeAgent(ClaudeCodeOptions options, IClaudeCodeTransport transport)
+    {
+        _options = options;
+        _transport = transport;
+    }
+
     public ClaudeCodeAgent() : this(new ClaudeCodeOptions()) { }
 
     public string Name => "claude-code";
     public IWorkerProgressDigester? Digester => _digester;
 
-    public async Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
+    public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
     {
-        // Write brief to .build/brief.md (persisted for diagnostics)
-        var buildDir = Path.Combine(workingDirectory, ".build");
-        Directory.CreateDirectory(buildDir);
-        var briefPath = Path.Combine(buildDir, "brief.md");
-        await File.WriteAllTextAsync(briefPath, brief.Instruction, ct);
-
-        // Build args - brief is delivered via stdin.
-        var args = BuildArgs(_options, options);
-        _options.Sizes.TryGetValue(options.Size, out var tier);
-
-        var stdoutBuilder = new StringBuilder();
-        var stderrBuilder = new StringBuilder();
-
-        var psi = new ProcessStartInfo(_options.ExecutablePath)
+        if (_options.Transport == ClaudeCodeTransport.InteractiveHook)
         {
-            WorkingDirectory = workingDirectory,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        ProcessStreamEncoding.ApplyUtf8(psi);
-        foreach (var arg in args)
-            psi.ArgumentList.Add(arg);
-        ConfigureEnvironment(psi, options);
-
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(options.Timeout);
-
-        var stopwatch = Stopwatch.StartNew();
-        var startedAt = DateTimeOffset.UtcNow;
-
-        // Under --debug, capture each stdout line with its arrival timestamp so the structured
-        // transcript can report per-turn latency. The CLI's stream events carry no timestamps;
-        // arrival time is the authoritative inter-turn clock. Allocated only when capturing -
-        // the non-debug path keeps the exact same zero-overhead handler it had before.
-        var timestampedStdout = options.DebugCaptureDirectory is not null
-            ? new List<(DateTimeOffset At, string Line)>()
-            : null;
-
-        var process = new Process { StartInfo = psi };
-        _digester.ResetStart();
-        if (options.ProgressDigestSink is not null)
-        {
-            var startModel = NormalizeModel(tier?.Model);
-            var startPayload = string.IsNullOrEmpty(startModel) ? Name : $"{Name} model {startModel}";
-            options.ProgressDigestSink.WriteLine($"[0:00] {"agent".PadRight(10)} {startPayload}");
-        }
-        process.OutputDataReceived += (_, e) =>
-        {
-            if (e.Data != null)
-            {
-                stdoutBuilder.AppendLine(e.Data);
-                timestampedStdout?.Add((DateTimeOffset.UtcNow, e.Data));
-                if (options.LiveStdoutSink is not null)
-                {
-                    // --debug path: raw firehose. Digest is suppressed (mutually exclusive).
-                    WriteWorkerLine(options.LiveStdoutSink, "", e.Data);
-                }
-                else if (options.ProgressDigestSink is not null)
-                {
-                    // Default path: per-event digest. Best-effort - a malformed line or
-                    // unexpected schema must not crash the worker dispatch.
-                    var dl = _digester.FormatLine(e.Data);
-                    if (dl != null) options.ProgressDigestSink.WriteLine(dl);
-                }
-            }
-        };
-        process.ErrorDataReceived += (_, e) =>
-        {
-            if (e.Data != null)
-            {
-                stderrBuilder.AppendLine(e.Data);
-                WriteWorkerLine(options.LiveStderrSink, "worker! ", e.Data);
-            }
-        };
-
-        try
-        {
-            process.Start();
-        }
-        catch (System.ComponentModel.Win32Exception ex)
-        {
-            var reason = $"Worker executable not found: '{_options.ExecutablePath}'. " +
-                         $"Verify it is on PATH or set workers.claude-code.executable in config.toml. Win32: {ex.Message}";
-            WorkerDiagnostics.Write($"[ClaudeCodeAgent] {reason}");
-            return new WorkerResult(Status.Failed, $"Worker executable not found: '{_options.ExecutablePath}'",
-                Array.Empty<string>(), reason, new Dictionary<string, object>());
-        }
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
-
-        // Send brief via stdin then close to signal EOF. If the subprocess exits before
-        // reading stdin - an immediate startup error, a rate-limit exit, or the nested-session
-        // guard rejecting `claude` inside another Claude Code session - the pipe closes
-        // mid-write and WriteAsync throws IOException. Swallow it: a broken stdin pipe must
-        // NOT abort the whole orchestrator. WaitForExit below still runs, and the captured
-        // stderr (surfaced by ParseStdoutEnvelope) carries the real cause as a clean
-        // WorkerResult.Failed. See TLB-472.
-        try
-        {
-            await process.StandardInput.WriteAsync(brief.Instruction);
-            process.StandardInput.Close();
-        }
-        catch (IOException ex)
-        {
-            stderrBuilder.AppendLine($"[worker stdin] subprocess closed stdin before the brief was sent: {ex.Message}");
+            const string reason = "Claude Code transport 'interactive-hook' is not implemented in this stage. " +
+                                  "Set workers.claude-code.transport = \"print\" or omit the setting.";
+            return Task.FromResult(new WorkerResult(Status.Failed, "Claude Code transport is not implemented",
+                Array.Empty<string>(), reason, new Dictionary<string, object>()));
         }
 
-        try
-        {
-            await process.WaitForExitAsync(cts.Token);
-            stopwatch.Stop();
-        }
-        catch (OperationCanceledException)
-        {
-            try { process.Kill(entireProcessTree: true); } catch { }
-            stopwatch.Stop();
-
-            var cancelResult = new WorkerResult(Status.Failed, "Process cancelled or timed out", Array.Empty<string>(),
-                "Execution cancelled or timed out", new Dictionary<string, object>());
-
-            // Write partial output to debug capture directory (best-effort)
-            try
-            {
-                WriteCancellationCapture(options.DebugCaptureDirectory, brief.Instruction,
-                    stdoutBuilder.ToString(), stderrBuilder.ToString());
-
-                // Partial transcript too: a worker killed mid-session still spent turns, and the
-                // truncated stream synthesizes an "incomplete" result record so the file is usable.
-                if (options.DebugCaptureDirectory is not null && timestampedStdout is not null)
-                {
-                    var cancelModel = TryExtractModelFromStream(stdoutBuilder.ToString()) ?? NormalizeModel(tier?.Model);
-                    WorkerTranscriptWriter.Write(options.DebugCaptureDirectory, brief, timestampedStdout,
-                        cancelResult, options.DebugTranscript, cancelModel, args, stopwatch.ElapsedMilliseconds, startedAt);
-                }
-            }
-            catch
-            {
-                // Best-effort: failure to write debug artifacts never masks the cancellation.
-            }
-
-            return cancelResult;
-        }
-
-        var stdout = stdoutBuilder.ToString();
-        var stderr = stderrBuilder.ToString();
-
-        var fallbackModel = NormalizeModel(tier?.Model);
-        var result = ParseStdoutEnvelope(stdout, process.ExitCode, stderr, stopwatch.ElapsedMilliseconds, fallbackModel);
-
-        result = AttachContextTurns(result, stdout);
-
-        if (options.DebugCaptureDirectory is not null)
-        {
-            // Same envelope-parse fallback chain as ParseStdoutEnvelope: try single
-            // object first (legacy), fall back to last type=result NDJSON line.
-            ClaudeCodeJsonEnvelope? envelope = TryParseEnvelopeFromStdout(stdout, out _);
-            WriteDebugCapture(options.DebugCaptureDirectory, brief.Instruction, stdout, stderr, envelope, result);
-
-            // Structured side-channel transcript: the raw stream re-emitted in a stable,
-            // mechanically-comparable JSONL schema. Pure observation; best-effort internally.
-            var transcriptModel = TryExtractModelFromStream(stdout) ?? fallbackModel;
-            WorkerTranscriptWriter.Write(options.DebugCaptureDirectory, brief,
-                timestampedStdout ?? new List<(DateTimeOffset, string)>(), result, options.DebugTranscript,
-                transcriptModel, args, stopwatch.ElapsedMilliseconds, startedAt);
-        }
-
-        return result;
+        return _transport.ExecuteAsync(brief, workingDirectory, options, ct);
     }
 
     // Behavior-inert telemetry: after the worker exits, parse the already-captured NDJSON stream
@@ -614,13 +465,16 @@ public class ClaudeCodeAgent : IWorkerAgent
     }
 
     internal void ConfigureEnvironment(ProcessStartInfo psi, WorkerOptions options)
+        => ConfigureEnvironment(psi, _options, options);
+
+    internal static void ConfigureEnvironment(ProcessStartInfo psi, ClaudeCodeOptions claudeOptions, WorkerOptions options)
     {
         // Ensure Claude Code uses OAuth auth rather than API-key auth; worker LLM cost
         // flows to the user's subscription, not to per-token API billing.
         psi.Environment.Remove("ANTHROPIC_API_KEY");
         // Pin max output tokens if configured; do this before the user-supplied
         // EnvironmentVariables loop so an explicit user override still wins.
-        if (_options.MaxOutputTokens is int n)
+        if (claudeOptions.MaxOutputTokens is int n)
             psi.Environment["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = n.ToString(System.Globalization.CultureInfo.InvariantCulture);
         if (options.EnvironmentVariables != null)
             foreach (var (k, v) in options.EnvironmentVariables)

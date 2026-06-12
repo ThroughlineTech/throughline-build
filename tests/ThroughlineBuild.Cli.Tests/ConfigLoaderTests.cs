@@ -60,6 +60,8 @@ log_directory = ".build/events"
             Assert.Equal("ANTHROPIC_KEY", config.Llm.AnthropicApiKeyEnv);
             Assert.Equal("claude-code", config.Workers.DefaultAgent);
             Assert.Equal("claude", config.Workers.Agents["claude-code"].Executable);
+            Assert.Equal(ThroughlineBuild.Workers.ClaudeCode.ClaudeCodeTransport.Print,
+                config.Workers.Agents["claude-code"].Transport);
             Assert.Equal(20, config.Workers.TimeoutMinutes);
             Assert.Equal(".build/events", config.Events.LogDirectory);
         }
@@ -872,6 +874,46 @@ log_directory = ".build/events"
             var config = BuildConfigLoader.Load(path);
 
             Assert.False(config.Workers.Agents["claude-code"].BypassPermissions);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData("print", ThroughlineBuild.Workers.ClaudeCode.ClaudeCodeTransport.Print)]
+    [InlineData("interactive-hook", ThroughlineBuild.Workers.ClaudeCode.ClaudeCodeTransport.InteractiveHook)]
+    public void Load_ClaudeTransport_ParsesSupportedValues(
+        string value,
+        ThroughlineBuild.Workers.ClaudeCode.ClaudeCodeTransport expected)
+    {
+        var path = WriteToml(ValidToml.Replace(
+            "executable = \"claude\"",
+            $"executable = \"claude\"\ntransport = \"{value}\""));
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Equal(expected, config.Workers.Agents["claude-code"].Transport);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_ClaudeTransportUnknown_ThrowsActionableConfigException()
+    {
+        var path = WriteToml(ValidToml.Replace(
+            "executable = \"claude\"",
+            "executable = \"claude\"\ntransport = \"telepathy\""));
+        try
+        {
+            var ex = Assert.Throws<ConfigException>(() => BuildConfigLoader.Load(path));
+            Assert.Contains("telepathy", ex.Message);
+            Assert.Contains("print", ex.Message);
+            Assert.Contains("interactive-hook", ex.Message);
         }
         finally
         {
