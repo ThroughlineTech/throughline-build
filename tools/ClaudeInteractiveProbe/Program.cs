@@ -7,7 +7,7 @@ using ClaudeInteractiveProbe;
 internal static class Program
 {
     private const string OptInVariable = "LATTICEFLOW_RUN_CLAUDE_INTERACTIVE_PROBE";
-    private static readonly TimeSpan HookTimeout = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan HookTimeout = TimeSpan.FromMinutes(2);
 
     public static async Task<int> Main(string[] args)
     {
@@ -33,12 +33,18 @@ internal static class Program
             foreach (var mode in new[] { "inherited", "redirected", "winpty", "windows-terminal" })
                 results.Add(await RunModeAsync(mode, runRoot, hookCommandPrefix));
 
+            TryDeleteDirectory(runRoot);
+            var remainingProbePids = await FindProbeProcessIdsAsync();
+
             Console.WriteLine(JsonSerializer.Serialize(new
             {
                 claude_version = version,
                 host = Environment.OSVersion.VersionString,
                 probe_runtime = Environment.Version.ToString(),
                 raw_evidence_policy = "captured under gitignored .tmp and deleted on exit",
+                probe_process_count = remainingProbePids.Count,
+                probe_process_pids = remainingProbePids,
+                probe_run_directory_exists = Directory.Exists(runRoot),
                 modes = results
             }, new JsonSerializerOptions { WriteIndented = true }));
             return 0;
@@ -84,48 +90,77 @@ internal static class Program
         if (psi.RedirectStandardError)
             process.ErrorDataReceived += (_, e) => { if (e.Data is not null) stderr.AppendLine(e.Data); };
 
-        process.Start();
-        var pid = process.Id;
-        if (psi.RedirectStandardOutput) process.BeginOutputReadLine();
-        if (psi.RedirectStandardError) process.BeginErrorReadLine();
-
-        var detachedTerminal = mode is "winpty" or "windows-terminal";
-        var hookObserved = await WaitForFileAsync(payloadPath, HookTimeout, process, detachedTerminal);
-        await Task.Delay(750);
-        var correlatedPids = await FindCorrelatedProcessIdsAsync(sentinel);
-        var aliveAfterStop = correlatedPids.Count > 0 || !process.HasExited;
-        int? exitCodeBeforeCleanup = !detachedTerminal && process.HasExited ? process.ExitCode : null;
-        var payload = hookObserved ? await File.ReadAllTextAsync(payloadPath) : "{}";
-        var shape = ProbeContract.InspectStopPayload(payload);
-
+        var pid = 0;
+        var hookObserved = false;
+        bool? aliveAfterStop = null;
+        int? exitCodeBeforeCleanup = null;
+        var correlatedPids = new List<int>();
+        var remainingCorrelatedPids = new List<int>();
+        var launcherExitedAfterCleanup = false;
+        string? cleanupDiscoveryError = null;
+        var shape = new StopPayloadShape(false, false, false, false, false);
         string? lastMessage = null;
         string? cwd = null;
         string? transcriptPath = null;
         string? sessionId = null;
         bool? stopHookActive = null;
-        using (var document = JsonDocument.Parse(payload))
+        string? transcriptModel = null;
+
+        try
         {
+            process.Start();
+            pid = process.Id;
+            if (psi.RedirectStandardOutput) process.BeginOutputReadLine();
+            if (psi.RedirectStandardError) process.BeginErrorReadLine();
+
+            var detachedTerminal = mode is "winpty" or "windows-terminal";
+            hookObserved = await WaitForFileAsync(payloadPath, HookTimeout, process, detachedTerminal);
+            await Task.Delay(750);
+            correlatedPids = await FindCorrelatedProcessIdsAsync(sentinel);
+            if (hookObserved)
+                aliveAfterStop = correlatedPids.Count > 0 || !process.HasExited;
+            exitCodeBeforeCleanup = process.HasExited ? process.ExitCode : null;
+
+            var payload = hookObserved ? await File.ReadAllTextAsync(payloadPath) : "{}";
+            shape = ProbeContract.InspectStopPayload(payload);
+            using var document = JsonDocument.Parse(payload);
             var root = document.RootElement;
             lastMessage = GetString(root, "last_assistant_message");
             cwd = GetString(root, "cwd");
             transcriptPath = GetString(root, "transcript_path");
             sessionId = GetString(root, "session_id");
             stopHookActive = GetBoolean(root, "stop_hook_active");
+            transcriptModel = TryFindModel(transcriptPath);
+        }
+        finally
+        {
+            var cleanupPids = new HashSet<int>(correlatedPids);
+            if (pid > 0) cleanupPids.Add(pid);
+            var beforeCleanup = await TryFindCorrelatedProcessIdsAsync(sentinel);
+            cleanupDiscoveryError = beforeCleanup.Error;
+            foreach (var correlatedPid in beforeCleanup.Pids)
+                cleanupPids.Add(correlatedPid);
+
+            foreach (var cleanupPid in cleanupPids)
+                await KillProcessTreeAsync(cleanupPid);
+
+            if (pid > 0 && !process.HasExited)
+            {
+                try { process.Kill(entireProcessTree: true); } catch { }
+            }
+            if (pid > 0)
+            {
+                try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15)); } catch { }
+            }
+
+            await Task.Delay(500);
+            var afterCleanup = await TryFindCorrelatedProcessIdsAsync(sentinel);
+            remainingCorrelatedPids = afterCleanup.Pids;
+            cleanupDiscoveryError = JoinErrors(cleanupDiscoveryError, afterCleanup.Error);
+            launcherExitedAfterCleanup = pid == 0 || process.HasExited;
         }
 
-        var transcriptModel = TryFindModel(transcriptPath);
-        foreach (var correlatedPid in correlatedPids)
-            await KillProcessTreeAsync(correlatedPid);
-        if (!detachedTerminal && !process.HasExited)
-        {
-            try { process.Kill(entireProcessTree: true); } catch { }
-        }
-        if (!detachedTerminal)
-        {
-            try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15)); } catch { }
-        }
-        var remainingCorrelatedPids = await FindCorrelatedProcessIdsAsync(sentinel);
-        var cleanedUp = remainingCorrelatedPids.Count == 0 && (detachedTerminal || process.HasExited);
+        var cleanedUp = cleanupDiscoveryError is null && remainingCorrelatedPids.Count == 0 && launcherExitedAfterCleanup;
 
         return new
         {
@@ -136,7 +171,10 @@ internal static class Program
             hook_observed = hookObserved,
             alive_after_stop = aliveAfterStop,
             exit_code_before_cleanup = exitCodeBeforeCleanup,
-            process_exited_after_cleanup = cleanedUp,
+            launcher_exited_after_cleanup = launcherExitedAfterCleanup,
+            remaining_correlated_process_pids = remainingCorrelatedPids,
+            cleanup_discovery_error = cleanupDiscoveryError,
+            cleanup_confirmed = cleanedUp,
             sentinel_observed = lastMessage?.Contains(sentinel, StringComparison.Ordinal) == true,
             cwd_matches_disposable_repo = PathsEqual(cwd, repository),
             transcript_exists_during_probe = transcriptPath is not null && File.Exists(transcriptPath),
@@ -255,11 +293,27 @@ internal static class Program
     private static async Task<List<int>> FindCorrelatedProcessIdsAsync(string sentinel)
     {
         var escaped = sentinel.Replace("'", "''");
-        var script = $"Get-CimInstance Win32_Process | Where-Object {{ $_.Name -in @('claude.exe', 'WindowsTerminal.exe') -and $_.CommandLine -like '*{escaped}*' }} | Select-Object -ExpandProperty ProcessId";
+        var script = $"Get-CimInstance Win32_Process | Where-Object {{ $_.Name -in @('claude.exe', 'winpty.exe', 'winpty-agent.exe', 'WindowsTerminal.exe') -and $_.CommandLine -like '*{escaped}*' }} | Select-Object -ExpandProperty ProcessId";
         var output = await RunAndCaptureAsync("powershell.exe", ["-NoProfile", "-Command", script], Environment.CurrentDirectory);
         return output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Select(value => int.TryParse(value.Trim(), out var pid) ? pid : 0)
             .Where(pid => pid > 0)
+            .ToList();
+    }
+
+    private static async Task<(List<int> Pids, string? Error)> TryFindCorrelatedProcessIdsAsync(string sentinel)
+    {
+        try { return (await FindCorrelatedProcessIdsAsync(sentinel), null); }
+        catch (Exception ex) { return ([], ex.Message); }
+    }
+
+    private static async Task<List<int>> FindProbeProcessIdsAsync()
+    {
+        const string script = "Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('claude.exe', 'winpty.exe', 'winpty-agent.exe', 'WindowsTerminal.exe') -and $_.CommandLine -like '*LATTICEFLOW_INTERACTIVE_SENTINEL_*' } | Select-Object -ExpandProperty ProcessId";
+        var output = await RunAndCaptureAsync("powershell.exe", ["-NoProfile", "-Command", script], Environment.CurrentDirectory);
+        return output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(value => int.TryParse(value.Trim(), out var processId) ? processId : 0)
+            .Where(processId => processId > 0)
             .ToList();
     }
 
@@ -299,6 +353,9 @@ internal static class Program
         string.Equals(Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar), Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase);
 
     private static string Redact(string value, string runRoot) => value.Replace(runRoot, "<probe-run>").Trim();
+
+    private static string? JoinErrors(string? first, string? second) =>
+        first is null ? second : second is null ? first : $"{first}; {second}";
 
     private static void TryDeleteDirectory(string path)
     {
