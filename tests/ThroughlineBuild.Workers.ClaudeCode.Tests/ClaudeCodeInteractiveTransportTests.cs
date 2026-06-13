@@ -511,11 +511,16 @@ public sealed class ClaudeCodeInteractiveLiveTests
                 .ExecuteAsync(brief, worktree, new WorkerOptions(TimeSpan.FromMinutes(3), Size: WorkerSize.Small),
                     CancellationToken.None);
 
-            var launcher = new CapturingLauncher(new WindowsConPtyClaudeProcessLauncher());
+            // Use the production platform factory so this exercises the real host
+            // (ConPTY on Windows, the PTY host on Unix), not a hardcoded Windows host.
+            var launcher = new CapturingLauncher(InteractiveClaudeProcessLauncherFactory.Create());
             var transport = new ClaudeCodeInteractiveTransport(
                 options, launcher, new ClaudeCompletionWaiter(),
                 ["dotnet", cliAssembly]);
-            var debugDirectory = Path.Combine(worktree, "interactive-debug");
+            // Capture outside the worktree so a failed run's transcript survives the
+            // finally cleanup and stays diagnosable.
+            var debugDirectory = Path.Combine(Path.GetTempPath(), $"lattice-interactive-debug-{Guid.NewGuid():N}");
+            Console.WriteLine($"interactive debug capture: {debugDirectory}");
             var result = await transport.ExecuteAsync(
                 brief,
                 worktree,
