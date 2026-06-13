@@ -17,7 +17,9 @@ public class ClaudeCodeAgent : IWorkerAgent
     public ClaudeCodeAgent(ClaudeCodeOptions options)
     {
         _options = options;
-        _transport = new ClaudeCodePrintTransport(options, _digester);
+        _transport = options.Transport == ClaudeCodeTransport.InteractiveHook
+            ? new ClaudeCodeInteractiveTransport(options)
+            : new ClaudeCodePrintTransport(options, _digester);
     }
 
     internal ClaudeCodeAgent(ClaudeCodeOptions options, IClaudeCodeTransport transport)
@@ -32,17 +34,7 @@ public class ClaudeCodeAgent : IWorkerAgent
     public IWorkerProgressDigester? Digester => _digester;
 
     public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
-    {
-        if (_options.Transport == ClaudeCodeTransport.InteractiveHook)
-        {
-            const string reason = "Claude Code transport 'interactive-hook' is not implemented in this stage. " +
-                                  "Set workers.claude-code.transport = \"print\" or omit the setting.";
-            return Task.FromResult(new WorkerResult(Status.Failed, "Claude Code transport is not implemented",
-                Array.Empty<string>(), reason, new Dictionary<string, object>()));
-        }
-
-        return _transport.ExecuteAsync(brief, workingDirectory, options, ct);
-    }
+        => _transport.ExecuteAsync(brief, workingDirectory, options, ct);
 
     // Behavior-inert telemetry: after the worker exits, parse the already-captured NDJSON stream
     // for per-turn context attribution and stash it on Metadata["context_turns"] as a flat dict of

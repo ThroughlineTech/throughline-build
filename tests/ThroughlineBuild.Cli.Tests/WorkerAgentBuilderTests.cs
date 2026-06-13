@@ -9,7 +9,7 @@ namespace ThroughlineBuild.Cli.Tests;
 public class WorkerAgentBuilderTests
 {
     [Fact]
-    public async Task Create_ClaudeInteractiveHook_MapsTransportWithoutSpawningPrint()
+    public async Task Create_ClaudeInteractiveHook_MapsTransportWithoutFallingBackToPrint()
     {
         var config = new AgentConfig(
             Executable: "this-executable-must-not-run",
@@ -26,7 +26,6 @@ public class WorkerAgentBuilderTests
             CancellationToken.None);
 
         Assert.Equal(Status.Failed, result.Status);
-        Assert.Contains("interactive-hook", result.FailureReason);
-        Assert.DoesNotContain("executable not found", result.FailureReason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("executable not found", result.Summary, StringComparison.OrdinalIgnoreCase);
     }
 }

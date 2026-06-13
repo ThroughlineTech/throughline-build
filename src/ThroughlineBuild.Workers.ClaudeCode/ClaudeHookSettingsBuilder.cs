@@ -6,17 +6,23 @@ namespace ThroughlineBuild.Workers.ClaudeCode;
 public static class ClaudeHookSettingsBuilder
 {
     public static string Build(string executablePath, string runDirectory, string runId)
+        => Build([executablePath], runDirectory, runId);
+
+    public static string Build(IReadOnlyList<string> commandPrefix, string runDirectory, string runId)
     {
-        var command = string.Join(" ", new[]
+        ArgumentNullException.ThrowIfNull(commandPrefix);
+        if (commandPrefix.Count == 0 || commandPrefix.Any(string.IsNullOrWhiteSpace))
+            throw new ArgumentException("Hook command prefix must contain non-empty arguments.", nameof(commandPrefix));
+
+        var command = string.Join(" ", commandPrefix.Select(Quote).Concat(new[]
         {
-            Quote(executablePath),
             "internal",
             "claude-stop-hook",
             "--run-dir",
             Quote(runDirectory),
             "--run-id",
             Quote(runId)
-        });
+        }));
         var settings = new ClaudeHookSettings(new Dictionary<string, ClaudeHookMatcher[]>
         {
             ["Stop"] = [new ClaudeHookMatcher([new ClaudeHookDefinition("command", command, 30)])]

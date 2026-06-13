@@ -1644,7 +1644,7 @@ public class ClaudeCodeAgentBypassPermissionsTests
 public class ClaudeCodeAgentTransportTests
 {
     [Fact]
-    public async Task ExecuteAsync_InteractiveHook_ReturnsUnsupportedWithoutCallingPrintTransport()
+    public async Task ExecuteAsync_InteractiveHook_UsesSelectedTransport()
     {
         var transport = new RecordingTransport();
         var agent = new ClaudeCodeAgent(
@@ -1658,9 +1658,8 @@ public class ClaudeCodeAgentTransportTests
             new WorkerOptions(TimeSpan.FromSeconds(30)),
             CancellationToken.None);
 
-        Assert.Equal(Status.Failed, result.Status);
-        Assert.Contains("interactive-hook", result.FailureReason);
-        Assert.False(transport.Called);
+        Assert.Equal(Status.Ok, result.Status);
+        Assert.True(transport.Called);
     }
 
     private sealed class RecordingTransport : IClaudeCodeTransport
@@ -1674,7 +1673,8 @@ public class ClaudeCodeAgentTransportTests
             CancellationToken ct)
         {
             Called = true;
-            throw new InvalidOperationException("print transport must not be called");
+            return Task.FromResult(new WorkerResult(Status.Ok, "interactive", [], null,
+                new Dictionary<string, object>()));
         }
     }
 }
