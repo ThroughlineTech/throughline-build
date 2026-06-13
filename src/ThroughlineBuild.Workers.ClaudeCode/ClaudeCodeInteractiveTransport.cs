@@ -66,6 +66,13 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
         var buildDirectory = Path.Combine(workingDirectory, ".build");
         Directory.CreateDirectory(buildDirectory);
 
+        // Canonicalize the worktree to claude's own form (resolving symlinks) so the
+        // spawn cwd, the trust key, and the turn-match all agree. macOS hands back an
+        // unresolved /var/... temp path while claude records the resolved /private/var/...
+        // cwd; without this the turn-detector never matches and the worker times out.
+        // Resolved after Directory.CreateDirectory so the path exists for realpath.
+        var canonicalWorktree = ClaudeRealPath.Resolve(workingDirectory);
+
         // Same-worktree collision guard: two interactive runs in one worktree would
         // race on the shared .build/brief.md path. Independent worktrees hash to
         // distinct locks, so concurrent runs there are never blocked by this.
@@ -120,12 +127,12 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
             // Pre-seed workspace trust so the interactive launch does not hang at
             // claude's trust dialog on a fresh worktree (which --dangerously-skip-
             // permissions does NOT bypass). Best-effort: never throws.
-            ClaudeWorkspaceTrust.TryEnsureTrusted(workingDirectory);
+            ClaudeWorkspaceTrust.TryEnsureTrusted(canonicalWorktree);
 
             try
             {
                 process = _launcher.Launch(new InteractiveClaudeLaunchSpec(
-                    _options.ExecutablePath, arguments, workingDirectory, environment));
+                    _options.ExecutablePath, arguments, canonicalWorktree, environment));
             }
             catch (Win32Exception ex)
             {
@@ -146,7 +153,7 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
             // The turn signal learns when the assistant turn ended without a per-turn
             // Stop hook (claude 2.1.170 only fires it on exit). Bounded by the same
             // linked token the transport cancels on completion/timeout/cancel.
-            var turnTask = _turnSignal.WaitForTurnAsync(workingDirectory, launchedAt, waitCancellation.Token);
+            var turnTask = _turnSignal.WaitForTurnAsync(canonicalWorktree, launchedAt, waitCancellation.Token);
             var timeoutTask = Task.Delay(options.Timeout);
             var cancellationTask = Task.Delay(Timeout.InfiniteTimeSpan, ct);
 

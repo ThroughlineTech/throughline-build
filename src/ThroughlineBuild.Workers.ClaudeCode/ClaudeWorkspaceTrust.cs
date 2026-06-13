@@ -21,12 +21,13 @@ namespace ThroughlineBuild.Workers.ClaudeCode;
 /// </summary>
 internal static class ClaudeWorkspaceTrust
 {
-    // Best-known claude 2.1.x trust keys. A live experiment (stage 06 evidence) pinned
-    // that the trust dialog gate lives in projects[<path>] in ~/.claude.json; these are
-    // the flags observed once a project has been accepted. If a future claude release
-    // renames them the launch falls back to the timeout (no behavior regression).
+    // claude 2.1.177 trust keys, confirmed by live runs: seeding hasTrustDialogAccepted
+    // alone suppresses the trust dialog. The onboarding field is the integer
+    // projectOnboardingSeenCount (there is no hasCompletedProjectOnboarding key). If a
+    // future claude release renames them the launch falls back to the timeout (no
+    // behavior regression).
     private const string TrustAcceptedKey = "hasTrustDialogAccepted";
-    private const string OnboardingKey = "hasCompletedProjectOnboarding";
+    private const string OnboardingSeenCountKey = "projectOnboardingSeenCount";
 
     public static void TryEnsureTrusted(string workingDirectory)
     {
@@ -86,7 +87,9 @@ internal static class ClaudeWorkspaceTrust
         }
 
         project[TrustAcceptedKey] = true;
-        project[OnboardingKey] = true;
+        // Seed the onboarding counter only if absent so we never clobber a real count.
+        if (project[OnboardingSeenCountKey] is null)
+            project[OnboardingSeenCountKey] = JsonValue.Create(1);
 
         WriteAtomic(configFilePath, root);
     }

@@ -47,7 +47,38 @@ public sealed class ClaudeWorkspaceTrustTests : IDisposable
         // The target worktree is now trusted.
         var entry = projects.GetProperty(NormalizeKey(worktree));
         Assert.True(entry.GetProperty("hasTrustDialogAccepted").GetBoolean());
-        Assert.True(entry.GetProperty("hasCompletedProjectOnboarding").GetBoolean());
+        // The onboarding field is the integer projectOnboardingSeenCount, seeded to 1.
+        var onboarding = entry.GetProperty("projectOnboardingSeenCount");
+        Assert.Equal(JsonValueKind.Number, onboarding.ValueKind);
+        Assert.Equal(1, onboarding.GetInt32());
+        // hasCompletedProjectOnboarding is not a real key and must not be written.
+        Assert.False(entry.TryGetProperty("hasCompletedProjectOnboarding", out _));
+    }
+
+    [Fact]
+    public void EnsureTrusted_PreservesExistingOnboardingCount()
+    {
+        Directory.CreateDirectory(_home);
+        var configPath = Path.Combine(_home, ".claude.json");
+        var worktree = Path.Combine(_home, "worktree");
+        Directory.CreateDirectory(worktree);
+
+        // The project already carries a real onboarding count; seeding must not clobber it.
+        File.WriteAllText(configPath, $$"""
+            {
+              "projects": {
+                {{Json(NormalizeKey(worktree))}}: { "projectOnboardingSeenCount": 5 }
+              }
+            }
+            """);
+
+        ClaudeWorkspaceTrust.EnsureTrusted(configPath, worktree);
+
+        using var document = JsonDocument.Parse(File.ReadAllText(configPath));
+        var entry = document.RootElement.GetProperty("projects").GetProperty(NormalizeKey(worktree));
+        Assert.True(entry.GetProperty("hasTrustDialogAccepted").GetBoolean());
+        Assert.Equal(5, entry.GetProperty("projectOnboardingSeenCount").GetInt32());
+        Assert.False(entry.TryGetProperty("hasCompletedProjectOnboarding", out _));
     }
 
     [Fact]

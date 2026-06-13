@@ -81,6 +81,51 @@ public sealed class TranscriptTurnSignalTests : IDisposable
     }
 
     [Fact]
+    public async Task WaitForTurnAsync_SymlinkWorktree_MatchesResolvedTranscriptCwd()
+    {
+        // macOS exposes /var as a symlink to /private/var, so Path.GetTempPath() hands
+        // back an unresolved worktree while claude records the resolved cwd. The detector
+        // must canonicalize both so the symlink path matches. Unix-only: Windows temp has
+        // no parent symlinks and Directory.CreateSymbolicLink needs elevation there.
+        if (OperatingSystem.IsWindows()) return;
+
+        // The REAL worktree (what claude resolves cwd to) and a symlink that points at it.
+        var realWorktree = Path.Combine(_configHome, "real worktree");
+        Directory.CreateDirectory(realWorktree);
+        var resolvedCwd = ClaudeRealPath.Resolve(realWorktree);
+        var symlinkWorktree = Path.Combine(_configHome, "symlink worktree");
+        Directory.CreateSymbolicLink(symlinkWorktree, realWorktree);
+
+        // Transcript records the RESOLVED real path as cwd.
+        WriteTranscript("session-a.jsonl", resolvedCwd, stopReason: "end_turn");
+
+        var signal = new TranscriptTurnSignal(_configHome, _poll);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        // Pass the SYMLINK path as the worktree. Without canonicalization this hangs.
+        await signal.WaitForTurnAsync(symlinkWorktree, DateTimeOffset.UtcNow.AddMinutes(-1), cts.Token);
+        // Completing without throwing (i.e. before the 10s token fires) is the assertion.
+    }
+
+    [Fact]
+    public void ClaudeRealPath_Resolve_ResolvesSymlinkToRealPath()
+    {
+        // Unix-only symlink resolution check. On Windows Resolve is just GetFullPath.
+        if (OperatingSystem.IsWindows()) return;
+
+        var realDir = Path.Combine(_configHome, "real dir");
+        Directory.CreateDirectory(realDir);
+        var linkDir = Path.Combine(_configHome, "link dir");
+        Directory.CreateSymbolicLink(linkDir, realDir);
+
+        var resolvedReal = ClaudeRealPath.Resolve(realDir);
+        var resolvedLink = ClaudeRealPath.Resolve(linkDir);
+
+        // The symlink resolves to the same canonical path as the real directory.
+        Assert.Equal(resolvedReal, resolvedLink);
+    }
+
+    [Fact]
     public async Task WaitForTurnAsync_ToleratesUnparseableLinesAndMissingFields()
     {
         var worktree = Path.Combine(_configHome, "work tree");

@@ -314,7 +314,9 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
 
         Assert.Equal(Status.Ok, result.Status);
         Assert.Equal("unicode ok", result.Summary);
-        Assert.Equal(worktree, launcher.Spec!.WorkingDirectory);
+        // The spawn cwd is canonicalized to claude's own form (symlinks resolved) so
+        // the turn-detector match works on macOS where the temp path is a symlink.
+        Assert.Equal(ClaudeRealPath.Resolve(worktree), launcher.Spec!.WorkingDirectory);
         Assert.True(File.Exists(Path.Combine(worktree, ".build", "brief.md")));
     }
 

@@ -157,11 +157,16 @@ internal sealed class TranscriptTurnSignal : IInteractiveTurnSignal
         string.Equals(NormalizeDirectory(left), NormalizeDirectory(right),
             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
+    // Canonicalize (resolving symlinks) so a /var worktree matches claude's
+    // recorded /private/var cwd on macOS. ClaudeRealPath.Resolve falls back to
+    // Path.GetFullPath when realpath fails, keeping this total. Both the passed
+    // worktree and each transcript line's cwd flow through here, so the match is
+    // symlink-proof regardless of which side carries the unresolved path.
     private static string NormalizeDirectory(string value)
     {
         try
         {
-            return Path.TrimEndingDirectorySeparator(Path.GetFullPath(value));
+            return Path.TrimEndingDirectorySeparator(ClaudeRealPath.Resolve(value));
         }
         catch
         {
