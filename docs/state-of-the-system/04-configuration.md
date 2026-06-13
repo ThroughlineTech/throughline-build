@@ -1,6 +1,6 @@
 # 04 - Configuration and Environment
 
-Last refreshed: 2026-06-12 (HEAD `130e61a` on `heartbeat`)
+Last refreshed: 2026-06-13 (HEAD `a62cb84` on `heartbeat/stage-04-interactive-worker`)
 
 Every config file the binary reads, every environment variable it consults, every secret it requires, and whether each is required or optional.
 
@@ -80,12 +80,12 @@ Parsed into `AgentConfig(Executable, MaxOutputTokens, Sizes, BypassPermissions, 
 | `executable` | yes | - | Path or bare command for the worker CLI. |
 | `max_output_tokens` | no | `null` | Only `ClaudeCodeAgent` uses it (sets `CLAUDE_CODE_MAX_OUTPUT_TOKENS`); Codex/Gemini/Copilot accept the key but do not apply it. |
 | `bypass_permissions` | no | `true` | Per-agent unattended-mode toggle (TLB-229). `true` emits the agent's skip-permissions flag; `false` opts back into the interactive gate. |
-| `transport` | no | `print` | Claude Code only. Accepted values are `print` and `interactive-hook`; unknown Claude values hard-fail config loading and name both supported values. On any other agent block, `transport` emits the standard unknown-key warning and is ignored. `interactive-hook` is deliberately unsupported in Stage 02 and returns a worker failure without spawning `claude --print`. |
+| `transport` | no | `print` | Claude Code only. Accepted values are `print` and `interactive-hook`; unknown Claude values hard-fail config loading and name both supported values. On any other agent block, `transport` emits the standard unknown-key warning and is ignored. `print` remains the default. `interactive-hook` launches a fresh interactive Claude session on Windows through ConPTY, correlates its Stop-hook completion record, parses the full final assistant response, and never falls back to `--print` ([`ClaudeCodeAgent` constructor](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs), [`ClaudeCodeInteractiveTransport.ExecuteAsync`](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeInteractiveTransport.cs)). |
 | `[workers.<name>.sizes]` | yes | - | Required sub-table mapping `small`/`medium`/`large` to model tiers. A missing sub-table throws. |
 
 `bypass_permissions` is wired into each agent's options by `WorkerAgentBuilder.Create` ([src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs:16-45](../../src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs#L16-L45)). It translates to a different flag per agent: `--dangerously-skip-permissions` for Claude Code, `--dangerously-bypass-approvals-and-sandbox` for Codex, `--yolo` for Gemini. `CopilotOptions` has no `BypassPermissions` field; Copilot always runs `-s --no-ask-user` - an asymmetry vs the other three agents (per-agent flag sites are cited in [03-external-dependencies.md](03-external-dependencies.md)).
 
-`transport` is read only from `[workers.claude-code]` and mapped by `WorkerAgentBuilder` into `ClaudeCodeOptions.Transport`. Omission preserves the historical print invocation. The generated `build init` template advertises the optional key as a comment and leaves it omitted, so existing configurations remain print-mode compatible.
+`transport` is read only from `[workers.claude-code]` and mapped by `WorkerAgentBuilder` into `ClaudeCodeOptions.Transport`. Omission preserves the historical print invocation. The generated `build init` template advertises the optional key as a comment and leaves it omitted, so existing configurations remain print-mode compatible. The interactive host currently requires Windows ConPTY; non-debug runs remove their private per-invocation run directory, while debug runs retain settings and completion evidence under the configured capture directory ([`ClaudeCodeInteractiveTransport.ExecuteAsync`](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeInteractiveTransport.cs)).
 
 #### `[workers.<name>.sizes]` (required per agent) - Functional, schema hard-break (op-33)
 
