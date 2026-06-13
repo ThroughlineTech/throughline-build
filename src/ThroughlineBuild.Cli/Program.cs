@@ -21,6 +21,9 @@ return await RunAsync(args);
 
 static async Task<int> RunAsync(string[] args)
 {
+    if (ClaudeStopHookCommand.IsMatch(args))
+        return await ClaudeStopHookCommand.RunAsync(args);
+
     var helpRegistry = HelpRegistryFactory.Build();
     var helpTopicRegistry = HelpTopicRegistry.Build();
 
