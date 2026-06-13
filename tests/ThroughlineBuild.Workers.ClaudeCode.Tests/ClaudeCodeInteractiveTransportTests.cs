@@ -359,6 +359,104 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task TurnDone_SendsExitThenCompletionResolvesToOk()
+    {
+        var process = new FakeProcess();
+        var turnSignal = new FakeTurnSignal();
+        // Completion only resolves once /exit has been observed on the process input,
+        // modelling the Stop hook firing on interactive session exit.
+        var completion = new TaskCompletionSource<ClaudeCompletionRecord>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var waiter = new FakeWaiter((run, _) => completion.Task);
+
+        var task = ExecuteAsync(new FakeLauncher(process), waiter, turnSignal: turnSignal);
+        var run = await waiter.RunObserved.Task;
+        await turnSignal.WorkingDirectoryObserved.Task;
+
+        // No /exit until the turn-done signal fires.
+        Assert.Empty(process.Inputs);
+        turnSignal.SignalTurnDone();
+
+        // The transport sends /exit; only then do we resolve the completion.
+        await WaitUntilAsync(() => process.Inputs.Count > 0);
+        Assert.Contains("/exit\r", process.Inputs);
+        completion.SetResult(Completion(run.RunId, WorkerResultText("exited then completed")));
+
+        var result = await task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(result.Status == Status.Ok, $"{result.Summary}: {result.FailureReason}");
+        Assert.Equal("exited then completed", result.Summary);
+        Assert.True(process.Killed);
+    }
+
+    [Fact]
+    public async Task CompletionBeforeTurnDone_SucceedsWithoutSendingExit()
+    {
+        var process = new FakeProcess();
+        // Turn signal never fires; the per-turn hook completion resolves immediately.
+        var turnSignal = new FakeTurnSignal();
+        var waiter = new FakeWaiter((run, _) => Task.FromResult(Completion(run.RunId, WorkerResultText("hook fired per-turn"))));
+
+        var result = await ExecuteAsync(new FakeLauncher(process), waiter, turnSignal: turnSignal);
+
+        Assert.True(result.Status == Status.Ok, $"{result.Summary}: {result.FailureReason}");
+        Assert.Equal("hook fired per-turn", result.Summary);
+        // The completion path won, so no /exit was needed.
+        Assert.Empty(process.Inputs);
+        Assert.True(process.Killed);
+    }
+
+    [Fact]
+    public async Task TurnDone_WriteInputFailure_StillCompletesViaCompletion()
+    {
+        // Writing /exit throws, but the completion still resolves (best-effort write).
+        var process = new FakeProcess(writeException: new IOException("pipe closed"));
+        var turnSignal = new FakeTurnSignal();
+        var completion = new TaskCompletionSource<ClaudeCompletionRecord>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var waiter = new FakeWaiter((run, _) => completion.Task);
+
+        var task = ExecuteAsync(new FakeLauncher(process), waiter, turnSignal: turnSignal);
+        var run = await waiter.RunObserved.Task;
+        await turnSignal.WorkingDirectoryObserved.Task;
+        turnSignal.SignalTurnDone();
+
+        await WaitUntilAsync(() => process.Inputs.Count > 0);
+        completion.SetResult(Completion(run.RunId, WorkerResultText("survived write failure")));
+
+        var result = await task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(result.Status == Status.Ok, $"{result.Summary}: {result.FailureReason}");
+        Assert.Equal("survived write failure", result.Summary);
+    }
+
+    [Fact]
+    public async Task TurnDone_NoCompletionAfterExit_TimesOutWithActionableFailure()
+    {
+        var process = new FakeProcess();
+        var turnSignal = new FakeTurnSignal();
+        var waiter = NeverCompletes();
+
+        var task = ExecuteAsync(new FakeLauncher(process), waiter,
+            timeout: TimeSpan.FromMilliseconds(200), turnSignal: turnSignal);
+        await turnSignal.WorkingDirectoryObserved.Task;
+        turnSignal.SignalTurnDone();
+
+        var result = await task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(Status.Failed, result.Status);
+        Assert.Contains("/exit\r", process.Inputs);
+        Assert.Contains("did not complete after exit", result.Summary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("after the interactive session exited", result.FailureReason);
+        Assert.True(process.Killed);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (!condition())
+        {
+            if (DateTime.UtcNow > deadline) throw new TimeoutException("Condition was not met in time.");
+            await Task.Delay(5);
+        }
+    }
+
     private FakeWaiter NeverCompletes() => new((_, cancellationToken) =>
         Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken)
             .ContinueWith<ClaudeCompletionRecord>(_ => throw new UnreachableException(), CancellationToken.None));
@@ -370,12 +468,16 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
         CancellationToken cancellationToken = default,
         string? debugDirectory = null,
         TextWriter? progressSink = null,
-        string? worktree = null)
+        string? worktree = null,
+        IInteractiveTurnSignal? turnSignal = null)
     {
         worktree ??= Path.Combine(_root, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(worktree);
         var options = new ClaudeCodeOptions { Transport = ClaudeCodeTransport.InteractiveHook };
-        var transport = new ClaudeCodeInteractiveTransport(options, launcher, waiter, ["build.exe"]);
+        // Default to a turn signal that never fires so the existing tests exercise the
+        // completion-first path (a per-turn hook firing) exactly as before.
+        var transport = new ClaudeCodeInteractiveTransport(
+            options, launcher, waiter, turnSignal ?? new NeverTurnSignal(), ["build.exe"]);
         return await transport.ExecuteAsync(
             new Brief("TLB-live", Phase.Implement, "test brief", [], [], new Dictionary<string, string>()),
             worktree,
@@ -440,16 +542,26 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
     {
         private readonly TaskCompletionSource<int> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly Exception? _killException;
+        private readonly Exception? _writeException;
 
-        public FakeProcess(int? exitCode = null, Exception? killException = null)
+        public FakeProcess(int? exitCode = null, Exception? killException = null, Exception? writeException = null)
         {
             _killException = killException;
+            _writeException = writeException;
             if (exitCode is int code) _exit.SetResult(code);
         }
 
         public Task<int> ExitTask => _exit.Task;
         public bool Killed { get; private set; }
         public bool Disposed { get; private set; }
+        public List<string> Inputs { get; } = [];
+
+        public Task WriteInputAsync(string text, CancellationToken cancellationToken)
+        {
+            Inputs.Add(text);
+            if (_writeException is not null) throw _writeException;
+            return Task.CompletedTask;
+        }
 
         public Task TerminateAsync(CancellationToken cancellationToken)
         {
@@ -463,6 +575,31 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
         {
             Disposed = true;
             return ValueTask.CompletedTask;
+        }
+    }
+
+    // Default turn signal for the existing suite: never reports a turn, so those tests
+    // exercise the completion-first path (a per-turn Stop hook firing) unchanged.
+    private sealed class NeverTurnSignal : IInteractiveTurnSignal
+    {
+        public Task WaitForTurnAsync(string workingDirectory, DateTimeOffset launchedAt, CancellationToken cancellationToken) =>
+            Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+    }
+
+    // Completes WaitForTurnAsync on demand so a test can drive the /exit flow.
+    private sealed class FakeTurnSignal : IInteractiveTurnSignal
+    {
+        private readonly TaskCompletionSource _turn = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource<string> WorkingDirectoryObserved { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void SignalTurnDone() => _turn.TrySetResult();
+
+        public Task WaitForTurnAsync(string workingDirectory, DateTimeOffset launchedAt, CancellationToken cancellationToken)
+        {
+            WorkingDirectoryObserved.TrySetResult(workingDirectory);
+            return _turn.Task.WaitAsync(cancellationToken);
         }
     }
 }
@@ -516,6 +653,7 @@ public sealed class ClaudeCodeInteractiveLiveTests
             var launcher = new CapturingLauncher(InteractiveClaudeProcessLauncherFactory.Create());
             var transport = new ClaudeCodeInteractiveTransport(
                 options, launcher, new ClaudeCompletionWaiter(),
+                new TranscriptTurnSignal(),
                 ["dotnet", cliAssembly]);
             // Capture outside the worktree so a failed run's transcript survives the
             // finally cleanup and stays diagnosable.

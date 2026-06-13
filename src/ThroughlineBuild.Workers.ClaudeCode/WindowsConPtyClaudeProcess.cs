@@ -31,12 +31,13 @@ internal sealed class WindowsConPtyClaudeProcess : IInteractiveClaudeProcess
     private static readonly TimeSpan DefaultForcedTimeout = TimeSpan.FromSeconds(10);
 
     private readonly Process _process;
-    private readonly SafeFileHandle _input;
+    private readonly FileStream _input;
     private readonly FileStream _output;
     private readonly Task _drainTask;
     private readonly TimeSpan _gracefulTimeout;
     private readonly TimeSpan _forcedTimeout;
     private readonly object _gate = new();
+    private readonly SemaphoreSlim _inputGate = new(1, 1);
     private IntPtr _pseudoConsole;
     private IntPtr _job;
 
@@ -52,7 +53,9 @@ internal sealed class WindowsConPtyClaudeProcess : IInteractiveClaudeProcess
         _process = process;
         _pseudoConsole = pseudoConsole;
         _job = job;
-        _input = input;
+        // The stream owns the input handle (the write end into the pseudo console)
+        // for the life of the host; DisposeAsync disposing _input closes the handle.
+        _input = new FileStream(input, FileAccess.Write);
         _output = output;
         _gracefulTimeout = gracefulTimeout;
         _forcedTimeout = forcedTimeout;
@@ -177,6 +180,25 @@ internal sealed class WindowsConPtyClaudeProcess : IInteractiveClaudeProcess
         }
     }
 
+    public async Task WriteInputAsync(string text, CancellationToken cancellationToken)
+    {
+        // Best-effort: do not write into a console whose child has already exited.
+        if (_process.HasExited) return;
+        var bytes = Encoding.UTF8.GetBytes(text);
+        // Serialize writes so two concurrent inputs cannot interleave on the pipe.
+        await _inputGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_process.HasExited) return;
+            await _input.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+            await _input.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _inputGate.Release();
+        }
+    }
+
     public Task TerminateAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -198,7 +220,9 @@ internal sealed class WindowsConPtyClaudeProcess : IInteractiveClaudeProcess
 
     public async ValueTask DisposeAsync()
     {
+        // The stream owns the input handle; disposing it closes the write end of the pipe.
         _input.Dispose();
+        _inputGate.Dispose();
         ClosePseudoConsoleOnce();
         // Closing a kill-on-close job is the final safety net: any descendant that
         // somehow outlived termination is reaped here.

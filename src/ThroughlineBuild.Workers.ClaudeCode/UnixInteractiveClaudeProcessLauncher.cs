@@ -73,15 +73,23 @@ internal sealed class UnixPtyClaudeProcess : IInteractiveClaudeProcess
     private static readonly TimeSpan DefaultForcedTimeout = TimeSpan.FromSeconds(10);
 
     private readonly int _pid;
+    private readonly int _masterFd;
     private readonly FileStream _master;
     private readonly Task _drainTask;
     private readonly TimeSpan _gracefulTimeout;
     private readonly TimeSpan _forcedTimeout;
     private readonly object _gate = new();
+    private readonly object _inputGate = new();
+    private bool _disposed;
 
     private UnixPtyClaudeProcess(int pid, SafeFileHandle master, TimeSpan gracefulTimeout, TimeSpan forcedTimeout)
     {
         _pid = pid;
+        // Keep the raw master fd so WriteInputAsync can write the input direction of
+        // the pty while the FileStream below drains the read direction. Read and write
+        // on a pty master are independent, so concurrent read/write on the same fd is
+        // safe; the FileStream owns and closes the fd on disposal.
+        _masterFd = (int)master.DangerousGetHandle();
         _master = new FileStream(master, FileAccess.Read);
         _gracefulTimeout = gracefulTimeout;
         _forcedTimeout = forcedTimeout;
@@ -124,6 +132,40 @@ internal sealed class UnixPtyClaudeProcess : IInteractiveClaudeProcess
         }
     }
 
+    public Task WriteInputAsync(string text, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        // Run the blocking write off the caller's path. Read and write directions of a
+        // pty master are independent, so writing the raw fd while the drain FileStream
+        // reads it is safe.
+        return Task.Run(() => WriteInput(Encoding.UTF8.GetBytes(text)), cancellationToken);
+    }
+
+    private void WriteInput(byte[] bytes)
+    {
+        lock (_inputGate)
+        {
+            // Best-effort: never write into a disposed/closed master fd or after exit.
+            if (_disposed || ExitTask.IsCompleted) return;
+            // write(2) starts at the buffer head, so a partial write is resumed by
+            // shifting the unwritten tail to the head of a fresh buffer. This avoids
+            // an unsafe pointer-offset block while still handling partial writes.
+            var remaining = bytes;
+            while (remaining.Length > 0)
+            {
+                var written = NativeMethods.write(_masterFd, remaining, (nuint)remaining.Length);
+                if (written < 0)
+                {
+                    // Retry on EINTR; give up on anything else (best-effort input).
+                    if (Marshal.GetLastPInvokeError() == Eintr) continue;
+                    return;
+                }
+                if (written == 0) return;
+                remaining = remaining[(int)written..];
+            }
+        }
+    }
+
     public Task TerminateAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -156,6 +198,9 @@ internal sealed class UnixPtyClaudeProcess : IInteractiveClaudeProcess
         // bounded group-drain (SIGKILL + kill(-pid,0) confirmation) rather than a
         // single fire-and-forget signal. Best-effort: disposal never throws.
         try { await EnsureGroupDrainedAsync().ConfigureAwait(false); } catch { }
+        // Mark disposed under the input gate so an in-flight WriteInput cannot write to
+        // the master fd once the FileStream below closes it.
+        lock (_inputGate) { _disposed = true; }
         _master.Dispose();
         try { await _drainTask.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false); } catch { }
     }
@@ -376,6 +421,9 @@ internal sealed class UnixPtyClaudeProcess : IInteractiveClaudeProcess
 
         [DllImport("libc", SetLastError = true)]
         internal static extern int close(int fd);
+
+        [DllImport("libc", SetLastError = true)]
+        internal static extern nint write(int fd, byte[] buf, nuint count);
 
         [DllImport("libc", SetLastError = true)]
         internal static extern int kill(int pid, int sig);

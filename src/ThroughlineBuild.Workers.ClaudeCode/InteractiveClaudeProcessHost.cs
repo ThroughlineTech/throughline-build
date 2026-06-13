@@ -24,6 +24,14 @@ internal interface IInteractiveClaudeProcess : IAsyncDisposable
     Task<int> ExitTask { get; }
 
     /// <summary>
+    /// Writes raw input to the terminal host's input channel (the pty input pipe on
+    /// Windows, the pty master fd on Unix). Used to drive the interactive REPL - e.g.
+    /// sending "/exit\r" once the assistant turn is done so Claude exits and fires its
+    /// Stop hook. A no-op once the process has exited or been disposed.
+    /// </summary>
+    Task WriteInputAsync(string text, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Bounded graceful-then-forced shutdown of the whole process tree. Signals a
     /// graceful exit first, waits a bounded grace period, then escalates to a
     /// forced tree kill. Throws when the tree could not be terminated.
