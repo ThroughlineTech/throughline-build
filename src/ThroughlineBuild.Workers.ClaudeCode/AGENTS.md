@@ -30,7 +30,7 @@ Each run holds a `ClaudeRunLease` (exclusive `run.lock` + `owner.json`);
 on the shared `.build/brief.md`. Real tree-cleanup tests exist per platform:
 `WindowsProcessTreeCleanupTests` passes on the Windows dev host;
 `UnixProcessTreeCleanupTests` (forced-termination + early-root-exit) passes on
-macOS arm64 (validated 2026-06-13), with the linux-x64/glibc run still pending.
+macOS arm64 and Ubuntu 24.04 x86_64 / glibc 2.39 (both validated 2026-06-13).
 
 WORKER_RESULT + fenced blocks are parsed from the FULL assistant transcript
 reconstructed from the stream (`TryExtractAssistantTranscript`), not from the
