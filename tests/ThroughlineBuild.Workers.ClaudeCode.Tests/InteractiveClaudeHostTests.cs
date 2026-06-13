@@ -91,6 +91,24 @@ public sealed class ProcessShutdownSequenceTests
     }
 }
 
+public sealed class UnixPtyEnvironmentTests
+{
+    [Fact]
+    public void RenderEnvironment_ProducesKeyValueStringsAndSkipsNulls()
+    {
+        var rendered = UnixSpawnArguments.RenderEnvironment(new Dictionary<string, string?>
+        {
+            ["PATH"] = "/usr/bin",
+            ["EMPTY"] = "",
+            ["DROP"] = null,
+        });
+
+        Assert.Contains("PATH=/usr/bin", rendered);
+        Assert.Contains("EMPTY=", rendered);
+        Assert.DoesNotContain(rendered, e => e.StartsWith("DROP", StringComparison.Ordinal));
+    }
+}
+
 public sealed class InteractiveClaudeWorktreeLockTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"lattice worktree lock {Guid.NewGuid():N}");

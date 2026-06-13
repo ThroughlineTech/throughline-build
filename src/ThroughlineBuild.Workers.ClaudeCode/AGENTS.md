@@ -9,19 +9,27 @@ host, trusts a correlated Stop hook, and recovers telemetry through the isolated
 Process/terminal hosting is behind a focused abstraction
 (`InteractiveClaudeProcessHost.cs`): `InteractiveClaudeProcessLauncherFactory`
 picks the platform host, so the transport, run store, and parsing never touch
-platform code. Windows = `WindowsConPtyClaudeProcess` (ConPTY) which puts the
-whole child tree in a kill-on-close **job object** - the guarantee that no
-descendant (incl. tool subprocesses) survives - and terminates via
-`ProcessShutdownSequence`: close-the-console (graceful) -> bounded wait ->
-TerminateJobObject (forced). Unix is a documented unsupported arm
-(`UnixInteractiveClaudeProcessLauncher`) and the single drop-in extension point;
-there is no Stage-01-equivalent Unix evidence yet, and the transport never
-silently falls back to `--print`. Each run holds a `ClaudeRunLease`
-(exclusive `run.lock` + `owner.json`); `ClaudeRunDirectorySweeper` reclaims
-crash-orphaned run dirs by lock-freeness (never by killing a pid). A per-worktree
-temp lock (`InteractiveClaudeWorktreeLock`, hashed by full path) prevents two
-runs racing on the shared `.build/brief.md`. The kernel-validated Windows
-tree-cleanup test (`WindowsProcessTreeCleanupTests`) runs on the dev host.
+platform code. Both hosts terminate via `ProcessShutdownSequence`: a graceful
+signal -> bounded wait -> forced kill escalation. Containment differs by platform
+and is NOT equivalent:
+- Windows `WindowsConPtyClaudeProcess` (ConPTY): the whole child tree goes in a
+  mandatory kill-on-close **job object** - a kernel guarantee no descendant
+  survives. The job is required; a job create/assign failure fails the launch
+  (terminating the still-suspended child), never a silent best-effort fallback.
+- Unix `UnixPtyClaudeProcess` (`posix_openpt` + `posix_spawnp`,
+  `POSIX_SPAWN_SETSID`): **process-group** containment via `kill(-pid, SIGTERM)`
+  then `SIGKILL`, then a bounded `kill(-pid, 0)` drain check. Weaker than the job
+  object - a descendant that double-forks / `setsid`s out of the group escapes.
+  Requires glibc >= 2.26 / macOS >= 10.15 (CI targets). The transport never
+  silently falls back to `--print`.
+
+Each run holds a `ClaudeRunLease` (exclusive `run.lock` + `owner.json`);
+`ClaudeRunDirectorySweeper` reclaims crash-orphaned run dirs by lock-freeness
+(never by killing a pid). A per-worktree temp lock
+(`InteractiveClaudeWorktreeLock`, hashed by full path) prevents two runs racing
+on the shared `.build/brief.md`. Real tree-cleanup tests run per platform:
+`WindowsProcessTreeCleanupTests` on the Windows dev host,
+`UnixProcessTreeCleanupTests` on the Linux/macOS CI hosts.
 
 WORKER_RESULT + fenced blocks are parsed from the FULL assistant transcript
 reconstructed from the stream (`TryExtractAssistantTranscript`), not from the

@@ -106,7 +106,9 @@ internal sealed class WindowsConPtyClaudeProcess : IInteractiveClaudeProcess
 
             // The job is the tree-containment guarantee: every descendant inherits
             // job membership and the kernel kills the whole job when it is closed.
-            job = TryCreateKillOnCloseJob();
+            // It is mandatory - if it cannot be established the launch fails rather
+            // than silently degrading to a best-effort snapshot kill.
+            job = CreateKillOnCloseJob();
 
             var startup = new StartupInfoEx();
             startup.StartupInfo.cb = Marshal.SizeOf<StartupInfoEx>();
@@ -119,12 +121,11 @@ internal sealed class WindowsConPtyClaudeProcess : IInteractiveClaudeProcess
                 environment, spec.WorkingDirectory, ref startup, out processInfo));
             started = true;
 
-            // Assign while still suspended so no grandchild escapes the job, then resume.
-            if (job != IntPtr.Zero && !NativeMethods.AssignProcessToJobObject(job, processInfo.Process))
-            {
-                NativeMethods.CloseHandle(job);
-                job = IntPtr.Zero; // fall back to entire-tree kill if assignment is refused
-            }
+            // Assign while still suspended so no grandchild can spawn outside the job.
+            // Assignment failure means we cannot contain the tree: abort the launch
+            // (the catch terminates the still-suspended child) instead of resuming
+            // an uncontained process.
+            ThrowIfFalse(NativeMethods.AssignProcessToJobObject(job, processInfo.Process));
             if (NativeMethods.ResumeThread(processInfo.Thread) == unchecked((uint)-1))
                 throw new Win32Exception(Marshal.GetLastWin32Error());
 
@@ -209,9 +210,14 @@ internal sealed class WindowsConPtyClaudeProcess : IInteractiveClaudeProcess
 
     private void ForceKillTree()
     {
-        if (_job != IntPtr.Zero)
+        // The job kill is the guarantee; Process.Kill(tree) is secondary defense.
+        // Snapshot the handle under the gate so a concurrent CloseJobOnce cannot
+        // close it between our read and use (CloseJobOnce still owns the close).
+        IntPtr job;
+        lock (_gate) { job = _job; }
+        if (job != IntPtr.Zero)
         {
-            try { NativeMethods.TerminateJobObject(_job, 1); } catch { }
+            try { NativeMethods.TerminateJobObject(job, 1); } catch { }
         }
         try
         {
@@ -242,17 +248,19 @@ internal sealed class WindowsConPtyClaudeProcess : IInteractiveClaudeProcess
         }
     }
 
-    private static IntPtr TryCreateKillOnCloseJob()
+    private static IntPtr CreateKillOnCloseJob()
     {
         var job = NativeMethods.CreateJobObject(IntPtr.Zero, null);
-        if (job == IntPtr.Zero) return IntPtr.Zero;
+        if (job == IntPtr.Zero)
+            throw new Win32Exception(Marshal.GetLastWin32Error());
         var info = new JobObjectExtendedLimitInformation();
         info.BasicLimitInformation.LimitFlags = JobObjectLimitKillOnJobClose;
         var length = (uint)Marshal.SizeOf<JobObjectExtendedLimitInformation>();
         if (!NativeMethods.SetInformationJobObject(job, JobObjectExtendedLimitInformationClass, ref info, length))
         {
+            var error = Marshal.GetLastWin32Error();
             NativeMethods.CloseHandle(job);
-            return IntPtr.Zero;
+            throw new Win32Exception(error);
         }
         return job;
     }
