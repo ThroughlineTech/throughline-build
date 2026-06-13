@@ -84,6 +84,8 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
         var run = ClaudeRunDirectory.Open(runPath, runId);
 
         IInteractiveClaudeProcess? process = null;
+        var startedAt = DateTimeOffset.UtcNow;
+        var stopwatch = Stopwatch.StartNew();
         try
         {
             var settingsPath = Path.Combine(run.Path, "settings.json");
@@ -95,9 +97,13 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
             _options.Sizes.TryGetValue(options.Size, out var tier);
             var model = ClaudeCodeAgent.NormalizeModel(tier?.Model);
             if (ClaudeCodeModelValidator.Validate(model) is string modelError)
-                return Failure("Invalid Claude Code model", $"{modelError}. Run directory: '{run.Path}'.");
+                return FailureWithDebug("Invalid Claude Code model", $"{modelError}. Run directory: '{run.Path}'.",
+                    options.DebugCaptureDirectory, run.Path, brief);
 
             var arguments = BuildInteractiveArgs(_options, options, settingsPath, model);
+            WriteProgress(options.ProgressDigestSink, startedAt, "agent", model is null
+                ? "claude-code interactive"
+                : $"claude-code interactive model {model}");
             var environmentInfo = new ProcessStartInfo(_options.ExecutablePath) { UseShellExecute = false };
             ClaudeCodeAgent.ConfigureEnvironment(environmentInfo, _options, options);
             var environment = environmentInfo.Environment.ToDictionary(
@@ -110,14 +116,15 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
             }
             catch (Win32Exception ex)
             {
-                return Failure(
+                return FailureWithDebug(
                     $"Worker executable not found: '{_options.ExecutablePath}'",
-                    $"Unable to launch interactive Claude Code with ConPTY: {ex.Message}. Run directory: '{run.Path}'.");
+                    $"Unable to launch interactive Claude Code with ConPTY: {ex.Message}. Run directory: '{run.Path}'.",
+                    options.DebugCaptureDirectory, run.Path, brief);
             }
             catch (PlatformNotSupportedException ex)
             {
-                return Failure("Interactive Claude Code is unsupported on this host",
-                    $"{ex.Message} Run directory: '{run.Path}'.");
+                return FailureWithDebug("Interactive Claude Code is unsupported on this host",
+                    $"{ex.Message} Run directory: '{run.Path}'.", options.DebugCaptureDirectory, run.Path, brief);
             }
 
             using var waitCancellation = new CancellationTokenSource();
@@ -131,27 +138,33 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
                 var completion = await completionTask;
                 var killFailure = await TryKillAndWaitAsync(process);
                 if (killFailure is not null)
-                    return Failure("Interactive Claude process cleanup failed",
-                        $"{killFailure}Run directory: '{run.Path}'.");
+                    return FailureWithDebug("Interactive Claude process cleanup failed",
+                        $"{killFailure}Run directory: '{run.Path}'.", options.DebugCaptureDirectory, run.Path, brief);
                 if (!string.Equals(completion.RunId, run.RunId, StringComparison.Ordinal))
-                    return Failure("Claude Stop-hook completion was stale",
-                        $"Completion run id '{completion.RunId}' did not match expected run id '{run.RunId}'. Run directory: '{run.Path}'.");
-                return ParseCompletion(completion, run.Path);
+                    return FailureWithDebug("Claude Stop-hook completion was stale",
+                        $"Completion run id '{completion.RunId}' did not match expected run id '{run.RunId}'. Run directory: '{run.Path}'.",
+                        options.DebugCaptureDirectory, run.Path, brief);
+                stopwatch.Stop();
+                WriteProgress(options.ProgressDigestSink, startedAt, "result", "Stop hook completed; recovering persisted transcript");
+                return ParseCompletion(completion, run.Path, brief, options, arguments, model,
+                    stopwatch.ElapsedMilliseconds, startedAt);
             }
 
             waitCancellation.Cancel();
             if (winner == cancellationTask)
             {
                 var killFailure = await TryKillAndWaitAsync(process);
-                return Failure("Interactive Claude execution was cancelled",
-                    $"Cancellation requested. {killFailure}Run directory: '{run.Path}'.");
+                return FailureWithDebug("Interactive Claude execution was cancelled",
+                    $"Cancellation requested. {killFailure}Run directory: '{run.Path}'.",
+                    options.DebugCaptureDirectory, run.Path, brief);
             }
 
             if (winner == timeoutTask)
             {
                 var killFailure = await TryKillAndWaitAsync(process);
-                return Failure("Interactive Claude execution timed out",
-                    $"Timed out after {options.Timeout}. {killFailure}Run directory: '{run.Path}'.");
+                return FailureWithDebug("Interactive Claude execution timed out",
+                    $"Timed out after {options.Timeout}. {killFailure}Run directory: '{run.Path}'.",
+                    options.DebugCaptureDirectory, run.Path, brief);
             }
 
             if (winner == completionTask)
@@ -160,14 +173,16 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
                 catch (Exception ex)
                 {
                     var killFailure = await TryKillAndWaitAsync(process);
-                    return Failure("Claude Stop-hook completion was malformed",
-                        $"{ex.Message}. {killFailure}Run directory: '{run.Path}'.");
+                    return FailureWithDebug("Claude Stop-hook completion was malformed",
+                        $"{ex.Message}. {killFailure}Run directory: '{run.Path}'.",
+                        options.DebugCaptureDirectory, run.Path, brief);
                 }
             }
 
             var exitCode = await process.ExitTask;
-            return Failure("Interactive Claude exited before trusted completion",
-                $"Claude exited with code {exitCode} before the correlated Stop hook completed. Run directory: '{run.Path}'.");
+            return FailureWithDebug("Interactive Claude exited before trusted completion",
+                $"Claude exited with code {exitCode} before the correlated Stop hook completed. Run directory: '{run.Path}'.",
+                options.DebugCaptureDirectory, run.Path, brief);
         }
         finally
         {
@@ -201,21 +216,154 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
         return arguments;
     }
 
-    private static WorkerResult ParseCompletion(ClaudeCompletionRecord completion, string runPath)
+    private static WorkerResult ParseCompletion(
+        ClaudeCompletionRecord completion,
+        string runPath,
+        Brief brief,
+        WorkerOptions options,
+        IReadOnlyList<string> arguments,
+        string? fallbackModel,
+        long wallClockMs,
+        DateTimeOffset startedAt)
     {
-        if (ClaudeCodeAgent.TryDescribeInvalidModelError(completion.LastAssistantMessage, "") is string invalidModel)
+        ClaudePersistedTranscript? transcript = null;
+        string? telemetryError = null;
+        try
+        {
+            transcript = ClaudePersistedTranscriptReader.Read(completion.TranscriptPath, completion.ClaudeSessionId);
+        }
+        catch (Exception ex)
+        {
+            telemetryError = ex.Message;
+        }
+
+        var assistantText = string.IsNullOrWhiteSpace(transcript?.AssistantTranscript)
+            ? completion.LastAssistantMessage
+            : transcript.AssistantTranscript;
+
+        if (ClaudeCodeAgent.TryDescribeInvalidModelError(assistantText, "") is string invalidModel)
             return Failure("Claude Code rejected the configured model", $"{invalidModel} Run directory: '{runPath}'.");
 
-        var outcome = WorkerResultParser.TryParse(completion.LastAssistantMessage);
+        var outcome = WorkerResultParser.TryParse(assistantText);
+        WorkerResult result;
         if (outcome.Result is not null)
-            return outcome.Result with { Blocks = outcome.Blocks };
-
-        if (outcome.DeserializeErrorType is not null)
-            return Failure("Failed to deserialize WORKER_RESULT JSON",
+            result = outcome.Result with { Blocks = outcome.Blocks };
+        else if (outcome.DeserializeErrorType is not null)
+            result = Failure("Failed to deserialize WORKER_RESULT JSON",
                 $"{outcome.DeserializeErrorType}: {outcome.DeserializeErrorMessage}. Run directory: '{runPath}'.");
+        else if (transcript?.ProviderErrorText is string providerError)
+            result = new WorkerResult(Status.Escalate, "Claude Code provider failure", Array.Empty<string>(),
+                $"Claude Code reported: {providerError}. Run directory: '{runPath}'.", new Dictionary<string, object>());
+        else
+        {
+            var missing = Failure("No WORKER_RESULT found in interactive Claude completion",
+                $"Claude Code response: {assistantText}. The trusted Stop-hook completion did not contain a WORKER_RESULT block. " +
+                $"Run directory: '{runPath}'.");
+            result = ProviderErrorClassifier.Classify(missing, "claude-code") is not null
+                ? missing with { Status = Status.Escalate, Summary = "Claude Code provider failure" }
+                : missing;
+        }
 
-        return Failure("No WORKER_RESULT found in interactive Claude completion",
-            $"The trusted Stop-hook completion did not contain a WORKER_RESULT block. Run directory: '{runPath}'.");
+        if (transcript is not null)
+        {
+            result = AttachTelemetry(result, transcript, wallClockMs, fallbackModel);
+            result = ClaudeCodeAgent.AttachContextTurns(result,
+                string.Join('\n', transcript.NormalizedLines.Select(line => line.Line)));
+        }
+
+        TryWriteDebugCapture(options.DebugCaptureDirectory, options.DebugTranscript, runPath, brief, completion, transcript,
+            telemetryError, result, arguments, fallbackModel, wallClockMs, startedAt);
+        return result;
+    }
+
+    private static WorkerResult AttachTelemetry(
+        WorkerResult result,
+        ClaudePersistedTranscript transcript,
+        long wallClockMs,
+        string? fallbackModel)
+    {
+        var usage = new Dictionary<string, object?>
+        {
+            ["model"] = transcript.Model ?? fallbackModel,
+            ["vendor"] = "anthropic",
+            ["wall_clock_ms"] = wallClockMs,
+            ["input_tokens"] = transcript.Usage?.InputTokens,
+            ["output_tokens"] = transcript.Usage?.OutputTokens,
+            ["cache_read_tokens"] = transcript.Usage?.CacheReadInputTokens,
+            ["cache_create_tokens"] = transcript.Usage?.CacheCreationInputTokens,
+            ["partial"] = transcript.Usage is null
+                || transcript.Usage.InputTokens is null
+                || transcript.Usage.OutputTokens is null
+                || transcript.Usage.CacheReadInputTokens is null
+                || transcript.Usage.CacheCreationInputTokens is null
+        };
+        var merged = new Dictionary<string, object>(result.Metadata)
+        {
+            ["llm_usage"] = usage
+        };
+        return result with { Metadata = merged };
+    }
+
+    private static void TryWriteDebugCapture(
+        string? captureDirectory,
+        DebugTranscriptContext? debugTranscript,
+        string runPath,
+        Brief brief,
+        ClaudeCompletionRecord completion,
+        ClaudePersistedTranscript? transcript,
+        string? telemetryError,
+        WorkerResult result,
+        IReadOnlyList<string> arguments,
+        string? fallbackModel,
+        long wallClockMs,
+        DateTimeOffset startedAt)
+    {
+        if (captureDirectory is null) return;
+        try
+        {
+            Directory.CreateDirectory(captureDirectory);
+            File.WriteAllText(Path.Combine(captureDirectory, "worker-stdin.txt"), brief.Instruction, Encoding.UTF8);
+            var debugCompletionPath = Path.Combine(captureDirectory, "hook-completion.json");
+            var redactedCompletion = completion with
+            {
+                LastAssistantMessage = ClaudePersistedTranscriptReader.RedactText(completion.LastAssistantMessage)
+            };
+            var completionJson = System.Text.Json.JsonSerializer.Serialize(
+                redactedCompletion, ClaudeHookJsonContext.Default.ClaudeCompletionRecord);
+            File.WriteAllText(debugCompletionPath, completionJson, Encoding.UTF8);
+            File.WriteAllText(Path.Combine(runPath, ClaudeRunDirectory.CompletionFileName), completionJson, Encoding.UTF8);
+            File.WriteAllText(Path.Combine(captureDirectory, "assistant-transcript.txt"),
+                transcript?.RedactedAssistantTranscript
+                    ?? ClaudePersistedTranscriptReader.RedactText(completion.LastAssistantMessage), Encoding.UTF8);
+            File.WriteAllText(Path.Combine(captureDirectory, "provider-transcript.jsonl"),
+                transcript?.RedactedRawTranscript ?? "", Encoding.UTF8);
+            File.WriteAllText(Path.Combine(captureDirectory, "process-host.txt"),
+                $"transport=interactive-hook{Environment.NewLine}terminal_rendering_parsed=false{Environment.NewLine}" +
+                $"run_directory={runPath}{Environment.NewLine}telemetry_error={telemetryError ?? ""}{Environment.NewLine}", Encoding.UTF8);
+            var dto = new WorkerResultDebugDto(result.Status.ToString(), result.Summary,
+                result.FilesChanged, result.FailureReason);
+            File.WriteAllText(Path.Combine(captureDirectory, "worker-result.json"),
+                System.Text.Json.JsonSerializer.Serialize(dto, DebugCaptureJsonContext.Default.WorkerResultDebugDto), Encoding.UTF8);
+            if (transcript is not null)
+                WorkerTranscriptWriter.Write(captureDirectory, brief, transcript.RedactedNormalizedLines, result,
+                    context: debugTranscript, model: transcript.Model ?? fallbackModel, invocationArgs: arguments,
+                    wallClockMs: wallClockMs, startedAt: startedAt);
+        }
+        catch
+        {
+            // Optional diagnostic capture must never change the worker result.
+        }
+    }
+
+    private static void WriteProgress(TextWriter? sink, DateTimeOffset startedAt, string kind, string message)
+    {
+        if (sink is null) return;
+        try
+        {
+            var elapsed = DateTimeOffset.UtcNow - startedAt;
+            sink.WriteLine($"[{ClaudeCodeProgressDigester.FormatOffset(elapsed)}] {kind.PadRight(10)} {message}");
+        }
+        catch { }
     }
 
     private static async Task<string?> TryKillAndWaitAsync(IInteractiveClaudeProcess process)
@@ -247,6 +395,31 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
 
     private static WorkerResult Failure(string summary, string reason) =>
         new(Status.Failed, summary, Array.Empty<string>(), reason, new Dictionary<string, object>());
+
+    private static WorkerResult FailureWithDebug(
+        string summary,
+        string reason,
+        string? captureDirectory,
+        string runPath,
+        Brief brief)
+    {
+        var result = Failure(summary, reason);
+        if (captureDirectory is null) return result;
+        try
+        {
+            Directory.CreateDirectory(captureDirectory);
+            File.WriteAllText(Path.Combine(captureDirectory, "worker-stdin.txt"), brief.Instruction, Encoding.UTF8);
+            File.WriteAllText(Path.Combine(captureDirectory, "process-host.txt"),
+                $"transport=interactive-hook{Environment.NewLine}terminal_rendering_parsed=false{Environment.NewLine}" +
+                $"run_directory={runPath}{Environment.NewLine}failure={reason}{Environment.NewLine}", Encoding.UTF8);
+            var dto = new WorkerResultDebugDto(result.Status.ToString(), result.Summary,
+                result.FilesChanged, result.FailureReason);
+            File.WriteAllText(Path.Combine(captureDirectory, "worker-result.json"),
+                System.Text.Json.JsonSerializer.Serialize(dto, DebugCaptureJsonContext.Default.WorkerResultDebugDto), Encoding.UTF8);
+        }
+        catch { }
+        return result;
+    }
 
     private static void TryDeleteRunDirectory(string path)
     {

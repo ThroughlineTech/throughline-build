@@ -23,5 +23,6 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Fixtures\**\*.ndjson" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Fixtures\**\*.jsonl" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

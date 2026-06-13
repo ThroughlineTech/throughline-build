@@ -1,9 +1,10 @@
 # ThroughlineBuild.Workers.ClaudeCode - vendor worker (template)
 
-`ClaudeCodeAgent : IWorkerAgent` (`Name => "claude-code"`). Spawns
-`claude --print --verbose --output-format stream-json` with the brief on
-stdin, parses the NDJSON stream, and emits a one-line progress digest
-(`ClaudeCodeProgressDigester`).
+`ClaudeCodeAgent : IWorkerAgent` (`Name => "claude-code"`). The default print
+transport spawns `claude --print --verbose --output-format stream-json` with
+the brief on stdin. The opt-in interactive-hook transport runs under ConPTY,
+trusts a correlated Stop hook, and recovers telemetry through the isolated
+`ClaudePersistedTranscriptReader` adapter.
 
 WORKER_RESULT + fenced blocks are parsed from the FULL assistant transcript
 reconstructed from the stream (`TryExtractAssistantTranscript`), not from the

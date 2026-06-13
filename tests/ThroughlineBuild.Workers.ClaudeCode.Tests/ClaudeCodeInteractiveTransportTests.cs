@@ -86,6 +86,21 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task TimeoutUnderDebug_WritesFailureDiagnostics()
+    {
+        var debugDirectory = Path.Combine(_root, "timeout-debug");
+        var result = await ExecuteAsync(new FakeLauncher(new FakeProcess()), NeverCompletes(),
+            TimeSpan.FromMilliseconds(30), debugDirectory: debugDirectory);
+
+        Assert.Equal(Status.Failed, result.Status);
+        Assert.True(File.Exists(Path.Combine(debugDirectory, "worker-stdin.txt")));
+        Assert.True(File.Exists(Path.Combine(debugDirectory, "process-host.txt")));
+        Assert.True(File.Exists(Path.Combine(debugDirectory, "worker-result.json")));
+        Assert.Contains("timed out", File.ReadAllText(Path.Combine(debugDirectory, "process-host.txt")),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task CancellationWithoutCompletion_KillsProcessAndCleansRun()
     {
         var process = new FakeProcess();
@@ -144,6 +159,18 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task ProviderFailureTextWithoutEnvelope_IsPreservedAndEscalated()
+    {
+        var waiter = new FakeWaiter((run, _) => Task.FromResult(Completion(
+            run.RunId, "Claude AI usage limit reached|1781366400")));
+
+        var result = await ExecuteAsync(new FakeLauncher(new FakeProcess()), waiter);
+
+        Assert.Equal(Status.Escalate, result.Status);
+        Assert.Contains("usage limit reached", result.FailureReason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task KillFailure_IsReturnedInsteadOfSuccessfulEnvelope()
     {
         var process = new FakeProcess(killException: new InvalidOperationException("access denied"));
@@ -161,14 +188,49 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
     public async Task DebugRun_PreservesSettingsAndCompletionEvidence()
     {
         var debugDirectory = Path.Combine(_root, "debug");
+        var transcriptPath = CopyFixture("persisted-transcript-2.1.52.jsonl");
         var process = new FakeProcess();
-        var waiter = new FakeWaiter((run, _) => Task.FromResult(Completion(run.RunId, WorkerResultText("debug"))));
+        var waiter = new FakeWaiter((run, _) => Task.FromResult(Completion(
+            run.RunId, WorkerResultText("debug"), transcriptPath, "fixture-session")));
 
         var result = await ExecuteAsync(new FakeLauncher(process), waiter, debugDirectory: debugDirectory);
 
         Assert.True(result.Status == Status.Ok, $"{result.Summary}: {result.FailureReason}");
+        Assert.Equal("fixture complete", result.Summary);
         Assert.True(Directory.Exists(waiter.Run!.Path));
         Assert.True(File.Exists(Path.Combine(waiter.Run.Path, "settings.json")));
+        Assert.True(File.Exists(Path.Combine(debugDirectory, "worker-stdin.txt")));
+        Assert.True(File.Exists(Path.Combine(debugDirectory, "provider-transcript.jsonl")));
+        Assert.True(File.Exists(Path.Combine(debugDirectory, "assistant-transcript.txt")));
+        Assert.True(File.Exists(Path.Combine(debugDirectory, "hook-completion.json")));
+        Assert.True(File.Exists(Path.Combine(debugDirectory, "process-host.txt")));
+        Assert.True(File.Exists(Path.Combine(debugDirectory, "worker-result.json")));
+        Assert.True(File.Exists(Path.Combine(debugDirectory, "transcript.jsonl")));
+        Assert.DoesNotContain("fixture-secret", File.ReadAllText(Path.Combine(debugDirectory, "provider-transcript.jsonl")));
+    }
+
+    [Fact]
+    public async Task PersistedTranscript_AttachesModelUsageContextAndAllFencedBlocks()
+    {
+        var transcriptPath = CopyFixture("persisted-transcript-2.1.52.jsonl");
+        var waiter = new FakeWaiter((run, _) => Task.FromResult(Completion(
+            run.RunId, "final message only", transcriptPath, "fixture-session")));
+        var progress = new StringWriter();
+
+        var result = await ExecuteAsync(new FakeLauncher(new FakeProcess()), waiter, progressSink: progress);
+
+        Assert.Equal(Status.Ok, result.Status);
+        Assert.Equal("first block", result.Blocks!["REPORT"]);
+        var usage = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(result.Metadata["llm_usage"]);
+        Assert.Equal("claude-sonnet-4-6", usage["model"]);
+        Assert.Equal(17, usage["input_tokens"]);
+        Assert.Equal(65, usage["output_tokens"]);
+        Assert.Equal(240, usage["cache_read_tokens"]);
+        Assert.Equal(35, usage["cache_create_tokens"]);
+        Assert.False((bool)usage["partial"]!);
+        Assert.True(result.Metadata.ContainsKey("context_turns"));
+        Assert.Contains("interactive", progress.ToString());
+        Assert.Contains("recovering persisted transcript", progress.ToString());
     }
 
     [Fact]
@@ -210,7 +272,8 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
         FakeWaiter waiter,
         TimeSpan? timeout = null,
         CancellationToken cancellationToken = default,
-        string? debugDirectory = null)
+        string? debugDirectory = null,
+        TextWriter? progressSink = null)
     {
         var worktree = Path.Combine(_root, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(worktree);
@@ -219,12 +282,25 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
         return await transport.ExecuteAsync(
             new Brief("TLB-live", Phase.Implement, "test brief", [], [], new Dictionary<string, string>()),
             worktree,
-            new WorkerOptions(timeout ?? TimeSpan.FromSeconds(5), DebugCaptureDirectory: debugDirectory),
+            new WorkerOptions(timeout ?? TimeSpan.FromSeconds(5), DebugCaptureDirectory: debugDirectory,
+                ProgressDigestSink: progressSink),
             cancellationToken);
     }
 
-    private static ClaudeCompletionRecord Completion(string runId, string response) =>
-        new(ClaudeCompletionStore.CurrentSchemaVersion, runId, "session", "C:/repo", "C:/transcript", response, false, DateTimeOffset.UtcNow);
+    private static ClaudeCompletionRecord Completion(
+        string runId,
+        string response,
+        string transcriptPath = "C:/transcript",
+        string sessionId = "session") =>
+        new(ClaudeCompletionStore.CurrentSchemaVersion, runId, sessionId, "C:/repo", transcriptPath, response, false, DateTimeOffset.UtcNow);
+
+    private string CopyFixture(string name)
+    {
+        Directory.CreateDirectory(_root);
+        var path = Path.Combine(_root, Guid.NewGuid().ToString("N") + ".jsonl");
+        File.Copy(Path.Combine(AppContext.BaseDirectory, "Fixtures", name), path);
+        return path;
+    }
 
     private static string WorkerResultText(string summary) => $$"""
         WORKER_RESULT
@@ -322,24 +398,53 @@ public sealed class ClaudeCodeInteractiveLiveTests
                 Transport = ClaudeCodeTransport.InteractiveHook,
                 Sizes = new Dictionary<WorkerSize, ModelTier> { [WorkerSize.Small] = new("haiku") }
             };
+            var brief = new Brief("TLB-live", Phase.Implement, """
+                Do not modify files. Finish with exactly this result envelope:
+                WORKER_RESULT
+                {"status":"Ok","summary":"INTERACTIVE_HOOK_SENTINEL","files_changed":[],"failure_reason":null}
+                """, [], [], new Dictionary<string, string>());
+
+            var printOptions = new ClaudeCodeOptions
+            {
+                Transport = ClaudeCodeTransport.Print,
+                Sizes = new Dictionary<WorkerSize, ModelTier> { [WorkerSize.Small] = new("haiku") }
+            };
+            var printResult = await new ClaudeCodePrintTransport(printOptions, new ClaudeCodeProgressDigester())
+                .ExecuteAsync(brief, worktree, new WorkerOptions(TimeSpan.FromMinutes(3), Size: WorkerSize.Small),
+                    CancellationToken.None);
+
             var launcher = new CapturingLauncher(new WindowsConPtyClaudeProcessLauncher());
             var transport = new ClaudeCodeInteractiveTransport(
                 options, launcher, new ClaudeCompletionWaiter(),
                 ["dotnet", cliAssembly]);
+            var debugDirectory = Path.Combine(worktree, "interactive-debug");
             var result = await transport.ExecuteAsync(
-                new Brief("TLB-live", Phase.Implement, """
-                    Do not modify files. Finish with exactly this result envelope:
-                    WORKER_RESULT
-                    {"status":"Ok","summary":"INTERACTIVE_HOOK_SENTINEL","files_changed":[],"failure_reason":null}
-                    """, [], [], new Dictionary<string, string>()),
+                brief,
                 worktree,
-                new WorkerOptions(TimeSpan.FromMinutes(3), Size: WorkerSize.Small),
+                new WorkerOptions(TimeSpan.FromMinutes(3), Size: WorkerSize.Small,
+                    DebugCaptureDirectory: debugDirectory),
                 CancellationToken.None);
 
-            Assert.Equal(Status.Ok, result.Status);
+            Assert.True(printResult.Status == Status.Ok,
+                $"print: {printResult.Summary}: {printResult.FailureReason}");
+            Assert.True(result.Status == Status.Ok, $"{result.Summary}: {result.FailureReason}");
             Assert.Equal("INTERACTIVE_HOOK_SENTINEL", result.Summary);
             Assert.DoesNotContain("--print", launcher.Spec!.Arguments);
             Assert.True(launcher.Process!.ExitTask.IsCompleted);
+            Assert.True(result.Metadata.ContainsKey("llm_usage"));
+            Assert.True(result.Metadata.ContainsKey("context_turns"));
+            var observedToolCall = File.ReadLines(Path.Combine(debugDirectory, "transcript.jsonl"))
+                .Select(line => JsonDocument.Parse(line))
+                .Any(document => document.RootElement.TryGetProperty("tool_count", out var count)
+                    && count.GetInt32() > 0);
+            Assert.True(observedToolCall);
+
+            var printUsage = (IReadOnlyDictionary<string, object>)printResult.Metadata["llm_usage"];
+            var interactiveUsage = (IReadOnlyDictionary<string, object?>)result.Metadata["llm_usage"];
+            Console.WriteLine($"print model={printUsage["model"]} input={printUsage["input_tokens"]} " +
+                $"output={printUsage["output_tokens"]} cache_read={printUsage["cache_read_tokens"]} cache_create={printUsage["cache_create_tokens"]}");
+            Console.WriteLine($"interactive model={interactiveUsage["model"]} input={interactiveUsage["input_tokens"]} " +
+                $"output={interactiveUsage["output_tokens"]} cache_read={interactiveUsage["cache_read_tokens"]} cache_create={interactiveUsage["cache_create_tokens"]}");
         }
         finally
         {
