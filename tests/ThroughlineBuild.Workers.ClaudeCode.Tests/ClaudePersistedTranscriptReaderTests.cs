@@ -58,6 +58,50 @@ public sealed class ClaudePersistedTranscriptReaderTests
             JsonDocument.Parse(line.Line).Dispose();
     }
 
+    [Theory]
+    [InlineData("Authorization: Bearer sk-ant-TOPSECRETvalue123456")]
+    [InlineData("ANTHROPIC_API_KEY=sk-ant-TOPSECRETvalue123456")]
+    [InlineData("api_key: sk-ant-TOPSECRETvalue123456")]
+    [InlineData("export TOKEN=sk-ant-TOPSECRETvalue123456")]
+    [InlineData("{\"env\":\"sk-ant-TOPSECRETvalue123456\"}")]
+    public void RedactText_RemovesCredentialValuesNotJustTheKeyword(string input)
+    {
+        var redacted = ClaudePersistedTranscriptReader.RedactText(input);
+
+        Assert.DoesNotContain("TOPSECRETvalue123456", redacted);
+        Assert.Contains("[REDACTED]", redacted);
+    }
+
+    [Fact]
+    public void RedactText_PreservesUsageCountersAndOrdinaryText()
+    {
+        Assert.Equal("the output_tokens recorded were fine",
+            ClaudePersistedTranscriptReader.RedactText("the output_tokens recorded were fine"));
+        Assert.Equal("\"input_tokens\":10",
+            ClaudePersistedTranscriptReader.RedactText("\"input_tokens\":10"));
+    }
+
+    [Fact]
+    public void Read_CredentialsInToolValueSubstrings_AreRedacted()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(path, """
+                {"type":"assistant","sessionId":"s","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"curl -H 'Authorization: Bearer sk-ant-LEAKEDvalue1234567' https://x"}}]}}
+                {"type":"user","sessionId":"s","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ANTHROPIC_API_KEY=sk-ant-LEAKEDvalue1234567"}]}}
+                """);
+
+            var transcript = ClaudePersistedTranscriptReader.Read(path, "s");
+
+            Assert.DoesNotContain("LEAKEDvalue1234567", transcript.RedactedRawTranscript);
+            Assert.Contains("[REDACTED]", transcript.RedactedRawTranscript);
+            foreach (var line in transcript.RedactedNormalizedLines)
+                JsonDocument.Parse(line.Line).Dispose();
+        }
+        finally { File.Delete(path); }
+    }
+
     [Fact]
     public void Read_MissingUsage_RemainsUnavailable()
     {

@@ -22,8 +22,17 @@ internal sealed record ClaudePersistedTranscript(
 // retained as harmless decorations or ignored.
 internal static class ClaudePersistedTranscriptReader
 {
+    // Redacts `key: value` / `key=value` / `Authorization: Bearer <token>` shapes inside string
+    // values. The keyword may be a tail of a compound identifier (ANTHROPIC_API_KEY) and an optional
+    // auth scheme is consumed after a colon so the token itself is removed, not just the scheme word.
     private static readonly Regex InlineSecret = new(
-        @"(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|password|client[_-]?secret|authorization)\b(\s*[:=]\s*|\s+bearer\s+)\S+",
+        @"(?i)\b([\w-]*(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|password|passwd|token|authorization)[\w-]*)\b(?:\s*[:=]\s*(?:bearer\s+)?|\s+bearer\s+)\S+",
+        RegexOptions.Compiled);
+
+    // Catches bare high-entropy provider tokens that appear under benign keys or free text, where the
+    // key/value pattern above cannot anchor (e.g. a token echoed into a tool result).
+    private static readonly Regex VendorSecret = new(
+        @"(?i)\b(?:sk-[a-z0-9-]{16,}|ghp_[a-z0-9]{16,}|github_pat_[a-z0-9_]{16,}|xox[baprs]-[a-z0-9-]{8,})\b",
         RegexOptions.Compiled);
 
     public static ClaudePersistedTranscript Read(string path, string expectedSessionId)
@@ -225,7 +234,8 @@ internal static class ClaudePersistedTranscriptReader
         }
     }
 
-    internal static string RedactText(string value) => InlineSecret.Replace(value, "$1=[REDACTED]");
+    internal static string RedactText(string value) =>
+        VendorSecret.Replace(InlineSecret.Replace(value, "$1=[REDACTED]"), "[REDACTED]");
 
     private static bool IsSensitiveName(string name)
     {
