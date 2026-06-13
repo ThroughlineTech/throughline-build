@@ -28,7 +28,6 @@ internal static class ClaudePersistedTranscriptReader
 
     public static ClaudePersistedTranscript Read(string path, string expectedSessionId)
     {
-        var assistant = new StringBuilder();
         var rawRedacted = new StringBuilder();
         var normalized = new List<(DateTimeOffset, string)>();
         var redactedNormalized = new List<(DateTimeOffset, string)>();
@@ -67,18 +66,6 @@ internal static class ClaudePersistedTranscriptReader
                 {
                     model ??= GetString(message, "model");
                     var messageId = GetString(message, "id") ?? GetString(root, "uuid") ?? $"line-{normalized.Count}";
-                    if (message.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.Array)
-                    {
-                        foreach (var block in content.EnumerateArray())
-                        {
-                            if (GetString(block, "type") != "text") continue;
-                            var text = GetString(block, "text");
-                            if (string.IsNullOrEmpty(text)) continue;
-                            if (assistant.Length > 0) assistant.Append('\n');
-                            assistant.Append(text);
-                        }
-                    }
-
                     if (message.TryGetProperty("usage", out var usageElement) && usageElement.ValueKind == JsonValueKind.Object)
                         turns[messageId] = ReadUsage(usageElement);
                 }
@@ -105,9 +92,14 @@ internal static class ClaudePersistedTranscriptReader
         normalized.Add((fallbackAt, resultLine));
         redactedNormalized.Add((fallbackAt, resultLine));
 
+        // Reconstruct both transcripts through the single shared extractor so the parsed
+        // assistant text and the redacted debug artifact stay byte-for-byte equivalent
+        // (modulo redaction) instead of drifting across two hand-written code paths.
+        var assistant = ClaudeCodeAgent.TryExtractAssistantTranscript(
+            string.Join('\n', normalized.Select(line => line.Item2))) ?? "";
         var redactedAssistant = ClaudeCodeAgent.TryExtractAssistantTranscript(
             string.Join('\n', redactedNormalized.Select(line => line.Item2))) ?? "";
-        return new ClaudePersistedTranscript(assistant.ToString(), redactedAssistant, model, version, usage,
+        return new ClaudePersistedTranscript(assistant, redactedAssistant, model, version, usage,
             normalized, redactedNormalized, rawRedacted.ToString(), providerError, skipped);
     }
 
@@ -117,8 +109,19 @@ internal static class ClaudePersistedTranscriptReader
 
     private static int? SumNullable(IEnumerable<int?> values)
     {
-        var present = values.Where(x => x.HasValue).Select(x => x!.Value).ToList();
-        return present.Count == 0 ? null : checked(present.Sum());
+        // Accumulate into a long so a pathological token total cannot throw
+        // OverflowException inside Read() (which would be caught as a telemetry
+        // failure and drop the recovered assistant text too). Saturate at int.MaxValue
+        // rather than throw; real token sums never approach that ceiling.
+        long sum = 0;
+        var any = false;
+        foreach (var value in values)
+        {
+            if (value is not int present) continue;
+            any = true;
+            sum += present;
+        }
+        return any ? (int)Math.Min(sum, int.MaxValue) : null;
     }
 
     private static string BuildSystemLine(string sessionId, string? model, string? version) =>
