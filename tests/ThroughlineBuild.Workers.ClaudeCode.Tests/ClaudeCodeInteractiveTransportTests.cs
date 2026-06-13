@@ -263,6 +263,102 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
         Assert.StartsWith("'C:/Program Files/dotnet/dotnet.exe' 'C:/repo with space/build.dll' internal", command);
     }
 
+    [Fact]
+    public async Task SameWorktreeCollision_IsPreventedWithoutLaunchingClaude()
+    {
+        var worktree = Path.Combine(_root, "shared worktree");
+        Directory.CreateDirectory(worktree);
+        // Simulate another live interactive run already holding the worktree lock.
+        using var held = new FileStream(
+            InteractiveClaudeWorktreeLock.PathFor(worktree), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+
+        var launcher = new FakeLauncher(new FakeProcess());
+        var waiter = new FakeWaiter((run, _) => Task.FromResult(Completion(run.RunId, WorkerResultText("nope"))));
+
+        var result = await ExecuteAsync(launcher, waiter, worktree: worktree);
+
+        Assert.Equal(Status.Failed, result.Status);
+        Assert.Contains("active in this worktree", result.Summary, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(launcher.Spec); // Claude was never launched
+    }
+
+    [Fact]
+    public async Task IndependentWorktrees_RunConcurrentlyWithDistinctRuns()
+    {
+        var observed = new System.Collections.Concurrent.ConcurrentBag<string>();
+        Task<WorkerResult> Run()
+        {
+            var waiter = new FakeWaiter((run, _) =>
+            {
+                observed.Add(run.RunId);
+                return Task.FromResult(Completion(run.RunId, WorkerResultText("ok")));
+            });
+            return ExecuteAsync(new FakeLauncher(new FakeProcess()), waiter);
+        }
+
+        var results = await Task.WhenAll(Run(), Run());
+
+        Assert.All(results, r => Assert.Equal(Status.Ok, r.Status));
+        Assert.Equal(2, new HashSet<string>(observed).Count); // two distinct private run ids
+    }
+
+    [Fact]
+    public async Task WorktreeWithSpacesAndUnicode_WritesBriefAndCompletes()
+    {
+        // Escapes keep this source ASCII while exercising a spaced + Unicode path.
+        var worktree = Path.Combine(_root, "work tree \u00e9\u4f60\u597d");
+        var launcher = new FakeLauncher(new FakeProcess());
+        var waiter = new FakeWaiter((run, _) => Task.FromResult(Completion(run.RunId, WorkerResultText("unicode ok"))));
+
+        var result = await ExecuteAsync(launcher, waiter, worktree: worktree);
+
+        Assert.Equal(Status.Ok, result.Status);
+        Assert.Equal("unicode ok", result.Summary);
+        Assert.Equal(worktree, launcher.Spec!.WorkingDirectory);
+        Assert.True(File.Exists(Path.Combine(worktree, ".build", "brief.md")));
+    }
+
+    [Fact]
+    public async Task ExecutableMissingDuringLaunch_ReportsActionableFailure()
+    {
+        var launcher = new FakeLauncher(new FakeProcess(),
+            new System.ComponentModel.Win32Exception("The system cannot find the file specified"));
+        var waiter = new FakeWaiter((run, _) => Task.FromResult(Completion(run.RunId, WorkerResultText("unreached"))));
+
+        var result = await ExecuteAsync(launcher, waiter);
+
+        Assert.Equal(Status.Failed, result.Status);
+        Assert.Contains("Worker executable not found", result.Summary);
+        Assert.Contains("Run directory", result.FailureReason);
+    }
+
+    [Fact]
+    public async Task CancellationCompletionRace_StaysDeterministicUnderRepetition()
+    {
+        for (var i = 0; i < 200; i++)
+        {
+            var process = new FakeProcess();
+            var completion = new TaskCompletionSource<ClaudeCompletionRecord>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var waiter = new FakeWaiter((_, _) => completion.Task);
+            using var cancellation = new CancellationTokenSource();
+
+            var task = ExecuteAsync(new FakeLauncher(process), waiter, cancellationToken: cancellation.Token);
+            var run = await waiter.RunObserved.Task;
+
+            // Trusted completion and cancellation fire as close together as possible.
+            completion.SetResult(Completion(run.RunId, WorkerResultText("race")));
+            cancellation.Cancel();
+
+            var result = await task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            // A completion that resolved successfully always wins the race.
+            Assert.True(result.Status == Status.Ok, $"iteration {i}: {result.Status} {result.Summary}: {result.FailureReason}");
+            Assert.True(process.Killed);
+            Assert.True(process.Disposed);
+            Assert.False(Directory.Exists(run.Path));
+        }
+    }
+
     private FakeWaiter NeverCompletes() => new((_, cancellationToken) =>
         Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken)
             .ContinueWith<ClaudeCompletionRecord>(_ => throw new UnreachableException(), CancellationToken.None));
@@ -273,9 +369,10 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
         TimeSpan? timeout = null,
         CancellationToken cancellationToken = default,
         string? debugDirectory = null,
-        TextWriter? progressSink = null)
+        TextWriter? progressSink = null,
+        string? worktree = null)
     {
-        var worktree = Path.Combine(_root, Guid.NewGuid().ToString("N"));
+        worktree ??= Path.Combine(_root, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(worktree);
         var options = new ClaudeCodeOptions { Transport = ClaudeCodeTransport.InteractiveHook };
         var transport = new ClaudeCodeInteractiveTransport(options, launcher, waiter, ["build.exe"]);
@@ -312,13 +409,14 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
         if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
     }
 
-    private sealed class FakeLauncher(FakeProcess process) : IInteractiveClaudeProcessLauncher
+    private sealed class FakeLauncher(FakeProcess process, Exception? launchException = null) : IInteractiveClaudeProcessLauncher
     {
         public InteractiveClaudeLaunchSpec? Spec { get; private set; }
 
         public IInteractiveClaudeProcess Launch(InteractiveClaudeLaunchSpec spec)
         {
             Spec = spec;
+            if (launchException is not null) throw launchException;
             return process;
         }
     }
@@ -353,7 +451,7 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
         public bool Killed { get; private set; }
         public bool Disposed { get; private set; }
 
-        public Task KillTreeAsync(CancellationToken cancellationToken)
+        public Task TerminateAsync(CancellationToken cancellationToken)
         {
             Killed = true;
             if (_killException is not null) throw _killException;

@@ -1,30 +1,11 @@
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Text;
-using Microsoft.Win32.SafeHandles;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Workers.Common;
 
 namespace ThroughlineBuild.Workers.ClaudeCode;
-
-internal sealed record InteractiveClaudeLaunchSpec(
-    string Executable,
-    IReadOnlyList<string> Arguments,
-    string WorkingDirectory,
-    IReadOnlyDictionary<string, string?> Environment);
-
-internal interface IInteractiveClaudeProcess : IAsyncDisposable
-{
-    Task<int> ExitTask { get; }
-    Task KillTreeAsync(CancellationToken cancellationToken);
-}
-
-internal interface IInteractiveClaudeProcessLauncher
-{
-    IInteractiveClaudeProcess Launch(InteractiveClaudeLaunchSpec spec);
-}
 
 internal interface IClaudeCompletionWaiter
 {
@@ -44,13 +25,17 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
     private const string InitialPrompt =
         "Read .build/brief.md, execute it completely, and obey the brief's final-output contract.";
 
+    // A run directory with no live lock is reclaimed regardless of age; this bound
+    // only governs legacy/partial directories that predate the lock file.
+    private static readonly TimeSpan StaleRunMinimumAge = TimeSpan.FromHours(1);
+
     private readonly ClaudeCodeOptions _options;
     private readonly IInteractiveClaudeProcessLauncher _launcher;
     private readonly IClaudeCompletionWaiter _completionWaiter;
     private readonly IReadOnlyList<string>? _hookCommandPrefix;
 
     internal ClaudeCodeInteractiveTransport(ClaudeCodeOptions options)
-        : this(options, new WindowsConPtyClaudeProcessLauncher(), new ClaudeCompletionWaiter()) { }
+        : this(options, InteractiveClaudeProcessLauncherFactory.Create(), new ClaudeCompletionWaiter()) { }
 
     internal ClaudeCodeInteractiveTransport(
         ClaudeCodeOptions options,
@@ -72,6 +57,14 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
     {
         var buildDirectory = Path.Combine(workingDirectory, ".build");
         Directory.CreateDirectory(buildDirectory);
+
+        // Same-worktree collision guard: two interactive runs in one worktree would
+        // race on the shared .build/brief.md path. Independent worktrees hash to
+        // distinct locks, so concurrent runs there are never blocked by this.
+        using var worktreeLock = InteractiveClaudeWorktreeLock.TryAcquire(workingDirectory);
+        if (worktreeLock is null)
+            return CollisionFailure(workingDirectory, options.DebugCaptureDirectory, brief);
+
         await File.WriteAllTextAsync(Path.Combine(buildDirectory, "brief.md"), brief.Instruction, ct);
 
         var runId = Guid.NewGuid().ToString("N");
@@ -79,15 +72,22 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
         var runParent = preserveRun
             ? Path.Combine(options.DebugCaptureDirectory!, "claude-interactive-runs")
             : Path.Combine(Path.GetTempPath(), "latticeflow-claude-runs");
+        // Reclaim run directories orphaned by a crashed parent before adding ours.
+        // Preserved debug runs are intentionally retained and never swept.
+        if (!preserveRun)
+            ClaudeRunDirectorySweeper.SweepStaleRuns(runParent, StaleRunMinimumAge);
         var runPath = Path.Combine(runParent, runId);
         Directory.CreateDirectory(runPath);
         var run = ClaudeRunDirectory.Open(runPath, runId);
 
         IInteractiveClaudeProcess? process = null;
+        ClaudeRunLease? lease = null;
         var startedAt = DateTimeOffset.UtcNow;
         var stopwatch = Stopwatch.StartNew();
         try
         {
+            // Hold the lease for the whole run so a concurrent sweeper treats it as live.
+            lease = ClaudeRunLease.Acquire(run);
             var settingsPath = Path.Combine(run.Path, "settings.json");
             await File.WriteAllTextAsync(
                 settingsPath,
@@ -118,7 +118,7 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
             {
                 return FailureWithDebug(
                     $"Worker executable not found: '{_options.ExecutablePath}'",
-                    $"Unable to launch interactive Claude Code with ConPTY: {ex.Message}. Run directory: '{run.Path}'.",
+                    $"Unable to launch interactive Claude Code in the terminal host: {ex.Message}. Run directory: '{run.Path}'.",
                     options.DebugCaptureDirectory, run.Path, brief);
             }
             catch (PlatformNotSupportedException ex)
@@ -188,6 +188,8 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
         {
             if (process is not null)
                 await process.DisposeAsync();
+            // Release the lease before deleting so the directory looks reclaimable.
+            lease?.Dispose();
             if (!preserveRun)
                 TryDeleteRunDirectory(run.Path);
         }
@@ -370,8 +372,9 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
     {
         try
         {
-            await process.KillTreeAsync(CancellationToken.None);
-            await process.ExitTask.WaitAsync(TimeSpan.FromSeconds(10));
+            // TerminateAsync escalates graceful -> forced and waits for tree exit,
+            // all internally bounded.
+            await process.TerminateAsync(CancellationToken.None);
             return null;
         }
         catch (Exception ex)
@@ -395,6 +398,29 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
 
     private static WorkerResult Failure(string summary, string reason) =>
         new(Status.Failed, summary, Array.Empty<string>(), reason, new Dictionary<string, object>());
+
+    private static WorkerResult CollisionFailure(string workingDirectory, string? captureDirectory, Brief brief)
+    {
+        var lockPath = InteractiveClaudeWorktreeLock.PathFor(workingDirectory);
+        var result = Failure(
+            "Another interactive Claude run is active in this worktree",
+            $"A concurrent interactive run already holds the worktree lock '{lockPath}' for '{workingDirectory}'. " +
+            "Same-worktree interactive runs are not supported; run them in separate worktrees, or wait for the active run to finish.");
+        if (captureDirectory is null) return result;
+        try
+        {
+            Directory.CreateDirectory(captureDirectory);
+            File.WriteAllText(Path.Combine(captureDirectory, "worker-stdin.txt"), brief.Instruction, Encoding.UTF8);
+            File.WriteAllText(Path.Combine(captureDirectory, "process-host.txt"),
+                $"transport=interactive-hook{Environment.NewLine}terminal_rendering_parsed=false{Environment.NewLine}" +
+                $"worktree_lock={lockPath}{Environment.NewLine}failure={result.FailureReason}{Environment.NewLine}", Encoding.UTF8);
+            var dto = new WorkerResultDebugDto(result.Status.ToString(), result.Summary, result.FilesChanged, result.FailureReason);
+            File.WriteAllText(Path.Combine(captureDirectory, "worker-result.json"),
+                System.Text.Json.JsonSerializer.Serialize(dto, DebugCaptureJsonContext.Default.WorkerResultDebugDto), Encoding.UTF8);
+        }
+        catch { }
+        return result;
+    }
 
     private static WorkerResult FailureWithDebug(
         string summary,
@@ -425,250 +451,5 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
     {
         try { Directory.Delete(path, recursive: true); }
         catch { }
-    }
-}
-
-internal sealed class WindowsConPtyClaudeProcessLauncher : IInteractiveClaudeProcessLauncher
-{
-    public IInteractiveClaudeProcess Launch(InteractiveClaudeLaunchSpec spec)
-    {
-        if (!OperatingSystem.IsWindows())
-            throw new PlatformNotSupportedException(
-                "The interactive-hook transport currently requires Windows ConPTY; print remains available on other hosts.");
-        return WindowsConPtyClaudeProcess.Start(spec);
-    }
-}
-
-internal sealed class WindowsConPtyClaudeProcess : IInteractiveClaudeProcess
-{
-    private readonly Process _process;
-    private readonly IntPtr _pseudoConsole;
-    private readonly SafeFileHandle _input;
-    private readonly FileStream _output;
-    private readonly Task _drainTask;
-
-    private WindowsConPtyClaudeProcess(
-        Process process,
-        IntPtr pseudoConsole,
-        SafeFileHandle input,
-        FileStream output)
-    {
-        _process = process;
-        _pseudoConsole = pseudoConsole;
-        _input = input;
-        _output = output;
-        _drainTask = output.CopyToAsync(Stream.Null);
-        ExitTask = WaitForExitAsync(process);
-    }
-
-    public Task<int> ExitTask { get; }
-
-    public static WindowsConPtyClaudeProcess Start(InteractiveClaudeLaunchSpec spec)
-    {
-        IntPtr inputRead = IntPtr.Zero;
-        IntPtr outputWrite = IntPtr.Zero;
-        IntPtr pseudoConsole = IntPtr.Zero;
-        IntPtr attributes = IntPtr.Zero;
-        IntPtr environment = IntPtr.Zero;
-        SafeFileHandle? inputWrite = null;
-        SafeFileHandle? outputRead = null;
-        try
-        {
-            ThrowIfFalse(NativeMethods.CreatePipe(out inputRead, out var inputWriteRaw, IntPtr.Zero, 0));
-            inputWrite = new SafeFileHandle(inputWriteRaw, ownsHandle: true);
-            ThrowIfFalse(NativeMethods.CreatePipe(out var outputReadRaw, out outputWrite, IntPtr.Zero, 0));
-            outputRead = new SafeFileHandle(outputReadRaw, ownsHandle: true);
-
-            var hr = NativeMethods.CreatePseudoConsole(new Coord(120, 40), inputRead, outputWrite, 0, out pseudoConsole);
-            if (hr != 0) Marshal.ThrowExceptionForHR(hr);
-            NativeMethods.CloseHandle(inputRead);
-            inputRead = IntPtr.Zero;
-            NativeMethods.CloseHandle(outputWrite);
-            outputWrite = IntPtr.Zero;
-
-            nuint attributeSize = 0;
-            NativeMethods.InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attributeSize);
-            attributes = Marshal.AllocHGlobal((nint)attributeSize);
-            ThrowIfFalse(NativeMethods.InitializeProcThreadAttributeList(attributes, 1, 0, ref attributeSize));
-            ThrowIfFalse(NativeMethods.UpdateProcThreadAttribute(
-                attributes, 0, (IntPtr)0x00020016, pseudoConsole, (nuint)IntPtr.Size, IntPtr.Zero, IntPtr.Zero));
-
-            var startup = new StartupInfoEx();
-            startup.StartupInfo.cb = Marshal.SizeOf<StartupInfoEx>();
-            startup.AttributeList = attributes;
-            var commandLine = new StringBuilder(RenderCommandLine(spec.Executable, spec.Arguments));
-            environment = Marshal.StringToHGlobalUni(RenderEnvironment(spec.Environment));
-            ThrowIfFalse(NativeMethods.CreateProcess(
-                null, commandLine, IntPtr.Zero, IntPtr.Zero, false,
-                0x00080000 | 0x00000400 | 0x08000000,
-                environment, spec.WorkingDirectory, ref startup, out var processInfo));
-
-            NativeMethods.CloseHandle(processInfo.Thread);
-            NativeMethods.CloseHandle(processInfo.Process);
-            var process = Process.GetProcessById((int)processInfo.ProcessId);
-            return new WindowsConPtyClaudeProcess(
-                process, pseudoConsole, inputWrite, new FileStream(outputRead, FileAccess.Read, 4096, isAsync: false));
-        }
-        catch
-        {
-            inputWrite?.Dispose();
-            outputRead?.Dispose();
-            if (pseudoConsole != IntPtr.Zero) NativeMethods.ClosePseudoConsole(pseudoConsole);
-            throw;
-        }
-        finally
-        {
-            if (inputRead != IntPtr.Zero) NativeMethods.CloseHandle(inputRead);
-            if (outputWrite != IntPtr.Zero) NativeMethods.CloseHandle(outputWrite);
-            if (attributes != IntPtr.Zero)
-            {
-                NativeMethods.DeleteProcThreadAttributeList(attributes);
-                Marshal.FreeHGlobal(attributes);
-            }
-            if (environment != IntPtr.Zero) Marshal.FreeHGlobal(environment);
-        }
-    }
-
-    public Task KillTreeAsync(CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (!_process.HasExited) _process.Kill(entireProcessTree: true);
-        return Task.CompletedTask;
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        _input.Dispose();
-        if (_pseudoConsole != IntPtr.Zero) NativeMethods.ClosePseudoConsole(_pseudoConsole);
-        try { await _drainTask.WaitAsync(TimeSpan.FromSeconds(1)); } catch { }
-        _output.Dispose();
-        _process.Dispose();
-    }
-
-    private static async Task<int> WaitForExitAsync(Process process)
-    {
-        await process.WaitForExitAsync();
-        return process.ExitCode;
-    }
-
-    internal static string RenderCommandLine(string executable, IReadOnlyList<string> arguments) =>
-        string.Join(" ", new[] { executable }.Concat(arguments).Select(QuoteWindowsArgument));
-
-    private static string QuoteWindowsArgument(string value)
-    {
-        if (value.Length > 0 && value.All(ch => !char.IsWhiteSpace(ch) && ch != '"')) return value;
-        var builder = new StringBuilder("\"");
-        var slashes = 0;
-        foreach (var ch in value)
-        {
-            if (ch == '\\') { slashes++; continue; }
-            if (ch == '"') builder.Append('\\', slashes * 2 + 1).Append(ch);
-            else { builder.Append('\\', slashes).Append(ch); }
-            slashes = 0;
-        }
-        builder.Append('\\', slashes * 2).Append('"');
-        return builder.ToString();
-    }
-
-    private static string RenderEnvironment(IReadOnlyDictionary<string, string?> environment)
-    {
-        var builder = new StringBuilder();
-        foreach (var pair in environment.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
-            builder.Append(pair.Key).Append('=').Append(pair.Value).Append('\0');
-        builder.Append('\0');
-        return builder.ToString();
-    }
-
-    private static void ThrowIfFalse(bool success)
-    {
-        if (!success) throw new Win32Exception(Marshal.GetLastWin32Error());
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct Coord(short x, short y)
-    {
-        public short X = x;
-        public short Y = y;
-    }
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct StartupInfo
-    {
-        public int cb;
-        public string? Reserved;
-        public string? Desktop;
-        public string? Title;
-        public int X;
-        public int Y;
-        public int XSize;
-        public int YSize;
-        public int XCountChars;
-        public int YCountChars;
-        public int FillAttribute;
-        public int Flags;
-        public short ShowWindow;
-        public short Reserved2;
-        public IntPtr Reserved2Pointer;
-        public IntPtr StandardInput;
-        public IntPtr StandardOutput;
-        public IntPtr StandardError;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct StartupInfoEx
-    {
-        public StartupInfo StartupInfo;
-        public IntPtr AttributeList;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct ProcessInformation
-    {
-        public IntPtr Process;
-        public IntPtr Thread;
-        public uint ProcessId;
-        public uint ThreadId;
-    }
-
-    private static class NativeMethods
-    {
-        [DllImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        internal static extern bool CreatePipe(out IntPtr readPipe, out IntPtr writePipe, IntPtr pipeAttributes, uint size);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        internal static extern bool CloseHandle(IntPtr handle);
-
-        [DllImport("kernel32.dll")]
-        internal static extern int CreatePseudoConsole(Coord size, IntPtr input, IntPtr output, uint flags, out IntPtr pseudoConsole);
-
-        [DllImport("kernel32.dll")]
-        internal static extern void ClosePseudoConsole(IntPtr pseudoConsole);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        internal static extern bool InitializeProcThreadAttributeList(IntPtr attributeList, int attributeCount, int flags, ref nuint size);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        internal static extern bool UpdateProcThreadAttribute(IntPtr attributeList, uint flags, IntPtr attribute, IntPtr value, nuint size, IntPtr previousValue, IntPtr returnSize);
-
-        [DllImport("kernel32.dll")]
-        internal static extern void DeleteProcThreadAttributeList(IntPtr attributeList);
-
-        [DllImport("kernel32.dll", EntryPoint = "CreateProcessW", CharSet = CharSet.Unicode, SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        internal static extern bool CreateProcess(
-            string? applicationName,
-            StringBuilder commandLine,
-            IntPtr processAttributes,
-            IntPtr threadAttributes,
-            [MarshalAs(UnmanagedType.Bool)] bool inheritHandles,
-            uint creationFlags,
-            IntPtr environment,
-            string currentDirectory,
-            ref StartupInfoEx startupInfo,
-            out ProcessInformation processInformation);
     }
 }

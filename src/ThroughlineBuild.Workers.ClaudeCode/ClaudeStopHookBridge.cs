@@ -223,6 +223,7 @@ public static class ClaudeStopHookBridge
 [JsonSourceGenerationOptions(WriteIndented = true, PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
 [JsonSerializable(typeof(ClaudeStopHookPayload))]
 [JsonSerializable(typeof(ClaudeCompletionRecord))]
+[JsonSerializable(typeof(ClaudeRunOwner))]
 [JsonSerializable(typeof(ClaudeHookSettings))]
 [JsonSerializable(typeof(Dictionary<string, ClaudeHookMatcher[]>))]
 [JsonSerializable(typeof(ClaudeHookMatcher[]))]
