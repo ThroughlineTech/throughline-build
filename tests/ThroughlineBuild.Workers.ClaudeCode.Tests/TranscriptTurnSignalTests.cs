@@ -144,6 +144,35 @@ public sealed class TranscriptTurnSignalTests : IDisposable
         await signal.WaitForTurnAsync(worktree, DateTimeOffset.UtcNow.AddMinutes(-1), cts.Token);
     }
 
+    [Fact]
+    public void DescribeCandidates_ReportsPerCandidateCwdMtimeAndEndTurn()
+    {
+        var worktree = Path.Combine(_configHome, "work tree");
+        Directory.CreateDirectory(worktree);
+        var resolved = ClaudeRealPath.Resolve(worktree);
+        WriteTranscript("matching.jsonl", resolved, stopReason: "end_turn");
+        WriteTranscript("other.jsonl", Path.Combine(_configHome, "elsewhere"), stopReason: "tool_use");
+
+        var signal = new TranscriptTurnSignal(_configHome, _poll);
+        var report = signal.DescribeCandidates(worktree, DateTimeOffset.UtcNow.AddMinutes(-1));
+
+        Assert.Contains("config_home=", report);
+        Assert.Contains("matching.jsonl", report);
+        Assert.Contains("other.jsonl", report);
+        Assert.Contains("cwd_matched=True", report);
+        Assert.Contains("assistant_end_turn=True", report);
+        Assert.Contains("worktree_resolved=", report);
+    }
+
+    [Fact]
+    public void DescribeCandidates_MissingProjectsRoot_NeverThrows()
+    {
+        var signal = new TranscriptTurnSignal(_configHome, _poll);
+        // _configHome has no projects/ subdir yet.
+        var report = signal.DescribeCandidates(Path.Combine(_configHome, "nope"), DateTimeOffset.UtcNow);
+        Assert.Contains("projects_root_exists=false", report);
+    }
+
     private void WriteTranscript(string fileName, string cwd, string stopReason)
     {
         var dir = Path.Combine(_configHome, "projects", "encoded-name");

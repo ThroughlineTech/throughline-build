@@ -1,4 +1,4 @@
-using System.Text.Json;
+using System.Text;
 
 namespace ThroughlineBuild.Workers.ClaudeCode;
 
@@ -19,14 +19,23 @@ internal interface IInteractiveTurnSignal
     /// with the same linked timeout/cancellation token it uses for completion.
     /// </summary>
     Task WaitForTurnAsync(string workingDirectory, DateTimeOffset launchedAt, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Best-effort, human-readable diagnosis of why no turn was detected, for the
+    /// Phase-1 timeout artifact. Never throws.
+    /// </summary>
+    string DescribeCandidates(string workingDirectory, DateTimeOffset launchedAt);
 }
 
 /// <summary>
 /// Default <see cref="IInteractiveTurnSignal"/>: polls Claude's persisted transcript
 /// tree under <c>&lt;configHome&gt;/projects/</c> for a transcript whose <c>cwd</c>
 /// matches the run's working directory and that carries an assistant message at
-/// <c>end_turn</c>. Tolerant exactly like <see cref="ClaudePersistedTranscriptReader"/>:
-/// unparseable lines and missing fields are skipped, and the poll loop never throws.
+/// <c>end_turn</c>. The per-file cwd/end_turn match is shared with the transport's
+/// telemetry resolve via <see cref="ClaudeTranscriptLocator"/> so both agree on which
+/// file is "this run's transcript".
+/// Tolerant exactly like <see cref="ClaudePersistedTranscriptReader"/>: unparseable
+/// lines and missing fields are skipped, and the poll loop never throws.
 /// AOT-safe: JsonDocument/JsonElement only, no reflection-based deserialization.
 /// </summary>
 internal sealed class TranscriptTurnSignal : IInteractiveTurnSignal
@@ -64,13 +73,41 @@ internal sealed class TranscriptTurnSignal : IInteractiveTurnSignal
 
     public async Task WaitForTurnAsync(string workingDirectory, DateTimeOffset launchedAt, CancellationToken cancellationToken)
     {
-        var target = NormalizeDirectory(workingDirectory);
+        var target = ClaudeTranscriptLocator.NormalizeDirectory(workingDirectory);
         var projects = Path.Combine(_configHome, "projects");
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (TurnEnded(projects, target, launchedAt)) return;
             await Task.Delay(_pollInterval, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    public string DescribeCandidates(string workingDirectory, DateTimeOffset launchedAt)
+    {
+        try
+        {
+            var projects = Path.Combine(_configHome, "projects");
+            var report = new StringBuilder();
+            report.Append("config_home=").Append(_configHome).Append('\n');
+            // claude shards transcripts into a per-project subdirectory under
+            // projects/, and the encoded name is not recomputed here, so describe
+            // every per-project directory plus any files directly under projects/.
+            if (Directory.Exists(projects))
+            {
+                foreach (var dir in EnumerateCandidateDirectories(projects))
+                    report.Append(ClaudeTranscriptLocator.DescribeCandidates(dir, workingDirectory, launchedAt));
+            }
+            else
+            {
+                report.Append("projects_root=").Append(projects).Append('\n');
+                report.Append("projects_root_exists=false\n");
+            }
+            return report.ToString();
+        }
+        catch (Exception ex)
+        {
+            return $"describe_candidates_error={ex.Message}\n";
         }
     }
 
@@ -81,15 +118,18 @@ internal sealed class TranscriptTurnSignal : IInteractiveTurnSignal
         try
         {
             if (!Directory.Exists(projectsRoot)) return false;
-            // Newest first so a fresh transcript for this run is seen before older runs.
+            // No mtime gate on candidate selection: claude's first transcript write
+            // can lag launch by ~60s while it connects MCP servers, so a strict
+            // written >= launchedAt window dropped the real transcript on Linux. The
+            // cwd + end_turn match is already run-specific; recency only orders the
+            // scan so a fresh transcript is seen before stale ones.
             var candidates = Directory.EnumerateFiles(projectsRoot, "*.jsonl", SearchOption.AllDirectories)
                 .Select(path => (Path: path, Written: SafeLastWrite(path)))
-                .Where(file => file.Written >= launchedAt)
                 .OrderByDescending(file => file.Written);
 
             foreach (var candidate in candidates)
             {
-                if (TranscriptForDirectoryEndedTurn(candidate.Path, targetDirectory)) return true;
+                if (ClaudeTranscriptLocator.TranscriptEndedTurn(candidate.Path, targetDirectory)) return true;
             }
             return false;
         }
@@ -99,52 +139,16 @@ internal sealed class TranscriptTurnSignal : IInteractiveTurnSignal
         }
     }
 
-    private static bool TranscriptForDirectoryEndedTurn(string path, string targetDirectory)
+    // The projects/ root itself plus each immediate per-project subdirectory, so the
+    // diagnosis covers wherever claude actually wrote (it sometimes flattens, sometimes
+    // shards by encoded cwd).
+    private static IEnumerable<string> EnumerateCandidateDirectories(string projectsRoot)
     {
-        var matchesDirectory = false;
-        var sawEndTurn = false;
-        try
-        {
-            foreach (var rawLine in File.ReadLines(path))
-            {
-                if (string.IsNullOrWhiteSpace(rawLine)) continue;
-                JsonDocument document;
-                try { document = JsonDocument.Parse(rawLine); }
-                catch (JsonException) { continue; }
-
-                using (document)
-                {
-                    var root = document.RootElement;
-                    if (root.ValueKind != JsonValueKind.Object) continue;
-
-                    // Match the transcript to this run by its recorded cwd rather than
-                    // trying to recompute claude's encoded project-dir name.
-                    if (GetString(root, "cwd") is string cwd && DirectoriesMatch(cwd, targetDirectory))
-                        matchesDirectory = true;
-
-                    if (IsAssistantEndTurn(root)) sawEndTurn = true;
-                }
-            }
-        }
-        catch (IOException)
-        {
-            // Transcript mid-write (the file is being appended). Treat as not-yet.
-            return false;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return false;
-        }
-
-        return matchesDirectory && sawEndTurn;
-    }
-
-    private static bool IsAssistantEndTurn(JsonElement root)
-    {
-        if (GetString(root, "type") != "assistant") return false;
-        if (!root.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.Object)
-            return false;
-        return GetString(message, "stop_reason") == "end_turn";
+        yield return projectsRoot;
+        IEnumerable<string> subdirs;
+        try { subdirs = Directory.EnumerateDirectories(projectsRoot); }
+        catch { yield break; }
+        foreach (var dir in subdirs) yield return dir;
     }
 
     private static DateTime SafeLastWrite(string path)
@@ -152,29 +156,4 @@ internal sealed class TranscriptTurnSignal : IInteractiveTurnSignal
         try { return File.GetLastWriteTimeUtc(path); }
         catch { return DateTime.MinValue; }
     }
-
-    private static bool DirectoriesMatch(string left, string right) =>
-        string.Equals(NormalizeDirectory(left), NormalizeDirectory(right),
-            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
-
-    // Canonicalize (resolving symlinks) so a /var worktree matches claude's
-    // recorded /private/var cwd on macOS. ClaudeRealPath.Resolve falls back to
-    // Path.GetFullPath when realpath fails, keeping this total. Both the passed
-    // worktree and each transcript line's cwd flow through here, so the match is
-    // symlink-proof regardless of which side carries the unresolved path.
-    private static string NormalizeDirectory(string value)
-    {
-        try
-        {
-            return Path.TrimEndingDirectorySeparator(ClaudeRealPath.Resolve(value));
-        }
-        catch
-        {
-            return value;
-        }
-    }
-
-    private static string? GetString(JsonElement element, string name) =>
-        element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out var value)
-        && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 }

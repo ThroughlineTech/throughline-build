@@ -234,6 +234,58 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task PayloadTranscriptFilenameMismatch_ResolvesRealTranscriptByCwdAndRecoversTelemetry()
+    {
+        // claude 2.1.177 reports a transcript_path whose FILENAME (session id) does not
+        // match the real on-disk transcript for the same run. The DIRECTORY is correct;
+        // the transport must resolve the real file by project dir + matching cwd, not by
+        // the payload filename, and tolerate the differing on-disk session id.
+        var projectDir = Path.Combine(_root, "projects", "encoded-cwd");
+        Directory.CreateDirectory(projectDir);
+        var runCwd = Path.Combine(_root, "real worktree").Replace('\\', '/');
+        // The REAL transcript: a DIFFERENT session id in its filename and content, a
+        // matching cwd, assistant text + usage + an assistant end_turn.
+        var realTranscript = Path.Combine(projectDir, "ad940d31-real.jsonl");
+        File.WriteAllText(realTranscript, string.Join('\n',
+            TranscriptLine("on-disk-session", runCwd, "assistant", model: "claude-haiku-4-5",
+                text: "WORKER_RESULT\\n{\\\"status\\\":\\\"Ok\\\",\\\"summary\\\":\\\"recovered\\\",\\\"files_changed\\\":[],\\\"failure_reason\\\":null}",
+                stopReason: "end_turn", usage: true)));
+        // The payload points at a session-id filename that DOES NOT EXIST in that dir.
+        var bogusPayloadPath = Path.Combine(projectDir, "d91740c9-does-not-exist.jsonl");
+
+        var waiter = new FakeWaiter((run, _) => Task.FromResult(new ClaudeCompletionRecord(
+            ClaudeCompletionStore.CurrentSchemaVersion, run.RunId, "d91740c9-claimed", runCwd,
+            bogusPayloadPath, "final message only", false, DateTimeOffset.UtcNow)));
+
+        var result = await ExecuteAsync(new FakeLauncher(new FakeProcess()), waiter);
+
+        Assert.True(result.Status == Status.Ok, $"{result.Summary}: {result.FailureReason}");
+        Assert.Equal("recovered", result.Summary);
+        // Telemetry is recovered from the resolved transcript even though the payload
+        // filename pointed at a non-existent session.
+        Assert.True(result.Metadata.ContainsKey("llm_usage"));
+        var usage = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(result.Metadata["llm_usage"]);
+        Assert.Equal("claude-haiku-4-5", usage["model"]);
+        Assert.Equal(11, usage["input_tokens"]);
+        Assert.Equal(22, usage["output_tokens"]);
+    }
+
+    // Builds a single transcript JSONL line by concatenation so the trailing JSON
+    // braces never collide with interpolation. text is already JSON-escaped.
+    private static string TranscriptLine(
+        string sessionId, string cwd, string type, string model, string text, string stopReason, bool usage)
+    {
+        var usageJson = usage
+            ? ",\"usage\":{\"input_tokens\":11,\"output_tokens\":22,\"cache_read_input_tokens\":33,\"cache_creation_input_tokens\":44}"
+            : "";
+        return "{\"type\":\"" + type + "\",\"sessionId\":" + Json(sessionId) + ",\"cwd\":" + Json(cwd) +
+            ",\"message\":{\"model\":\"" + model + "\",\"id\":\"m1\",\"role\":\"assistant\",\"stop_reason\":\"" + stopReason +
+            "\",\"content\":[{\"type\":\"text\",\"text\":\"" + text + "\"}]" + usageJson + "}}";
+    }
+
+    private static string Json(string value) => JsonSerializer.Serialize(value);
+
+    [Fact]
     public void InteractiveArgs_PreservePermissionsToolsModelAndNeverPrint()
     {
         var args = ClaudeCodeInteractiveTransport.BuildInteractiveArgs(
@@ -586,6 +638,9 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
     {
         public Task WaitForTurnAsync(string workingDirectory, DateTimeOffset launchedAt, CancellationToken cancellationToken) =>
             Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+
+        public string DescribeCandidates(string workingDirectory, DateTimeOffset launchedAt) =>
+            $"fake_never_turn_signal worktree={workingDirectory}\n";
     }
 
     // Completes WaitForTurnAsync on demand so a test can drive the /exit flow.
@@ -603,6 +658,9 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
             WorkingDirectoryObserved.TrySetResult(workingDirectory);
             return _turn.Task.WaitAsync(cancellationToken);
         }
+
+        public string DescribeCandidates(string workingDirectory, DateTimeOffset launchedAt) =>
+            $"fake_turn_signal worktree={workingDirectory}\n";
     }
 }
 

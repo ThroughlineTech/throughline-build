@@ -180,9 +180,15 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
             {
                 waitCancellation.Cancel();
                 var killFailure = await TryKillAndWaitAsync(process);
-                return FailureWithDebug("Interactive Claude execution timed out",
+                var timeoutFailure = FailureWithDebug("Interactive Claude execution timed out",
                     $"Timed out after {options.Timeout}. {killFailure}Run directory: '{run.Path}'.",
                     options.DebugCaptureDirectory, run.Path, brief);
+                // Phase-1 timeout means the turn-detector never matched (turnTask never
+                // completed -> /exit never sent). Append a self-diagnosis of every
+                // candidate transcript so the next live run pins the exact reason from
+                // artifacts. Best-effort: never throws, never alters the result text.
+                AppendTurnDiagnostics(options.DebugCaptureDirectory, canonicalWorktree, launchedAt);
+                return timeoutFailure;
             }
 
             if (completionTask.IsCompleted)
@@ -330,7 +336,20 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
         string? telemetryError = null;
         try
         {
-            transcript = ClaudePersistedTranscriptReader.Read(completion.TranscriptPath, completion.ClaudeSessionId);
+            // claude 2.1.177's Stop-hook payload reports a transcript_path whose
+            // FILENAME (session id) does not match the actual on-disk transcript for
+            // the same run. The DIRECTORY part is correct, so resolve the real file by
+            // the project dir + newest *.jsonl whose content cwd matches the run cwd -
+            // the same resolution the turn-detector already performs. Fall back to the
+            // payload path if nothing resolves. The on-disk session id is allowed to
+            // differ from the payload's claimed session (validateSessionId: false).
+            var projectDir = Path.GetDirectoryName(completion.TranscriptPath);
+            var resolved = projectDir is null
+                ? null
+                : ClaudeTranscriptLocator.FindNewestMatching(projectDir, completion.Cwd, notBefore: null);
+            var transcriptPath = resolved ?? completion.TranscriptPath;
+            transcript = ClaudePersistedTranscriptReader.Read(
+                transcriptPath, completion.ClaudeSessionId, validateSessionId: resolved is null);
         }
         catch (Exception ex)
         {
@@ -452,6 +471,26 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
         catch
         {
             // Optional diagnostic capture must never change the worker result.
+        }
+    }
+
+    // Appends the turn-detector's candidate diagnosis to the process-host.txt debug
+    // artifact on the Phase-1 timeout path only. Best-effort: a null capture dir, an
+    // IO failure, or a throwing diagnosis must never change the worker result.
+    private void AppendTurnDiagnostics(string? captureDirectory, string worktree, DateTimeOffset launchedAt)
+    {
+        if (captureDirectory is null) return;
+        try
+        {
+            var report = _turnSignal.DescribeCandidates(worktree, launchedAt);
+            var path = Path.Combine(captureDirectory, "process-host.txt");
+            File.AppendAllText(path,
+                $"turn_detector_diagnosis=begin{Environment.NewLine}{report}turn_detector_diagnosis=end{Environment.NewLine}",
+                Encoding.UTF8);
+        }
+        catch
+        {
+            // Diagnostic capture must never affect the worker result.
         }
     }
 

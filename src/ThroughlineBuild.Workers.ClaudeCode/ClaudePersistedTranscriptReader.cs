@@ -35,7 +35,20 @@ internal static class ClaudePersistedTranscriptReader
         @"(?i)\b(?:sk-[a-z0-9-]{16,}|ghp_[a-z0-9]{16,}|github_pat_[a-z0-9_]{16,}|xox[baprs]-[a-z0-9-]{8,})\b",
         RegexOptions.Compiled);
 
-    public static ClaudePersistedTranscript Read(string path, string expectedSessionId)
+    public static ClaudePersistedTranscript Read(string path, string expectedSessionId) =>
+        Read(path, expectedSessionId, validateSessionId: true);
+
+    /// <summary>
+    /// Reads a persisted transcript. When <paramref name="validateSessionId"/> is
+    /// false the on-disk <c>sessionId</c> is allowed to differ from
+    /// <paramref name="expectedSessionId"/> without throwing - claude 2.1.177's
+    /// Stop-hook payload reports a session id whose transcript filename does not match
+    /// the real on-disk transcript for the same run, so when the transport resolves the
+    /// transcript by project dir + cwd (not by the payload filename) it must tolerate
+    /// the mismatch. <paramref name="expectedSessionId"/> still labels the synthesized
+    /// system line either way.
+    /// </summary>
+    public static ClaudePersistedTranscript Read(string path, string expectedSessionId, bool validateSessionId)
     {
         var rawRedacted = new StringBuilder();
         var normalized = new List<(DateTimeOffset, string)>();
@@ -83,7 +96,8 @@ internal static class ClaudePersistedTranscriptReader
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(observedSession)
+        if (validateSessionId
+            && !string.IsNullOrWhiteSpace(observedSession)
             && !string.Equals(observedSession, expectedSessionId, StringComparison.Ordinal))
             throw new InvalidDataException("Persisted transcript session id did not match the Stop-hook completion.");
 
