@@ -151,9 +151,11 @@ internal sealed class UnixPtyClaudeProcess : IInteractiveClaudeProcess
     public async ValueTask DisposeAsync()
     {
         GC.SuppressFinalize(this);
-        // Final group flush in case Terminate was never called (e.g. the leader
-        // exited before a trusted completion); the observer reaps the leader itself.
-        SignalGroup(Sigkill);
+        // The transport skips TerminateAsync when the leader exits before a trusted
+        // completion and relies on disposal alone, so disposal must run the same
+        // bounded group-drain (SIGKILL + kill(-pid,0) confirmation) rather than a
+        // single fire-and-forget signal. Best-effort: disposal never throws.
+        try { await EnsureGroupDrainedAsync().ConfigureAwait(false); } catch { }
         _master.Dispose();
         try { await _drainTask.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false); } catch { }
     }

@@ -27,9 +27,10 @@ Each run holds a `ClaudeRunLease` (exclusive `run.lock` + `owner.json`);
 `ClaudeRunDirectorySweeper` reclaims crash-orphaned run dirs by lock-freeness
 (never by killing a pid). A per-worktree temp lock
 (`InteractiveClaudeWorktreeLock`, hashed by full path) prevents two runs racing
-on the shared `.build/brief.md`. Real tree-cleanup tests run per platform:
-`WindowsProcessTreeCleanupTests` on the Windows dev host,
-`UnixProcessTreeCleanupTests` on the Linux/macOS CI hosts.
+on the shared `.build/brief.md`. Real tree-cleanup tests exist per platform:
+`WindowsProcessTreeCleanupTests` passes on the Windows dev host;
+`UnixProcessTreeCleanupTests` (forced-termination + early-root-exit) runs only on
+the Linux/macOS CI jobs and is pending this branch's first CI run.
 
 WORKER_RESULT + fenced blocks are parsed from the FULL assistant transcript
 reconstructed from the stream (`TryExtractAssistantTranscript`), not from the

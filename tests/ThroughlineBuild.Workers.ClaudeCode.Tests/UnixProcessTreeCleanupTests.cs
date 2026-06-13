@@ -66,6 +66,58 @@ public sealed class UnixProcessTreeCleanupTests
         }
     }
 
+    [Fact]
+    public async Task EarlyRootExit_DisposalReapsDescendants()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // PTY host is Unix-only.
+
+        await RunEarlyExitUnixAsync();
+    }
+
+    [UnsupportedOSPlatform("windows")]
+    private static async Task RunEarlyExitUnixAsync()
+    {
+        var pidFile = Path.Combine(Path.GetTempPath(), $"lattice-early-{Guid.NewGuid():N}.pid");
+        // sh backgrounds a sleep then EXITS immediately (no `wait`): the host's child
+        // (the group leader) is gone, but the sleep lives on in the group. The
+        // transport's early-root-exit path never calls TerminateAsync, so disposal
+        // alone must reap the descendant.
+        var script = $"sleep 60 & echo $! > '{pidFile}'";
+
+        var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (DictionaryEntry entry in Environment.GetEnvironmentVariables())
+            environment[(string)entry.Key] = (string?)entry.Value;
+
+        var spec = new InteractiveClaudeLaunchSpec(
+            "/bin/sh", ["-c", script], Environment.CurrentDirectory, environment);
+
+        var host = UnixPtyClaudeProcess.Start(spec, TimeSpan.Zero, TimeSpan.FromSeconds(15));
+        var sleepPid = 0;
+        try
+        {
+            sleepPid = await ReadPidAsync(pidFile, TimeSpan.FromSeconds(25));
+            // The root exits on its own; wait for that so this exercises the
+            // disposal-only path, not termination.
+            await host.ExitTask.WaitAsync(TimeSpan.FromSeconds(15));
+
+            // No TerminateAsync: disposal alone must drain the group.
+            await host.DisposeAsync();
+
+            var deadline = DateTime.UtcNow.AddSeconds(15);
+            while (IsAlive(sleepPid) && DateTime.UtcNow < deadline)
+                await Task.Delay(100);
+
+            Assert.False(IsAlive(sleepPid), "descendant survived disposal after early root exit");
+        }
+        finally
+        {
+            await host.DisposeAsync();
+            TryKill(sleepPid);
+            try { if (File.Exists(pidFile)) File.Delete(pidFile); } catch { }
+        }
+    }
+
     private static async Task<int> ReadPidAsync(string pidFile, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
