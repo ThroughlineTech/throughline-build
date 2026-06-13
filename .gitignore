@@ -17,3 +17,4 @@ src/tools/artifacts/
 # Machine-specific native-AOT linker overrides (hardcoded MSVC/SDK paths); keep local, do not commit
 /Directory.Build.props
 /Directory.Build.targets
+.DS_Store
