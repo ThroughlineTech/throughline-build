@@ -18,12 +18,16 @@ namespace ThroughlineBuild.Workers.ClaudeCode;
 ///   for arbitrary JSON) and preserves every other key.
 /// - Latticeflow writers are SERIALIZED by a cross-process lock keyed on the config
 ///   path, so two concurrent runs in different worktrees never interleave their
-///   read-modify-write and lose each other's trust entry.
+///   read-modify-write and lose each other's trust entry. If the lock cannot be
+///   acquired within the bound, seeding is SKIPPED (never performed unserialized).
 /// - An UNCOORDINATED external writer (claude itself rewrites ~/.claude.json) is
 ///   handled with optimistic concurrency: the version (mtime + length) is captured at
 ///   read and re-checked immediately before the atomic replace; a detected change
 ///   triggers a bounded re-read/re-apply so claude's update is preserved rather than
-///   clobbered.
+///   clobbered. The replacement is NEVER forced - if contention persists past the
+///   bound, or an existing config cannot be read, seeding is ABANDONED rather than
+///   risk overwriting claude's concurrent update (the launch's trust-dialog timeout
+///   then surfaces the missed seed as an actionable, non-destructive failure).
 /// - The replacement is durable (flushed to disk before the rename) and never widens
 ///   permissions: the temp is made owner-only on Unix (the file can hold the
 ///   operator's account/credential state) and the destination's ACL is preserved on
@@ -82,36 +86,49 @@ internal static class ClaudeWorkspaceTrust
     // Test seam overload: externalMutationForTest fires once, after the first read and
     // before the first write, to simulate claude racing the read-modify-write so the
     // detect/retry path is exercised deterministically. Null in production.
-    internal static void EnsureTrusted(string configFilePath, string workingDirectory, Action<string>? externalMutationForTest)
+    internal static void EnsureTrusted(string configFilePath, string workingDirectory, Action<int, string>? externalMutationForTest)
     {
         var worktreePath = ProjectKeyFor(workingDirectory);
 
         // Serialize Latticeflow writers: hold a cross-process lock for the whole
         // read-modify-write so two of our runs cannot interleave and drop one another's
-        // trust entry. The lock lives in the temp tree keyed by the config path, so the
-        // operator's home directory is never polluted with a lock file.
-        using var guard = TrustWriterLock.Acquire(configFilePath);
+        // trust entry. If the lock cannot be acquired within the bound, SKIP trust seeding
+        // entirely rather than perform the unserialized RMW the lock exists to prevent.
+        using var guard = TrustWriterLock.TryAcquire(configFilePath);
+        if (guard is null)
+            return;
 
-        for (var attempt = 1; ; attempt++)
+        for (var attempt = 1; attempt <= MaxWriteAttempts; attempt++)
         {
             var snapshot = ReadSnapshot(configFilePath);
+            // A null snapshot means an existing config could not be read (claude mid-write,
+            // permissions). That is an ABORT, not "absent": never create/overwrite over a
+            // file we could not read. Abandon seeding; the trust-dialog timeout surfaces it.
+            if (snapshot is not ConfigSnapshot current)
+                return;
 
-            // Simulate an uncoordinated external writer racing us (tests only).
-            if (attempt == 1) externalMutationForTest?.Invoke(configFilePath);
+            // Simulate an uncoordinated external writer racing us (tests only); the test
+            // decides per-attempt whether to mutate.
+            externalMutationForTest?.Invoke(attempt, configFilePath);
 
-            var root = JsonNode.Parse(string.IsNullOrWhiteSpace(snapshot.Text) ? "{}" : snapshot.Text!) as JsonObject
+            var root = JsonNode.Parse(string.IsNullOrWhiteSpace(current.Text) ? "{}" : current.Text!) as JsonObject
                 ?? new JsonObject();
 
             if (!ApplyTrust(root, worktreePath))
                 return; // already trusted; do not rewrite (idempotent, zero clobber risk)
 
             var json = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
-            if (TryWriteIfUnchanged(configFilePath, json, snapshot, force: attempt >= MaxWriteAttempts))
+            if (TryWriteIfUnchanged(configFilePath, json, current))
                 return;
 
             // The file changed under us between read and write (claude wrote): re-read and
             // re-apply our key on top of the external change rather than overwriting it.
         }
+
+        // Bounded contention exhausted with the file STILL changing under us. Abandon trust
+        // seeding - we NEVER force the replacement, because overwriting claude's concurrent
+        // update is worse than a missed seed (which the interactive launch's trust-dialog
+        // timeout surfaces as an actionable, non-destructive failure).
     }
 
     // Claude 2.1.177 records Windows project keys with forward slashes even though
@@ -164,7 +181,12 @@ internal static class ClaudeWorkspaceTrust
 
     private readonly record struct ConfigSnapshot(string? Text, DateTime LastWriteUtc, long Length, bool Exists);
 
-    private static ConfigSnapshot ReadSnapshot(string configFilePath)
+    // Returns the snapshot, or null to ABORT. A genuinely absent file (File.Exists false)
+    // yields an Exists=false snapshot so we create it. But a read FAILURE on a file we
+    // could not classify as absent (an exception from stat/read - e.g. claude mid-write or
+    // a permissions hiccup) returns null: the caller must NOT treat that as "absent" and
+    // create/overwrite over a file that exists but is momentarily unreadable.
+    private static ConfigSnapshot? ReadSnapshot(string configFilePath)
     {
         try
         {
@@ -179,23 +201,18 @@ internal static class ClaudeWorkspaceTrust
         }
         catch
         {
-            // An unreadable file is treated as absent; we recreate it. The serializing
-            // lock still protects against concurrent Latticeflow writers.
-            return new ConfigSnapshot(null, default, 0, false);
+            return null;
         }
     }
 
-    // Writes only if the file's version still matches the snapshot taken at read time,
-    // unless force is set (final attempt - we have just read the latest, so write on top
-    // of it). Returns false when an external change is detected so the caller retries.
-    private static bool TryWriteIfUnchanged(string configFilePath, string json, ConfigSnapshot snapshot, bool force)
+    // Writes only if the file's version still matches the snapshot taken at read time;
+    // returns false when an external change is detected so the caller retries. There is NO
+    // force path: we never overwrite a config that changed under us between read and write.
+    private static bool TryWriteIfUnchanged(string configFilePath, string json, ConfigSnapshot snapshot)
     {
-        if (!force)
-        {
-            var (exists, lastWrite, length) = CurrentVersion(configFilePath);
-            if (exists != snapshot.Exists || lastWrite != snapshot.LastWriteUtc || length != snapshot.Length)
-                return false;
-        }
+        var (exists, lastWrite, length) = CurrentVersion(configFilePath);
+        if (exists != snapshot.Exists || lastWrite != snapshot.LastWriteUtc || length != snapshot.Length)
+            return false;
         WriteAtomic(configFilePath, json);
         return true;
     }
@@ -292,8 +309,9 @@ internal static class ClaudeWorkspaceTrust
     /// Modeled on <see cref="InteractiveClaudeWorktreeLock"/>: a temp-keyed
     /// <see cref="FileShare.None"/> handle, so the operator's home directory is never
     /// polluted with a lock file and two spellings of the same config map to one lock.
-    /// Acquisition waits a bounded time, then proceeds UNLOCKED as a last resort - trust
-    /// seeding is best-effort, so a stuck lock must not skip it entirely.
+    /// <see cref="TryAcquire"/> waits a bounded time and returns null if it cannot acquire
+    /// - the caller then SKIPS trust seeding rather than run the read-modify-write
+    /// unserialized, which would reintroduce the exact interleaving the lock prevents.
     /// </summary>
     private sealed class TrustWriterLock : IDisposable
     {
@@ -301,13 +319,15 @@ internal static class ClaudeWorkspaceTrust
 
         private FileStream? _stream;
 
-        private TrustWriterLock(FileStream? stream) => _stream = stream;
+        private TrustWriterLock(FileStream stream) => _stream = stream;
 
-        public static TrustWriterLock Acquire(string configFilePath)
+        /// <returns>The held lock, or null when it could not be acquired within the bound
+        /// (or the lock path could not be computed). Never returns an unlocked guard.</returns>
+        public static TrustWriterLock? TryAcquire(string configFilePath)
         {
             string path;
             try { path = LockPathFor(configFilePath); }
-            catch { return new TrustWriterLock(null); }
+            catch { return null; }
 
             var deadline = DateTime.UtcNow + AcquireTimeout;
             var delayMs = 10;
@@ -322,7 +342,7 @@ internal static class ClaudeWorkspaceTrust
                 catch (UnauthorizedAccessException) { }
 
                 if (DateTime.UtcNow >= deadline)
-                    return new TrustWriterLock(null); // proceed best-effort rather than skip seeding
+                    return null; // could not serialize within the bound -> caller skips seeding
                 Thread.Sleep(delayMs);
                 delayMs = Math.Min(delayMs * 2, 200);
             }

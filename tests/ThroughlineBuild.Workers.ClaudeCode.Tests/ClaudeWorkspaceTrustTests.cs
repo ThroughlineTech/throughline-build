@@ -178,10 +178,12 @@ public sealed class ClaudeWorkspaceTrustTests : IDisposable
         Directory.CreateDirectory(worktree);
         File.WriteAllText(configPath, """{ "numStartups": 1 }""");
 
-        ClaudeWorkspaceTrust.EnsureTrusted(configPath, worktree, configFile =>
+        ClaudeWorkspaceTrust.EnsureTrusted(configPath, worktree, (attempt, configFile) =>
         {
-            // Simulate claude writing the file AFTER we read but BEFORE we write.
-            File.WriteAllText(configFile, """{ "numStartups": 2, "externalKey": "claude wrote this" }""");
+            // Simulate claude writing the file ONCE, AFTER our first read but BEFORE our
+            // first write. The retry then re-reads and re-applies on top of it.
+            if (attempt == 1)
+                File.WriteAllText(configFile, """{ "numStartups": 2, "externalKey": "claude wrote this" }""");
         });
 
         using var document = JsonDocument.Parse(File.ReadAllText(configPath));
@@ -192,6 +194,37 @@ public sealed class ClaudeWorkspaceTrustTests : IDisposable
         // And our trust entry is present.
         Assert.True(root.GetProperty("projects").GetProperty(NormalizeKey(worktree))
             .GetProperty("hasTrustDialogAccepted").GetBoolean());
+    }
+
+    [Fact]
+    public void EnsureTrusted_EveryAttemptExternallyMutated_AbandonsWithoutClobbering()
+    {
+        // High finding: when claude keeps rewriting the config on EVERY one of our bounded
+        // attempts, we must never force the final write. The version check detects the
+        // change every time, contention is exhausted, and we ABANDON seeding - leaving the
+        // external writer's latest content intact and writing nothing of our own.
+        Directory.CreateDirectory(_home);
+        var configPath = Path.Combine(_home, ".claude.json");
+        var worktree = Path.Combine(_home, "worktree");
+        Directory.CreateDirectory(worktree);
+        File.WriteAllText(configPath, """{ "externalKey": "" }""");
+
+        var mutations = 0;
+        ClaudeWorkspaceTrust.EnsureTrusted(configPath, worktree, (attempt, configFile) =>
+        {
+            // Mutate on EVERY attempt with increasing-length content, so the version check
+            // (mtime + length) detects the change regardless of clock granularity.
+            mutations = attempt;
+            File.WriteAllText(configFile, $$"""{ "externalKey": "{{new string('x', attempt)}}" }""");
+        });
+
+        Assert.True(mutations >= 2, $"expected multiple bounded attempts, saw {mutations}");
+        using var document = JsonDocument.Parse(File.ReadAllText(configPath));
+        var root = document.RootElement;
+        // The external writer's LAST write survives verbatim - we never forced over it...
+        Assert.Equal(new string('x', mutations), root.GetProperty("externalKey").GetString());
+        // ...and we wrote nothing of our own (no projects/trust entry landed).
+        Assert.False(root.TryGetProperty("projects", out _));
     }
 
     [Fact]
