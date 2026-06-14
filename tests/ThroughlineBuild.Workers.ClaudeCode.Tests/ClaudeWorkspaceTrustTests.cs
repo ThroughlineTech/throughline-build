@@ -40,7 +40,7 @@ public sealed class ClaudeWorkspaceTrustTests : IDisposable
 
         var projects = root.GetProperty("projects");
         // Unrelated project entry preserved untouched.
-        var other = projects.GetProperty(NormalizeKey(otherProject));
+        var other = projects.GetProperty(otherProject);
         Assert.True(other.GetProperty("hasTrustDialogAccepted").GetBoolean());
         Assert.Equal(42, other.GetProperty("exampleSetting").GetInt32());
 
@@ -239,7 +239,16 @@ public sealed class ClaudeWorkspaceTrustTests : IDisposable
         Assert.Equal(UnixFileMode.None, mode & groupOther);
     }
 
-    private static string NormalizeKey(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+    [Fact]
+    public void ProjectKeyFor_UsesClaudeProjectPathForm()
+    {
+        var path = Path.Combine(_home, "worktree");
+        var key = ClaudeWorkspaceTrust.ProjectKeyFor(path);
+
+        Assert.Equal(Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)).Replace('\\', '/'), key);
+    }
+
+    private static string NormalizeKey(string path) => ClaudeWorkspaceTrust.ProjectKeyFor(path);
 
     private static string Json(string value) => JsonSerializer.Serialize(value);
 

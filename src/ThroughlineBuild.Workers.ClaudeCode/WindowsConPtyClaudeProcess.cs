@@ -115,12 +115,18 @@ internal sealed class WindowsConPtyClaudeProcess : IInteractiveClaudeProcess
 
             var startup = new StartupInfoEx();
             startup.StartupInfo.cb = Marshal.SizeOf<StartupInfoEx>();
+            // Force the child to discard any redirected standard handles copied from
+            // this host process. Without STARTF_USESTDHANDLES, Windows can duplicate
+            // the parent's redirected stdin/stdout into a console child even when a
+            // pseudoconsole attribute is present, bypassing ConPTY input and output.
+            // Null handles are intentional: ConPTY installs the real terminal handles.
+            startup.StartupInfo.Flags = StartfUseStdHandles;
             startup.AttributeList = attributes;
             var commandLine = new StringBuilder(RenderCommandLine(spec.Executable, spec.Arguments));
             environment = Marshal.StringToHGlobalUni(RenderEnvironment(spec.Environment));
             ThrowIfFalse(NativeMethods.CreateProcess(
                 null, commandLine, IntPtr.Zero, IntPtr.Zero, false,
-                ExtendedStartupInfoPresent | CreateUnicodeEnvironment | CreateNoWindow | CreateSuspended,
+                ExtendedStartupInfoPresent | CreateUnicodeEnvironment | CreateSuspended,
                 environment, spec.WorkingDirectory, ref startup, out processInfo));
             started = true;
 
@@ -329,9 +335,9 @@ internal sealed class WindowsConPtyClaudeProcess : IInteractiveClaudeProcess
     }
 
     private const uint CreateUnicodeEnvironment = 0x00000400;
-    private const uint CreateNoWindow = 0x08000000;
     private const uint CreateSuspended = 0x00000004;
     private const uint ExtendedStartupInfoPresent = 0x00080000;
+    private const int StartfUseStdHandles = 0x00000100;
     private const int PseudoConsoleAttribute = 0x00020016;
     private const int JobObjectExtendedLimitInformationClass = 9;
     private const uint JobObjectLimitKillOnJobClose = 0x00002000;

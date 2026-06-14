@@ -84,7 +84,7 @@ internal static class ClaudeWorkspaceTrust
     // detect/retry path is exercised deterministically. Null in production.
     internal static void EnsureTrusted(string configFilePath, string workingDirectory, Action<string>? externalMutationForTest)
     {
-        var worktreePath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(workingDirectory));
+        var worktreePath = ProjectKeyFor(workingDirectory);
 
         // Serialize Latticeflow writers: hold a cross-process lock for the whole
         // read-modify-write so two of our runs cannot interleave and drop one another's
@@ -112,6 +112,16 @@ internal static class ClaudeWorkspaceTrust
             // The file changed under us between read and write (claude wrote): re-read and
             // re-apply our key on top of the external change rather than overwriting it.
         }
+    }
+
+    // Claude 2.1.177 records Windows project keys with forward slashes even though
+    // its transcript cwd uses the normal Windows form. JSON property lookup is exact,
+    // so a backslash key looks trusted to us but is ignored by Claude, which then waits
+    // at the interactive trust prompt. Unix keys already use forward slashes.
+    internal static string ProjectKeyFor(string workingDirectory)
+    {
+        var fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(workingDirectory));
+        return OperatingSystem.IsWindows() ? fullPath.Replace('\\', '/') : fullPath;
     }
 
     // Adds the trust flags to the worktree's project entry. Returns true when the

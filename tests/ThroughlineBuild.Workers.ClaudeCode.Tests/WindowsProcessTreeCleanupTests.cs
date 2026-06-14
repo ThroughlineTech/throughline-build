@@ -15,6 +15,15 @@ namespace ThroughlineBuild.Workers.ClaudeCode.Tests;
 public sealed class WindowsProcessTreeCleanupTests
 {
     [Fact]
+    public async Task PseudoConsoleInput_IsNotReplacedByParentRedirectedStdin()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        await RunInputRoutingAsync();
+    }
+
+    [Fact]
     public async Task ForcedTermination_LeavesNoDescendantAlive()
     {
         if (!OperatingSystem.IsWindows())
@@ -68,6 +77,45 @@ public sealed class WindowsProcessTreeCleanupTests
             TryKill(rootPid);
             try { if (File.Exists(pidFile)) File.Delete(pidFile); } catch { }
         }
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static async Task RunInputRoutingAsync()
+    {
+        var marker = Path.Combine(Path.GetTempPath(), $"lattice conpty input {Guid.NewGuid():N}.txt");
+        var script =
+            "$value = [Console]::ReadLine(); " +
+            $"[IO.File]::WriteAllText('{marker}', $value)";
+        var spec = new InteractiveClaudeLaunchSpec(
+            "powershell.exe",
+            ["-NoLogo", "-NoProfile", "-Command", script],
+            Environment.CurrentDirectory,
+            CaptureEnvironment());
+
+        var host = WindowsConPtyClaudeProcess.Start(spec);
+        try
+        {
+            // ConPTY/Windows console input submits Enter as CR. LF alone is not a
+            // console Enter key and must not be used for interactive commands.
+            await host.WriteInputAsync("PING\r", CancellationToken.None);
+            await host.ExitTask.WaitAsync(TimeSpan.FromSeconds(15));
+
+            Assert.True(File.Exists(marker), "the ConPTY child did not consume terminal input");
+            Assert.Equal("PING", File.ReadAllText(marker));
+        }
+        finally
+        {
+            await host.DisposeAsync();
+            try { if (File.Exists(marker)) File.Delete(marker); } catch { }
+        }
+    }
+
+    private static Dictionary<string, string?> CaptureEnvironment()
+    {
+        var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (DictionaryEntry entry in Environment.GetEnvironmentVariables())
+            environment[(string)entry.Key] = (string?)entry.Value;
+        return environment;
     }
 
     private static async Task<int> ReadPidAsync(string pidFile, TimeSpan timeout)
