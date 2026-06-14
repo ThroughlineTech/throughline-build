@@ -27,7 +27,9 @@ timeout_minutes = 30
 
 [workers.claude-code]
 executable = "claude"
-# transport = "print"  # optional: print (default) or interactive-hook (Windows ConPTY + Stop hook)
+transport = "interactive-hook"  # default since the Stage 07 cutover: runs interactive claude (no --print)
+# via ConPTY (Windows) / PTY (Unix); completion is read from claude's persisted transcript. Requires
+# Claude Code >= 2.1.177. Rollback to the legacy headless path: transport = "print".
 # max_output_tokens = 32000  # claude-code#24159 caps Opus 4.6 at 32000; do not raise above this
 
 # Claude tiers use stable aliases (haiku/sonnet/opus) that auto-track the current

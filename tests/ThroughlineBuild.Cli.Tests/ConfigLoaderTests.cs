@@ -60,7 +60,9 @@ log_directory = ".build/events"
             Assert.Equal("ANTHROPIC_KEY", config.Llm.AnthropicApiKeyEnv);
             Assert.Equal("claude-code", config.Workers.DefaultAgent);
             Assert.Equal("claude", config.Workers.Agents["claude-code"].Executable);
-            Assert.Equal(ThroughlineBuild.Workers.ClaudeCode.ClaudeCodeTransport.Print,
+            // Omitted-value default: a [workers.claude-code] block with no `transport` key resolves to
+            // interactive-hook as of the Stage 07 cutover (was Print before).
+            Assert.Equal(ThroughlineBuild.Workers.ClaudeCode.ClaudeCodeTransport.InteractiveHook,
                 config.Workers.Agents["claude-code"].Transport);
             Assert.Equal(20, config.Workers.TimeoutMinutes);
             Assert.Equal(".build/events", config.Events.LogDirectory);
@@ -895,6 +897,30 @@ log_directory = ".build/events"
         {
             var config = BuildConfigLoader.Load(path);
             Assert.Equal(expected, config.Workers.Agents["claude-code"].Transport);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_GeneratedConfigTemplate_DefaultsToInteractiveHookTransport()
+    {
+        // The config the operator gets from `build init` must resolve to interactive-hook as of the
+        // Stage 07 cutover. Load the embedded template (placeholders filled) and confirm the transport.
+        var filled = ThroughlineBuild.Commands.ConfigTemplateLoader.Load()
+            .Replace("REQUIRED_PLANE_BASE_URL", "https://api.plane.so")
+            .Replace("REQUIRED_PLANE_WORKSPACE_SLUG", "my-workspace")
+            .Replace("REQUIRED_PLANE_PROJECT_ID", "abc-123")
+            .Replace("REQUIRED_PLANE_API_TOKEN", "PLANE_TOKEN");
+        var path = WriteToml(filled);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Equal(
+                ThroughlineBuild.Workers.ClaudeCode.ClaudeCodeTransport.InteractiveHook,
+                config.Workers.Agents["claude-code"].Transport);
         }
         finally
         {

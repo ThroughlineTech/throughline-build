@@ -1,10 +1,16 @@
 # ThroughlineBuild.Workers.ClaudeCode - vendor worker (template)
 
-`ClaudeCodeAgent : IWorkerAgent` (`Name => "claude-code"`). The default print
-transport spawns `claude --print --verbose --output-format stream-json` with
-the brief on stdin. The opt-in interactive-hook transport runs under a terminal
-host and recovers telemetry through the isolated
-`ClaudePersistedTranscriptReader` adapter. Completion is SYNTHESIZED from
+`ClaudeCodeAgent : IWorkerAgent` (`Name => "claude-code"`). The DEFAULT transport
+is interactive-hook as of the Stage 07 cutover (set by the config loader's
+omitted-value default + the generated template; the `ClaudeCodeOptions`/`AgentConfig`
+type defaults stay `Print` for direct construction). It runs an interactive Claude
+session under a terminal host (argv never contains `--print`) and recovers telemetry
+through the isolated `ClaudePersistedTranscriptReader` adapter. The legacy `print`
+transport (`claude --print --verbose --output-format stream-json`, brief on stdin)
+is the one-line rollback (`transport = "print"`). `ClaudeCodePreflight` gates the
+interactive path before a phase starts (claude runnable, version >= 2.1.177, platform
+supported) and never silently falls back to print; `build setup` runs the same check.
+Completion is SYNTHESIZED from
 `claude`'s persisted transcript (tail for an assistant message at
 `stop_reason == end_turn`, synthesize the completion record, best-effort `/exit`
 nudge, terminate the tree, parse `WORKER_RESULT` + telemetry) - the correlated

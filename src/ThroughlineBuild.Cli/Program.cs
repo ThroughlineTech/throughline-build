@@ -580,7 +580,12 @@ static async Task<int> RunAsync(string[] args)
         {
             using var verbCts = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
-            return await setupCmd.ExecuteAsync(checkOnly, SystemConsole.Instance, verbCts.Token);
+            var setupExit = await setupCmd.ExecuteAsync(checkOnly, SystemConsole.Instance, verbCts.Token);
+            // Diagnose the configured Claude transport (executable, version, platform) so an operator
+            // learns about an unsupported interactive-hook setup here, before running a phase.
+            var transportExit = await ClaudeTransportPreflight.ReportAsync(
+                config2.Workers, Console.Out, Console.Error, verbCts.Token);
+            return setupExit != 0 ? setupExit : transportExit;
         }
         catch (OperationCanceledException)
         {
@@ -1155,6 +1160,32 @@ static async Task<int> RunAsync(string[] args)
         phase == "implement" ? (agentImplementFlag ?? agentAll ?? AgentFor("implement")) :
         phase == "review"    ? (agentReviewFlag ?? agentAll ?? AgentFor("review")) :
         AgentFor(phase);
+
+    // Stage 07 cutover guard: when a phase about to run is configured to use the interactive-hook
+    // Claude transport, verify this host can support it (claude present, version >= minimum,
+    // platform) BEFORE the phase starts, and never silently fall back to print. Plan is excluded:
+    // its default mode is "promote", which spawns no worker, so gating it would falsely require
+    // claude for a deterministic plan; ship spawns no worker. An interactive path actually reached
+    // (e.g. an investigate-mode plan) still fails clearly in the transport itself.
+    string[] interactivePhasesForVerb = verb switch
+    {
+        "implement" => new[] { "implement" },
+        "review" => new[] { "review" },
+        "rework" => new[] { "implement" },
+        "decompose" => new[] { "decompose" },
+        "chain" => new[] { "implement", "review" },
+        _ => Array.Empty<string>(),
+    };
+    if (interactivePhasesForVerb.Length > 0)
+    {
+        var transportGateExit = await ClaudeTransportPreflight.GateAsync(
+            config2.Workers,
+            interactivePhasesForVerb.Select(EffectiveAgentFor),
+            Console.Error,
+            CancellationToken.None);
+        if (transportGateExit != 0)
+            return transportGateExit;
+    }
 
     // Shared git client (read-only ops only at this layer) for summary-block construction.
     var summaryGit = new ProcessGitClient(cwd);

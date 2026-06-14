@@ -625,7 +625,12 @@ public static class BuildConfigLoader
             if (subTable.TryGetValue("bypass_permissions", out var bpVal) && bpVal is bool bp)
                 bypassPermissions = bp;
 
-            var transport = ClaudeCodeTransport.Print;
+            // Omitted-value default for [workers.claude-code].transport. As of the Stage 07 cutover
+            // this is interactive-hook (runs interactive claude, no --print); set transport = "print"
+            // for the one-line rollback to the legacy headless path. This loaded-config default is the
+            // one that controls real worker runs - the AgentConfig/ClaudeCodeOptions type defaults stay
+            // Print as conservative direct-construction defaults and are always overridden here.
+            var transport = ClaudeCodeTransport.InteractiveHook;
             if (kv.Key == "claude-code" && subTable.TryGetValue("transport", out var transportValue))
             {
                 if (transportValue is not string transportName)
