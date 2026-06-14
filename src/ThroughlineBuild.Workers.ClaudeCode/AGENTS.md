@@ -3,8 +3,17 @@
 `ClaudeCodeAgent : IWorkerAgent` (`Name => "claude-code"`). The default print
 transport spawns `claude --print --verbose --output-format stream-json` with
 the brief on stdin. The opt-in interactive-hook transport runs under a terminal
-host, trusts a correlated Stop hook, and recovers telemetry through the isolated
-`ClaudePersistedTranscriptReader` adapter.
+host and recovers telemetry through the isolated
+`ClaudePersistedTranscriptReader` adapter. Completion is SYNTHESIZED from
+`claude`'s persisted transcript (tail for an assistant message at
+`stop_reason == end_turn`, synthesize the completion record, best-effort `/exit`
+nudge, terminate the tree, parse `WORKER_RESULT` + telemetry) - the correlated
+Stop-hook `completion.json` is only a best-effort fast-path, because
+`claude` 2.1.170+ does not fire the per-turn Stop hook in interactive mode.
+Workspace trust is pre-seeded in `~/.claude.json` and all claude-facing paths
+are canonicalized via `ClaudeRealPath.Resolve` (so spawn cwd, trust key, and
+transcript `cwd` match). Validated live on macOS arm64 + Linux x86_64/glibc;
+Windows live pending.
 
 Process/terminal hosting is behind a focused abstraction
 (`InteractiveClaudeProcessHost.cs`): `InteractiveClaudeProcessLauncherFactory`
