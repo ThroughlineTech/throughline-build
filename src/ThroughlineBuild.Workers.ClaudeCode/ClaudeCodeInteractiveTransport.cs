@@ -29,8 +29,10 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
     // only governs legacy/partial directories that predate the lock file.
     private static readonly TimeSpan StaleRunMinimumAge = TimeSpan.FromHours(1);
 
-    // Sent to the pty once the assistant turn is done so claude exits and fires its
-    // Stop hook on exit (claude 2.1.170 does not fire the per-turn hook interactively).
+    // Best-effort graceful nudge sent to the pty once the assistant turn is done so
+    // claude exits cleanly where it can. Completion does NOT depend on this: the
+    // transport synthesizes the completion from the located transcript and then
+    // terminates the tree regardless of whether /exit lands or the Stop hook fires.
     private const string ExitCommand = "/exit\r";
 
     private readonly ClaudeCodeOptions _options;
@@ -150,15 +152,19 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
             var launchedAt = DateTimeOffset.UtcNow;
             using var waitCancellation = new CancellationTokenSource();
             var completionTask = _completionWaiter.WaitAsync(run, waitCancellation.Token);
-            // The turn signal learns when the assistant turn ended without a per-turn
-            // Stop hook (claude 2.1.170 only fires it on exit). Bounded by the same
-            // linked token the transport cancels on completion/timeout/cancel.
+            // The turn signal locates the run's persisted transcript and resolves with
+            // its PATH once the assistant turn ends. The Stop hook is unreliable
+            // cross-platform (Linux's O_NOCTTY/sdk-cli launch never fires it), so the
+            // transport synthesizes the completion from this transcript rather than
+            // waiting for completion.json. Bounded by the same linked token the
+            // transport cancels on completion/timeout/cancel.
             var turnTask = _turnSignal.WaitForTurnAsync(canonicalWorktree, launchedAt, waitCancellation.Token);
             var timeoutTask = Task.Delay(options.Timeout);
             var cancellationTask = Task.Delay(Timeout.InfiniteTimeSpan, ct);
 
-            // Phase 1: wait for the first of completion (a per-turn hook DID fire),
-            // turn-done (no per-turn hook - send /exit), exit, timeout, or cancellation.
+            // Phase 1: wait for the first of a real Stop-hook completion (fast-path,
+            // backward compatible), the located transcript (synthesize the completion),
+            // process exit, timeout, or cancellation.
             await Task.WhenAny(completionTask, turnTask, process.ExitTask, timeoutTask, cancellationTask);
 
             // A completion that resolved successfully always wins, preserving backward
@@ -205,54 +211,25 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
                 }
             }
 
-            if (turnTask.IsCompletedSuccessfully)
+            if (turnTask.IsCompletedSuccessfully && turnTask.Result is string transcriptPath)
             {
-                // Phase 2: the assistant turn finished but no per-turn hook fired. Send
-                // /exit so claude exits and the Stop hook writes completion.json on exit.
+                // The assistant turn finished and the turn-detector located the run's
+                // transcript. Synthesize the completion from that transcript instead of
+                // waiting for the unreliable Stop hook. Send /exit first as a best-effort
+                // graceful nudge so claude exits cleanly where it can - but completion
+                // does NOT depend on it landing, on process exit, or on completion.json.
+                waitCancellation.Cancel();
                 WriteProgress(options.ProgressDigestSink, startedAt, "agent",
-                    "turn complete; sending /exit so the Stop hook fires on session exit");
+                    "turn complete; synthesizing completion from the located transcript");
                 try { await process.WriteInputAsync(ExitCommand, ct); }
                 catch
                 {
-                    // If writing /exit fails, fall through to terminate via the
-                    // completion timeout below rather than aborting outright.
+                    // A failed /exit write is harmless: we terminate the tree below.
                 }
 
-                // Do NOT treat process exit as a failure now - claude exiting is
-                // expected. The completion waiter keeps polling completion.json, which
-                // the Stop hook writes during exit. Bound only by timeout/cancellation.
-                await Task.WhenAny(completionTask, timeoutTask, cancellationTask);
-
-                if (completionTask.IsCompletedSuccessfully)
-                    return await HandleSuccessfulCompletionAsync(
-                        completionTask, process, run, brief, options, arguments, model, stopwatch, startedAt);
-
-                waitCancellation.Cancel();
-                if (cancellationTask.IsCompleted)
-                {
-                    var killFailure = await TryKillAndWaitAsync(process);
-                    return FailureWithDebug("Interactive Claude execution was cancelled",
-                        $"Cancellation requested after the turn completed and /exit was sent. {killFailure}Run directory: '{run.Path}'.",
-                        options.DebugCaptureDirectory, run.Path, brief);
-                }
-
-                if (completionTask.IsCompleted)
-                {
-                    try { await completionTask; }
-                    catch (Exception ex)
-                    {
-                        var killFailure = await TryKillAndWaitAsync(process);
-                        return FailureWithDebug("Claude Stop-hook completion was malformed",
-                            $"{ex.Message}. {killFailure}Run directory: '{run.Path}'.",
-                            options.DebugCaptureDirectory, run.Path, brief);
-                    }
-                }
-
-                var exitKillFailure = await TryKillAndWaitAsync(process);
-                return FailureWithDebug("Interactive Claude did not complete after exit",
-                    $"Timed out after {options.Timeout}; the Stop hook did not write a completion after the interactive session exited. " +
-                    $"{exitKillFailure}Run directory: '{run.Path}'.",
-                    options.DebugCaptureDirectory, run.Path, brief);
+                var synthesized = SynthesizeCompletion(run, canonicalWorktree, transcriptPath);
+                return await HandleSuccessfulCompletionAsync(
+                    Task.FromResult(synthesized), process, run, brief, options, arguments, model, stopwatch, startedAt);
             }
 
             // The only remaining Phase 1 winner is process exit before any signal.
@@ -294,9 +271,43 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
                 $"Completion run id '{completion.RunId}' did not match expected run id '{run.RunId}'. Run directory: '{run.Path}'.",
                 options.DebugCaptureDirectory, run.Path, brief);
         stopwatch.Stop();
-        WriteProgress(options.ProgressDigestSink, startedAt, "result", "Stop hook completed; recovering persisted transcript");
+        WriteProgress(options.ProgressDigestSink, startedAt, "result", "completion resolved; recovering persisted transcript");
         return ParseCompletion(completion, run.Path, brief, options, arguments, model,
             stopwatch.ElapsedMilliseconds, startedAt);
+    }
+
+    // Builds a completion record from the located persisted transcript when the Stop
+    // hook never fires (the cross-platform reality). The transcript is read tolerantly
+    // (the on-disk session id need not match any payload), and its reconstructed
+    // assistant text seeds LastAssistantMessage. TranscriptPath is the located file and
+    // Cwd is the canonical worktree, so ParseCompletion's locator re-resolves the same
+    // file for telemetry. StopHookActive=false records that no hook drove this.
+    private static ClaudeCompletionRecord SynthesizeCompletion(
+        ClaudeRunDirectory run, string canonicalWorktree, string transcriptPath)
+    {
+        string sessionId = "transcript";
+        string lastAssistantMessage = "";
+        try
+        {
+            var transcript = ClaudePersistedTranscriptReader.Read(transcriptPath, sessionId, validateSessionId: false);
+            if (!string.IsNullOrWhiteSpace(transcript.SessionId)) sessionId = transcript.SessionId!;
+            lastAssistantMessage = transcript.AssistantTranscript;
+        }
+        catch
+        {
+            // A read failure here is non-fatal: ParseCompletion re-reads the transcript
+            // (resolving telemetry) and reports the parse/telemetry error itself. The
+            // placeholder session id and empty message keep the record well-formed.
+        }
+        return new ClaudeCompletionRecord(
+            ClaudeCompletionStore.CurrentSchemaVersion,
+            run.RunId,
+            sessionId,
+            canonicalWorktree,
+            transcriptPath,
+            lastAssistantMessage,
+            StopHookActive: false,
+            DateTimeOffset.UtcNow);
     }
 
     internal static IReadOnlyList<string> BuildInteractiveArgs(

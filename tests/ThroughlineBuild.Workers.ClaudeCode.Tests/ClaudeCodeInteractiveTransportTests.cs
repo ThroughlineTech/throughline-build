@@ -414,91 +414,97 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task TurnDone_SendsExitThenCompletionResolvesToOk()
+    public async Task TurnDone_SynthesizesCompletionFromTranscriptWithoutCompletionJson()
     {
+        // The Stop hook never fires (the cross-platform reality): no completion.json is
+        // ever written. The turn-detector locates the run's transcript and the transport
+        // synthesizes the completion from it, recovering the WORKER_RESULT and telemetry.
+        var worktree = Path.Combine(_root, "synth worktree");
+        Directory.CreateDirectory(worktree);
+        var transcriptPath = WriteRunTranscript(worktree, "claude-haiku-4-5", "synthesized from transcript");
+
         var process = new FakeProcess();
         var turnSignal = new FakeTurnSignal();
-        // Completion only resolves once /exit has been observed on the process input,
-        // modelling the Stop hook firing on interactive session exit.
-        var completion = new TaskCompletionSource<ClaudeCompletionRecord>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var waiter = new FakeWaiter((run, _) => completion.Task);
+        // The completion waiter NEVER resolves - proving synthesis does not depend on it.
+        var waiter = NeverCompletes();
 
-        var task = ExecuteAsync(new FakeLauncher(process), waiter, turnSignal: turnSignal);
-        var run = await waiter.RunObserved.Task;
+        var task = ExecuteAsync(new FakeLauncher(process), waiter, worktree: worktree, turnSignal: turnSignal);
         await turnSignal.WorkingDirectoryObserved.Task;
 
         // No /exit until the turn-done signal fires.
         Assert.Empty(process.Inputs);
-        turnSignal.SignalTurnDone();
-
-        // The transport sends /exit; only then do we resolve the completion.
-        await WaitUntilAsync(() => process.Inputs.Count > 0);
-        Assert.Contains("/exit\r", process.Inputs);
-        completion.SetResult(Completion(run.RunId, WorkerResultText("exited then completed")));
+        turnSignal.SignalTurnDone(transcriptPath);
 
         var result = await task.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.True(result.Status == Status.Ok, $"{result.Summary}: {result.FailureReason}");
-        Assert.Equal("exited then completed", result.Summary);
+        Assert.Equal("synthesized from transcript", result.Summary);
+        // /exit is still sent as a best-effort graceful nudge before termination.
+        Assert.Contains("/exit\r", process.Inputs);
         Assert.True(process.Killed);
+        // Telemetry is recovered from the located transcript, with no completion.json.
+        Assert.True(result.Metadata.ContainsKey("llm_usage"));
+        var usage = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(result.Metadata["llm_usage"]);
+        Assert.Equal("claude-haiku-4-5", usage["model"]);
+        Assert.Equal(11, usage["input_tokens"]);
+        Assert.Equal(22, usage["output_tokens"]);
+        Assert.False(Directory.Exists(waiter.Run!.Path));
     }
 
     [Fact]
-    public async Task CompletionBeforeTurnDone_SucceedsWithoutSendingExit()
+    public async Task CompletionBeforeTurnDone_UsesStopHookFastPathWithoutSendingExit()
     {
         var process = new FakeProcess();
-        // Turn signal never fires; the per-turn hook completion resolves immediately.
+        // Turn signal never fires; a real Stop-hook completion.json resolves first
+        // (backward-compatible fast-path).
         var turnSignal = new FakeTurnSignal();
-        var waiter = new FakeWaiter((run, _) => Task.FromResult(Completion(run.RunId, WorkerResultText("hook fired per-turn"))));
+        var waiter = new FakeWaiter((run, _) => Task.FromResult(Completion(run.RunId, WorkerResultText("hook fired"))));
 
         var result = await ExecuteAsync(new FakeLauncher(process), waiter, turnSignal: turnSignal);
 
         Assert.True(result.Status == Status.Ok, $"{result.Summary}: {result.FailureReason}");
-        Assert.Equal("hook fired per-turn", result.Summary);
-        // The completion path won, so no /exit was needed.
+        Assert.Equal("hook fired", result.Summary);
+        // The completion fast-path won, so no /exit was needed.
         Assert.Empty(process.Inputs);
         Assert.True(process.Killed);
     }
 
     [Fact]
-    public async Task TurnDone_WriteInputFailure_StillCompletesViaCompletion()
+    public async Task TurnDone_WriteInputFailure_StillSynthesizesCompletion()
     {
-        // Writing /exit throws, but the completion still resolves (best-effort write).
+        // Writing /exit throws, but synthesis from the located transcript still
+        // succeeds (the /exit nudge is best-effort and never load-bearing).
+        var worktree = Path.Combine(_root, "write fail worktree");
+        Directory.CreateDirectory(worktree);
+        var transcriptPath = WriteRunTranscript(worktree, "claude-haiku-4-5", "survived write failure");
+
         var process = new FakeProcess(writeException: new IOException("pipe closed"));
         var turnSignal = new FakeTurnSignal();
-        var completion = new TaskCompletionSource<ClaudeCompletionRecord>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var waiter = new FakeWaiter((run, _) => completion.Task);
+        var waiter = NeverCompletes();
 
-        var task = ExecuteAsync(new FakeLauncher(process), waiter, turnSignal: turnSignal);
-        var run = await waiter.RunObserved.Task;
+        var task = ExecuteAsync(new FakeLauncher(process), waiter, worktree: worktree, turnSignal: turnSignal);
         await turnSignal.WorkingDirectoryObserved.Task;
-        turnSignal.SignalTurnDone();
-
-        await WaitUntilAsync(() => process.Inputs.Count > 0);
-        completion.SetResult(Completion(run.RunId, WorkerResultText("survived write failure")));
+        turnSignal.SignalTurnDone(transcriptPath);
 
         var result = await task.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.True(result.Status == Status.Ok, $"{result.Summary}: {result.FailureReason}");
         Assert.Equal("survived write failure", result.Summary);
+        Assert.True(process.Killed);
     }
 
-    [Fact]
-    public async Task TurnDone_NoCompletionAfterExit_TimesOutWithActionableFailure()
+    // Writes a single-line persisted transcript whose cwd matches the run's canonical
+    // worktree (so ParseCompletion's locator re-resolves it) carrying the WORKER_RESULT
+    // envelope, an assistant end_turn, and usage. Returns the transcript path.
+    private string WriteRunTranscript(string worktree, string model, string summary)
     {
-        var process = new FakeProcess();
-        var turnSignal = new FakeTurnSignal();
-        var waiter = NeverCompletes();
-
-        var task = ExecuteAsync(new FakeLauncher(process), waiter,
-            timeout: TimeSpan.FromMilliseconds(200), turnSignal: turnSignal);
-        await turnSignal.WorkingDirectoryObserved.Task;
-        turnSignal.SignalTurnDone();
-
-        var result = await task.WaitAsync(TimeSpan.FromSeconds(10));
-        Assert.Equal(Status.Failed, result.Status);
-        Assert.Contains("/exit\r", process.Inputs);
-        Assert.Contains("did not complete after exit", result.Summary, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("after the interactive session exited", result.FailureReason);
-        Assert.True(process.Killed);
+        var projectDir = Path.Combine(_root, "projects", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(projectDir);
+        var cwd = ClaudeRealPath.Resolve(worktree).Replace('\\', '/');
+        var path = Path.Combine(projectDir, Guid.NewGuid().ToString("N") + ".jsonl");
+        var text = "WORKER_RESULT\\n{\\\"status\\\":\\\"Ok\\\",\\\"summary\\\":\\\"" + summary +
+            "\\\",\\\"files_changed\\\":[],\\\"failure_reason\\\":null}";
+        File.WriteAllText(path, TranscriptLine("on-disk-session", cwd, "assistant", model,
+            text, stopReason: "end_turn", usage: true));
+        return path;
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition)
@@ -633,27 +639,29 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
     }
 
     // Default turn signal for the existing suite: never reports a turn, so those tests
-    // exercise the completion-first path (a per-turn Stop hook firing) unchanged.
+    // exercise the completion-first fast-path (a per-turn Stop hook firing) unchanged.
     private sealed class NeverTurnSignal : IInteractiveTurnSignal
     {
-        public Task WaitForTurnAsync(string workingDirectory, DateTimeOffset launchedAt, CancellationToken cancellationToken) =>
-            Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        public Task<string?> WaitForTurnAsync(string workingDirectory, DateTimeOffset launchedAt, CancellationToken cancellationToken) =>
+            Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ContinueWith<string?>(_ => null, CancellationToken.None);
 
         public string DescribeCandidates(string workingDirectory, DateTimeOffset launchedAt) =>
             $"fake_never_turn_signal worktree={workingDirectory}\n";
     }
 
-    // Completes WaitForTurnAsync on demand so a test can drive the /exit flow.
+    // Resolves WaitForTurnAsync on demand with a located transcript path so a test can
+    // drive the synthesize-from-transcript flow.
     private sealed class FakeTurnSignal : IInteractiveTurnSignal
     {
-        private readonly TaskCompletionSource _turn = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<string?> _turn = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public TaskCompletionSource<string> WorkingDirectoryObserved { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public void SignalTurnDone() => _turn.TrySetResult();
+        // Resolves the turn with the transcript path the transport will synthesize from.
+        public void SignalTurnDone(string transcriptPath) => _turn.TrySetResult(transcriptPath);
 
-        public Task WaitForTurnAsync(string workingDirectory, DateTimeOffset launchedAt, CancellationToken cancellationToken)
+        public Task<string?> WaitForTurnAsync(string workingDirectory, DateTimeOffset launchedAt, CancellationToken cancellationToken)
         {
             WorkingDirectoryObserved.TrySetResult(workingDirectory);
             return _turn.Task.WaitAsync(cancellationToken);
@@ -688,13 +696,25 @@ public sealed class ClaudeCodeInteractiveLiveTests
         try
         {
             await RunAsync("git", ["init", "-q"], worktree);
+            // Seed a known file so the brief can induce a DETERMINISTIC Read tool call
+            // (the print baseline + interactive paths both need a captured tool_use to
+            // make observedToolCall meaningful).
+            const string sentinelMarker = "SENTINEL_MARKER_8F3A";
+            await File.WriteAllTextAsync(Path.Combine(worktree, "sentinel-input.txt"), sentinelMarker + "\n");
             var options = new ClaudeCodeOptions
             {
                 Transport = ClaudeCodeTransport.InteractiveHook,
                 Sizes = new Dictionary<WorkerSize, ModelTier> { [WorkerSize.Small] = new("haiku") }
             };
-            var brief = new Brief("TLB-live", Phase.Implement, """
-                Do not modify files. Finish with exactly this result envelope:
+            // Strong imperative + verbatim envelope so haiku stays deterministic: it must
+            // read the seeded file with the Read tool (capturing a tool_use), then output
+            // ONLY the envelope. Do not modify, do not narrate.
+            var brief = new Brief("TLB-live", Phase.Implement, $$"""
+                Use the Read tool to read the file sentinel-input.txt in the current
+                directory and confirm it contains the marker {{sentinelMarker}}.
+                Do not modify any files. Do not write any explanation or narration.
+                After reading the file, output EXACTLY the following result envelope and
+                nothing else - no preamble, no commentary, no code fences:
                 WORKER_RESULT
                 {"status":"Ok","summary":"INTERACTIVE_HOOK_SENTINEL","files_changed":[],"failure_reason":null}
                 """, [], [], new Dictionary<string, string>());

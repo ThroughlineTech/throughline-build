@@ -4,21 +4,25 @@ namespace ThroughlineBuild.Workers.ClaudeCode;
 
 /// <summary>
 /// Learns when Claude's interactive assistant turn has finished WITHOUT relying on
-/// the per-turn Stop hook. claude 2.1.170 does not fire the <c>--settings</c> Stop
-/// hook per turn in interactive mode (only on session exit), so the transport tails
-/// the persisted transcript for an <c>end_turn</c> assistant message, then writes
-/// <c>/exit</c> to the pty so the Stop hook fires on exit. See
+/// the per-turn Stop hook. claude 2.1.177 does not reliably fire the <c>--settings</c>
+/// Stop hook in interactive mode (Linux's O_NOCTTY/sdk-cli launch never fires it, even
+/// on exit), so the transport tails the persisted transcript for an <c>end_turn</c>
+/// assistant message and SYNTHESIZES the completion from that located transcript - it
+/// no longer waits for the Stop hook to write completion.json. See
 /// docs/heartbeat/evidence/stage-06-process-hardening.md.
 /// </summary>
 internal interface IInteractiveTurnSignal
 {
     /// <summary>
-    /// Completes when the assistant turn for this run has ended (an assistant message
-    /// with <c>stop_reason</c> == <c>end_turn</c> in the run's transcript), or never
-    /// (until cancelled). Must be cancellation-aware - the transport bounds this wait
-    /// with the same linked timeout/cancellation token it uses for completion.
+    /// Completes with the PATH of the run's persisted transcript once its assistant
+    /// turn has ended (an assistant message with <c>stop_reason</c> == <c>end_turn</c>
+    /// whose recorded <c>cwd</c> matches the run), or never (until cancelled). Returns
+    /// null only on cancellation paths that do not throw. The transport reads the
+    /// returned transcript to synthesize the completion, so the path is load-bearing.
+    /// Must be cancellation-aware - the transport bounds this wait with the same linked
+    /// timeout/cancellation token it uses for completion.
     /// </summary>
-    Task WaitForTurnAsync(string workingDirectory, DateTimeOffset launchedAt, CancellationToken cancellationToken);
+    Task<string?> WaitForTurnAsync(string workingDirectory, DateTimeOffset launchedAt, CancellationToken cancellationToken);
 
     /// <summary>
     /// Best-effort, human-readable diagnosis of why no turn was detected, for the
@@ -71,14 +75,14 @@ internal sealed class TranscriptTurnSignal : IInteractiveTurnSignal
         return Path.Combine(home, ".claude");
     }
 
-    public async Task WaitForTurnAsync(string workingDirectory, DateTimeOffset launchedAt, CancellationToken cancellationToken)
+    public async Task<string?> WaitForTurnAsync(string workingDirectory, DateTimeOffset launchedAt, CancellationToken cancellationToken)
     {
         var target = ClaudeTranscriptLocator.NormalizeDirectory(workingDirectory);
         var projects = Path.Combine(_configHome, "projects");
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (TurnEnded(projects, target, launchedAt)) return;
+            if (TurnEnded(projects, target) is string matchedPath) return matchedPath;
             await Task.Delay(_pollInterval, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -111,13 +115,16 @@ internal sealed class TranscriptTurnSignal : IInteractiveTurnSignal
         }
     }
 
-    private static bool TurnEnded(string projectsRoot, string targetDirectory, DateTimeOffset launchedAt)
+    // Returns the path of the newest transcript whose cwd matches the run AND that
+    // carries an assistant end_turn, or null if none yet. The matched path is what the
+    // transport reads to synthesize the completion.
+    private static string? TurnEnded(string projectsRoot, string targetDirectory)
     {
         // Tolerant by contract: any IO/parse failure means "not yet", never an
         // exception out of the poll loop.
         try
         {
-            if (!Directory.Exists(projectsRoot)) return false;
+            if (!Directory.Exists(projectsRoot)) return null;
             // No mtime gate on candidate selection: claude's first transcript write
             // can lag launch by ~60s while it connects MCP servers, so a strict
             // written >= launchedAt window dropped the real transcript on Linux. The
@@ -129,13 +136,13 @@ internal sealed class TranscriptTurnSignal : IInteractiveTurnSignal
 
             foreach (var candidate in candidates)
             {
-                if (ClaudeTranscriptLocator.TranscriptEndedTurn(candidate.Path, targetDirectory)) return true;
+                if (ClaudeTranscriptLocator.TranscriptEndedTurn(candidate.Path, targetDirectory)) return candidate.Path;
             }
-            return false;
+            return null;
         }
         catch
         {
-            return false;
+            return null;
         }
     }
 

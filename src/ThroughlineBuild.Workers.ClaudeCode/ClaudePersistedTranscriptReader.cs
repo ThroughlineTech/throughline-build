@@ -15,7 +15,11 @@ internal sealed record ClaudePersistedTranscript(
     IReadOnlyList<(DateTimeOffset At, string Line)> RedactedNormalizedLines,
     string RedactedRawTranscript,
     string? ProviderErrorText,
-    int SkippedLines);
+    int SkippedLines,
+    // The sessionId observed on disk (may differ from any payload's claimed session),
+    // surfaced so the transport can synthesize a completion when the Stop hook never
+    // fires. Null when no line recorded a sessionId.
+    string? SessionId);
 
 // Isolates the installed Claude Code persisted-session schema from transport and phase code.
 // Only assistant text is required. Every other field is optional and unknown event kinds are
@@ -123,7 +127,7 @@ internal static class ClaudePersistedTranscriptReader
         var redactedAssistant = ClaudeCodeAgent.TryExtractAssistantTranscript(
             string.Join('\n', redactedNormalized.Select(line => line.Item2))) ?? "";
         return new ClaudePersistedTranscript(assistant, redactedAssistant, model, version, usage,
-            normalized, redactedNormalized, rawRedacted.ToString(), providerError, skipped);
+            normalized, redactedNormalized, rawRedacted.ToString(), providerError, skipped, observedSession);
     }
 
     private static TurnUsage ReadUsage(JsonElement usage) => new(
