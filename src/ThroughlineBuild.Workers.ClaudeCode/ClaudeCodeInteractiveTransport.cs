@@ -25,6 +25,16 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
     private const string InitialPrompt =
         "Read .build/brief.md, execute it completely, and obey the brief's final-output contract.";
 
+    // The initial prompt carries the run id verbatim as a correlation nonce. claude
+    // persists the prompt into the transcript's user message, so the locator can require
+    // this token to identify THIS run's transcript and reject a stale prior-run
+    // transcript in the same worktree (same cwd) or a competing session's file. The hex
+    // run id JSON-encodes with no escaping, so a raw substring search of the transcript
+    // always finds it. Kept on its own clearly-ignorable line so it never perturbs the
+    // brief's instructions or output contract.
+    internal static string BuildInitialPrompt(string runNonce) =>
+        $"{InitialPrompt}\n(latticeflow run token, ignore: {runNonce})";
+
     // A run directory with no live lock is reclaimed regardless of age; this bound
     // only governs legacy/partial directories that predate the lock file.
     private static readonly TimeSpan StaleRunMinimumAge = TimeSpan.FromHours(1);
@@ -117,7 +127,7 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
                 return FailureWithDebug("Invalid Claude Code model", $"{modelError}. Run directory: '{run.Path}'.",
                     options.DebugCaptureDirectory, run.Path, brief);
 
-            var arguments = BuildInteractiveArgs(_options, options, settingsPath, model);
+            var arguments = BuildInteractiveArgs(_options, options, settingsPath, model, run.RunId);
             WriteProgress(options.ProgressDigestSink, startedAt, "agent", model is null
                 ? "claude-code interactive"
                 : $"claude-code interactive model {model}");
@@ -158,7 +168,7 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
             // transport synthesizes the completion from this transcript rather than
             // waiting for completion.json. Bounded by the same linked token the
             // transport cancels on completion/timeout/cancel.
-            var turnTask = _turnSignal.WaitForTurnAsync(canonicalWorktree, launchedAt, waitCancellation.Token);
+            var turnTask = _turnSignal.WaitForTurnAsync(canonicalWorktree, run.RunId, launchedAt, waitCancellation.Token);
             var timeoutTask = Task.Delay(options.Timeout);
             var cancellationTask = Task.Delay(Timeout.InfiniteTimeSpan, ct);
 
@@ -168,10 +178,13 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
             await Task.WhenAny(completionTask, turnTask, process.ExitTask, timeoutTask, cancellationTask);
 
             // A completion that resolved successfully always wins, preserving backward
-            // compatibility with any claude that fires the per-turn hook.
+            // compatibility with any claude that fires the per-turn hook. The legacy
+            // Stop-hook payload reports a transcript_path whose FILENAME is unreliable,
+            // so this path re-resolves the real transcript by project dir + cwd + nonce.
             if (completionTask.IsCompletedSuccessfully)
                 return await HandleSuccessfulCompletionAsync(
-                    completionTask, process, run, brief, options, arguments, model, stopwatch, startedAt);
+                    completionTask, process, run, brief, options, arguments, model, stopwatch, startedAt,
+                    reResolveTranscript: true);
 
             if (cancellationTask.IsCompleted)
             {
@@ -193,7 +206,7 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
                 // completed -> /exit never sent). Append a self-diagnosis of every
                 // candidate transcript so the next live run pins the exact reason from
                 // artifacts. Best-effort: never throws, never alters the result text.
-                AppendTurnDiagnostics(options.DebugCaptureDirectory, canonicalWorktree, launchedAt);
+                AppendTurnDiagnostics(options.DebugCaptureDirectory, canonicalWorktree, run.RunId, launchedAt);
                 return timeoutFailure;
             }
 
@@ -228,8 +241,13 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
                 }
 
                 var synthesized = SynthesizeCompletion(run, canonicalWorktree, transcriptPath);
+                // Synthesized completions already hold the EXACT transcript turn
+                // detection located (nonce + cwd + end_turn). Consume it directly; do
+                // NOT re-resolve by newest-cwd, which a concurrent MCP/session write
+                // could swap out from under us between turn-detect and parse.
                 return await HandleSuccessfulCompletionAsync(
-                    Task.FromResult(synthesized), process, run, brief, options, arguments, model, stopwatch, startedAt);
+                    Task.FromResult(synthesized), process, run, brief, options, arguments, model, stopwatch, startedAt,
+                    reResolveTranscript: false);
             }
 
             // The only remaining Phase 1 winner is process exit before any signal.
@@ -259,7 +277,8 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
         IReadOnlyList<string> arguments,
         string? model,
         Stopwatch stopwatch,
-        DateTimeOffset startedAt)
+        DateTimeOffset startedAt,
+        bool reResolveTranscript)
     {
         var completion = await completionTask;
         var killFailure = await TryKillAndWaitAsync(process);
@@ -273,7 +292,7 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
         stopwatch.Stop();
         WriteProgress(options.ProgressDigestSink, startedAt, "result", "completion resolved; recovering persisted transcript");
         return ParseCompletion(completion, run.Path, brief, options, arguments, model,
-            stopwatch.ElapsedMilliseconds, startedAt);
+            stopwatch.ElapsedMilliseconds, startedAt, reResolveTranscript);
     }
 
     // Builds a completion record from the located persisted transcript when the Stop
@@ -314,7 +333,8 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
         ClaudeCodeOptions claudeOptions,
         WorkerOptions workerOptions,
         string settingsPath,
-        string? model)
+        string? model,
+        string runNonce)
     {
         var arguments = new List<string>();
         if (claudeOptions.BypassPermissions)
@@ -329,7 +349,7 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
         if (model is not null)
             arguments.AddRange(["--model", model]);
         arguments.AddRange(claudeOptions.ExtraArgs);
-        arguments.AddRange(["--settings", settingsPath, InitialPrompt]);
+        arguments.AddRange(["--settings", settingsPath, BuildInitialPrompt(runNonce)]);
         return arguments;
     }
 
@@ -341,26 +361,42 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
         IReadOnlyList<string> arguments,
         string? fallbackModel,
         long wallClockMs,
-        DateTimeOffset startedAt)
+        DateTimeOffset startedAt,
+        bool reResolveTranscript)
     {
         ClaudePersistedTranscript? transcript = null;
         string? telemetryError = null;
         try
         {
-            // claude 2.1.177's Stop-hook payload reports a transcript_path whose
-            // FILENAME (session id) does not match the actual on-disk transcript for
-            // the same run. The DIRECTORY part is correct, so resolve the real file by
-            // the project dir + newest *.jsonl whose content cwd matches the run cwd -
-            // the same resolution the turn-detector already performs. Fall back to the
-            // payload path if nothing resolves. The on-disk session id is allowed to
-            // differ from the payload's claimed session (validateSessionId: false).
-            var projectDir = Path.GetDirectoryName(completion.TranscriptPath);
-            var resolved = projectDir is null
-                ? null
-                : ClaudeTranscriptLocator.FindNewestMatching(projectDir, completion.Cwd, notBefore: null);
-            var transcriptPath = resolved ?? completion.TranscriptPath;
+            string transcriptPath;
+            bool validateSessionId;
+            if (reResolveTranscript)
+            {
+                // Legacy Stop-hook path only: claude 2.1.177's Stop-hook payload reports
+                // a transcript_path whose FILENAME (session id) does not match the actual
+                // on-disk transcript for the same run. The DIRECTORY part is correct, so
+                // resolve the real file by the project dir + newest *.jsonl whose content
+                // cwd matches AND that carries this run's nonce - so a concurrent MCP or
+                // session cannot substitute a different file. Fall back to the payload
+                // path if nothing resolves; then the on-disk session id must match.
+                var projectDir = Path.GetDirectoryName(completion.TranscriptPath);
+                var resolved = projectDir is null
+                    ? null
+                    : ClaudeTranscriptLocator.FindNewestMatching(projectDir, completion.Cwd, completion.RunId, notBefore: null);
+                transcriptPath = resolved ?? completion.TranscriptPath;
+                validateSessionId = resolved is null;
+            }
+            else
+            {
+                // Synthesized completion: TranscriptPath is the EXACT file turn detection
+                // located (already nonce + cwd + end_turn correlated). Consume it directly
+                // so nothing re-scanned between turn-detect and parse can replace it. The
+                // synthesized session id is the on-disk one, so no validation is needed.
+                transcriptPath = completion.TranscriptPath;
+                validateSessionId = false;
+            }
             transcript = ClaudePersistedTranscriptReader.Read(
-                transcriptPath, completion.ClaudeSessionId, validateSessionId: resolved is null);
+                transcriptPath, completion.ClaudeSessionId, validateSessionId);
         }
         catch (Exception ex)
         {
@@ -488,12 +524,12 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
     // Appends the turn-detector's candidate diagnosis to the process-host.txt debug
     // artifact on the Phase-1 timeout path only. Best-effort: a null capture dir, an
     // IO failure, or a throwing diagnosis must never change the worker result.
-    private void AppendTurnDiagnostics(string? captureDirectory, string worktree, DateTimeOffset launchedAt)
+    private void AppendTurnDiagnostics(string? captureDirectory, string worktree, string runNonce, DateTimeOffset launchedAt)
     {
         if (captureDirectory is null) return;
         try
         {
-            var report = _turnSignal.DescribeCandidates(worktree, launchedAt);
+            var report = _turnSignal.DescribeCandidates(worktree, runNonce, launchedAt);
             var path = Path.Combine(captureDirectory, "process-host.txt");
             File.AppendAllText(path,
                 $"turn_detector_diagnosis=begin{Environment.NewLine}{report}turn_detector_diagnosis=end{Environment.NewLine}",

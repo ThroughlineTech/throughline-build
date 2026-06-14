@@ -9,6 +9,10 @@ public sealed class TranscriptTurnSignalTests : IDisposable
     private readonly string _configHome = Path.Combine(Path.GetTempPath(), $"lattice-turn-signal-{Guid.NewGuid():N}");
     private readonly TimeSpan _poll = TimeSpan.FromMilliseconds(20);
 
+    // The per-run correlation token the transport embeds in the prompt; the transcript
+    // must carry it for the turn-detector to claim it. Most tests reuse one value.
+    private const string Nonce = "run-nonce-abcdef0123456789";
+
     [Fact]
     public async Task WaitForTurnAsync_EndTurnForMatchingCwd_Completes()
     {
@@ -19,7 +23,7 @@ public sealed class TranscriptTurnSignalTests : IDisposable
         var signal = new TranscriptTurnSignal(_configHome, _poll);
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
-        await signal.WaitForTurnAsync(worktree, DateTimeOffset.UtcNow.AddMinutes(-1), cts.Token);
+        await signal.WaitForTurnAsync(worktree, Nonce, DateTimeOffset.UtcNow.AddMinutes(-1), cts.Token);
         // Completing without throwing is the assertion.
     }
 
@@ -33,7 +37,7 @@ public sealed class TranscriptTurnSignalTests : IDisposable
 
         var signal = new TranscriptTurnSignal(_configHome, _poll);
         using var cts = new CancellationTokenSource();
-        var wait = signal.WaitForTurnAsync(worktree, DateTimeOffset.UtcNow.AddMinutes(-1), cts.Token);
+        var wait = signal.WaitForTurnAsync(worktree, Nonce, DateTimeOffset.UtcNow.AddMinutes(-1), cts.Token);
 
         var completed = await Task.WhenAny(wait, Task.Delay(TimeSpan.FromMilliseconds(300)));
         Assert.NotSame(wait, completed); // it did not complete within the window
@@ -52,12 +56,61 @@ public sealed class TranscriptTurnSignalTests : IDisposable
 
         var signal = new TranscriptTurnSignal(_configHome, _poll);
         using var cts = new CancellationTokenSource();
-        var wait = signal.WaitForTurnAsync(worktree, DateTimeOffset.UtcNow.AddMinutes(-1), cts.Token);
+        var wait = signal.WaitForTurnAsync(worktree, Nonce, DateTimeOffset.UtcNow.AddMinutes(-1), cts.Token);
 
         var completed = await Task.WhenAny(wait, Task.Delay(TimeSpan.FromMilliseconds(300)));
         Assert.NotSame(wait, completed); // a different cwd's end_turn does not satisfy this run
         cts.Cancel();
         await SwallowCancel(wait);
+    }
+
+    [Fact]
+    public async Task WaitForTurnAsync_StalePriorRunSameWorktree_WaitsForThisRunsNonce()
+    {
+        // Sequential same-worktree: a PRIOR run left an end_turn transcript in the SAME
+        // worktree (same cwd). Without the nonce it would immediately complete this run
+        // and return the prior result. The nonce makes the detector wait for THIS run's
+        // transcript.
+        var worktree = Path.Combine(_configHome, "shared worktree");
+        Directory.CreateDirectory(worktree);
+        WriteTranscript("prior-run.jsonl", worktree, stopReason: "end_turn", nonce: "prior-run-nonce-0000");
+
+        const string thisRunNonce = "this-run-nonce-1111";
+        var signal = new TranscriptTurnSignal(_configHome, _poll);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var wait = signal.WaitForTurnAsync(worktree, thisRunNonce, DateTimeOffset.UtcNow.AddMinutes(-1), cts.Token);
+
+        // The stale prior-run transcript must NOT complete this run.
+        var early = await Task.WhenAny(wait, Task.Delay(TimeSpan.FromMilliseconds(300)));
+        Assert.NotSame(wait, early);
+
+        // This run's transcript appears; now it completes - and resolves to THIS run's file.
+        WriteTranscript("this-run.jsonl", worktree, stopReason: "end_turn", nonce: thisRunNonce);
+        var matched = await wait;
+        Assert.Equal(TranscriptPath("this-run.jsonl"), matched);
+    }
+
+    [Fact]
+    public async Task WaitForTurnAsync_CompetingSessionNewerSameCwd_MatchesThisRunsNonce()
+    {
+        // Competing session: another claude session wrote a NEWER transcript for the same
+        // cwd while this run was in flight. Recency-based selection would pick the
+        // competitor; the nonce must override recency and select THIS run's transcript.
+        var worktree = Path.Combine(_configHome, "contended worktree");
+        Directory.CreateDirectory(worktree);
+        const string thisRunNonce = "this-run-nonce-2222";
+
+        WriteTranscript("this-run.jsonl", worktree, stopReason: "end_turn", nonce: thisRunNonce);
+        WriteTranscript("competitor.jsonl", worktree, stopReason: "end_turn", nonce: "competing-nonce-3333");
+        // Force the competitor to be the NEWEST file so a recency-only locator would pick it.
+        File.SetLastWriteTimeUtc(TranscriptPath("competitor.jsonl"), DateTime.UtcNow.AddMinutes(5));
+        File.SetLastWriteTimeUtc(TranscriptPath("this-run.jsonl"), DateTime.UtcNow);
+
+        var signal = new TranscriptTurnSignal(_configHome, _poll);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var matched = await signal.WaitForTurnAsync(worktree, thisRunNonce, DateTimeOffset.UtcNow.AddMinutes(-1), cts.Token);
+
+        Assert.Equal(TranscriptPath("this-run.jsonl"), matched);
     }
 
     private static async Task SwallowCancel(Task task)
@@ -74,7 +127,7 @@ public sealed class TranscriptTurnSignalTests : IDisposable
 
         var signal = new TranscriptTurnSignal(_configHome, _poll);
         using var cts = new CancellationTokenSource();
-        var wait = signal.WaitForTurnAsync(worktree, DateTimeOffset.UtcNow.AddMinutes(-1), cts.Token);
+        var wait = signal.WaitForTurnAsync(worktree, Nonce, DateTimeOffset.UtcNow.AddMinutes(-1), cts.Token);
         cts.CancelAfter(TimeSpan.FromMilliseconds(50));
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => wait);
@@ -103,7 +156,7 @@ public sealed class TranscriptTurnSignalTests : IDisposable
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         // Pass the SYMLINK path as the worktree. Without canonicalization this hangs.
-        await signal.WaitForTurnAsync(symlinkWorktree, DateTimeOffset.UtcNow.AddMinutes(-1), cts.Token);
+        await signal.WaitForTurnAsync(symlinkWorktree, Nonce, DateTimeOffset.UtcNow.AddMinutes(-1), cts.Token);
         // Completing without throwing (i.e. before the 10s token fires) is the assertion.
     }
 
@@ -136,16 +189,17 @@ public sealed class TranscriptTurnSignalTests : IDisposable
             "this is not json",
             "{}",
             "[1,2,3]",
+            UserLine(worktree, Nonce),
             AssistantLine(worktree, "end_turn"),
             "{ broken"));
 
         var signal = new TranscriptTurnSignal(_configHome, _poll);
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        await signal.WaitForTurnAsync(worktree, DateTimeOffset.UtcNow.AddMinutes(-1), cts.Token);
+        await signal.WaitForTurnAsync(worktree, Nonce, DateTimeOffset.UtcNow.AddMinutes(-1), cts.Token);
     }
 
     [Fact]
-    public void DescribeCandidates_ReportsPerCandidateCwdMtimeAndEndTurn()
+    public void DescribeCandidates_ReportsPerCandidateCwdMtimeEndTurnAndNonce()
     {
         var worktree = Path.Combine(_configHome, "work tree");
         Directory.CreateDirectory(worktree);
@@ -154,13 +208,15 @@ public sealed class TranscriptTurnSignalTests : IDisposable
         WriteTranscript("other.jsonl", Path.Combine(_configHome, "elsewhere"), stopReason: "tool_use");
 
         var signal = new TranscriptTurnSignal(_configHome, _poll);
-        var report = signal.DescribeCandidates(worktree, DateTimeOffset.UtcNow.AddMinutes(-1));
+        var report = signal.DescribeCandidates(worktree, Nonce, DateTimeOffset.UtcNow.AddMinutes(-1));
 
         Assert.Contains("config_home=", report);
+        Assert.Contains("run_nonce=" + Nonce, report);
         Assert.Contains("matching.jsonl", report);
         Assert.Contains("other.jsonl", report);
         Assert.Contains("cwd_matched=True", report);
         Assert.Contains("assistant_end_turn=True", report);
+        Assert.Contains("nonce_matched=True", report);
         Assert.Contains("worktree_resolved=", report);
     }
 
@@ -169,16 +225,30 @@ public sealed class TranscriptTurnSignalTests : IDisposable
     {
         var signal = new TranscriptTurnSignal(_configHome, _poll);
         // _configHome has no projects/ subdir yet.
-        var report = signal.DescribeCandidates(Path.Combine(_configHome, "nope"), DateTimeOffset.UtcNow);
+        var report = signal.DescribeCandidates(Path.Combine(_configHome, "nope"), Nonce, DateTimeOffset.UtcNow);
         Assert.Contains("projects_root_exists=false", report);
     }
 
-    private void WriteTranscript(string fileName, string cwd, string stopReason)
+    private void WriteTranscript(string fileName, string cwd, string stopReason, string nonce = Nonce)
     {
         var dir = Path.Combine(_configHome, "projects", "encoded-name");
         Directory.CreateDirectory(dir);
-        File.WriteAllText(Path.Combine(dir, fileName), AssistantLine(cwd, stopReason) + "\n");
+        // Two lines, mirroring a real claude transcript: the user prompt line carries the
+        // run nonce (verbatim, as claude persists it), the assistant line carries the
+        // turn-end. The locator scans every line, so cwd + end_turn + nonce can be spread.
+        File.WriteAllText(Path.Combine(dir, fileName),
+            UserLine(cwd, nonce) + "\n" + AssistantLine(cwd, stopReason) + "\n");
     }
+
+    private string TranscriptPath(string fileName) =>
+        Path.Combine(_configHome, "projects", "encoded-name", fileName);
+
+    // A user-prompt line whose content embeds the nonce exactly as the transport's
+    // BuildInitialPrompt writes it, so the raw-substring nonce match exercises reality.
+    private static string UserLine(string cwd, string nonce) =>
+        "{\"type\":\"user\",\"cwd\":" + Json(cwd) +
+        ",\"message\":{\"role\":\"user\",\"content\":" +
+        Json("Read .build/brief.md, execute it completely.\n(latticeflow run token, ignore: " + nonce + ")") + "}}";
 
     // Built by concatenation rather than a raw interpolated string so the trailing
     // JSON object braces never collide with the interpolation's closing braces.

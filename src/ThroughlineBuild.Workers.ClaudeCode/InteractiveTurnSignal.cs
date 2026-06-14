@@ -16,19 +16,27 @@ internal interface IInteractiveTurnSignal
     /// <summary>
     /// Completes with the PATH of the run's persisted transcript once its assistant
     /// turn has ended (an assistant message with <c>stop_reason</c> == <c>end_turn</c>
-    /// whose recorded <c>cwd</c> matches the run), or never (until cancelled). Returns
-    /// null only on cancellation paths that do not throw. The transport reads the
-    /// returned transcript to synthesize the completion, so the path is load-bearing.
+    /// whose recorded <c>cwd</c> matches the run AND that carries
+    /// <paramref name="runNonce"/>), or never (until cancelled). Returns null only on
+    /// cancellation paths that do not throw. The transport reads the returned
+    /// transcript to synthesize the completion, so the path is load-bearing.
+    ///
+    /// <paramref name="runNonce"/> is the per-run correlation token the transport
+    /// embeds in the initial prompt; requiring it is what stops a stale prior-run
+    /// transcript (same worktree, same cwd) or a competing session's transcript from
+    /// completing THIS run. <paramref name="launchedAt"/> is retained for the timeout
+    /// diagnosis only - it no longer gates matching (the nonce is the per-run
+    /// correlator, and claude's first transcript write can lag launch by ~60s).
     /// Must be cancellation-aware - the transport bounds this wait with the same linked
     /// timeout/cancellation token it uses for completion.
     /// </summary>
-    Task<string?> WaitForTurnAsync(string workingDirectory, DateTimeOffset launchedAt, CancellationToken cancellationToken);
+    Task<string?> WaitForTurnAsync(string workingDirectory, string runNonce, DateTimeOffset launchedAt, CancellationToken cancellationToken);
 
     /// <summary>
     /// Best-effort, human-readable diagnosis of why no turn was detected, for the
     /// Phase-1 timeout artifact. Never throws.
     /// </summary>
-    string DescribeCandidates(string workingDirectory, DateTimeOffset launchedAt);
+    string DescribeCandidates(string workingDirectory, string runNonce, DateTimeOffset launchedAt);
 }
 
 /// <summary>
@@ -75,19 +83,19 @@ internal sealed class TranscriptTurnSignal : IInteractiveTurnSignal
         return Path.Combine(home, ".claude");
     }
 
-    public async Task<string?> WaitForTurnAsync(string workingDirectory, DateTimeOffset launchedAt, CancellationToken cancellationToken)
+    public async Task<string?> WaitForTurnAsync(string workingDirectory, string runNonce, DateTimeOffset launchedAt, CancellationToken cancellationToken)
     {
         var target = ClaudeTranscriptLocator.NormalizeDirectory(workingDirectory);
         var projects = Path.Combine(_configHome, "projects");
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (TurnEnded(projects, target) is string matchedPath) return matchedPath;
+            if (TurnEnded(projects, target, runNonce) is string matchedPath) return matchedPath;
             await Task.Delay(_pollInterval, cancellationToken).ConfigureAwait(false);
         }
     }
 
-    public string DescribeCandidates(string workingDirectory, DateTimeOffset launchedAt)
+    public string DescribeCandidates(string workingDirectory, string runNonce, DateTimeOffset launchedAt)
     {
         try
         {
@@ -100,7 +108,7 @@ internal sealed class TranscriptTurnSignal : IInteractiveTurnSignal
             if (Directory.Exists(projects))
             {
                 foreach (var dir in EnumerateCandidateDirectories(projects))
-                    report.Append(ClaudeTranscriptLocator.DescribeCandidates(dir, workingDirectory, launchedAt));
+                    report.Append(ClaudeTranscriptLocator.DescribeCandidates(dir, workingDirectory, runNonce, launchedAt));
             }
             else
             {
@@ -115,10 +123,10 @@ internal sealed class TranscriptTurnSignal : IInteractiveTurnSignal
         }
     }
 
-    // Returns the path of the newest transcript whose cwd matches the run AND that
-    // carries an assistant end_turn, or null if none yet. The matched path is what the
-    // transport reads to synthesize the completion.
-    private static string? TurnEnded(string projectsRoot, string targetDirectory)
+    // Returns the path of the newest transcript that carries this run's nonce AND whose
+    // cwd matches the run AND that carries an assistant end_turn, or null if none yet.
+    // The matched path is what the transport reads to synthesize the completion.
+    private static string? TurnEnded(string projectsRoot, string targetDirectory, string runNonce)
     {
         // Tolerant by contract: any IO/parse failure means "not yet", never an
         // exception out of the poll loop.
@@ -128,15 +136,16 @@ internal sealed class TranscriptTurnSignal : IInteractiveTurnSignal
             // No mtime gate on candidate selection: claude's first transcript write
             // can lag launch by ~60s while it connects MCP servers, so a strict
             // written >= launchedAt window dropped the real transcript on Linux. The
-            // cwd + end_turn match is already run-specific; recency only orders the
-            // scan so a fresh transcript is seen before stale ones.
+            // nonce + cwd + end_turn match is per-run (the nonce uniquely identifies
+            // THIS run's transcript); recency only orders the scan so a fresh
+            // transcript is seen before stale ones.
             var candidates = Directory.EnumerateFiles(projectsRoot, "*.jsonl", SearchOption.AllDirectories)
                 .Select(path => (Path: path, Written: SafeLastWrite(path)))
                 .OrderByDescending(file => file.Written);
 
             foreach (var candidate in candidates)
             {
-                if (ClaudeTranscriptLocator.TranscriptEndedTurn(candidate.Path, targetDirectory)) return candidate.Path;
+                if (ClaudeTranscriptLocator.TranscriptEndedTurn(candidate.Path, targetDirectory, runNonce)) return candidate.Path;
             }
             return null;
         }

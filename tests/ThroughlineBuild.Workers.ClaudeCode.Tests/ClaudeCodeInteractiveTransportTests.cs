@@ -246,16 +246,24 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
         // The REAL transcript: a DIFFERENT session id in its filename and content, a
         // matching cwd, assistant text + usage + an assistant end_turn.
         var realTranscript = Path.Combine(projectDir, "ad940d31-real.jsonl");
-        File.WriteAllText(realTranscript, string.Join('\n',
-            TranscriptLine("on-disk-session", runCwd, "assistant", model: "claude-haiku-4-5",
-                text: "WORKER_RESULT\\n{\\\"status\\\":\\\"Ok\\\",\\\"summary\\\":\\\"recovered\\\",\\\"files_changed\\\":[],\\\"failure_reason\\\":null}",
-                stopReason: "end_turn", usage: true)));
         // The payload points at a session-id filename that DOES NOT EXIST in that dir.
         var bogusPayloadPath = Path.Combine(projectDir, "d91740c9-does-not-exist.jsonl");
 
-        var waiter = new FakeWaiter((run, _) => Task.FromResult(new ClaudeCompletionRecord(
-            ClaudeCompletionStore.CurrentSchemaVersion, run.RunId, "d91740c9-claimed", runCwd,
-            bogusPayloadPath, "final message only", false, DateTimeOffset.UtcNow)));
+        var waiter = new FakeWaiter((run, _) =>
+        {
+            // claude persists the run nonce (the run id) in the transcript's user prompt,
+            // and the legacy re-resolve now requires it, so write the real transcript here
+            // where run.RunId is known. The locator must resolve by cwd + nonce, not the
+            // bogus payload filename, and tolerate the differing on-disk session id.
+            File.WriteAllText(realTranscript, string.Join('\n',
+                UserLineWithNonce(runCwd, run.RunId),
+                TranscriptLine("on-disk-session", runCwd, "assistant", model: "claude-haiku-4-5",
+                    text: "WORKER_RESULT\\n{\\\"status\\\":\\\"Ok\\\",\\\"summary\\\":\\\"recovered\\\",\\\"files_changed\\\":[],\\\"failure_reason\\\":null}",
+                    stopReason: "end_turn", usage: true)));
+            return Task.FromResult(new ClaudeCompletionRecord(
+                ClaudeCompletionStore.CurrentSchemaVersion, run.RunId, "d91740c9-claimed", runCwd,
+                bogusPayloadPath, "final message only", false, DateTimeOffset.UtcNow));
+        });
 
         var result = await ExecuteAsync(new FakeLauncher(new FakeProcess()), waiter);
 
@@ -285,6 +293,57 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
 
     private static string Json(string value) => JsonSerializer.Serialize(value);
 
+    // A user-prompt line embedding the run nonce exactly as the transport writes it, so
+    // the legacy re-resolve's nonce match exercises reality. cwd lets it also satisfy the
+    // cwd match.
+    private static string UserLineWithNonce(string cwd, string nonce) =>
+        "{\"type\":\"user\",\"cwd\":" + Json(cwd) +
+        ",\"message\":{\"role\":\"user\",\"content\":" +
+        Json("Read .build/brief.md (latticeflow run token, ignore: " + nonce + ")") + "}}";
+
+    [Fact]
+    public async Task TurnDone_ConsumesExactLocatedTranscript_IgnoringNewerSameCwdTranscript()
+    {
+        // Finding 2: once turn detection has located THIS run's transcript, the synthesized
+        // completion must consume that EXACT file - not re-resolve by newest-same-cwd, which
+        // a concurrent MCP/session write could replace between turn-detect and parse.
+        var worktree = Path.Combine(_root, "exact worktree");
+        Directory.CreateDirectory(worktree);
+        var projectDir = Path.Combine(_root, "projects", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(projectDir);
+        var cwd = ClaudeRealPath.Resolve(worktree).Replace('\\', '/');
+
+        string Transcript(string summary) =>
+            TranscriptLine("on-disk-session", cwd, "assistant", "claude-haiku-4-5",
+                "WORKER_RESULT\\n{\\\"status\\\":\\\"Ok\\\",\\\"summary\\\":\\\"" + summary +
+                "\\\",\\\"files_changed\\\":[],\\\"failure_reason\\\":null}",
+                stopReason: "end_turn", usage: true);
+
+        // The transcript turn detection located (what the transport must consume)...
+        var located = Path.Combine(projectDir, "located.jsonl");
+        File.WriteAllText(located, Transcript("from located transcript"));
+        // ...and a NEWER same-cwd transcript a competing writer dropped in the same dir.
+        var newer = Path.Combine(projectDir, "newer-competitor.jsonl");
+        File.WriteAllText(newer, Transcript("from newer competitor"));
+        File.SetLastWriteTimeUtc(located, DateTime.UtcNow);
+        File.SetLastWriteTimeUtc(newer, DateTime.UtcNow.AddMinutes(5));
+
+        var process = new FakeProcess();
+        var turnSignal = new FakeTurnSignal();
+        var waiter = NeverCompletes(); // completion.json never written - synthesis only
+
+        var task = ExecuteAsync(new FakeLauncher(process), waiter, worktree: worktree, turnSignal: turnSignal);
+        await turnSignal.WorkingDirectoryObserved.Task;
+        turnSignal.SignalTurnDone(located);
+
+        var result = await task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(result.Status == Status.Ok, $"{result.Summary}: {result.FailureReason}");
+        // The EXACT located transcript wins even though a newer same-cwd file exists; a
+        // re-resolve would have returned "from newer competitor".
+        Assert.Equal("from located transcript", result.Summary);
+        Assert.False(Directory.Exists(waiter.Run!.Path));
+    }
+
     [Fact]
     public void InteractiveArgs_PreservePermissionsToolsModelAndNeverPrint()
     {
@@ -292,7 +351,8 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
             new ClaudeCodeOptions { BypassPermissions = true, ExtraArgs = ["--append-system-prompt", "extra"] },
             new WorkerOptions(TimeSpan.FromMinutes(1), AllowedTools: ["Read", "Grep"], LeanPlanning: true),
             "C:/run/settings.json",
-            "claude-sonnet-4-6");
+            "claude-sonnet-4-6",
+            "deadbeefcafef00d1234567890abcdef");
 
         Assert.DoesNotContain("--print", args);
         Assert.Contains("--dangerously-skip-permissions", args);
@@ -300,7 +360,10 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
         Assert.Contains("Read,Grep", args);
         Assert.Contains("TodoWrite,Task", args);
         Assert.Contains("claude-sonnet-4-6", args);
-        Assert.Equal("Read .build/brief.md, execute it completely, and obey the brief's final-output contract.", args[^1]);
+        // The prompt is the last arg, opens with the base instruction, and carries the run
+        // nonce verbatim so the transcript locator can correlate this run's transcript.
+        Assert.StartsWith("Read .build/brief.md, execute it completely, and obey the brief's final-output contract.", args[^1]);
+        Assert.Contains("deadbeefcafef00d1234567890abcdef", args[^1]);
     }
 
     [Fact]
@@ -642,10 +705,10 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
     // exercise the completion-first fast-path (a per-turn Stop hook firing) unchanged.
     private sealed class NeverTurnSignal : IInteractiveTurnSignal
     {
-        public Task<string?> WaitForTurnAsync(string workingDirectory, DateTimeOffset launchedAt, CancellationToken cancellationToken) =>
+        public Task<string?> WaitForTurnAsync(string workingDirectory, string runNonce, DateTimeOffset launchedAt, CancellationToken cancellationToken) =>
             Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ContinueWith<string?>(_ => null, CancellationToken.None);
 
-        public string DescribeCandidates(string workingDirectory, DateTimeOffset launchedAt) =>
+        public string DescribeCandidates(string workingDirectory, string runNonce, DateTimeOffset launchedAt) =>
             $"fake_never_turn_signal worktree={workingDirectory}\n";
     }
 
@@ -658,16 +721,20 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
         public TaskCompletionSource<string> WorkingDirectoryObserved { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        // The run nonce the transport passed in (for tests that assert correlation).
+        public string? ObservedNonce { get; private set; }
+
         // Resolves the turn with the transcript path the transport will synthesize from.
         public void SignalTurnDone(string transcriptPath) => _turn.TrySetResult(transcriptPath);
 
-        public Task<string?> WaitForTurnAsync(string workingDirectory, DateTimeOffset launchedAt, CancellationToken cancellationToken)
+        public Task<string?> WaitForTurnAsync(string workingDirectory, string runNonce, DateTimeOffset launchedAt, CancellationToken cancellationToken)
         {
+            ObservedNonce = runNonce;
             WorkingDirectoryObserved.TrySetResult(workingDirectory);
             return _turn.Task.WaitAsync(cancellationToken);
         }
 
-        public string DescribeCandidates(string workingDirectory, DateTimeOffset launchedAt) =>
+        public string DescribeCandidates(string workingDirectory, string runNonce, DateTimeOffset launchedAt) =>
             $"fake_turn_signal worktree={workingDirectory}\n";
     }
 }
@@ -691,16 +758,18 @@ public sealed class ClaudeCodeInteractiveLiveTests
         await RunAsync("dotnet", ["build", cliProject, "--nologo", "-v", "q"], repositoryRoot);
         var cliAssembly = Path.Combine(repositoryRoot, "src", "ThroughlineBuild.Cli", "bin", "Debug", "net10.0", "build.dll");
 
-        var worktree = Path.Combine(Path.GetTempPath(), $"lattice claude live {Guid.NewGuid():N}");
-        Directory.CreateDirectory(worktree);
+        const string sentinelMarker = "SENTINEL_MARKER_8F3A";
+        // Isolation is part of the correctness contract, not cleanup: the print baseline
+        // and the interactive run get SEPARATE worktrees. Sharing one worktree let the
+        // print baseline's persisted transcript (same cwd + end_turn) stand in for the
+        // interactive run's during turn detection, so the "interactive" path could pass on
+        // the PRINT transcript. With distinct worktrees the interactive turn-detector can
+        // only match the interactive run's own transcript - the test is now honest about
+        // whether interactive Claude actually completed.
+        var printWorktree = await CreateSeededWorktreeAsync(sentinelMarker);
+        var interactiveWorktree = await CreateSeededWorktreeAsync(sentinelMarker);
         try
         {
-            await RunAsync("git", ["init", "-q"], worktree);
-            // Seed a known file so the brief can induce a DETERMINISTIC Read tool call
-            // (the print baseline + interactive paths both need a captured tool_use to
-            // make observedToolCall meaningful).
-            const string sentinelMarker = "SENTINEL_MARKER_8F3A";
-            await File.WriteAllTextAsync(Path.Combine(worktree, "sentinel-input.txt"), sentinelMarker + "\n");
             var options = new ClaudeCodeOptions
             {
                 Transport = ClaudeCodeTransport.InteractiveHook,
@@ -725,7 +794,7 @@ public sealed class ClaudeCodeInteractiveLiveTests
                 Sizes = new Dictionary<WorkerSize, ModelTier> { [WorkerSize.Small] = new("haiku") }
             };
             var printResult = await new ClaudeCodePrintTransport(printOptions, new ClaudeCodeProgressDigester())
-                .ExecuteAsync(brief, worktree, new WorkerOptions(TimeSpan.FromMinutes(3), Size: WorkerSize.Small),
+                .ExecuteAsync(brief, printWorktree, new WorkerOptions(TimeSpan.FromMinutes(3), Size: WorkerSize.Small),
                     CancellationToken.None);
 
             // Use the production platform factory so this exercises the real host
@@ -741,7 +810,7 @@ public sealed class ClaudeCodeInteractiveLiveTests
             Console.WriteLine($"interactive debug capture: {debugDirectory}");
             var result = await transport.ExecuteAsync(
                 brief,
-                worktree,
+                interactiveWorktree,
                 new WorkerOptions(TimeSpan.FromMinutes(3), Size: WorkerSize.Small,
                     DebugCaptureDirectory: debugDirectory),
                 CancellationToken.None);
@@ -769,8 +838,21 @@ public sealed class ClaudeCodeInteractiveLiveTests
         }
         finally
         {
-            if (Directory.Exists(worktree)) Directory.Delete(worktree, recursive: true);
+            foreach (var worktree in new[] { printWorktree, interactiveWorktree })
+                if (Directory.Exists(worktree)) Directory.Delete(worktree, recursive: true);
         }
+    }
+
+    // Creates a fresh git-init'd worktree seeded with sentinel-input.txt so the brief can
+    // induce a DETERMINISTIC Read tool call (a captured tool_use makes observedToolCall
+    // meaningful). Each transport gets its own so neither rides the other's transcript.
+    private static async Task<string> CreateSeededWorktreeAsync(string sentinelMarker)
+    {
+        var worktree = Path.Combine(Path.GetTempPath(), $"lattice claude live {Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktree);
+        await RunAsync("git", ["init", "-q"], worktree);
+        await File.WriteAllTextAsync(Path.Combine(worktree, "sentinel-input.txt"), sentinelMarker + "\n");
+        return worktree;
     }
 
     private static async Task RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory)

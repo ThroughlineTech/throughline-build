@@ -136,6 +136,109 @@ public sealed class ClaudeWorkspaceTrustTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task EnsureTrusted_ConcurrentWritersForDifferentWorktrees_AllEntriesSurvive()
+    {
+        // Finding 3: concurrent Latticeflow runs in different worktrees both
+        // read-modify-write the SAME global ~/.claude.json. Without serialization their
+        // writes clobber each other and entries are lost. The cross-process writer lock
+        // must serialize them so EVERY worktree ends up trusted.
+        Directory.CreateDirectory(_home);
+        var configPath = Path.Combine(_home, ".claude.json");
+        File.WriteAllText(configPath, """{ "numStartups": 1 }""");
+
+        const int writers = 16;
+        var worktrees = Enumerable.Range(0, writers)
+            .Select(i => Path.Combine(_home, $"worktree-{i}"))
+            .ToArray();
+        foreach (var worktree in worktrees) Directory.CreateDirectory(worktree);
+
+        await Task.WhenAll(worktrees.Select(worktree =>
+            Task.Run(() => ClaudeWorkspaceTrust.EnsureTrusted(configPath, worktree))));
+
+        using var document = JsonDocument.Parse(File.ReadAllText(configPath));
+        var projects = document.RootElement.GetProperty("projects");
+        // Unrelated content survived...
+        Assert.Equal(1, document.RootElement.GetProperty("numStartups").GetInt32());
+        // ...and every concurrent worktree is present and trusted (none lost to a race).
+        foreach (var worktree in worktrees)
+            Assert.True(projects.GetProperty(NormalizeKey(worktree)).GetProperty("hasTrustDialogAccepted").GetBoolean());
+    }
+
+    [Fact]
+    public void EnsureTrusted_ExternalChangeBetweenReadAndWrite_IsDetectedAndPreserved()
+    {
+        // Finding 3: claude is an UNCOORDINATED external writer. If it rewrites the config
+        // between our read and our write, the optimistic version check must detect the
+        // change and re-read/re-apply on top of it - preserving claude's update rather
+        // than clobbering it, while still landing our trust entry.
+        Directory.CreateDirectory(_home);
+        var configPath = Path.Combine(_home, ".claude.json");
+        var worktree = Path.Combine(_home, "worktree");
+        Directory.CreateDirectory(worktree);
+        File.WriteAllText(configPath, """{ "numStartups": 1 }""");
+
+        ClaudeWorkspaceTrust.EnsureTrusted(configPath, worktree, configFile =>
+        {
+            // Simulate claude writing the file AFTER we read but BEFORE we write.
+            File.WriteAllText(configFile, """{ "numStartups": 2, "externalKey": "claude wrote this" }""");
+        });
+
+        using var document = JsonDocument.Parse(File.ReadAllText(configPath));
+        var root = document.RootElement;
+        // The external writer's change survived (we re-read and re-applied on top of it).
+        Assert.Equal(2, root.GetProperty("numStartups").GetInt32());
+        Assert.Equal("claude wrote this", root.GetProperty("externalKey").GetString());
+        // And our trust entry is present.
+        Assert.True(root.GetProperty("projects").GetProperty(NormalizeKey(worktree))
+            .GetProperty("hasTrustDialogAccepted").GetBoolean());
+    }
+
+    [Fact]
+    public void EnsureTrusted_OnUnix_WritesOwnerOnlyConfig()
+    {
+        // Finding 4: the config can hold the operator's account/credential state, so a
+        // newly created file must be owner-only (no group/other access). Unix-only:
+        // Windows protects the file through the profile-directory ACL instead.
+        if (OperatingSystem.IsWindows()) return;
+
+        Directory.CreateDirectory(_home);
+        var configPath = Path.Combine(_home, ".claude.json");
+        var worktree = Path.Combine(_home, "worktree");
+        Directory.CreateDirectory(worktree);
+
+        ClaudeWorkspaceTrust.EnsureTrusted(configPath, worktree);
+
+        var mode = File.GetUnixFileMode(configPath);
+        var groupOther = UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
+            | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute;
+        Assert.Equal(UnixFileMode.None, mode & groupOther);
+        Assert.True(mode.HasFlag(UnixFileMode.UserRead) && mode.HasFlag(UnixFileMode.UserWrite));
+    }
+
+    [Fact]
+    public void EnsureTrusted_OnUnix_TightensGroupOtherReadableConfig()
+    {
+        // Finding 4: an existing config that is group/other-readable must be tightened to
+        // owner-only across the atomic replace, never left widened.
+        if (OperatingSystem.IsWindows()) return;
+
+        Directory.CreateDirectory(_home);
+        var configPath = Path.Combine(_home, ".claude.json");
+        var worktree = Path.Combine(_home, "worktree");
+        Directory.CreateDirectory(worktree);
+        File.WriteAllText(configPath, """{ "numStartups": 1 }""");
+        File.SetUnixFileMode(configPath, UnixFileMode.UserRead | UnixFileMode.UserWrite
+            | UnixFileMode.GroupRead | UnixFileMode.OtherRead); // 0644
+
+        ClaudeWorkspaceTrust.EnsureTrusted(configPath, worktree);
+
+        var mode = File.GetUnixFileMode(configPath);
+        var groupOther = UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
+            | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute;
+        Assert.Equal(UnixFileMode.None, mode & groupOther);
+    }
+
     private static string NormalizeKey(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
 
     private static string Json(string value) => JsonSerializer.Serialize(value);
