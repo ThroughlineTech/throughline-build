@@ -136,6 +136,18 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
             var environment = environmentInfo.Environment.ToDictionary(
                 pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
 
+            // Interactive claude launched with --dangerously-skip-permissions still
+            // presents a one-time "Bypass Permissions mode" ACCEPTANCE dialog in the PTY
+            // host - separate from the workspace-trust dialog, and the flag does NOT
+            // auto-accept it - so an unattended launch blocks at it forever and times out
+            // (observed on the Linux Unix-PTY host with claude 2.1.177; the Windows host
+            // happened not to surface it). IS_SANDBOX=1 tells claude it is already running
+            // sandboxed, which is exactly the "sandboxed VM" context the warning asks the
+            // operator to confirm, so claude skips the dialog. Only set it when we actually
+            // pass the bypass flag, and never clobber an explicit operator override.
+            if (_options.BypassPermissions && !environment.ContainsKey("IS_SANDBOX"))
+                environment["IS_SANDBOX"] = "1";
+
             // Pre-seed workspace trust so the interactive launch does not hang at
             // claude's trust dialog on a fresh worktree (which --dangerously-skip-
             // permissions does NOT bypass). Best-effort: never throws.

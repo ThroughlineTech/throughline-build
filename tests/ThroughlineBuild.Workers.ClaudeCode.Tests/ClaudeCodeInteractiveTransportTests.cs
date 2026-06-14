@@ -345,6 +345,22 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task BypassPermissions_SetsIsSandboxSoTheBypassDialogIsSkipped()
+    {
+        // With --dangerously-skip-permissions, claude's PTY host presents a one-time
+        // "Bypass Permissions mode" acceptance dialog that the flag does not auto-accept;
+        // IS_SANDBOX=1 makes claude skip it so the unattended interactive launch does not
+        // hang (proven on the Linux Unix-PTY host). BypassPermissions defaults to true.
+        var launcher = new FakeLauncher(new FakeProcess());
+        var waiter = new FakeWaiter((run, _) => Task.FromResult(Completion(run.RunId, WorkerResultText("ok"))));
+
+        await ExecuteAsync(launcher, waiter);
+
+        Assert.True(launcher.Spec!.Environment.TryGetValue("IS_SANDBOX", out var isSandbox));
+        Assert.Equal("1", isSandbox);
+    }
+
+    [Fact]
     public void InteractiveArgs_PreservePermissionsToolsModelAndNeverPrint()
     {
         var args = ClaudeCodeInteractiveTransport.BuildInteractiveArgs(
