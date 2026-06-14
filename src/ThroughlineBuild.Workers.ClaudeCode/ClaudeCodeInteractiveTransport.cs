@@ -116,9 +116,16 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
             // Hold the lease for the whole run so a concurrent sweeper treats it as live.
             lease = ClaudeRunLease.Acquire(run);
             var settingsPath = Path.Combine(run.Path, "settings.json");
+            // When we pass --dangerously-skip-permissions, the ephemeral settings file also
+            // carries skipDangerousModePermissionPrompt so claude skips its one-time "Bypass
+            // Permissions mode" acceptance dialog (the flag alone does not auto-accept it, and
+            // an unattended PTY launch would otherwise hang at it). This is the narrowly-scoped
+            // mechanism - NOT IS_SANDBOX, which would falsely flip claude's global sandbox state.
             await File.WriteAllTextAsync(
                 settingsPath,
-                ClaudeHookSettingsBuilder.Build(_hookCommandPrefix ?? ResolveHookCommandPrefix(), run.Path, run.RunId),
+                ClaudeHookSettingsBuilder.Build(
+                    _hookCommandPrefix ?? ResolveHookCommandPrefix(), run.Path, run.RunId,
+                    skipDangerousModePermissionPrompt: _options.BypassPermissions),
                 ct);
 
             _options.Sizes.TryGetValue(options.Size, out var tier);
@@ -136,17 +143,9 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
             var environment = environmentInfo.Environment.ToDictionary(
                 pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
 
-            // Interactive claude launched with --dangerously-skip-permissions still
-            // presents a one-time "Bypass Permissions mode" ACCEPTANCE dialog in the PTY
-            // host - separate from the workspace-trust dialog, and the flag does NOT
-            // auto-accept it - so an unattended launch blocks at it forever and times out
-            // (observed on the Linux Unix-PTY host with claude 2.1.177; the Windows host
-            // happened not to surface it). IS_SANDBOX=1 tells claude it is already running
-            // sandboxed, which is exactly the "sandboxed VM" context the warning asks the
-            // operator to confirm, so claude skips the dialog. Only set it when we actually
-            // pass the bypass flag, and never clobber an explicit operator override.
-            if (_options.BypassPermissions && !environment.ContainsKey("IS_SANDBOX"))
-                environment["IS_SANDBOX"] = "1";
+            // (The "Bypass Permissions mode" acceptance dialog is suppressed via the
+            // skipDangerousModePermissionPrompt key written into settings.json above, not by
+            // mutating the process environment.)
 
             // Pre-seed workspace trust so the interactive launch does not hang at
             // claude's trust dialog on a fresh worktree (which --dangerously-skip-

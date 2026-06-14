@@ -345,19 +345,20 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
     }
 
     [Fact]
-    public async Task BypassPermissions_SetsIsSandboxSoTheBypassDialogIsSkipped()
+    public async Task BypassPermissions_DoesNotInjectIsSandboxIntoTheEnvironment()
     {
-        // With --dangerously-skip-permissions, claude's PTY host presents a one-time
-        // "Bypass Permissions mode" acceptance dialog that the flag does not auto-accept;
-        // IS_SANDBOX=1 makes claude skip it so the unattended interactive launch does not
-        // hang (proven on the Linux Unix-PTY host). BypassPermissions defaults to true.
+        // With --dangerously-skip-permissions, claude's PTY host presents a one-time "Bypass
+        // Permissions mode" acceptance dialog the flag does not auto-accept. The transport
+        // suppresses it with the narrowly-scoped skipDangerousModePermissionPrompt key in the
+        // ephemeral settings.json (see SettingsBuilder_EmitsSkipDangerousModePromptWhenRequested),
+        // NOT IS_SANDBOX - which would falsely flip claude's GLOBAL sandbox state and can alter
+        // tool/permission behavior. BypassPermissions defaults to true.
         var launcher = new FakeLauncher(new FakeProcess());
         var waiter = new FakeWaiter((run, _) => Task.FromResult(Completion(run.RunId, WorkerResultText("ok"))));
 
         await ExecuteAsync(launcher, waiter);
 
-        Assert.True(launcher.Spec!.Environment.TryGetValue("IS_SANDBOX", out var isSandbox));
-        Assert.Equal("1", isSandbox);
+        Assert.False(launcher.Spec!.Environment.ContainsKey("IS_SANDBOX"));
     }
 
     [Fact]
@@ -392,6 +393,20 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
             .GetProperty("hooks")[0].GetProperty("command").GetString();
 
         Assert.StartsWith("'C:/Program Files/dotnet/dotnet.exe' 'C:/repo with space/build.dll' internal", command);
+    }
+
+    [Fact]
+    public void SettingsBuilder_EmitsSkipDangerousModePromptWhenRequested()
+    {
+        // The dialog-suppression key is present (and true) only when requested, and omitted
+        // entirely otherwise so it never leaks into runs that do not pass the bypass flag.
+        var without = ClaudeHookSettingsBuilder.Build(["dotnet", "build.dll"], "C:/run/id", "id");
+        Assert.DoesNotContain("skipDangerousModePermissionPrompt", without);
+
+        var with = ClaudeHookSettingsBuilder.Build(
+            ["dotnet", "build.dll"], "C:/run/id", "id", skipDangerousModePermissionPrompt: true);
+        using var document = JsonDocument.Parse(with);
+        Assert.True(document.RootElement.GetProperty("skipDangerousModePermissionPrompt").GetBoolean());
     }
 
     [Fact]
