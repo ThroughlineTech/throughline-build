@@ -601,6 +601,35 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
         return path;
     }
 
+    [Fact]
+    public async Task ExecuteAsync_PreflightUnsupported_FailsClearlyWithoutLaunching()
+    {
+        // The interactive transport runs its capability preflight before any side effect: an
+        // unsupported host fails clearly and the process is never launched (no fallback to print).
+        // This is the chokepoint that guards every worker-spawning path, not just the phase verbs.
+        var launcher = new FakeLauncher(new FakeProcess(exitCode: 0));
+        var options = new ClaudeCodeOptions { Transport = ClaudeCodeTransport.InteractiveHook, ExecutablePath = "claude" };
+        var failingPreflight = new Func<string, CancellationToken, Task<ClaudePreflightResult>>((_, _) =>
+            Task.FromResult(new ClaudePreflightResult(false, ClaudePreflightFailureKind.VersionTooOld,
+                "transport = \"interactive-hook\" requires Claude Code >= 2.1.177, but the installed claude is 2.1.150.",
+                new Version(2, 1, 150), "2.1.150")));
+        var transport = new ClaudeCodeInteractiveTransport(
+            options, launcher, NeverCompletes(), new NeverTurnSignal(), ["build.exe"], failingPreflight);
+
+        var worktree = Path.Combine(_root, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(worktree);
+        var result = await transport.ExecuteAsync(
+            new Brief("TLB-pf", Phase.Implement, "brief", [], [], new Dictionary<string, string>()),
+            worktree,
+            new WorkerOptions(TimeSpan.FromSeconds(5)),
+            CancellationToken.None);
+
+        Assert.Equal(Status.Failed, result.Status);
+        Assert.Contains("Interactive Claude transport unavailable", result.Summary);
+        Assert.Contains("2.1.177", result.FailureReason);
+        Assert.Null(launcher.Spec); // Launch was never called
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);

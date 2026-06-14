@@ -26,6 +26,9 @@ public class WorkerAgentBuilderTests
             CancellationToken.None);
 
         Assert.Equal(Status.Failed, result.Status);
-        Assert.Contains("executable not found", result.Summary, StringComparison.OrdinalIgnoreCase);
+        // The interactive-hook capability preflight catches the missing executable and fails clearly,
+        // without ever falling back to the print transport.
+        Assert.Contains("Interactive Claude transport", result.Summary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("interactive-hook", result.FailureReason ?? "", StringComparison.OrdinalIgnoreCase);
     }
 }

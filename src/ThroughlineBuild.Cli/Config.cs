@@ -345,7 +345,10 @@ public static class BuildConfigLoader
                             }
                         }
                         else if (!KnownAgentKeys.Contains(agentKv.Key)
-                                 && !(kv.Key == "claude-code" && agentKv.Key == "transport"))
+                                 // `transport` is valid on any Claude-family agent (anything mapping to
+                                 // ClaudeCodeAgent), not just the literal claude-code block; only warn
+                                 // when it appears on gemini/codex/copilot.
+                                 && !(kv.Key is not ("gemini" or "codex" or "copilot") && agentKv.Key == "transport"))
                         {
                             warnings.Add($"warning: unknown config key workers.{kv.Key}.{agentKv.Key} - ignored");
                         }
@@ -625,23 +628,26 @@ public static class BuildConfigLoader
             if (subTable.TryGetValue("bypass_permissions", out var bpVal) && bpVal is bool bp)
                 bypassPermissions = bp;
 
-            // Omitted-value default for [workers.claude-code].transport. As of the Stage 07 cutover
-            // this is interactive-hook (runs interactive claude, no --print); set transport = "print"
-            // for the one-line rollback to the legacy headless path. This loaded-config default is the
-            // one that controls real worker runs - the AgentConfig/ClaudeCodeOptions type defaults stay
-            // Print as conservative direct-construction defaults and are always overridden here.
-            var transport = ClaudeCodeTransport.InteractiveHook;
-            if (kv.Key == "claude-code" && subTable.TryGetValue("transport", out var transportValue))
+            // Omitted-value default for a Claude-family agent's transport. It stays Print (the legacy
+            // headless path) until the Stage 07 cutover flips it to interactive-hook AFTER the operator
+            // dogfood + pre-cutover checkpoint (docs/heartbeat/evidence/stage-07-dogfood.md). Until then
+            // interactive-hook is opt-in (set transport = "interactive-hook"). Transport is honored for
+            // any agent name that maps to ClaudeCodeAgent in WorkerAgentBuilder - i.e. anything that is
+            // not gemini/codex/copilot - so a custom-named Claude block (e.g. [workers.my-claude]) can
+            // select print/interactive-hook too, and the documented rollback works there.
+            var transport = ClaudeCodeTransport.Print;
+            bool isClaudeAgent = kv.Key is not ("gemini" or "codex" or "copilot");
+            if (isClaudeAgent && subTable.TryGetValue("transport", out var transportValue))
             {
                 if (transportValue is not string transportName)
                     throw new ConfigException(
-                        "[workers.claude-code] transport must be a string: print or interactive-hook");
+                        $"[workers.{kv.Key}] transport must be a string: print or interactive-hook");
                 transport = transportName switch
                 {
                     "print" => ClaudeCodeTransport.Print,
                     "interactive-hook" => ClaudeCodeTransport.InteractiveHook,
                     _ => throw new ConfigException(
-                        $"unknown [workers.claude-code] transport '{transportName}'; supported values are: print, interactive-hook"),
+                        $"unknown [workers.{kv.Key}] transport '{transportName}'; supported values are: print, interactive-hook"),
                 };
             }
 

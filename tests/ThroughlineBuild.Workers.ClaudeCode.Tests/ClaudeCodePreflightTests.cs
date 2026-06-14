@@ -98,4 +98,30 @@ public class ClaudeCodePreflightTests
             "this-claude-executable-must-not-exist", ClaudeCodeTransport.Print, CancellationToken.None);
         Assert.True(result.Supported);
     }
+
+    [Fact]
+    public void UsableVersionOutput_NonZeroExit_IsDiscarded_EvenWithVersionText()
+    {
+        // A failed `claude --version` must not be trusted even if it printed a version-shaped string.
+        Assert.Null(ClaudeCodePreflight.UsableVersionOutput(1, "2.1.177 (Claude Code)", ""));
+        Assert.Null(ClaudeCodePreflight.UsableVersionOutput(3, "", "2.1.999"));
+    }
+
+    [Fact]
+    public void UsableVersionOutput_ZeroExit_ReturnsStdoutThenStderr()
+    {
+        Assert.Equal("2.1.177", ClaudeCodePreflight.UsableVersionOutput(0, "2.1.177", "ignored"));
+        Assert.Equal("2.1.177", ClaudeCodePreflight.UsableVersionOutput(0, "   ", "2.1.177"));
+    }
+
+    [Fact]
+    public void Evaluate_Interactive_NonZeroExitVersion_IsUndetectable()
+    {
+        // End-to-end of the exit-code rule: a discarded version (null) evaluates as undetectable, not
+        // parsed from the incidental text.
+        var raw = ClaudeCodePreflight.UsableVersionOutput(1, "2.1.177 (Claude Code)", "");
+        var result = ClaudeCodePreflight.Evaluate(ClaudeCodeTransport.InteractiveHook, executableResolved: true, raw);
+        Assert.False(result.Supported);
+        Assert.Equal(ClaudePreflightFailureKind.VersionUndetectable, result.Kind);
+    }
 }

@@ -50,24 +50,34 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
     private readonly IClaudeCompletionWaiter _completionWaiter;
     private readonly IInteractiveTurnSignal _turnSignal;
     private readonly IReadOnlyList<string>? _hookCommandPrefix;
+    private readonly Func<string, CancellationToken, Task<ClaudePreflightResult>> _preflight;
 
     internal ClaudeCodeInteractiveTransport(ClaudeCodeOptions options)
         : this(options, InteractiveClaudeProcessLauncherFactory.Create(), new ClaudeCompletionWaiter(),
-            new TranscriptTurnSignal()) { }
+            new TranscriptTurnSignal(), hookCommandPrefix: null, preflight: DefaultPreflightAsync) { }
 
     internal ClaudeCodeInteractiveTransport(
         ClaudeCodeOptions options,
         IInteractiveClaudeProcessLauncher launcher,
         IClaudeCompletionWaiter completionWaiter,
         IInteractiveTurnSignal turnSignal,
-        IReadOnlyList<string>? hookCommandPrefix = null)
+        IReadOnlyList<string>? hookCommandPrefix = null,
+        Func<string, CancellationToken, Task<ClaudePreflightResult>>? preflight = null)
     {
         _options = options;
         _launcher = launcher;
         _completionWaiter = completionWaiter;
         _turnSignal = turnSignal;
         _hookCommandPrefix = hookCommandPrefix;
+        // Production construction passes the real claude --version capability check. Direct (test)
+        // construction defaults to a permissive preflight so unit tests with fake launchers and
+        // arbitrary executable paths are unaffected.
+        _preflight = preflight ?? ((_, _) => Task.FromResult(
+            new ClaudePreflightResult(true, ClaudePreflightFailureKind.None, "preflight skipped", null, null)));
     }
+
+    private static Task<ClaudePreflightResult> DefaultPreflightAsync(string executable, CancellationToken ct)
+        => ClaudeCodePreflight.CheckAsync(executable, ClaudeCodeTransport.InteractiveHook, ct);
 
     public async Task<WorkerResult> ExecuteAsync(
         Brief brief,
@@ -75,6 +85,16 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
         WorkerOptions options,
         CancellationToken ct)
     {
+        // Capability gate: confirm this host can run the interactive transport BEFORE any side effect
+        // (no brief write, no worktree lock, no run directory, no process launch). This is the single
+        // chokepoint every interactive-hook invocation passes through - implement/review/chain phases,
+        // `build new` draft mode, investigate-mode plan, scaffold profile derivation, batch - so an
+        // unsupported host fails clearly here instead of hanging inside a phase, and never falls back
+        // to print. The message is a capability error, distinct from quota/model/permission/protocol.
+        var preflight = await _preflight(_options.ExecutablePath, ct).ConfigureAwait(false);
+        if (!preflight.Supported)
+            return PreflightFailure(preflight, options.DebugCaptureDirectory, brief);
+
         var buildDirectory = Path.Combine(workingDirectory, ".build");
         Directory.CreateDirectory(buildDirectory);
 
@@ -593,6 +613,27 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
 
     private static WorkerResult Failure(string summary, string reason) =>
         new(Status.Failed, summary, Array.Empty<string>(), reason, new Dictionary<string, object>());
+
+    // Pre-launch capability failure (interactive host/version/platform). Written before any run state
+    // exists, so it records only the transport marker and the preflight diagnosis.
+    private static WorkerResult PreflightFailure(ClaudePreflightResult preflight, string? captureDirectory, Brief brief)
+    {
+        var result = Failure("Interactive Claude transport unavailable on this host", preflight.Message);
+        if (captureDirectory is null) return result;
+        try
+        {
+            Directory.CreateDirectory(captureDirectory);
+            File.WriteAllText(Path.Combine(captureDirectory, "worker-stdin.txt"), brief.Instruction, Encoding.UTF8);
+            File.WriteAllText(Path.Combine(captureDirectory, "process-host.txt"),
+                $"transport=interactive-hook{Environment.NewLine}terminal_rendering_parsed=false{Environment.NewLine}" +
+                $"preflight={preflight.Kind}{Environment.NewLine}failure={preflight.Message}{Environment.NewLine}", Encoding.UTF8);
+            var dto = new WorkerResultDebugDto(result.Status.ToString(), result.Summary, result.FilesChanged, result.FailureReason);
+            File.WriteAllText(Path.Combine(captureDirectory, "worker-result.json"),
+                System.Text.Json.JsonSerializer.Serialize(dto, DebugCaptureJsonContext.Default.WorkerResultDebugDto), Encoding.UTF8);
+        }
+        catch { }
+        return result;
+    }
 
     private static WorkerResult CollisionFailure(string workingDirectory, string? captureDirectory, Brief brief)
     {

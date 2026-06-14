@@ -1161,12 +1161,14 @@ static async Task<int> RunAsync(string[] args)
         phase == "review"    ? (agentReviewFlag ?? agentAll ?? AgentFor("review")) :
         AgentFor(phase);
 
-    // Stage 07 cutover guard: when a phase about to run is configured to use the interactive-hook
-    // Claude transport, verify this host can support it (claude present, version >= minimum,
-    // platform) BEFORE the phase starts, and never silently fall back to print. Plan is excluded:
-    // its default mode is "promote", which spawns no worker, so gating it would falsely require
-    // claude for a deterministic plan; ship spawns no worker. An interactive path actually reached
-    // (e.g. an investigate-mode plan) still fails clearly in the transport itself.
+    // Early capability check for the common worker-spawning phase verbs: when the resolved agent uses
+    // the interactive-hook Claude transport, verify this host can support it (claude present, version
+    // >= minimum, platform) BEFORE the phase starts, so the failure is clean (no worktree cut, no
+    // ticket transition) and never falls back to print. This is an optimization, not the only guard:
+    // ClaudeCodeInteractiveTransport.ExecuteAsync runs the same preflight before any side effect, so
+    // every other worker-spawning path (build new draft, investigate-mode plan, scaffold profile
+    // derivation, batch) is also gated. Plan is omitted here because its default "promote" mode spawns
+    // no worker (gating it would falsely require claude for a deterministic plan); ship spawns none.
     string[] interactivePhasesForVerb = verb switch
     {
         "implement" => new[] { "implement" },

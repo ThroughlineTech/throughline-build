@@ -61,8 +61,9 @@ log_directory = ".build/events"
             Assert.Equal("claude-code", config.Workers.DefaultAgent);
             Assert.Equal("claude", config.Workers.Agents["claude-code"].Executable);
             // Omitted-value default: a [workers.claude-code] block with no `transport` key resolves to
-            // interactive-hook as of the Stage 07 cutover (was Print before).
-            Assert.Equal(ThroughlineBuild.Workers.ClaudeCode.ClaudeCodeTransport.InteractiveHook,
+            // Print until the Stage 07 default flip lands after operator dogfood (interactive-hook is
+            // opt-in until then).
+            Assert.Equal(ThroughlineBuild.Workers.ClaudeCode.ClaudeCodeTransport.Print,
                 config.Workers.Agents["claude-code"].Transport);
             Assert.Equal(20, config.Workers.TimeoutMinutes);
             Assert.Equal(".build/events", config.Events.LogDirectory);
@@ -905,10 +906,10 @@ log_directory = ".build/events"
     }
 
     [Fact]
-    public void Load_GeneratedConfigTemplate_DefaultsToInteractiveHookTransport()
+    public void Load_GeneratedConfigTemplate_DefaultsToPrintUntilCutover()
     {
-        // The config the operator gets from `build init` must resolve to interactive-hook as of the
-        // Stage 07 cutover. Load the embedded template (placeholders filled) and confirm the transport.
+        // The generated `build init` config leaves transport commented, so it resolves to Print until
+        // the Stage 07 default flip lands after operator dogfood. (interactive-hook is opt-in until then.)
         var filled = ThroughlineBuild.Commands.ConfigTemplateLoader.Load()
             .Replace("REQUIRED_PLANE_BASE_URL", "https://api.plane.so")
             .Replace("REQUIRED_PLANE_WORKSPACE_SLUG", "my-workspace")
@@ -919,8 +920,41 @@ log_directory = ".build/events"
         {
             var config = BuildConfigLoader.Load(path);
             Assert.Equal(
-                ThroughlineBuild.Workers.ClaudeCode.ClaudeCodeTransport.InteractiveHook,
+                ThroughlineBuild.Workers.ClaudeCode.ClaudeCodeTransport.Print,
                 config.Workers.Agents["claude-code"].Transport);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_TransportInCustomNamedClaudeAgent_ParsesAndDoesNotWarn()
+    {
+        // A custom-named agent block maps to ClaudeCodeAgent in WorkerAgentBuilder, so its `transport`
+        // key must be honored (and not warned as unknown) - the documented print rollback works there.
+        var toml = ValidToml.Replace("[events]", """
+[workers.my-claude]
+executable = "claude"
+transport = "interactive-hook"
+
+[workers.my-claude.sizes]
+small  = { model = "haiku" }
+medium = { model = "sonnet" }
+large  = { model = "opus" }
+
+[events]
+""");
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            var config = BuildConfigLoader.Load(path, captured.Add);
+            Assert.Equal(
+                ThroughlineBuild.Workers.ClaudeCode.ClaudeCodeTransport.InteractiveHook,
+                config.Workers.Agents["my-claude"].Transport);
+            Assert.DoesNotContain(captured, w => w.Contains("my-claude.transport"));
         }
         finally
         {

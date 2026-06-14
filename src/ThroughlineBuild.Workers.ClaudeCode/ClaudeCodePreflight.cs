@@ -213,6 +213,17 @@ public static class ClaudeCodePreflight
 
         var stdout = await stdoutTask.ConfigureAwait(false);
         var stderr = await stderrTask.ConfigureAwait(false);
+        return UsableVersionOutput(process.ExitCode, stdout, stderr);
+    }
+
+    // claude --version must exit 0 to be trusted. A non-zero exit means the executable could not
+    // report a usable version (broken install, wrong binary, an error that happens to print a
+    // version-shaped string), so the output is discarded and the version is treated as undetectable
+    // rather than parsed from incidental text. Pure + internal so the exit-code rule is unit-testable.
+    internal static string? UsableVersionOutput(int exitCode, string? stdout, string? stderr)
+    {
+        if (exitCode != 0)
+            return null;
         return string.IsNullOrWhiteSpace(stdout) ? stderr : stdout;
     }
 }
