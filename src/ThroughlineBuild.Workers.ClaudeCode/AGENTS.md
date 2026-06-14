@@ -12,8 +12,8 @@ Stop-hook `completion.json` is only a best-effort fast-path, because
 `claude` 2.1.170+ does not fire the per-turn Stop hook in interactive mode.
 Workspace trust is pre-seeded in `~/.claude.json` and all claude-facing paths
 are canonicalized via `ClaudeRealPath.Resolve` (so spawn cwd, trust key, and
-transcript `cwd` match). Validated live on macOS arm64 + Linux x86_64/glibc;
-Windows live pending.
+transcript `cwd` match). Validated live on Windows + macOS arm64 + Linux x86_64/glibc
+(claude 2.1.177).
 
 Process/terminal hosting is behind a focused abstraction
 (`InteractiveClaudeProcessHost.cs`): `InteractiveClaudeProcessLauncherFactory`
