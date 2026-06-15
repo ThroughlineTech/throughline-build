@@ -375,12 +375,31 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
         Assert.Contains("--dangerously-skip-permissions", args);
         Assert.Contains("bypassPermissions", args);
         Assert.Contains("Read,Grep", args);
-        Assert.Contains("TodoWrite,Task", args);
+        Assert.Contains("Agent,Task,TodoWrite", args);
         Assert.Contains("claude-sonnet-4-6", args);
         // The prompt is the last arg, opens with the base instruction, and carries the run
         // nonce verbatim so the transcript locator can correlate this run's transcript.
         Assert.StartsWith("Read .build/brief.md, execute it completely, and obey the brief's final-output contract.", args[^1]);
         Assert.Contains("deadbeefcafef00d1234567890abcdef", args[^1]);
+    }
+
+    [Fact]
+    public void InteractiveArgs_NonLeanTicket_StillDisallowsSubagentTools()
+    {
+        // The big-ticket regression: a one-shot worker must never be able to spawn a nested
+        // sub-agent and yield ("the agent is running, I'll report back") - which leaves the
+        // Stop-hook completion with no WORKER_RESULT. The sub-agent disallow is unconditional,
+        // not gated on lean planning (lean only fires for S-effort tickets).
+        var args = ClaudeCodeInteractiveTransport.BuildInteractiveArgs(
+            new ClaudeCodeOptions { BypassPermissions = true },
+            new WorkerOptions(TimeSpan.FromMinutes(1)),
+            "C:/run/settings.json",
+            "claude-sonnet-4-6",
+            "deadbeefcafef00d1234567890abcdef").ToList();
+
+        var i = args.IndexOf("--disallowedTools");
+        Assert.True(i >= 0, "expected --disallowedTools in argv even for non-lean tickets");
+        Assert.Equal("Agent,Task", args[i + 1]);
     }
 
     [Fact]

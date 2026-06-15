@@ -375,8 +375,11 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
         }
         if (workerOptions.AllowedTools is { Count: > 0 })
             arguments.AddRange(["--allowedTools", string.Join(",", workerOptions.AllowedTools)]);
-        if (workerOptions.LeanPlanning)
-            arguments.AddRange(["--disallowedTools", "TodoWrite,Task"]);
+        // Build workers are one-shot: they must emit WORKER_RESULT in their own turn, so they must
+        // never spawn a nested sub-agent and yield ("the agent is running, I'll report back"). Disallow
+        // the sub-agent tool unconditionally - Agent is the current claude tool name (2.1.177); Task is
+        // the pre-rename name, kept for back-compat. LeanPlanning additionally drops the planning tool.
+        arguments.AddRange(["--disallowedTools", workerOptions.LeanPlanning ? "Agent,Task,TodoWrite" : "Agent,Task"]);
         if (model is not null)
             arguments.AddRange(["--model", model]);
         arguments.AddRange(claudeOptions.ExtraArgs);

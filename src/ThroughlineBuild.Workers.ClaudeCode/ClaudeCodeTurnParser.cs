@@ -55,7 +55,8 @@ internal static class ClaudeCodeTurnParser
 
     private static readonly HashSet<string> TaskTools = new(StringComparer.Ordinal)
     {
-        "Task"
+        "Task",  // pre-rename sub-agent tool name (<= 2.1.52 transcripts)
+        "Agent"  // current sub-agent tool name (2.1.177)
     };
 
     private static readonly HashSet<string> BashTools = new(StringComparer.Ordinal)

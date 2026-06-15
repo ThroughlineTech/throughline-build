@@ -1615,6 +1615,7 @@ public class ClaudeCodeAgentBypassPermissionsTests
         {
             "--print", "--verbose", "--output-format", "stream-json",
             "--dangerously-skip-permissions",
+            "--disallowedTools", "Agent,Task",
         }, args);
     }
 
@@ -1682,7 +1683,7 @@ public class ClaudeCodeAgentTransportTests
 public class ClaudeCodeAgentLeanPlanningTests
 {
     [Fact]
-    public void BuildArgs_LeanPlanningTrue_AppendsDisallowedTools()
+    public void BuildArgs_LeanPlanningTrue_DisallowsSubagentAndPlanningTools()
     {
         var options = new ClaudeCodeOptions { BypassPermissions = true };
         var workerOptions = new WorkerOptions(TimeSpan.FromSeconds(30), LeanPlanning: true);
@@ -1692,17 +1693,21 @@ public class ClaudeCodeAgentLeanPlanningTests
         // assert the flag and its value are present as adjacent argv tokens
         var i = args.IndexOf("--disallowedTools");
         Assert.True(i >= 0, "expected --disallowedTools in argv");
-        Assert.Equal("TodoWrite,Task", args[i + 1]);
+        Assert.Equal("Agent,Task,TodoWrite", args[i + 1]);
     }
 
     [Fact]
-    public void BuildArgs_LeanPlanningFalse_OmitsDisallowedTools()
+    public void BuildArgs_LeanPlanningFalse_StillDisallowsSubagentToolsButKeepsPlanning()
     {
         var options = new ClaudeCodeOptions { BypassPermissions = true };
         var workerOptions = new WorkerOptions(TimeSpan.FromSeconds(30));
 
         var args = ClaudeCodeAgent.BuildArgs(options, workerOptions);
 
-        Assert.DoesNotContain("--disallowedTools", args);
+        // The sub-agent disallow is unconditional (a one-shot worker must never spawn a nested
+        // agent and yield); only the planning-tool drop is gated on lean planning.
+        var i = args.IndexOf("--disallowedTools");
+        Assert.True(i >= 0, "expected --disallowedTools in argv even for non-lean tickets");
+        Assert.Equal("Agent,Task", args[i + 1]);
     }
 }

@@ -396,13 +396,14 @@ public class ClaudeCodeAgent : IWorkerAgent
             args.Add("--dangerously-skip-permissions");
         if (workerOptions.AllowedTools is { Count: > 0 })
             args.AddRange(new[] { "--allowedTools", string.Join(",", workerOptions.AllowedTools) });
-        // Experiment 4 (L2b): lean planning drops the planning tools from the child's context. The
-        // phase expresses a stack-agnostic LeanPlanning intent; this adapter is the ONE place the
-        // claude-code tool-name literals live (mirrors the review phase's --allowedTools list).
-        // --disallowedTools removes the tools (--allowedTools only auto-approves, so disallow is the
-        // correct flag to actually disable them).
-        if (workerOptions.LeanPlanning)
-            args.AddRange(new[] { "--disallowedTools", "TodoWrite,Task" });
+        // Build workers are one-shot: they must emit WORKER_RESULT in their own turn, so they must
+        // never spawn a nested sub-agent and yield ("the agent is running, I'll report back"). Disallow
+        // the sub-agent tool unconditionally - Agent is the current claude tool name (2.1.177); Task is
+        // the pre-rename name, kept for back-compat. This adapter is the ONE place the claude-code
+        // tool-name literals live (mirrors the review phase's --allowedTools list); --disallowedTools
+        // removes the tools (--allowedTools only auto-approves, so disallow is the correct flag).
+        // Experiment 4 (L2b): lean planning additionally drops the planning tool (TodoWrite) for S-effort.
+        args.AddRange(new[] { "--disallowedTools", workerOptions.LeanPlanning ? "Agent,Task,TodoWrite" : "Agent,Task" });
         options.Sizes.TryGetValue(workerOptions.Size, out var tier);
         var modelArg = NormalizeModel(tier?.Model);
         if (modelArg is not null)
