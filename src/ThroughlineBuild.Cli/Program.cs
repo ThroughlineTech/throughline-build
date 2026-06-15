@@ -905,6 +905,12 @@ static async Task<int> RunAsync(string[] args)
             });
         var draftWorker = draftWorkerFactory.Create(draftImplementAgentName);
 
+        // Fail before the draft worker runs if its interactive-hook transport is unsupported here.
+        var draftGateExit = await ClaudeTransportPreflight.GateAsync(
+            config2.Workers, [draftImplementAgentName], Console.Error, CancellationToken.None);
+        if (draftGateExit != 0)
+            return draftGateExit;
+
         var draftPhase = new DraftPhase(draftWorker, buildOptions2);
         var draftSw = System.Diagnostics.Stopwatch.StartNew();
         DraftResult draftResult;
@@ -1088,8 +1094,22 @@ static async Task<int> RunAsync(string[] args)
                     ? Path.GetFullPath(Path.Combine(resolvedCwd, ".build", "sessions",
                         $"scaffold-profile-{DateTimeOffset.Now:yyyy-MM-dd-HHmmss}"))
                     : null;
-                await ScaffoldProfileRunner.RunAsync(
-                    args[1], resolvedCwd, config2.Workers, forceProfile, scaffoldDebugDir, scaffoldCts.Token);
+                // Gate the profile-derivation worker (the default agent) before it launches. Derivation
+                // is best-effort and never changes the scaffold exit code, so on an unsupported host we
+                // skip it with a clear note rather than fail the scaffold whose ticket tree already exists.
+                var scaffoldGateExit = await ClaudeTransportPreflight.GateAsync(
+                    config2.Workers, [config2.Workers.DefaultAgent], Console.Error, scaffoldCts.Token);
+                if (scaffoldGateExit != 0)
+                {
+                    Console.Error.WriteLine(
+                        "[build] Skipping profile derivation: the configured Claude transport is unsupported on this " +
+                        "host (see above). The ticket tree was created; derive checks later or set transport = \"print\".");
+                }
+                else
+                {
+                    await ScaffoldProfileRunner.RunAsync(
+                        args[1], resolvedCwd, config2.Workers, forceProfile, scaffoldDebugDir, scaffoldCts.Token);
+                }
             }
             else if (noProfile)
             {
@@ -1161,28 +1181,32 @@ static async Task<int> RunAsync(string[] args)
         phase == "review"    ? (agentReviewFlag ?? agentAll ?? AgentFor("review")) :
         AgentFor(phase);
 
-    // Early capability check for the common worker-spawning phase verbs: when the resolved agent uses
-    // the interactive-hook Claude transport, verify this host can support it (claude present, version
+    // Capability check for the worker-spawning phase verbs: when the resolved agent uses the
+    // interactive-hook Claude transport, verify this host can support it (claude present, version
     // >= minimum, platform) BEFORE the phase starts, so the failure is clean (no worktree cut, no
-    // ticket transition) and never falls back to print. This is an optimization, not the only guard:
-    // ClaudeCodeInteractiveTransport.ExecuteAsync runs the same preflight before any side effect, so
-    // every other worker-spawning path (build new draft, investigate-mode plan, scaffold profile
-    // derivation, batch) is also gated. Plan is omitted here because its default "promote" mode spawns
-    // no worker (gating it would falsely require claude for a deterministic plan); ship spawns none.
-    string[] interactivePhasesForVerb = verb switch
+    // ticket transition) and never falls back to print. The transport's own entry guard
+    // (ClaudeCodeInteractiveTransport.ExecuteAsync) backstops every path, but failing here keeps the
+    // before-phase contract. Plan is gated only in investigate mode (promote/--from-brief spawn no
+    // worker, so gating them would falsely require claude); ship spawns none. Chain's implement gate
+    // also covers the batch-implement worker (built from the implement-phase agent). build new draft
+    // and build scaffold gate at their own dispatch sites above.
+    var phasesToGate = new List<string>();
+    switch (verb)
     {
-        "implement" => new[] { "implement" },
-        "review" => new[] { "review" },
-        "rework" => new[] { "implement" },
-        "decompose" => new[] { "decompose" },
-        "chain" => new[] { "implement", "review" },
-        _ => Array.Empty<string>(),
-    };
-    if (interactivePhasesForVerb.Length > 0)
+        case "implement": phasesToGate.Add("implement"); break;
+        case "review": phasesToGate.Add("review"); break;
+        case "rework": phasesToGate.Add("implement"); break;
+        case "decompose": phasesToGate.Add("decompose"); break;
+        case "chain": phasesToGate.Add("implement"); phasesToGate.Add("review"); break;
+        case "plan":
+            if (!fromBrief && !config2.Plan.IsPromote) phasesToGate.Add("plan");
+            break;
+    }
+    if (phasesToGate.Count > 0)
     {
         var transportGateExit = await ClaudeTransportPreflight.GateAsync(
             config2.Workers,
-            interactivePhasesForVerb.Select(EffectiveAgentFor),
+            phasesToGate.Select(EffectiveAgentFor),
             Console.Error,
             CancellationToken.None);
         if (transportGateExit != 0)
