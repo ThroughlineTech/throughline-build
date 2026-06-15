@@ -91,6 +91,34 @@ internal static class ClaudeTranscriptLocator
         return matchesDirectory && sawEndTurn && sawNonce;
     }
 
+    /// <summary>
+    /// Number of assistant <c>end_turn</c> messages in the transcript at
+    /// <paramref name="path"/> when it records a <c>cwd</c> matching
+    /// <paramref name="targetDirectory"/> (already normalized) AND carries
+    /// <paramref name="runNonce"/>; otherwise 0. Lets the turn-detector wait for a
+    /// SPECIFIC turn (the Nth <c>end_turn</c>) so a continuation nudge can await the NEXT
+    /// turn rather than re-matching the one already seen. An empty/null nonce drops the
+    /// nonce requirement. Tolerant exactly like <see cref="TranscriptEndedTurn"/>: an
+    /// IO/access failure mid-write returns 0 ("not yet").
+    /// </summary>
+    public static int CountEndedTurns(string path, string targetDirectory, string? runNonce)
+    {
+        var matchesDirectory = false;
+        var sawNonce = string.IsNullOrEmpty(runNonce);
+        var endTurns = 0;
+        if (!ForEachLine(path, (root, rawLine) =>
+        {
+            if (!sawNonce && rawLine.Contains(runNonce!, StringComparison.Ordinal)) sawNonce = true;
+            if (GetString(root, "cwd") is string cwd && DirectoriesMatch(cwd, targetDirectory, alreadyNormalizedRight: true))
+                matchesDirectory = true;
+            if (IsAssistantEndTurn(root)) endTurns++;
+        }))
+        {
+            return 0;
+        }
+        return matchesDirectory && sawNonce ? endTurns : 0;
+    }
+
     private static bool TranscriptMatchesDirectory(string path, string targetDirectory, string? runNonce)
     {
         var matchesDirectory = false;

@@ -345,6 +345,72 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task MissingResult_NudgesLiveSessionThenSucceedsOnNextTurn()
+    {
+        // Reprompt backstop: turn 1 ends without a WORKER_RESULT (a conversational yield);
+        // the transport nudges the LIVE session, waits for the NEXT turn, and turn 2 emits
+        // the envelope -> Ok. (Sub-agent forking is already disabled; this catches the
+        // "the agent is running, I'll report back" yield.)
+        var turn1 = WriteTranscript("Implementation agent launched; I will report back with the commit SHA.", envelope: false);
+        var turn2 = WriteTranscript("nudged-pass", envelope: true);
+        var process = new FakeProcess();
+        var turnSignal = new SequencedTurnSignal(turn1, turn2);
+
+        var result = await ExecuteAsync(new FakeLauncher(process), NeverCompletes(), turnSignal: turnSignal)
+            .WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True(result.Status == Status.Ok, $"{result.Summary}: {result.FailureReason}");
+        Assert.Equal("nudged-pass", result.Summary);
+        // The re-armed wait asked for the NEXT turn (minEndTurns 1 then 2)...
+        Assert.Equal(new[] { 1, 2 }, turnSignal.RequestedMinEndTurns);
+        // ...and the live session got exactly one nudge, then the graceful /exit.
+        Assert.Equal(2, process.Inputs.Count);
+        Assert.Contains("WORKER_RESULT block", process.Inputs[0]);
+        Assert.Equal("/exit\r", process.Inputs[^1]);
+        Assert.True(process.Killed);
+    }
+
+    [Fact]
+    public async Task MissingResult_NudgeBudgetExhausted_FailsWithoutLooping()
+    {
+        // The backstop is bounded: if the worker still yields no WORKER_RESULT after the
+        // single nudge, the transport finalizes and fails - it never loops forever.
+        var turn1 = WriteTranscript("Still working; I will report back.", envelope: false);
+        var turn2 = WriteTranscript("Agent still running; reporting back soon.", envelope: false);
+        var process = new FakeProcess();
+        var turnSignal = new SequencedTurnSignal(turn1, turn2);
+
+        var result = await ExecuteAsync(new FakeLauncher(process), NeverCompletes(), turnSignal: turnSignal)
+            .WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(Status.Failed, result.Status);
+        Assert.Contains("No WORKER_RESULT", result.Summary);
+        Assert.Equal(new[] { 1, 2 }, turnSignal.RequestedMinEndTurns);
+        // Exactly one nudge then /exit - not an unbounded retry.
+        Assert.Equal(2, process.Inputs.Count);
+        Assert.True(process.Killed);
+    }
+
+    [Fact]
+    public async Task EnvelopeOnFirstTurn_DoesNotNudge()
+    {
+        // No regression: a turn that already carries a WORKER_RESULT is finalized directly,
+        // with only the graceful /exit and no re-armed wait.
+        var turn1 = WriteTranscript("first-turn-pass", envelope: true);
+        var process = new FakeProcess();
+        var turnSignal = new SequencedTurnSignal(turn1);
+
+        var result = await ExecuteAsync(new FakeLauncher(process), NeverCompletes(), turnSignal: turnSignal)
+            .WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True(result.Status == Status.Ok, $"{result.Summary}: {result.FailureReason}");
+        Assert.Equal("first-turn-pass", result.Summary);
+        Assert.Equal(new[] { 1 }, turnSignal.RequestedMinEndTurns);
+        Assert.Equal(new[] { "/exit\r" }, process.Inputs);
+        Assert.True(process.Killed);
+    }
+
+    [Fact]
     public async Task BypassPermissions_DoesNotInjectIsSandboxIntoTheEnvironment()
     {
         // With --dangerously-skip-permissions, claude's PTY host presents a one-time "Bypass
@@ -708,6 +774,23 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
         {"status":"Ok","summary":"{{summary}}","files_changed":[],"failure_reason":null}
         """;
 
+    // Writes a one-line persisted transcript (a single assistant end_turn message) under
+    // _root and returns its path, for driving the synthesize/nudge flow. envelope=true
+    // embeds a WORKER_RESULT whose summary is assistantText; envelope=false uses
+    // assistantText as plain assistant prose with no envelope.
+    private string WriteTranscript(string assistantText, bool envelope)
+    {
+        Directory.CreateDirectory(_root);
+        var path = Path.Combine(_root, Guid.NewGuid().ToString("N") + ".jsonl");
+        var text = envelope
+            ? "WORKER_RESULT\\n{\\\"status\\\":\\\"Ok\\\",\\\"summary\\\":\\\"" + assistantText +
+              "\\\",\\\"files_changed\\\":[],\\\"failure_reason\\\":null}"
+            : assistantText;
+        File.WriteAllText(path, TranscriptLine("on-disk-session", "C:/repo", "assistant", "claude-haiku-4-5",
+            text, stopReason: "end_turn", usage: false));
+        return path;
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
@@ -784,7 +867,7 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
     // exercise the completion-first fast-path (a per-turn Stop hook firing) unchanged.
     private sealed class NeverTurnSignal : IInteractiveTurnSignal
     {
-        public Task<string?> WaitForTurnAsync(string workingDirectory, string runNonce, DateTimeOffset launchedAt, CancellationToken cancellationToken) =>
+        public Task<string?> WaitForTurnAsync(string workingDirectory, string runNonce, DateTimeOffset launchedAt, CancellationToken cancellationToken, int minEndTurns = 1) =>
             Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ContinueWith<string?>(_ => null, CancellationToken.None);
 
         public string DescribeCandidates(string workingDirectory, string runNonce, DateTimeOffset launchedAt) =>
@@ -806,7 +889,7 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
         // Resolves the turn with the transcript path the transport will synthesize from.
         public void SignalTurnDone(string transcriptPath) => _turn.TrySetResult(transcriptPath);
 
-        public Task<string?> WaitForTurnAsync(string workingDirectory, string runNonce, DateTimeOffset launchedAt, CancellationToken cancellationToken)
+        public Task<string?> WaitForTurnAsync(string workingDirectory, string runNonce, DateTimeOffset launchedAt, CancellationToken cancellationToken, int minEndTurns = 1)
         {
             ObservedNonce = runNonce;
             WorkingDirectoryObserved.TrySetResult(workingDirectory);
@@ -815,6 +898,29 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
 
         public string DescribeCandidates(string workingDirectory, string runNonce, DateTimeOffset launchedAt) =>
             $"fake_turn_signal worktree={workingDirectory}\n";
+    }
+
+    // Hands out one located-transcript path per WaitForTurnAsync call (turn 1, turn 2,
+    // ...), recording the minEndTurns the transport requested each time so a test can
+    // assert the re-arm waits for the NEXT turn. Once the queue drains it blocks until
+    // cancelled, so the transport finalizes or times out rather than spinning.
+    private sealed class SequencedTurnSignal : IInteractiveTurnSignal
+    {
+        private readonly Queue<string> _paths;
+        public List<int> RequestedMinEndTurns { get; } = [];
+
+        public SequencedTurnSignal(params string[] paths) => _paths = new Queue<string>(paths);
+
+        public Task<string?> WaitForTurnAsync(string workingDirectory, string runNonce, DateTimeOffset launchedAt, CancellationToken cancellationToken, int minEndTurns = 1)
+        {
+            RequestedMinEndTurns.Add(minEndTurns);
+            return _paths.Count > 0
+                ? Task.FromResult<string?>(_paths.Dequeue())
+                : Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ContinueWith<string?>(_ => null, CancellationToken.None);
+        }
+
+        public string DescribeCandidates(string workingDirectory, string runNonce, DateTimeOffset launchedAt) =>
+            $"sequenced_turn_signal worktree={workingDirectory}\n";
     }
 }
 

@@ -29,8 +29,13 @@ internal interface IInteractiveTurnSignal
     /// correlator, and claude's first transcript write can lag launch by ~60s).
     /// Must be cancellation-aware - the transport bounds this wait with the same linked
     /// timeout/cancellation token it uses for completion.
+    ///
+    /// <paramref name="minEndTurns"/> (default 1) is the number of assistant
+    /// <c>end_turn</c> messages the run's transcript must carry before this completes.
+    /// After a continuation nudge the transport re-arms with the next count, so the wait
+    /// resolves on the NEXT turn rather than instantly re-matching the turn already seen.
     /// </summary>
-    Task<string?> WaitForTurnAsync(string workingDirectory, string runNonce, DateTimeOffset launchedAt, CancellationToken cancellationToken);
+    Task<string?> WaitForTurnAsync(string workingDirectory, string runNonce, DateTimeOffset launchedAt, CancellationToken cancellationToken, int minEndTurns = 1);
 
     /// <summary>
     /// Best-effort, human-readable diagnosis of why no turn was detected, for the
@@ -83,14 +88,14 @@ internal sealed class TranscriptTurnSignal : IInteractiveTurnSignal
         return Path.Combine(home, ".claude");
     }
 
-    public async Task<string?> WaitForTurnAsync(string workingDirectory, string runNonce, DateTimeOffset launchedAt, CancellationToken cancellationToken)
+    public async Task<string?> WaitForTurnAsync(string workingDirectory, string runNonce, DateTimeOffset launchedAt, CancellationToken cancellationToken, int minEndTurns = 1)
     {
         var target = ClaudeTranscriptLocator.NormalizeDirectory(workingDirectory);
         var projects = Path.Combine(_configHome, "projects");
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (TurnEnded(projects, target, runNonce) is string matchedPath) return matchedPath;
+            if (TurnEnded(projects, target, runNonce, minEndTurns) is string matchedPath) return matchedPath;
             await Task.Delay(_pollInterval, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -124,9 +129,10 @@ internal sealed class TranscriptTurnSignal : IInteractiveTurnSignal
     }
 
     // Returns the path of the newest transcript that carries this run's nonce AND whose
-    // cwd matches the run AND that carries an assistant end_turn, or null if none yet.
+    // cwd matches the run AND that carries at least minEndTurns assistant end_turns, or
+    // null if none yet. minEndTurns lets the caller wait for the NEXT turn after a nudge.
     // The matched path is what the transport reads to synthesize the completion.
-    private static string? TurnEnded(string projectsRoot, string targetDirectory, string runNonce)
+    private static string? TurnEnded(string projectsRoot, string targetDirectory, string runNonce, int minEndTurns)
     {
         // Tolerant by contract: any IO/parse failure means "not yet", never an
         // exception out of the poll loop.
@@ -145,7 +151,7 @@ internal sealed class TranscriptTurnSignal : IInteractiveTurnSignal
 
             foreach (var candidate in candidates)
             {
-                if (ClaudeTranscriptLocator.TranscriptEndedTurn(candidate.Path, targetDirectory, runNonce)) return candidate.Path;
+                if (ClaudeTranscriptLocator.CountEndedTurns(candidate.Path, targetDirectory, runNonce) >= minEndTurns) return candidate.Path;
             }
             return null;
         }

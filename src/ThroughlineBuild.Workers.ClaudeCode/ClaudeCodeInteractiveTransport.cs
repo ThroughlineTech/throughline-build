@@ -45,6 +45,21 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
     // terminates the tree regardless of whether /exit lands or the Stop hook fires.
     private const string ExitCommand = "/exit\r";
 
+    // Defense-in-depth backstop for a worker that ends its turn WITHOUT a WORKER_RESULT
+    // block - e.g. it narrated a hand-off ("the agent is running, I'll report back") and
+    // yielded, as if it would be re-prompted later. Rather than fail that turn outright,
+    // the transport nudges the LIVE session up to this many times to finish in-band and
+    // emit the envelope, then finalizes. The loop is ALSO bounded by the worker timeout,
+    // so nudging can never push a run past options.Timeout. Sub-agent forking is already
+    // disabled in BuildInteractiveArgs, so this only catches a conversational yield.
+    private const int MissingResultNudgeBudget = 1;
+
+    private const string MissingResultNudge =
+        "You ended your turn without a WORKER_RESULT block, and nothing is running in the " +
+        "background - there is no \"later\" and you will not be re-prompted again after this. " +
+        "Finish the task now in this session and end your reply with the WORKER_RESULT block " +
+        "exactly as the brief's final-output contract requires.\r";
+
     private readonly ClaudeCodeOptions _options;
     private readonly IInteractiveClaudeProcessLauncher _launcher;
     private readonly IClaudeCompletionWaiter _completionWaiter;
@@ -205,88 +220,111 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
 
             // Phase 1: wait for the first of a real Stop-hook completion (fast-path,
             // backward compatible), the located transcript (synthesize the completion),
-            // process exit, timeout, or cancellation.
-            await Task.WhenAny(completionTask, turnTask, process.ExitTask, timeoutTask, cancellationTask);
-
-            // A completion that resolved successfully always wins, preserving backward
-            // compatibility with any claude that fires the per-turn hook. The legacy
-            // Stop-hook payload reports a transcript_path whose FILENAME is unreliable,
-            // so this path re-resolves the real transcript by project dir + cwd + nonce.
-            if (completionTask.IsCompletedSuccessfully)
-                return await HandleSuccessfulCompletionAsync(
-                    completionTask, process, run, brief, options, arguments, model, stopwatch, startedAt,
-                    reResolveTranscript: true);
-
-            if (cancellationTask.IsCompleted)
+            // process exit, timeout, or cancellation. A turn that ended without a
+            // WORKER_RESULT can nudge the live session and loop back for the next turn;
+            // every other outcome returns. The loop is bounded by timeoutTask, so nudging
+            // can never extend a run past options.Timeout.
+            var endTurnsSeen = 0;
+            var nudgesUsed = 0;
+            while (true)
             {
-                waitCancellation.Cancel();
-                var killFailure = await TryKillAndWaitAsync(process);
-                return FailureWithDebug("Interactive Claude execution was cancelled",
-                    $"Cancellation requested. {killFailure}Run directory: '{run.Path}'.",
-                    options.DebugCaptureDirectory, run.Path, brief);
-            }
+                await Task.WhenAny(completionTask, turnTask, process.ExitTask, timeoutTask, cancellationTask);
 
-            if (timeoutTask.IsCompleted)
-            {
-                waitCancellation.Cancel();
-                var killFailure = await TryKillAndWaitAsync(process);
-                var timeoutFailure = FailureWithDebug("Interactive Claude execution timed out",
-                    $"Timed out after {options.Timeout}. {killFailure}Run directory: '{run.Path}'.",
-                    options.DebugCaptureDirectory, run.Path, brief);
-                // Phase-1 timeout means the turn-detector never matched (turnTask never
-                // completed -> /exit never sent). Append a self-diagnosis of every
-                // candidate transcript so the next live run pins the exact reason from
-                // artifacts. Best-effort: never throws, never alters the result text.
-                AppendTurnDiagnostics(options.DebugCaptureDirectory, canonicalWorktree, run.RunId, launchedAt);
-                return timeoutFailure;
-            }
+                // A completion that resolved successfully always wins, preserving backward
+                // compatibility with any claude that fires the per-turn hook. The legacy
+                // Stop-hook payload reports a transcript_path whose FILENAME is unreliable,
+                // so this path re-resolves the real transcript by project dir + cwd + nonce.
+                if (completionTask.IsCompletedSuccessfully)
+                    return await HandleSuccessfulCompletionAsync(
+                        completionTask, process, run, brief, options, arguments, model, stopwatch, startedAt,
+                        reResolveTranscript: true);
 
-            if (completionTask.IsCompleted)
-            {
-                waitCancellation.Cancel();
-                // Faulted/cancelled completion.
-                try { await completionTask; }
-                catch (Exception ex)
+                if (cancellationTask.IsCompleted)
                 {
+                    waitCancellation.Cancel();
                     var killFailure = await TryKillAndWaitAsync(process);
-                    return FailureWithDebug("Claude Stop-hook completion was malformed",
-                        $"{ex.Message}. {killFailure}Run directory: '{run.Path}'.",
+                    return FailureWithDebug("Interactive Claude execution was cancelled",
+                        $"Cancellation requested. {killFailure}Run directory: '{run.Path}'.",
                         options.DebugCaptureDirectory, run.Path, brief);
                 }
-            }
 
-            if (turnTask.IsCompletedSuccessfully && turnTask.Result is string transcriptPath)
-            {
-                // The assistant turn finished and the turn-detector located the run's
-                // transcript. Synthesize the completion from that transcript instead of
-                // waiting for the unreliable Stop hook. Send /exit first as a best-effort
-                // graceful nudge so claude exits cleanly where it can - but completion
-                // does NOT depend on it landing, on process exit, or on completion.json.
-                waitCancellation.Cancel();
-                WriteProgress(options.ProgressDigestSink, startedAt, "agent",
-                    "turn complete; synthesizing completion from the located transcript");
-                try { await process.WriteInputAsync(ExitCommand, ct); }
-                catch
+                if (timeoutTask.IsCompleted)
                 {
-                    // A failed /exit write is harmless: we terminate the tree below.
+                    waitCancellation.Cancel();
+                    var killFailure = await TryKillAndWaitAsync(process);
+                    var timeoutFailure = FailureWithDebug("Interactive Claude execution timed out",
+                        $"Timed out after {options.Timeout}. {killFailure}Run directory: '{run.Path}'.",
+                        options.DebugCaptureDirectory, run.Path, brief);
+                    // Phase-1 timeout means the turn-detector never matched (turnTask never
+                    // completed -> /exit never sent). Append a self-diagnosis of every
+                    // candidate transcript so the next live run pins the exact reason from
+                    // artifacts. Best-effort: never throws, never alters the result text.
+                    AppendTurnDiagnostics(options.DebugCaptureDirectory, canonicalWorktree, run.RunId, launchedAt);
+                    return timeoutFailure;
                 }
 
-                var synthesized = SynthesizeCompletion(run, canonicalWorktree, transcriptPath);
-                // Synthesized completions already hold the EXACT transcript turn
-                // detection located (nonce + cwd + end_turn). Consume it directly; do
-                // NOT re-resolve by newest-cwd, which a concurrent MCP/session write
-                // could swap out from under us between turn-detect and parse.
-                return await HandleSuccessfulCompletionAsync(
-                    Task.FromResult(synthesized), process, run, brief, options, arguments, model, stopwatch, startedAt,
-                    reResolveTranscript: false);
-            }
+                if (completionTask.IsCompleted)
+                {
+                    waitCancellation.Cancel();
+                    // Faulted/cancelled completion.
+                    try { await completionTask; }
+                    catch (Exception ex)
+                    {
+                        var killFailure = await TryKillAndWaitAsync(process);
+                        return FailureWithDebug("Claude Stop-hook completion was malformed",
+                            $"{ex.Message}. {killFailure}Run directory: '{run.Path}'.",
+                            options.DebugCaptureDirectory, run.Path, brief);
+                    }
+                }
 
-            // The only remaining Phase 1 winner is process exit before any signal.
-            waitCancellation.Cancel();
-            var exitCode = await process.ExitTask;
-            return FailureWithDebug("Interactive Claude exited before trusted completion",
-                $"Claude exited with code {exitCode} before the correlated Stop hook completed. Run directory: '{run.Path}'.",
-                options.DebugCaptureDirectory, run.Path, brief);
+                if (turnTask.IsCompletedSuccessfully && turnTask.Result is string transcriptPath)
+                {
+                    endTurnsSeen++;
+                    // Reprompt backstop: if this turn produced no WORKER_RESULT and a nudge
+                    // remains, push the LIVE session to finish in-band and emit the envelope,
+                    // then wait for the NEXT end_turn (minEndTurns advances so the re-armed
+                    // wait does not instantly re-match this turn). Falls through to finalize
+                    // when the envelope is present, the budget is spent, or the session can
+                    // no longer be written to.
+                    if (nudgesUsed < MissingResultNudgeBudget
+                        && !TranscriptCarriesWorkerResult(transcriptPath)
+                        && await TryWriteInputAsync(process, MissingResultNudge, ct))
+                    {
+                        nudgesUsed++;
+                        WriteProgress(options.ProgressDigestSink, startedAt, "agent",
+                            $"turn {endTurnsSeen} ended without WORKER_RESULT; sent continuation nudge {nudgesUsed}/{MissingResultNudgeBudget}");
+                        turnTask = _turnSignal.WaitForTurnAsync(
+                            canonicalWorktree, run.RunId, launchedAt, waitCancellation.Token, endTurnsSeen + 1);
+                        continue;
+                    }
+
+                    // The assistant turn finished and the turn-detector located the run's
+                    // transcript. Synthesize the completion from that transcript instead of
+                    // waiting for the unreliable Stop hook. Send /exit first as a best-effort
+                    // graceful nudge so claude exits cleanly where it can - but completion
+                    // does NOT depend on it landing, on process exit, or on completion.json.
+                    waitCancellation.Cancel();
+                    WriteProgress(options.ProgressDigestSink, startedAt, "agent",
+                        "turn complete; synthesizing completion from the located transcript");
+                    await TryWriteInputAsync(process, ExitCommand, ct);
+
+                    var synthesized = SynthesizeCompletion(run, canonicalWorktree, transcriptPath);
+                    // Synthesized completions already hold the EXACT transcript turn
+                    // detection located (nonce + cwd + end_turn). Consume it directly; do
+                    // NOT re-resolve by newest-cwd, which a concurrent MCP/session write
+                    // could swap out from under us between turn-detect and parse.
+                    return await HandleSuccessfulCompletionAsync(
+                        Task.FromResult(synthesized), process, run, brief, options, arguments, model, stopwatch, startedAt,
+                        reResolveTranscript: false);
+                }
+
+                // The only remaining Phase 1 winner is process exit before any signal.
+                waitCancellation.Cancel();
+                var exitCode = await process.ExitTask;
+                return FailureWithDebug("Interactive Claude exited before trusted completion",
+                    $"Claude exited with code {exitCode} before the correlated Stop hook completed. Run directory: '{run.Path}'.",
+                    options.DebugCaptureDirectory, run.Path, brief);
+            }
         }
         finally
         {
@@ -584,6 +622,39 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
             sink.WriteLine($"[{ClaudeCodeProgressDigester.FormatOffset(elapsed)}] {kind.PadRight(10)} {message}");
         }
         catch { }
+    }
+
+    // True if the located transcript already carries a parseable WORKER_RESULT block, so
+    // no continuation nudge is warranted. Reads tolerantly; on ANY read/parse failure it
+    // returns true ("do not nudge") so an unreadable transcript finalizes through
+    // ParseCompletion's real error reporting instead of spinning the nudge loop.
+    private static bool TranscriptCarriesWorkerResult(string transcriptPath)
+    {
+        try
+        {
+            var transcript = ClaudePersistedTranscriptReader.Read(transcriptPath, "transcript", validateSessionId: false);
+            return WorkerResultParser.TryParse(transcript.AssistantTranscript).Result is not null;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    // Best-effort PTY write (the continuation nudge and the graceful /exit). Returns
+    // false if the session can no longer be written to (e.g. it already exited), so the
+    // caller falls through to finalize rather than re-arming a turn that will never come.
+    private static async Task<bool> TryWriteInputAsync(IInteractiveClaudeProcess process, string text, CancellationToken ct)
+    {
+        try
+        {
+            await process.WriteInputAsync(text, ct);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static async Task<string?> TryKillAndWaitAsync(IInteractiveClaudeProcess process)
