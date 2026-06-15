@@ -43,7 +43,9 @@ public sealed record ProfileCheck(
     // but never hard-fails (op-30: lint/format are never hard gates). Defaults to gating, matching
     // CheckSpec; ProjectProfileParser resolves the real role from the deriver's "role" field, with a
     // name-based fallback (lint/format -> advisory) for profiles an older worker emitted.
-    CheckRole Role = CheckRole.Gating);
+    CheckRole Role = CheckRole.Gating,
+    // tracked project files/directories required before the check can run meaningfully on a base tree
+    IReadOnlyList<string>? RequiredPaths = null);
 
 // --- JSON DTOs (source-gen; AOT-safe) -------------------------------------------------
 
@@ -69,6 +71,7 @@ internal sealed class ProfileCheckDto
     [JsonPropertyName("timeout_minutes")] public int? TimeoutMinutes { get; set; }
     [JsonPropertyName("canary")] public List<CanaryFileDto>? Canary { get; set; }
     [JsonPropertyName("role")] public string? Role { get; set; }
+    [JsonPropertyName("required_paths")] public List<string>? RequiredPaths { get; set; }
 }
 
 internal sealed class CanaryFileDto
@@ -224,8 +227,15 @@ public static class ProjectProfileParser
             }
 
             var role = ResolveCheckRole(c.Role, c.Name!);
+            var requiredPaths = (c.RequiredPaths ?? new List<string>())
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Select(path => path.Trim())
+                .Distinct(StringComparer.Ordinal)
+                .ToList()
+                .AsReadOnly();
 
-            list.Add(new ProfileCheck(c.Name!.Trim(), c.Executable!.Trim(), args, timeout, canary, role));
+            list.Add(new ProfileCheck(c.Name!.Trim(), c.Executable!.Trim(), args, timeout, canary, role,
+                requiredPaths.Count > 0 ? requiredPaths : null));
         }
 
         checks = list;

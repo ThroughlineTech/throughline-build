@@ -21,7 +21,9 @@ public record CheckSpec(
     TimeSpan Timeout,
     CheckRole Role = CheckRole.Gating,
     // optional per-check canary files; null/empty means no canary declared (the gate cannot prove this check is non-vacuous)
-    IReadOnlyList<CanaryFile>? Canary = null);
+    IReadOnlyList<CanaryFile>? Canary = null,
+    // optional tracked files/directories that must exist before a control run on the base ref is meaningful
+    IReadOnlyList<string>? RequiredPaths = null);
 
 public record CheckResult(
     string Name,

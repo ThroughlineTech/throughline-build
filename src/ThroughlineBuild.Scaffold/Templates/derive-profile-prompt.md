@@ -43,6 +43,11 @@ Rules for checks:
     { "name": "xcodegen", "executable": "xcodegen", "arguments": ["generate"], "timeout_minutes": 2, "role": "setup" }.
   Emit "role" on every entry of BOTH review_checks and regression_checks (a setup step belongs in both,
   so the gate and the ship each run it before their checks).
+- "required_paths" is REQUIRED on every "gating" and "setup" check. It is the SHORT list of tracked
+  source/config files or directories that must exist in the repository tree before the command can run
+  meaningfully on a base ref. Pick stack-derived paths such as the package manifest, project/solution
+  file, generator config, source directory, or test directory; never use generated outputs or ignored
+  dependency folders. Advisory checks may omit it.
 - Do not invent a check the op-doc does not support. If the op-doc only specifies a build and a
   test command, emit exactly those two checks.
 - NON-VACUITY: Every gating check must be capable of FAILING on broken input. Choose a command that
@@ -126,19 +131,25 @@ First emit the profile as a single fenced block named PROJECT_PROFILE containing
   "dev_command": "npm run dev",
   "review_checks": [
     { "name": "typecheck", "executable": "npm", "arguments": ["run", "typecheck"], "timeout_minutes": 5, "role": "gating",
+      "required_paths": ["package.json", "src"],
       "canary": [ { "path": "src/__tlb_probe.ts", "content": "import { useState } from 'react';\nexport const x: number = null;" } ] },
     { "name": "build", "executable": "npm", "arguments": ["run", "build"], "timeout_minutes": 5, "role": "gating",
+      "required_paths": ["package.json", "src"],
       "canary": [ { "path": "src/__tlb_probe.ts", "content": "import { useState } from 'react';\nexport const x: number = null;" } ] },
     { "name": "test", "executable": "npm", "arguments": ["test"], "timeout_minutes": 10, "role": "gating",
+      "required_paths": ["package.json", "src"],
       "canary": [ { "path": "src/__tlb_probe.test.ts", "content": "import { test, expect } from 'vitest';\ntest('canary fails', () => { expect(1).toBe(2); });" } ] },
     { "name": "lint", "executable": "npm", "arguments": ["run", "lint"], "timeout_minutes": 5, "role": "advisory" }
   ],
   "regression_checks": [
     { "name": "typecheck", "executable": "npm", "arguments": ["run", "typecheck"], "timeout_minutes": 5, "role": "gating",
+      "required_paths": ["package.json", "src"],
       "canary": [ { "path": "src/__tlb_probe.ts", "content": "import { useState } from 'react';\nexport const x: number = null;" } ] },
     { "name": "build", "executable": "npm", "arguments": ["run", "build"], "timeout_minutes": 5, "role": "gating",
+      "required_paths": ["package.json", "src"],
       "canary": [ { "path": "src/__tlb_probe.ts", "content": "import { useState } from 'react';\nexport const x: number = null;" } ] },
     { "name": "test", "executable": "npm", "arguments": ["test"], "timeout_minutes": 10, "role": "gating",
+      "required_paths": ["package.json", "src"],
       "canary": [ { "path": "src/__tlb_probe.test.ts", "content": "import { test, expect } from 'vitest';\ntest('canary fails', () => { expect(1).toBe(2); });" } ] }
   ],
   "convention_files": ["src/setupTests.ts", "vite.config.ts", "src/data/__tests__/repository.test.ts"]

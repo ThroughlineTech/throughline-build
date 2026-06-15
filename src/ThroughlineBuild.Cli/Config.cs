@@ -251,7 +251,7 @@ public static class BuildConfigLoader
 
     private static readonly HashSet<string> KnownCheckEntryKeys = new(StringComparer.Ordinal)
     {
-        "name", "executable", "arguments", "timeout_minutes", "role", "canary"
+        "name", "executable", "arguments", "timeout_minutes", "role", "canary", "required_paths"
     };
 
     private static readonly HashSet<string> KnownShipKeys = new(StringComparer.Ordinal)
@@ -499,6 +499,16 @@ public static class BuildConfigLoader
         }
 
         return files.Count > 0 ? files.AsReadOnly() : null;
+    }
+
+    private static IReadOnlyList<string>? ParseRequiredPaths(TomlTable entry)
+    {
+        var paths = OptionalStringList(entry, "required_paths", Array.Empty<string>())
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => path.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        return paths.Count > 0 ? paths.AsReadOnly() : null;
     }
 
     private static string RequireString(TomlTable section, string sectionName, string key)
@@ -780,13 +790,15 @@ public static class BuildConfigLoader
                 var timeoutMins = OptionalInt(entry, "timeout_minutes", 5);
                 var role = ParseCheckRole(entry, "review.checks");
                 var canary = ParseCanary(entry);
+                var requiredPaths = ParseRequiredPaths(entry);
                 checks.Add(new CheckSpec(
                     Name: name,
                     Executable: executable,
                     Arguments: arguments,
                     Timeout: TimeSpan.FromMinutes(timeoutMins),
                     Role: role,
-                    Canary: canary));
+                    Canary: canary,
+                    RequiredPaths: requiredPaths));
             }
         }
 
@@ -829,13 +841,15 @@ public static class BuildConfigLoader
                 var timeoutMins = OptionalInt(entry, "timeout_minutes", 5);
                 var role = ParseCheckRole(entry, "ship.regression_checks");
                 var canary = ParseCanary(entry);
+                var requiredPaths = ParseRequiredPaths(entry);
                 checks.Add(new CheckSpec(
                     Name: name,
                     Executable: executable,
                     Arguments: arguments,
                     Timeout: TimeSpan.FromMinutes(timeoutMins),
                     Role: role,
-                    Canary: canary));
+                    Canary: canary,
+                    RequiredPaths: requiredPaths));
             }
         }
 

@@ -109,6 +109,9 @@ verifier_allowed_tools = ["Read", "Grep", "Glob"]
 #                      not a pass/fail check; a non-zero exit hard-fails the gate. Rarely needed - only
 #                      when the build cannot run in a fresh worktree without it (e.g. `xcodegen generate`).
 # Absent role defaults to "gating". A check absent from config is not-configured, never a failure.
+# required_paths lists tracked files/directories that must exist before a base-ref control run is
+# meaningful; if they are absent on the base ref, gate attribution stays inconclusive instead of
+# treating a scaffold/greenfield base as an environmental failure.
 #
 # --- Example: .NET stack ---
 # [[review.checks]]
@@ -117,6 +120,7 @@ verifier_allowed_tools = ["Read", "Grep", "Glob"]
 # arguments = ["build", "--no-restore", "-c", "Release", "--nologo", "-v", "q"]
 # timeout_minutes = 5
 # role = "gating"
+# required_paths = ["*.sln", "src"]
 #
 # [[review.checks]]
 # name = "test"
@@ -124,6 +128,7 @@ verifier_allowed_tools = ["Read", "Grep", "Glob"]
 # arguments = ["test", "--no-build", "-c", "Release", "--nologo", "-v", "q", "--logger", "console;verbosity=minimal"]
 # timeout_minutes = 10
 # role = "gating"
+# required_paths = ["*.sln", "tests"]
 #
 # --- Example: Node / web stack ---
 # [[review.checks]]
@@ -132,6 +137,7 @@ verifier_allowed_tools = ["Read", "Grep", "Glob"]
 # arguments = ["run", "build"]
 # timeout_minutes = 5
 # role = "gating"
+# required_paths = ["package.json", "src"]
 #
 # [[review.checks]]
 # name = "test"
@@ -139,6 +145,7 @@ verifier_allowed_tools = ["Read", "Grep", "Glob"]
 # arguments = ["test"]
 # timeout_minutes = 10
 # role = "gating"
+# required_paths = ["package.json", "src"]
 #
 # --- Advisory example (lint/format): records result, never hard-fails ---
 # [[review.checks]]
@@ -166,6 +173,7 @@ delete_feature_branch = true
 # arguments = ["build", "--nologo", "--configuration", "Release", "-v", "q"]
 # timeout_minutes = 5
 # role = "gating"
+# required_paths = ["*.sln", "src"]
 #
 # [[ship.regression_checks]]
 # name = "test"
@@ -173,6 +181,7 @@ delete_feature_branch = true
 # arguments = ["test", "--nologo", "--configuration", "Release", "--no-build", "-v", "q", "--logger", "console;verbosity=minimal"]
 # timeout_minutes = 10
 # role = "gating"
+# required_paths = ["*.sln", "tests"]
 #
 # --- Example: Node / web stack ---
 # [[ship.regression_checks]]
@@ -181,6 +190,7 @@ delete_feature_branch = true
 # arguments = ["run", "build"]
 # timeout_minutes = 5
 # role = "gating"
+# required_paths = ["package.json", "src"]
 #
 # [[ship.regression_checks]]
 # name = "test"
@@ -188,6 +198,7 @@ delete_feature_branch = true
 # arguments = ["test"]
 # timeout_minutes = 10
 # role = "gating"
+# required_paths = ["package.json", "src"]
 
 # [project] is optional - omit entirely to skip project-aware brief enrichment.
 # The toolchain fields below are LEFT BLANK on purpose: they are derived from your op-doc

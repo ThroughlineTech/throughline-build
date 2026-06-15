@@ -1725,6 +1725,40 @@ role = "setup"
     }
 
     [Fact]
+    public void Load_CheckRequiredPaths_ParsedForReviewAndShipWithoutUnknownWarnings()
+    {
+        var toml = ValidToml + """
+
+[[review.checks]]
+name = "build"
+executable = "npm"
+arguments = ["run", "build"]
+required_paths = ["package.json", "  src  ", "", "src"]
+
+[[ship.regression_checks]]
+name = "xcodegen"
+executable = "xcodegen"
+arguments = ["generate"]
+role = "setup"
+required_paths = ["project.yml"]
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            var config = BuildConfigLoader.Load(path, captured.Add);
+
+            Assert.Equal(new[] { "package.json", "src" }, config.Review.Checks[0].RequiredPaths);
+            Assert.Equal(new[] { "project.yml" }, config.Ship.RegressionChecks[0].RequiredPaths);
+            Assert.DoesNotContain(captured, warning => warning.Contains("required_paths"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Load_ReviewChecks_InvalidRole_ThrowsConfigException()
     {
         var toml = ValidToml + """

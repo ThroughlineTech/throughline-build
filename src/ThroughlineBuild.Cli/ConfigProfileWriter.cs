@@ -257,6 +257,8 @@ public static class ConfigProfileWriter
             rendered.Add($"role = {TomlString(RoleToToml(c.Role))}");
             if (c.Canary is { Count: > 0 })
                 rendered.Add($"canary = {TomlCanaryArray(c.Canary)}");
+            if (c.RequiredPaths is { Count: > 0 })
+                rendered.Add($"required_paths = {TomlStringArray(c.RequiredPaths)}");
         }
         return rendered;
     }

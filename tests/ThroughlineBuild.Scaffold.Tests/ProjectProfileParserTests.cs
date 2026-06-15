@@ -166,6 +166,27 @@ public class ProjectProfileParserTests
     }
 
     [Fact]
+    public void RequiredPaths_PresentOnCheck_ParsesTrimmedBlanksDropped()
+    {
+        var json = """
+        {
+          "build_command": "npm run build",
+          "test_command": "npm test",
+          "review_checks": [
+            {
+              "name": "build",
+              "executable": "npm",
+              "arguments": ["run", "build"],
+              "required_paths": ["package.json", "  src  ", "", "src"]
+            }
+          ]
+        }
+        """;
+        Assert.True(ProjectProfileParser.TryParse(json, out var profile, out var err), err);
+        Assert.Equal(new[] { "package.json", "src" }, profile!.ReviewChecks[0].RequiredPaths);
+    }
+
+    [Fact]
     public void ConventionFiles_Present_ParsedTrimmedBlanksDropped()
     {
         var json = """

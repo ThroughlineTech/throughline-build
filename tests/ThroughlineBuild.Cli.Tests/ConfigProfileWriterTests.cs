@@ -274,9 +274,11 @@ public class ConfigProfileWriterTests
         const string canaryContent = "export const x: number = \"s\";\nlet y;";
 
         var canary = new[] { new CanaryFile(canaryPath, canaryContent) };
+        var requiredPaths = new[] { "package.json", "src" };
         var checks = new[]
         {
-            new ProfileCheck("typecheck", "npm", new[] { "run", "typecheck" }, 5, canary),
+            new ProfileCheck("typecheck", "npm", new[] { "run", "typecheck" }, 5,
+                Canary: canary, RequiredPaths: requiredPaths),
         };
         var profile = new ProjectProfile(
             "typescript", "react-vite", "npm",
@@ -290,6 +292,7 @@ public class ConfigProfileWriterTests
         // Sanity: the rendered TOML re-parses cleanly via Tomlyn (no raw control chars).
         var model = Toml.ToModel(rendered);
         Assert.NotNull(model);
+        Assert.Contains("required_paths = [\"package.json\", \"src\"]", rendered);
 
         var tmpDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(tmpDir);
@@ -305,11 +308,13 @@ public class ConfigProfileWriterTests
             var file = Assert.Single(check.Canary!);
             Assert.Equal(canaryPath, file.Path);
             Assert.Equal(canaryContent, file.Content);
+            Assert.Equal(requiredPaths, check.RequiredPaths);
 
             // The ship regression check carried the same canary; it must round-trip too.
             var shipCheck = Assert.Single(config.Ship.RegressionChecks);
             Assert.NotNull(shipCheck.Canary);
             Assert.Equal(canaryContent, Assert.Single(shipCheck.Canary!).Content);
+            Assert.Equal(requiredPaths, shipCheck.RequiredPaths);
         }
         finally
         {

@@ -78,7 +78,14 @@ public class GateControlProber
 
         try
         {
-            var results = await runner.RunAsync(checks, created.AbsolutePath ?? worktreePath, ct)
+            var controlWorktreePath = created.AbsolutePath ?? worktreePath;
+            var missingInputs = await FirstMissingBaseInputsAsync(checks, controlWorktreePath, git, ct)
+                .ConfigureAwait(false);
+            if (missingInputs is not null)
+                return new GateControlVerdict(GateControlOutcome.Inconclusive, baseSha,
+                    Array.Empty<CheckResult>(), missingInputs);
+
+            var results = await runner.RunAsync(checks, controlWorktreePath, ct)
                 .ConfigureAwait(false);
             // A failed Setup step counts as a base failure too: the prerequisites the gate
             // depends on cannot be established even on pristine code.
@@ -105,4 +112,91 @@ public class GateControlProber
             catch { /* best-effort cleanup */ }
         }
     }
+
+    private static async Task<string?> FirstMissingBaseInputsAsync(
+        IReadOnlyList<CheckSpec> checks,
+        string controlWorktreePath,
+        IGitClient git,
+        CancellationToken ct)
+    {
+        foreach (var check in checks)
+        {
+            if (check.Role is not (CheckRole.Gating or CheckRole.Setup))
+                continue;
+
+            var requiredPaths = RequiredPathInputs(check);
+            if (requiredPaths.Count == 0)
+                continue;
+
+            var missing = new List<string>();
+            foreach (var path in requiredPaths)
+            {
+                IReadOnlyList<string> tracked;
+                try
+                {
+                    tracked = await git.FilterTrackedPathsAsync(new[] { path }, controlWorktreePath, ct)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    return $"control base-input probe threw for check '{check.Name}': {ex.Message}";
+                }
+
+                if (tracked.Count == 0)
+                    missing.Add(path);
+            }
+
+            if (missing.Count > 0)
+            {
+                var noun = missing.Count == 1 ? "path is" : "paths are";
+                return $"control check '{check.Name}' cannot run on base ref: required {noun} not tracked ({string.Join(", ", missing)})";
+            }
+        }
+
+        return null;
+    }
+
+    private static IReadOnlyList<string> RequiredPathInputs(CheckSpec check)
+    {
+        var explicitPaths = NormalizePathList(check.RequiredPaths);
+        if (explicitPaths.Count > 0)
+            return explicitPaths;
+
+        if (check.Canary is not { Count: > 0 })
+            return Array.Empty<string>();
+
+        var canaryParents = new List<string>();
+        foreach (var canary in check.Canary)
+        {
+            var path = NormalizePath(canary.Path);
+            if (path.Length == 0)
+                continue;
+
+            var slash = path.LastIndexOf('/');
+            if (slash > 0)
+                canaryParents.Add(path[..slash]);
+        }
+
+        return NormalizePathList(canaryParents);
+    }
+
+    private static IReadOnlyList<string> NormalizePathList(IEnumerable<string>? paths)
+    {
+        if (paths is null)
+            return Array.Empty<string>();
+
+        var normalized = paths
+            .Select(NormalizePath)
+            .Where(path => path.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        return normalized.Count == 0 ? Array.Empty<string>() : normalized.AsReadOnly();
+    }
+
+    private static string NormalizePath(string path) =>
+        path.Trim().Replace('\\', '/').Trim('/');
 }
