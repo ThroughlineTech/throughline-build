@@ -27,6 +27,7 @@ timeout_minutes = 30
 
 [workers.claude-code]
 executable = "claude"
+transport = "interactive-hook"
 # transport = "print"  # default is print (legacy headless path: claude --print). interactive-hook (the
 # Stage 07 cutover target: interactive claude, no --print, via ConPTY/PTY; reads completion from claude's
 # persisted transcript; needs Claude Code >= 2.1.177) is opt-in until the post-dogfood default flip.
