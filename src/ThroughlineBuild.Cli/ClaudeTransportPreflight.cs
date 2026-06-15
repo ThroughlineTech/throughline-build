@@ -16,8 +16,9 @@ namespace ThroughlineBuild.Cli;
 public static class ClaudeTransportPreflight
 {
     // Names mapped to a non-Claude worker by WorkerAgentBuilder.Create; every other name maps to
-    // ClaudeCodeAgent and therefore carries the Claude transport. (Transport is only ever parsed for
-    // the literal "claude-code" block, but a differently-named block still constructs a Claude agent.)
+    // ClaudeCodeAgent and therefore carries the Claude transport. Config.cs parses `transport` for any
+    // such Claude-family name (not just the literal "claude-code" block), so this same predicate gates
+    // which agents the preflight applies to.
     private static bool IsClaudeAgent(string name) => name is not ("gemini" or "codex" or "copilot");
 
     /// <summary>
