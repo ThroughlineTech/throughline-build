@@ -1186,22 +1186,10 @@ static async Task<int> RunAsync(string[] args)
     // >= minimum, platform) BEFORE the phase starts, so the failure is clean (no worktree cut, no
     // ticket transition) and never falls back to print. The transport's own entry guard
     // (ClaudeCodeInteractiveTransport.ExecuteAsync) backstops every path, but failing here keeps the
-    // before-phase contract. Plan is gated only in investigate mode (promote/--from-brief spawn no
-    // worker, so gating them would falsely require claude); ship spawns none. Chain's implement gate
-    // also covers the batch-implement worker (built from the implement-phase agent). build new draft
-    // and build scaffold gate at their own dispatch sites above.
-    var phasesToGate = new List<string>();
-    switch (verb)
-    {
-        case "implement": phasesToGate.Add("implement"); break;
-        case "review": phasesToGate.Add("review"); break;
-        case "rework": phasesToGate.Add("implement"); break;
-        case "decompose": phasesToGate.Add("decompose"); break;
-        case "chain": phasesToGate.Add("implement"); phasesToGate.Add("review"); break;
-        case "plan":
-            if (!fromBrief && !config2.Plan.IsPromote) phasesToGate.Add("plan");
-            break;
-    }
+    // before-phase contract. The verb -> gated-phases routing (incl. plan only in investigate mode)
+    // lives in ClaudeTransportPreflight.PhasesToGateForVerb so it is unit-tested; build new draft and
+    // build scaffold gate at their own dispatch sites above.
+    var phasesToGate = ClaudeTransportPreflight.PhasesToGateForVerb(verb, config2.Plan.IsPromote, fromBrief);
     if (phasesToGate.Count > 0)
     {
         var transportGateExit = await ClaudeTransportPreflight.GateAsync(

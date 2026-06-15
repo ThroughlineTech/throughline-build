@@ -4,5 +4,6 @@ src/ThroughlineBuild.Scaffold/Templates/**/*.md text eol=lf
 src/ThroughlineBuild.Verification/Templates/**/*.md text eol=lf
 src/ThroughlineBuild.Commands/Templates/*.md text eol=lf
 src/ThroughlineBuild.Commands/Templates/*.template text eol=lf
+docs/heartbeat/evidence/*.sh text eol=lf
 tests/ThroughlineBuild.Briefs.Tests/Templates/*.md text eol=lf
 tests/ThroughlineBuild.Briefs.Tests/Snapshots/*.txt text eol=lf

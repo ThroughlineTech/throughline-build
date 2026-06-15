@@ -21,6 +21,25 @@ public static class ClaudeTransportPreflight
     private static bool IsClaudeAgent(string name) => name is not ("gemini" or "codex" or "copilot");
 
     /// <summary>
+    /// The phase names a phase verb will run a worker for, so the dispatch gate checks the right
+    /// agents. Plan is gated only in investigate mode - promote and <c>--from-brief</c> spawn no worker,
+    /// so gating them would falsely require claude for a deterministic plan. Ship and any non-phase verb
+    /// return empty. Chain's <c>implement</c> entry also covers the batch-implement worker (built from
+    /// the implement-phase agent). The draft (<c>build new</c>) and scaffold paths gate at their own
+    /// dispatch sites and are not routed here.
+    /// </summary>
+    public static IReadOnlyList<string> PhasesToGateForVerb(string verb, bool planIsPromote, bool fromBrief) => verb switch
+    {
+        "implement" => new[] { "implement" },
+        "review" => new[] { "review" },
+        "rework" => new[] { "implement" },
+        "decompose" => new[] { "decompose" },
+        "chain" => new[] { "implement", "review" },
+        "plan" => (!fromBrief && !planIsPromote) ? new[] { "plan" } : Array.Empty<string>(),
+        _ => Array.Empty<string>(),
+    };
+
+    /// <summary>
     /// <c>build setup</c> diagnostic. Reports every configured Claude agent's transport and whether
     /// the host can support it. Returns 0 when all are supported (or print), non-zero when an
     /// interactive-hook agent is unsupported.
