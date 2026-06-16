@@ -13,6 +13,7 @@ using ThroughlineBuild.Phases;
 using ThroughlineBuild.Plane;
 using ThroughlineBuild.Scaffold;
 using ThroughlineBuild.Verification;
+using ThroughlineBuild.Workers.Common;
 using ThroughlineBuild.Workers.ClaudeCode;
 using ThroughlineBuild.Workers.Codex;
 using ThroughlineBuild.Workers.Copilot;
@@ -556,6 +557,43 @@ static async Task<int> RunAsync(string[] args)
                 key = key.Substring(2);
             extraArgs[key] = args[i + 1];
         }
+
+        // --json: emit the result as a versioned envelope instead of the human table.
+        if (jsonOutput)
+        {
+            TicketState? listState = null;
+            if (extraArgs.TryGetValue("state", out var stateArg) && !string.IsNullOrWhiteSpace(stateArg))
+            {
+                if (!Enum.TryParse<TicketState>(stateArg, ignoreCase: true, out var parsedState))
+                {
+                    CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, $"invalid --state value: {stateArg}");
+                    return 2;
+                }
+                listState = parsedState;
+            }
+            extraArgs.TryGetValue("parent", out var listParent);
+            extraArgs.TryGetValue("type", out var listType);
+
+            using var jsonListCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; jsonListCts.Cancel(); };
+            try
+            {
+                var listed = await ticketing2.QueryAsync(new TicketQuery(listState, listParent, listType), jsonListCts.Token);
+                CliEnvelopeWriter.WriteList(Console.Out, listed);
+                return 0;
+            }
+            catch (PlaneApiException ex)
+            {
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
+                return 1;
+            }
+            catch (OperationCanceledException)
+            {
+                Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
+        }
+
         var ctx = new TicketCommandContext("", extraArgs);
 
         try
@@ -651,6 +689,215 @@ static async Task<int> RunAsync(string[] args)
         {
             if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
             else Console.Error.WriteLine($"Command 'get' failed: Plane API {ex.Status}: {ex.Body}");
+            return 1;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+    }
+
+    // 'build comments <ticket-id> [--json]' lists a ticket's comments (read).
+    if (verb == "comments")
+    {
+        if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]) || args[1].StartsWith("--"))
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "ticket-id is required");
+            else { Console.Error.WriteLine("Error: ticket-id is required"); Console.Error.WriteLine("Usage: build comments <ticket-id> [--json]"); }
+            return 2;
+        }
+        var commentsId = args[1];
+        var http2 = new HttpClient();
+        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
+        {
+            BaseUrl = config2.Ticketing.PlaneBaseUrl,
+            ApiToken = secrets2.PlaneApiToken,
+            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
+            ProjectId = config2.Ticketing.PlaneProjectId,
+            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
+        });
+        try
+        {
+            using var verbCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+            var comments = await ticketing2.GetCommentsAsync(commentsId, verbCts.Token);
+            if (jsonOutput)
+            {
+                CliEnvelopeWriter.WriteComments(Console.Out, comments);
+            }
+            else if (comments.Count == 0)
+            {
+                Console.WriteLine("no comments");
+            }
+            else
+            {
+                foreach (var c in comments)
+                {
+                    Console.WriteLine($"[{c.CreatedAt:u}] {c.Id}");
+                    Console.WriteLine(c.Body);
+                    Console.WriteLine();
+                }
+            }
+            return 0;
+        }
+        catch (ArgumentException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, ex.Message);
+            else Console.Error.WriteLine($"Error: {ex.Message}");
+            return 2;
+        }
+        catch (KeyNotFoundException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.NotFound, ex.Message);
+            else Console.Error.WriteLine($"Command 'comments' failed: {ex.Message}");
+            return 1;
+        }
+        catch (PlaneApiException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
+            else Console.Error.WriteLine($"Command 'comments' failed: Plane API {ex.Status}: {ex.Body}");
+            return 1;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+    }
+
+    // 'build comment <ticket-id> <body|-> [--json]' posts a comment (write). The body is markdown
+    // (or "-" to read from stdin) and is rendered to Plane HTML. This is the agent's write-back path.
+    if (verb == "comment")
+    {
+        if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]) || args[1].StartsWith("--"))
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "ticket-id is required");
+            else { Console.Error.WriteLine("Error: ticket-id is required"); Console.Error.WriteLine("Usage: build comment <ticket-id> <body|-> [--json]"); }
+            return 2;
+        }
+        var commentTicketId = args[1];
+        string commentBody;
+        if (args.Length >= 3 && args[2] == "-")
+            commentBody = Console.In.ReadToEnd();
+        else if (args.Length >= 3 && !args[2].StartsWith("--"))
+            commentBody = args[2];
+        else
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "comment body is required (pass text or '-' to read stdin)");
+            else { Console.Error.WriteLine("Error: comment body is required"); Console.Error.WriteLine("Usage: build comment <ticket-id> <body|-> [--json]"); }
+            return 2;
+        }
+        if (string.IsNullOrWhiteSpace(commentBody))
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "comment body is empty");
+            else Console.Error.WriteLine("Error: comment body is empty");
+            return 2;
+        }
+        var commentHtml = MarkdownHtml.Render(commentBody);
+        var http2 = new HttpClient();
+        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
+        {
+            BaseUrl = config2.Ticketing.PlaneBaseUrl,
+            ApiToken = secrets2.PlaneApiToken,
+            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
+            ProjectId = config2.Ticketing.PlaneProjectId,
+            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
+        });
+        try
+        {
+            using var verbCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+            var newCommentId = await ticketing2.CreateCommentAsync(commentTicketId, commentHtml, verbCts.Token);
+            if (jsonOutput) CliEnvelopeWriter.WriteCommentCreated(Console.Out, newCommentId);
+            else Console.WriteLine($"Commented on {commentTicketId} (comment {newCommentId})");
+            return 0;
+        }
+        catch (ArgumentException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, ex.Message);
+            else Console.Error.WriteLine($"Error: {ex.Message}");
+            return 2;
+        }
+        catch (KeyNotFoundException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.NotFound, ex.Message);
+            else Console.Error.WriteLine($"Command 'comment' failed: {ex.Message}");
+            return 1;
+        }
+        catch (PlaneApiException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
+            else Console.Error.WriteLine($"Command 'comment' failed: Plane API {ex.Status}: {ex.Body}");
+            return 1;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+    }
+
+    // 'build transition <ticket-id> <state> [--json]' moves a ticket to a new state (write).
+    // State is matched case/space/hyphen-insensitively to the TicketState names.
+    if (verb == "transition")
+    {
+        if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]) || args[1].StartsWith("--"))
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "ticket-id is required");
+            else { Console.Error.WriteLine("Error: ticket-id is required"); Console.Error.WriteLine("Usage: build transition <ticket-id> <state> [--json]"); }
+            return 2;
+        }
+        if (args.Length < 3 || string.IsNullOrWhiteSpace(args[2]) || args[2].StartsWith("--"))
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "state is required");
+            else { Console.Error.WriteLine("Error: state is required"); Console.Error.WriteLine($"Usage: build transition <ticket-id> <state> [--json]   (states: {string.Join(", ", Enum.GetNames<TicketState>())})"); }
+            return 2;
+        }
+        var transitionId = args[1];
+        var stateRaw = args[2];
+        var stateNormalized = stateRaw.Replace(" ", "").Replace("-", "").Replace("_", "");
+        if (!Enum.TryParse<TicketState>(stateNormalized, ignoreCase: true, out var targetState))
+        {
+            var validStates = string.Join(", ", Enum.GetNames<TicketState>());
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, $"invalid state '{stateRaw}'; valid states: {validStates}");
+            else Console.Error.WriteLine($"Error: invalid state '{stateRaw}'; valid states: {validStates}");
+            return 2;
+        }
+        var http2 = new HttpClient();
+        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
+        {
+            BaseUrl = config2.Ticketing.PlaneBaseUrl,
+            ApiToken = secrets2.PlaneApiToken,
+            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
+            ProjectId = config2.Ticketing.PlaneProjectId,
+            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
+        });
+        try
+        {
+            using var verbCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+            await ticketing2.TransitionAsync(transitionId, targetState, verbCts.Token);
+            if (jsonOutput) CliEnvelopeWriter.WriteTransition(Console.Out, transitionId, targetState);
+            else Console.WriteLine($"{transitionId} -> {targetState}");
+            return 0;
+        }
+        catch (ArgumentException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, ex.Message);
+            else Console.Error.WriteLine($"Error: {ex.Message}");
+            return 2;
+        }
+        catch (KeyNotFoundException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.NotFound, ex.Message);
+            else Console.Error.WriteLine($"Command 'transition' failed: {ex.Message}");
+            return 1;
+        }
+        catch (PlaneApiException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
+            else Console.Error.WriteLine($"Command 'transition' failed: Plane API {ex.Status}: {ex.Body}");
             return 1;
         }
         catch (OperationCanceledException)

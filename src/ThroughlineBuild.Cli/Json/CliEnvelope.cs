@@ -80,6 +80,41 @@ public sealed record NewTicketView(
 /// <summary>Success envelope for <c>build new - --json</c>.</summary>
 public sealed record NewTicketEnvelope(int SchemaVersion, bool Ok, NewTicketView Data);
 
+// ---- build list --json -------------------------------------------------------------
+
+/// <summary>A ticket row for <c>build list --json</c> - the lean projection, no description.</summary>
+public sealed record ListTicketView(
+    string Id,
+    string Title,
+    TicketState State,
+    string Type,
+    string? ParentId);
+
+/// <summary>Success envelope for <c>build list --json</c>: an array of ticket rows.</summary>
+public sealed record ListEnvelope(int SchemaVersion, bool Ok, IReadOnlyList<ListTicketView> Data);
+
+// ---- build comments --json / build comment --json ----------------------------------
+
+/// <summary>A single comment for <c>build comments --json</c>.</summary>
+public sealed record CommentView(string Id, string Body, DateTimeOffset CreatedAt);
+
+/// <summary>Success envelope for <c>build comments --json</c>: an array of comments.</summary>
+public sealed record CommentsEnvelope(int SchemaVersion, bool Ok, IReadOnlyList<CommentView> Data);
+
+/// <summary>Data payload after creating a comment - the new comment's id.</summary>
+public sealed record CommentCreatedView(string Id);
+
+/// <summary>Success envelope for <c>build comment --json</c>.</summary>
+public sealed record CommentCreatedEnvelope(int SchemaVersion, bool Ok, CommentCreatedView Data);
+
+// ---- build transition --json -------------------------------------------------------
+
+/// <summary>Data payload after a state transition.</summary>
+public sealed record TransitionView(string Id, TicketState State);
+
+/// <summary>Success envelope for <c>build transition --json</c>.</summary>
+public sealed record TransitionEnvelope(int SchemaVersion, bool Ok, TransitionView Data);
+
 // Source-generated context keeps the --json path statically analyzable under PublishAot=true
 // (reflection-based serialization trips IL2026/IL3050). UseStringEnumConverter renders
 // State/Size/Risk as their names rather than integers. Mirrors PhaseSummaryJsonContext.
@@ -92,4 +127,8 @@ public sealed record NewTicketEnvelope(int SchemaVersion, bool Ok, NewTicketView
 [JsonSerializable(typeof(TicketEnvelope))]
 [JsonSerializable(typeof(TicketDraft))]
 [JsonSerializable(typeof(NewTicketEnvelope))]
+[JsonSerializable(typeof(ListEnvelope))]
+[JsonSerializable(typeof(CommentsEnvelope))]
+[JsonSerializable(typeof(CommentCreatedEnvelope))]
+[JsonSerializable(typeof(TransitionEnvelope))]
 internal partial class CliJsonContext : JsonSerializerContext { }

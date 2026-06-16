@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 
 namespace ThroughlineBuild.Cli.Json;
@@ -32,6 +33,40 @@ public static class CliEnvelopeWriter
     {
         var envelope = new NewTicketEnvelope(SchemaVersion, Ok: true, created);
         output.WriteLine(JsonSerializer.Serialize(envelope, CliJsonContext.Default.NewTicketEnvelope));
+    }
+
+    /// <summary>Write a success envelope wrapping a list of ticket rows.</summary>
+    public static void WriteList(TextWriter output, IReadOnlyList<Ticket> tickets)
+    {
+        var rows = tickets
+            .Select(t => new ListTicketView(t.Id, t.Title, t.State, t.Type, t.ParentId))
+            .ToList();
+        var envelope = new ListEnvelope(SchemaVersion, Ok: true, rows);
+        output.WriteLine(JsonSerializer.Serialize(envelope, CliJsonContext.Default.ListEnvelope));
+    }
+
+    /// <summary>Write a success envelope wrapping a ticket's comments.</summary>
+    public static void WriteComments(TextWriter output, IReadOnlyList<TicketComment> comments)
+    {
+        var rows = comments
+            .Select(c => new CommentView(c.Id, c.Body, c.CreatedAt))
+            .ToList();
+        var envelope = new CommentsEnvelope(SchemaVersion, Ok: true, rows);
+        output.WriteLine(JsonSerializer.Serialize(envelope, CliJsonContext.Default.CommentsEnvelope));
+    }
+
+    /// <summary>Write a success envelope describing a newly created comment.</summary>
+    public static void WriteCommentCreated(TextWriter output, string commentId)
+    {
+        var envelope = new CommentCreatedEnvelope(SchemaVersion, Ok: true, new CommentCreatedView(commentId));
+        output.WriteLine(JsonSerializer.Serialize(envelope, CliJsonContext.Default.CommentCreatedEnvelope));
+    }
+
+    /// <summary>Write a success envelope describing a state transition.</summary>
+    public static void WriteTransition(TextWriter output, string ticketId, TicketState state)
+    {
+        var envelope = new TransitionEnvelope(SchemaVersion, Ok: true, new TransitionView(ticketId, state));
+        output.WriteLine(JsonSerializer.Serialize(envelope, CliJsonContext.Default.TransitionEnvelope));
     }
 
     /// <summary>Project a domain <see cref="Ticket"/> onto its wire shape.</summary>
