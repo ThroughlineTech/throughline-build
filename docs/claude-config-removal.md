@@ -34,18 +34,28 @@ Run these from a repo root; every hit is a removal candidate:
 Removal is per-command and atomic with the matching `build` cutover - no
 dual-truth window (per TLB-541).
 
-## Status: latticeflow (this repo)
+## Status: latticeflow (this repo) - DONE 2026-06-16 (TLB-541, Phase 4)
 
-Evidence found (2026-06-16). Not yet removed - tracked for the "retire old path"
-phase so each deletion lands with its `build`-backed replacement:
+Verified first that no code/scripts/config read these files (`build` reads only
+`.build/config.toml`), then removed:
 
-- [ ] `.claude/plane-rest` (49 KB old REST layer)
-- [ ] `.claude/plane-config.md` (ID maps)
-- [ ] `.claude/ticket-config.md` (stack/preview config; migrate useful bits to `.build`/docs first)
-- [ ] `.claude/tmp_lengths.py` (stray claude-config helper)
-- [ ] root `CLAUDE.md` - "universal ticket workflow (Plane backend)" section + the `/tch` override block
-- [ ] root `AGENTS.md` - points at `.claude/plane-config.md` + `.claude/ticket-config.md` and `~/.codex/AGENTS.md`
-- [ ] add the rule above to `CLAUDE.md` + `AGENTS.md` so agents stop offering `/ticket-new`
+- [x] `.claude/plane-rest` (49 KB old REST layer) - deleted
+- [x] `.claude/plane-config.md` (ID maps) - deleted
+- [x] `.claude/ticket-config.md` (stack/preview config) - deleted; build/test commands live in
+      `.github/workflows/build.yml` and `dotnet build*` is allowlisted in `.claude/settings.json`
+- [x] `.claude/tmp_lengths.py` (stray helper) - deleted
+- [x] root `CLAUDE.md` - rewritten to the `build` dispatch table; `/ticket-*` + `/tch` block removed
+- [x] root `AGENTS.md` - rewritten to the `build` dispatch table; old `.claude/*` + `~/.codex` pointers removed
+- [x] `docs/build-command-setup.md` "What NOT to configure" - updated to point here
+
+Kept on purpose: `.claude/settings.json` (Claude Code harness config, not claude-config) and
+`.claude/commands/op-plan.md` (current `build scaffold` workflow).
+
+Left untouched on purpose: references to the old files in **historical / snapshot docs** -
+`docs/state-of-the-system/*` (explicitly drift-tolerant, "code wins"), `docs/op-docs/*`
+(historical operation plans, incl. the TLB-541 plan itself), `docs/ticket-audit-data/*`, and
+`docs/heartbeat/*`. Rewriting those would rewrite history; per the agent briefing, old-system
+references in docs are "intentional and bounded." Sweep later only if they cause confusion.
 
 ## Status: other repos
 

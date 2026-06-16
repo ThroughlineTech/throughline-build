@@ -205,7 +205,8 @@ Press `Ctrl+C` once. The CLI catches the signal, cancels the worker gracefully, 
 
 ## What NOT to configure here
 
-- `.claude/plane-config.md` - used by Claude Code slash commands (`/ticket-list`, `/ticket-investigate`, etc.), not by the `build` CLI.
-- `.claude/secrets*` - written by `/ticket-install` for the slash command workflow; the `build` CLI does not read these files.
-
-These two systems share the same Plane project but have separate config paths.
+The `build` CLI reads configuration ONLY from `.build/config.toml`; it does not read any
+`.claude/` files. The legacy claude-config `/ticket-*` slash-command workflow (which used
+`.claude/plane-config.md`, `.claude/plane-rest`, and `.claude/secrets*`) is retired - see
+[claude-config-removal.md](claude-config-removal.md). Tickets now go through `build` verbs;
+agent dispatch is documented in the repo's `CLAUDE.md` / `AGENTS.md`.
