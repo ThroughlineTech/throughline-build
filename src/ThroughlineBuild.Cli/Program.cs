@@ -876,6 +876,73 @@ static async Task<int> RunAsync(string[] args)
 
         var newPhase2 = new NewPhase(ticketing2, eventSink2, buildOptions2);
 
+        // build new - --json: strict JSON draft on stdin, no LLM drafter. Create deterministically
+        // via NewPhase.RunFromStructuredAsync and emit the {id,uuid,labels,parent,relations} envelope.
+        // This is the path that replaces /ticket-new (the agent assembles the draft and shells out).
+        if (jsonOutput && classification.Kind == NewVerbKind.StdinDraftMode)
+        {
+            var draftJson = Console.In.ReadToEnd();
+            if (!TicketDraftParser.TryParse(draftJson, out var draft, out var parseError))
+            {
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, parseError!);
+                return 2;
+            }
+            if (string.IsNullOrWhiteSpace(draft!.Title))
+            {
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "ticket draft requires a non-empty title");
+                return 2;
+            }
+            if (draft.Relations is { Count: > 0 })
+            {
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage,
+                    "relations are not yet supported by 'build new --json'; file the ticket, then add relations once the relate verb lands");
+                return 2;
+            }
+
+            using var jsonNewCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; jsonNewCts.Cancel(); };
+            try
+            {
+                var created = await newPhase2.RunFromStructuredAsync(
+                    draft.Title, draft.Type, draft.Description, draft.AcceptanceCriteria,
+                    draft.Labels, draft.Parent, jsonNewCts.Token);
+                CliEnvelopeWriter.WriteNewTicket(Console.Out, new NewTicketView(
+                    created.Id,
+                    created.Uuid,
+                    draft.Labels ?? Array.Empty<string>(),
+                    draft.Parent,
+                    Array.Empty<RelationView>()));
+                return 0;
+            }
+            catch (NewPhaseValidationException ex)
+            {
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, ex.Message);
+                return 2;
+            }
+            catch (KeyNotFoundException ex)
+            {
+                // The parent id did not resolve to a ticket.
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.NotFound, ex.Message);
+                return 1;
+            }
+            catch (PlaneApiException ex)
+            {
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
+                return 1;
+            }
+            catch (InvalidOperationException ex)
+            {
+                // e.g. an unknown label name or issue type rejected by CreateTicketAsync.
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, ex.Message);
+                return 1;
+            }
+            catch (OperationCanceledException)
+            {
+                Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
+        }
+
         var newCommandArgs = new Dictionary<string, string>(StringComparer.Ordinal);
 
         // Parse flags: --title, --type, --label (repeatable), --review; --debug already stripped.

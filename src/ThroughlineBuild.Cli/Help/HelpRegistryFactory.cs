@@ -238,6 +238,7 @@ public static class HelpRegistryFactory
             "new <body-path> [--title \"...\"] [--type \"...\"] [--label \"...\"]* [--debug]\n" +
             "new <text>      [--title \"...\"] [--type \"...\"] [--label \"...\"]* [--review] [--debug|--quiet]\n" +
             "new -           [--title \"...\"] [--type \"...\"] [--label \"...\"]* [--review] [--debug|--quiet]\n" +
+            "new - --json    (read a strict JSON ticket draft from stdin; emit a JSON envelope)\n" +
             "new --print-template",
         Options:
         [
@@ -245,6 +246,7 @@ public static class HelpRegistryFactory
             new("--type \"...\"",   "Set the work item type",                                                 false),
             new("--label \"...\"",  "Add a label (may be repeated)",                                          false),
             new("--review",         "Draft mode only: open an interactive review loop before filing",         false),
+            new("--json",           "Read a strict JSON draft (title,type,description,acceptanceCriteria,labels,parent) from stdin and emit a JSON envelope; no drafting worker", false),
             new("--debug",          "Draft/file mode: stream worker output when drafting and capture artifacts", false),
             new("--quiet",          "Draft mode only: suppress the worker progress digest",                   false),
             new("--print-template", "Print the body template to stdout; ignores other input forms",           false),
@@ -255,6 +257,7 @@ public static class HelpRegistryFactory
             new("new body.md", "If body.md exists, file it as the ticket body"),
             new("new \"fix the onboarding typo\"", "If the first argument is not an existing file, draft from text"),
             new("new - --review", "Read draft input from stdin, then review before filing"),
+            new("echo '{\"title\":\"...\"}' | new - --json", "File a structured draft and print {id,uuid,...}"),
             new("new --print-template", "Print the file-mode body template and exit"),
         ]
     );

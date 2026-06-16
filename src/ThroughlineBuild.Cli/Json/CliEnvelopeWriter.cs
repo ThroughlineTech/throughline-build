@@ -27,6 +27,13 @@ public static class CliEnvelopeWriter
         output.WriteLine(JsonSerializer.Serialize(envelope, CliJsonContext.Default.TicketEnvelope));
     }
 
+    /// <summary>Write a success envelope describing a newly created ticket.</summary>
+    public static void WriteNewTicket(TextWriter output, NewTicketView created)
+    {
+        var envelope = new NewTicketEnvelope(SchemaVersion, Ok: true, created);
+        output.WriteLine(JsonSerializer.Serialize(envelope, CliJsonContext.Default.NewTicketEnvelope));
+    }
+
     /// <summary>Project a domain <see cref="Ticket"/> onto its wire shape.</summary>
     public static TicketView ToView(Ticket ticket) => new(
         Id: ticket.Id,

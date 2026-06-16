@@ -48,6 +48,38 @@ public sealed record TicketView(
 /// <summary>Success envelope for <c>build get --json</c>.</summary>
 public sealed record TicketEnvelope(int SchemaVersion, bool Ok, TicketView Data);
 
+// ---- build new - --json (strict JSON draft on stdin) --------------------------------
+
+/// <summary>One relation on a draft: <paramref name="Kind"/> e.g. "blocked_by", toward a ticket id.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record TicketDraftRelation(string? Kind = null, string? TargetId = null);
+
+/// <summary>
+/// The strict JSON draft accepted on stdin by <c>build new - --json</c>. Unknown fields are
+/// rejected (the agent assembles this; a typo should fail loudly, not get silently dropped).
+/// Description and acceptanceCriteria are markdown - the create path renders them to HTML.
+/// </summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record TicketDraft(
+    string? Title = null,
+    string? Type = null,
+    string? Description = null,
+    string? AcceptanceCriteria = null,
+    IReadOnlyList<string>? Labels = null,
+    string? Parent = null,
+    IReadOnlyList<TicketDraftRelation>? Relations = null);
+
+/// <summary>The data payload returned after creating a ticket.</summary>
+public sealed record NewTicketView(
+    string Id,
+    string Uuid,
+    IReadOnlyList<string> Labels,
+    string? Parent,
+    IReadOnlyList<RelationView> Relations);
+
+/// <summary>Success envelope for <c>build new - --json</c>.</summary>
+public sealed record NewTicketEnvelope(int SchemaVersion, bool Ok, NewTicketView Data);
+
 // Source-generated context keeps the --json path statically analyzable under PublishAot=true
 // (reflection-based serialization trips IL2026/IL3050). UseStringEnumConverter renders
 // State/Size/Risk as their names rather than integers. Mirrors PhaseSummaryJsonContext.
@@ -58,4 +90,6 @@ public sealed record TicketEnvelope(int SchemaVersion, bool Ok, TicketView Data)
     UseStringEnumConverter = true)]
 [JsonSerializable(typeof(ErrorEnvelope))]
 [JsonSerializable(typeof(TicketEnvelope))]
+[JsonSerializable(typeof(TicketDraft))]
+[JsonSerializable(typeof(NewTicketEnvelope))]
 internal partial class CliJsonContext : JsonSerializerContext { }

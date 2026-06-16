@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Workers.Common;
 
 namespace ThroughlineBuild.Phases;
 
@@ -147,6 +148,75 @@ public class NewPhase : IWorkflowPhase
         }, ct).ConfigureAwait(false);
 
         return new NewResult(ticketResult.Id, ticketResult.Uuid, warnings.AsReadOnly());
+    }
+
+    /// <summary>
+    /// Deterministic create from an already-structured draft (build new - --json): no worker,
+    /// no markdown title-parsing. Renders description + acceptance criteria markdown to HTML,
+    /// creates the ticket, and - when a parent id is given - resolves its UUID and reparents.
+    /// Throws NewPhaseValidationException on a missing title and KeyNotFoundException when the
+    /// parent id does not resolve.
+    /// </summary>
+    public async Task<NewResult> RunFromStructuredAsync(
+        string? title,
+        string? type,
+        string? descriptionMarkdown,
+        string? acceptanceCriteriaMarkdown,
+        IReadOnlyList<string>? labels,
+        string? parentId,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+            throw new NewPhaseValidationException(new[] { "title is required" });
+
+        // Compose one markdown body (description, then an Acceptance criteria section) and render
+        // to HTML so Plane stores rich content rather than literal markdown.
+        var bodyMarkdown = descriptionMarkdown ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(acceptanceCriteriaMarkdown))
+        {
+            if (bodyMarkdown.Length > 0)
+                bodyMarkdown += "\n\n";
+            bodyMarkdown += "## Acceptance criteria\n\n" + acceptanceCriteriaMarkdown.Trim();
+        }
+        var descriptionHtml = MarkdownRenderer.Render(bodyMarkdown);
+
+        // Resolve the parent BEFORE creating, so a bad parent id fails fast (KeyNotFoundException)
+        // without leaving an orphaned ticket behind.
+        string? parentUuid = null;
+        if (!string.IsNullOrWhiteSpace(parentId))
+        {
+            var parent = await _ticketing.GetAsync(parentId!, ct).ConfigureAwait(false);
+            parentUuid = parent.Uuid;
+        }
+
+        await EmitAsync(EventKind.WorkerSpawn, new Dictionary<string, object>
+        {
+            ["worker"] = "deterministic",
+            ["role"] = "creator"
+        }, ct).ConfigureAwait(false);
+
+        var ticketResult = await _ticketing.CreateTicketAsync(
+            title!, type, descriptionHtml, labels, ct).ConfigureAwait(false);
+
+        await EmitAsync(EventKind.TicketWrite, new Dictionary<string, object>
+        {
+            ["action"] = "create_ticket",
+            ["id"] = ticketResult.Id,
+            ["uuid"] = ticketResult.Uuid
+        }, ct).ConfigureAwait(false);
+
+        if (parentUuid is not null)
+        {
+            await _ticketing.SetParentAsync(ticketResult.Uuid, parentUuid, ct).ConfigureAwait(false);
+            await EmitAsync(EventKind.TicketWrite, new Dictionary<string, object>
+            {
+                ["action"] = "set_parent",
+                ["id"] = ticketResult.Id,
+                ["parent"] = parentId!
+            }, ct).ConfigureAwait(false);
+        }
+
+        return new NewResult(ticketResult.Id, ticketResult.Uuid, Array.Empty<string>());
     }
 
     /// <summary>
