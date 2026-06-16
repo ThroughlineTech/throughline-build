@@ -1,5 +1,6 @@
 using System.Net.Http;
 using ThroughlineBuild.Cli;
+using ThroughlineBuild.Cli.Json;
 using ThroughlineBuild.Commands;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
@@ -12,6 +13,7 @@ using ThroughlineBuild.Phases;
 using ThroughlineBuild.Plane;
 using ThroughlineBuild.Scaffold;
 using ThroughlineBuild.Verification;
+using ThroughlineBuild.Workers.Common;
 using ThroughlineBuild.Workers.ClaudeCode;
 using ThroughlineBuild.Workers.Codex;
 using ThroughlineBuild.Workers.Copilot;
@@ -58,12 +60,13 @@ static async Task<int> RunAsync(string[] args)
         return 2;
     }
 
-    // Pre-pass: strip --debug, --quiet, --summary-json, and --error-location from args before any positional parser sees them.
-    // All four are bare bool flags (no value); the existing key/value parser expects pairs
+    // Pre-pass: strip --debug, --quiet, --summary-json, --json, and --error-location from args before any positional parser sees them.
+    // All are bare bool flags (no value); the existing key/value parser expects pairs
     // and would mangle subsequent args if they were left in.
     bool debugMode = false;
     bool quietMode = false;
     bool summaryJson = false;
+    bool jsonOutput = false;
     bool errorLocation = false;
     bool noAutoResolve = false;
     bool noAutoMerge = false;
@@ -83,6 +86,8 @@ static async Task<int> RunAsync(string[] args)
             quietMode = true;
         else if (a == "--summary-json")
             summaryJson = true;
+        else if (a == "--json")
+            jsonOutput = true;
         else if (a == "--error-location")
             errorLocation = true;
         else if (a == "--no-auto-resolve")
@@ -435,8 +440,12 @@ static async Task<int> RunAsync(string[] args)
     }
     catch (ConfigException ex)
     {
-        Console.Error.WriteLine($"Config error: {ex.Message}");
-        if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+        if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.ConfigError, ex.Message);
+        else
+        {
+            Console.Error.WriteLine($"Config error: {ex.Message}");
+            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+        }
         return 2;
     }
 
@@ -449,8 +458,12 @@ static async Task<int> RunAsync(string[] args)
     }
     catch (ConfigException ex)
     {
-        Console.Error.WriteLine($"Config error: {ex.Message}");
-        if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+        if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.ConfigError, ex.Message);
+        else
+        {
+            Console.Error.WriteLine($"Config error: {ex.Message}");
+            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+        }
         return 2;
     }
 
@@ -461,8 +474,12 @@ static async Task<int> RunAsync(string[] args)
     }
     catch (ConfigException ex)
     {
-        Console.Error.WriteLine($"Secret error: {ex.Message}");
-        if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+        if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.MissingSecret, ex.Message);
+        else
+        {
+            Console.Error.WriteLine($"Secret error: {ex.Message}");
+            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+        }
         return 3;
     }
 
@@ -540,6 +557,43 @@ static async Task<int> RunAsync(string[] args)
                 key = key.Substring(2);
             extraArgs[key] = args[i + 1];
         }
+
+        // --json: emit the result as a versioned envelope instead of the human table.
+        if (jsonOutput)
+        {
+            TicketState? listState = null;
+            if (extraArgs.TryGetValue("state", out var stateArg) && !string.IsNullOrWhiteSpace(stateArg))
+            {
+                if (!Enum.TryParse<TicketState>(stateArg, ignoreCase: true, out var parsedState))
+                {
+                    CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, $"invalid --state value: {stateArg}");
+                    return 2;
+                }
+                listState = parsedState;
+            }
+            extraArgs.TryGetValue("parent", out var listParent);
+            extraArgs.TryGetValue("type", out var listType);
+
+            using var jsonListCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; jsonListCts.Cancel(); };
+            try
+            {
+                var listed = await ticketing2.QueryAsync(new TicketQuery(listState, listParent, listType), jsonListCts.Token);
+                CliEnvelopeWriter.WriteList(Console.Out, listed);
+                return 0;
+            }
+            catch (PlaneApiException ex)
+            {
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
+                return 1;
+            }
+            catch (OperationCanceledException)
+            {
+                Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
+        }
+
         var ctx = new TicketCommandContext("", extraArgs);
 
         try
@@ -553,6 +607,298 @@ static async Task<int> RunAsync(string[] args)
                 return 1;
             }
             return 0;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+    }
+
+    // 'build get <ticket-id> [--json]' reads a single ticket. The first read verb on the
+    // versioned --json envelope (TLB-541): the agent shells out and parses the envelope
+    // instead of curling Plane itself. No worker, no event log - a thin Plane read.
+    if (verb == "get")
+    {
+        if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]) || args[1].StartsWith("--"))
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "ticket-id is required");
+            else
+            {
+                Console.Error.WriteLine("Error: ticket-id is required");
+                Console.Error.WriteLine("Usage: build get <ticket-id> [--json]");
+            }
+            return 2;
+        }
+
+        var getTicketId = args[1];
+        var http2 = new HttpClient();
+        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
+        {
+            BaseUrl = config2.Ticketing.PlaneBaseUrl,
+            ApiToken = secrets2.PlaneApiToken,
+            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
+            ProjectId = config2.Ticketing.PlaneProjectId,
+            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
+        });
+
+        try
+        {
+            using var verbCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+            var ticket = await ticketing2.GetAsync(getTicketId, verbCts.Token);
+
+            if (jsonOutput)
+            {
+                CliEnvelopeWriter.WriteTicket(Console.Out, CliEnvelopeWriter.ToView(ticket));
+            }
+            else
+            {
+                Console.WriteLine($"{ticket.Id}  {ticket.Title}");
+                Console.WriteLine($"  state:  {ticket.State}");
+                Console.WriteLine($"  type:   {(string.IsNullOrEmpty(ticket.Type) ? "-" : ticket.Type)}");
+                Console.WriteLine($"  size:   {ticket.Size}    risk: {ticket.Risk}");
+                if (ticket.ParentId is not null) Console.WriteLine($"  parent: {ticket.ParentId}");
+                if (ticket.Labels.Count > 0) Console.WriteLine($"  labels: {string.Join(", ", ticket.Labels)}");
+                foreach (var rel in ticket.Relations) Console.WriteLine($"  rel:    {rel.Kind} -> {rel.TargetId}");
+            }
+            return 0;
+        }
+        catch (ArgumentException ex)
+        {
+            // ParseSequenceId rejects a malformed id ("abc", "TLB-") - a usage error, not a miss.
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, ex.Message);
+            else Console.Error.WriteLine($"Error: {ex.Message}");
+            return 2;
+        }
+        catch (KeyNotFoundException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.NotFound, ex.Message);
+            else Console.Error.WriteLine($"Command 'get' failed: {ex.Message}");
+            return 1;
+        }
+        catch (PlaneApiException ex) when (ex.Status == 404)
+        {
+            var msg = PlaneTicketingClient.BuildProjectNotFoundMessage(
+                config2.Ticketing.PlaneWorkspaceSlug, config2.Ticketing.PlaneProjectId, ex);
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.ConfigError, msg);
+            else Console.Error.WriteLine("Command 'get' failed: " + msg);
+            return 1;
+        }
+        catch (PlaneApiException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
+            else Console.Error.WriteLine($"Command 'get' failed: Plane API {ex.Status}: {ex.Body}");
+            return 1;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+    }
+
+    // 'build comments <ticket-id> [--json]' lists a ticket's comments (read).
+    if (verb == "comments")
+    {
+        if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]) || args[1].StartsWith("--"))
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "ticket-id is required");
+            else { Console.Error.WriteLine("Error: ticket-id is required"); Console.Error.WriteLine("Usage: build comments <ticket-id> [--json]"); }
+            return 2;
+        }
+        var commentsId = args[1];
+        var http2 = new HttpClient();
+        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
+        {
+            BaseUrl = config2.Ticketing.PlaneBaseUrl,
+            ApiToken = secrets2.PlaneApiToken,
+            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
+            ProjectId = config2.Ticketing.PlaneProjectId,
+            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
+        });
+        try
+        {
+            using var verbCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+            var comments = await ticketing2.GetCommentsAsync(commentsId, verbCts.Token);
+            if (jsonOutput)
+            {
+                CliEnvelopeWriter.WriteComments(Console.Out, comments);
+            }
+            else if (comments.Count == 0)
+            {
+                Console.WriteLine("no comments");
+            }
+            else
+            {
+                foreach (var c in comments)
+                {
+                    Console.WriteLine($"[{c.CreatedAt:u}] {c.Id}");
+                    Console.WriteLine(HtmlToText.Render(c.Body));
+                    Console.WriteLine();
+                }
+            }
+            return 0;
+        }
+        catch (ArgumentException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, ex.Message);
+            else Console.Error.WriteLine($"Error: {ex.Message}");
+            return 2;
+        }
+        catch (KeyNotFoundException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.NotFound, ex.Message);
+            else Console.Error.WriteLine($"Command 'comments' failed: {ex.Message}");
+            return 1;
+        }
+        catch (PlaneApiException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
+            else Console.Error.WriteLine($"Command 'comments' failed: Plane API {ex.Status}: {ex.Body}");
+            return 1;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+    }
+
+    // 'build comment <ticket-id> <body|-> [--json]' posts a comment (write). The body is markdown
+    // (or "-" to read from stdin) and is rendered to Plane HTML. This is the agent's write-back path.
+    if (verb == "comment")
+    {
+        if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]) || args[1].StartsWith("--"))
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "ticket-id is required");
+            else { Console.Error.WriteLine("Error: ticket-id is required"); Console.Error.WriteLine("Usage: build comment <ticket-id> <body|-> [--json]"); }
+            return 2;
+        }
+        var commentTicketId = args[1];
+        string commentBody;
+        if (args.Length >= 3 && args[2] == "-")
+            commentBody = Console.In.ReadToEnd();
+        else if (args.Length >= 3 && !args[2].StartsWith("--"))
+            commentBody = args[2];
+        else
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "comment body is required (pass text or '-' to read stdin)");
+            else { Console.Error.WriteLine("Error: comment body is required"); Console.Error.WriteLine("Usage: build comment <ticket-id> <body|-> [--json]"); }
+            return 2;
+        }
+        if (string.IsNullOrWhiteSpace(commentBody))
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "comment body is empty");
+            else Console.Error.WriteLine("Error: comment body is empty");
+            return 2;
+        }
+        var commentHtml = MarkdownHtml.Render(commentBody);
+        var http2 = new HttpClient();
+        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
+        {
+            BaseUrl = config2.Ticketing.PlaneBaseUrl,
+            ApiToken = secrets2.PlaneApiToken,
+            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
+            ProjectId = config2.Ticketing.PlaneProjectId,
+            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
+        });
+        try
+        {
+            using var verbCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+            var newCommentId = await ticketing2.CreateCommentAsync(commentTicketId, commentHtml, verbCts.Token);
+            if (jsonOutput) CliEnvelopeWriter.WriteCommentCreated(Console.Out, newCommentId);
+            else Console.WriteLine($"Commented on {commentTicketId} (comment {newCommentId})");
+            return 0;
+        }
+        catch (ArgumentException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, ex.Message);
+            else Console.Error.WriteLine($"Error: {ex.Message}");
+            return 2;
+        }
+        catch (KeyNotFoundException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.NotFound, ex.Message);
+            else Console.Error.WriteLine($"Command 'comment' failed: {ex.Message}");
+            return 1;
+        }
+        catch (PlaneApiException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
+            else Console.Error.WriteLine($"Command 'comment' failed: Plane API {ex.Status}: {ex.Body}");
+            return 1;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+    }
+
+    // 'build transition <ticket-id> <state> [--json]' moves a ticket to a new state (write).
+    // State is matched case/space/hyphen-insensitively to the TicketState names.
+    if (verb == "transition")
+    {
+        if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]) || args[1].StartsWith("--"))
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "ticket-id is required");
+            else { Console.Error.WriteLine("Error: ticket-id is required"); Console.Error.WriteLine("Usage: build transition <ticket-id> <state> [--json]"); }
+            return 2;
+        }
+        if (args.Length < 3 || string.IsNullOrWhiteSpace(args[2]) || args[2].StartsWith("--"))
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "state is required");
+            else { Console.Error.WriteLine("Error: state is required"); Console.Error.WriteLine($"Usage: build transition <ticket-id> <state> [--json]   (states: {string.Join(", ", Enum.GetNames<TicketState>())})"); }
+            return 2;
+        }
+        var transitionId = args[1];
+        var stateRaw = args[2];
+        var stateNormalized = stateRaw.Replace(" ", "").Replace("-", "").Replace("_", "");
+        if (!Enum.TryParse<TicketState>(stateNormalized, ignoreCase: true, out var targetState))
+        {
+            var validStates = string.Join(", ", Enum.GetNames<TicketState>());
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, $"invalid state '{stateRaw}'; valid states: {validStates}");
+            else Console.Error.WriteLine($"Error: invalid state '{stateRaw}'; valid states: {validStates}");
+            return 2;
+        }
+        var http2 = new HttpClient();
+        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
+        {
+            BaseUrl = config2.Ticketing.PlaneBaseUrl,
+            ApiToken = secrets2.PlaneApiToken,
+            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
+            ProjectId = config2.Ticketing.PlaneProjectId,
+            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
+        });
+        try
+        {
+            using var verbCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+            await ticketing2.TransitionAsync(transitionId, targetState, verbCts.Token);
+            if (jsonOutput) CliEnvelopeWriter.WriteTransition(Console.Out, transitionId, targetState);
+            else Console.WriteLine($"{transitionId} -> {targetState}");
+            return 0;
+        }
+        catch (ArgumentException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, ex.Message);
+            else Console.Error.WriteLine($"Error: {ex.Message}");
+            return 2;
+        }
+        catch (KeyNotFoundException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.NotFound, ex.Message);
+            else Console.Error.WriteLine($"Command 'transition' failed: {ex.Message}");
+            return 1;
+        }
+        catch (PlaneApiException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
+            else Console.Error.WriteLine($"Command 'transition' failed: Plane API {ex.Status}: {ex.Body}");
+            return 1;
         }
         catch (OperationCanceledException)
         {
@@ -641,13 +987,18 @@ static async Task<int> RunAsync(string[] args)
         var wireUpError = WireUpConditionalCommands(verb, registry, secrets2, config2.Llm, http2, ticketing2, eventSink2, cwd2);
         if (wireUpError is not null)
         {
-            Console.Error.WriteLine($"Secret error: {wireUpError}");
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.MissingSecret, wireUpError);
+            else Console.Error.WriteLine($"Secret error: {wireUpError}");
             return 3;
         }
         if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]))
         {
-            Console.Error.WriteLine($"Error: ticket-id is required");
-            Console.Error.WriteLine($"Usage: build {verb} <ticket-id>");
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "ticket-id is required");
+            else
+            {
+                Console.Error.WriteLine($"Error: ticket-id is required");
+                Console.Error.WriteLine($"Usage: build {verb} <ticket-id>");
+            }
             return 2;
         }
 
@@ -696,12 +1047,33 @@ static async Task<int> RunAsync(string[] args)
             var verbResult = await cmd.ExecuteAsync(ctx, verbCts.Token);
             if (!verbResult.Success)
             {
-                Console.Error.WriteLine($"Command '{verb}' failed: {verbResult.Message}");
+                if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, verbResult.Message ?? "command failed");
+                else Console.Error.WriteLine($"Command '{verb}' failed: {verbResult.Message}");
                 return 1;
             }
-            if (!string.IsNullOrEmpty(verbResult.Message))
+            if (jsonOutput)
+                CliEnvelopeWriter.WriteAck(Console.Out, verbTicketId, verb);
+            else if (!string.IsNullOrEmpty(verbResult.Message))
                 Console.WriteLine(verbResult.Message);
             return 0;
+        }
+        catch (ArgumentException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, ex.Message);
+            else Console.Error.WriteLine($"Error: {ex.Message}");
+            return 2;
+        }
+        catch (KeyNotFoundException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.NotFound, ex.Message);
+            else Console.Error.WriteLine($"Command '{verb}' failed: {ex.Message}");
+            return 1;
+        }
+        catch (PlaneApiException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
+            else Console.Error.WriteLine($"Command '{verb}' failed: Plane API {ex.Status}: {ex.Body}");
+            return 1;
         }
         catch (OperationCanceledException)
         {
@@ -776,6 +1148,73 @@ static async Task<int> RunAsync(string[] args)
         }
 
         var newPhase2 = new NewPhase(ticketing2, eventSink2, buildOptions2);
+
+        // build new - --json: strict JSON draft on stdin, no LLM drafter. Create deterministically
+        // via NewPhase.RunFromStructuredAsync and emit the {id,uuid,labels,parent,relations} envelope.
+        // This is the path that replaces /ticket-new (the agent assembles the draft and shells out).
+        if (jsonOutput && classification.Kind == NewVerbKind.StdinDraftMode)
+        {
+            var draftJson = Console.In.ReadToEnd();
+            if (!TicketDraftParser.TryParse(draftJson, out var draft, out var parseError))
+            {
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, parseError!);
+                return 2;
+            }
+            if (string.IsNullOrWhiteSpace(draft!.Title))
+            {
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "ticket draft requires a non-empty title");
+                return 2;
+            }
+            if (draft.Relations is { Count: > 0 })
+            {
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage,
+                    "relations are not yet supported by 'build new --json'; file the ticket, then add relations once the relate verb lands");
+                return 2;
+            }
+
+            using var jsonNewCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; jsonNewCts.Cancel(); };
+            try
+            {
+                var created = await newPhase2.RunFromStructuredAsync(
+                    draft.Title, draft.Type, draft.Description, draft.AcceptanceCriteria,
+                    draft.Labels, draft.Parent, jsonNewCts.Token);
+                CliEnvelopeWriter.WriteNewTicket(Console.Out, new NewTicketView(
+                    created.Id,
+                    created.Uuid,
+                    draft.Labels ?? Array.Empty<string>(),
+                    draft.Parent,
+                    Array.Empty<RelationView>()));
+                return 0;
+            }
+            catch (NewPhaseValidationException ex)
+            {
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, ex.Message);
+                return 2;
+            }
+            catch (KeyNotFoundException ex)
+            {
+                // The parent id did not resolve to a ticket.
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.NotFound, ex.Message);
+                return 1;
+            }
+            catch (PlaneApiException ex)
+            {
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
+                return 1;
+            }
+            catch (InvalidOperationException ex)
+            {
+                // e.g. an unknown label name or issue type rejected by CreateTicketAsync.
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, ex.Message);
+                return 1;
+            }
+            catch (OperationCanceledException)
+            {
+                Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
+        }
 
         var newCommandArgs = new Dictionary<string, string>(StringComparer.Ordinal);
 
