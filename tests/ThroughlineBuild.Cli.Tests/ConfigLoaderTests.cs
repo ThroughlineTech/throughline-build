@@ -61,9 +61,9 @@ log_directory = ".build/events"
             Assert.Equal("claude-code", config.Workers.DefaultAgent);
             Assert.Equal("claude", config.Workers.Agents["claude-code"].Executable);
             // Omitted-value default: a [workers.claude-code] block with no `transport` key resolves to
-            // Print until the Stage 07 default flip lands after operator dogfood (interactive-hook is
-            // opt-in until then).
-            Assert.Equal(ThroughlineBuild.Workers.ClaudeCode.ClaudeCodeTransport.Print,
+            // InteractiveHook after the Stage 07 cutover (interactive-hook is the default; print is the
+            // documented rollback).
+            Assert.Equal(ThroughlineBuild.Workers.ClaudeCode.ClaudeCodeTransport.InteractiveHook,
                 config.Workers.Agents["claude-code"].Transport);
             Assert.Equal(20, config.Workers.TimeoutMinutes);
             Assert.Equal(".build/events", config.Events.LogDirectory);
@@ -906,10 +906,10 @@ log_directory = ".build/events"
     }
 
     [Fact]
-    public void Load_GeneratedConfigTemplate_DefaultsToPrintUntilCutover()
+    public void Load_GeneratedConfigTemplate_DefaultsToInteractiveHook()
     {
-        // The generated `build init` config leaves transport commented, so it resolves to Print until
-        // the Stage 07 default flip lands after operator dogfood. (interactive-hook is opt-in until then.)
+        // The generated `build init` config sets transport = "interactive-hook" explicitly after the
+        // Stage 07 cutover, so it resolves to InteractiveHook. (print is the documented rollback.)
         var filled = ThroughlineBuild.Commands.ConfigTemplateLoader.Load()
             .Replace("REQUIRED_PLANE_BASE_URL", "https://api.plane.so")
             .Replace("REQUIRED_PLANE_WORKSPACE_SLUG", "my-workspace")
@@ -920,7 +920,7 @@ log_directory = ".build/events"
         {
             var config = BuildConfigLoader.Load(path);
             Assert.Equal(
-                ThroughlineBuild.Workers.ClaudeCode.ClaudeCodeTransport.Print,
+                ThroughlineBuild.Workers.ClaudeCode.ClaudeCodeTransport.InteractiveHook,
                 config.Workers.Agents["claude-code"].Transport);
         }
         finally

@@ -638,14 +638,15 @@ public static class BuildConfigLoader
             if (subTable.TryGetValue("bypass_permissions", out var bpVal) && bpVal is bool bp)
                 bypassPermissions = bp;
 
-            // Omitted-value default for a Claude-family agent's transport. It stays Print (the legacy
-            // headless path) until the Stage 07 cutover flips it to interactive-hook AFTER the operator
-            // dogfood + pre-cutover checkpoint (docs/heartbeat/evidence/stage-07-dogfood.md). Until then
-            // interactive-hook is opt-in (set transport = "interactive-hook"). Transport is honored for
-            // any agent name that maps to ClaudeCodeAgent in WorkerAgentBuilder - i.e. anything that is
-            // not gemini/codex/copilot - so a custom-named Claude block (e.g. [workers.my-claude]) can
-            // select print/interactive-hook too, and the documented rollback works there.
-            var transport = ClaudeCodeTransport.Print;
+            // Omitted-value default for a Claude-family agent's transport. The Stage 07 cutover flipped
+            // it to interactive-hook after operator dogfood (the npt5 clean interactive chain;
+            // docs/heartbeat/evidence/stage-07-dogfood.md). This is the load-bearing default: a Claude
+            // block with no transport key now runs interactive-hook (requires Claude Code >= 2.1.177,
+            // gated by ClaudeCodePreflight). Roll back to the legacy headless path with
+            // transport = "print". Transport is honored for any agent name that maps to ClaudeCodeAgent
+            // in WorkerAgentBuilder - i.e. anything that is not gemini/codex/copilot - so a custom-named
+            // Claude block (e.g. [workers.my-claude]) can select print/interactive-hook too.
+            var transport = ClaudeCodeTransport.InteractiveHook;
             bool isClaudeAgent = kv.Key is not ("gemini" or "codex" or "copilot");
             if (isClaudeAgent && subTable.TryGetValue("transport", out var transportValue))
             {

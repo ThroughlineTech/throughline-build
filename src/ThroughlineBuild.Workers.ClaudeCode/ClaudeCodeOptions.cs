@@ -15,11 +15,10 @@ public class ClaudeCodeOptions
     public int? MaxOutputTokens { get; init; } = null;
     public IReadOnlyDictionary<WorkerSize, ModelTier> Sizes { get; init; } =
         new Dictionary<WorkerSize, ModelTier>();
-    // Default transport. Print (the legacy headless path) is the product default until the Stage 07
-    // cutover flips it to interactive-hook after operator dogfood (the config loader's omitted-value
-    // default matches this; interactive-hook is opt-in via transport = "interactive-hook" until then).
-    // WorkerAgentBuilder always passes the loaded transport explicitly, so this value only governs
-    // directly-constructed options (tests, the print transport itself).
+    // Default transport. The product default is interactive-hook after the Stage 07 cutover; the
+    // load-bearing default lives in the config loader's omitted-value branch (Config.cs), which
+    // WorkerAgentBuilder always passes here explicitly. This type-level default stays Print because it
+    // only governs directly-constructed options (tests, the print transport itself), not config loading.
     public ClaudeCodeTransport Transport { get; init; } = ClaudeCodeTransport.Print;
     // When true (default), pass --dangerously-skip-permissions to the CLI so the
     // headless --print run does not block on the interactive approval gate. Set

@@ -28,10 +28,10 @@ timeout_minutes = 30
 [workers.claude-code]
 executable = "claude"
 transport = "interactive-hook"
-# transport = "print"  # default is print (legacy headless path: claude --print). interactive-hook (the
-# Stage 07 cutover target: interactive claude, no --print, via ConPTY/PTY; reads completion from claude's
-# persisted transcript; needs Claude Code >= 2.1.177) is opt-in until the post-dogfood default flip.
-# Opt in now with: transport = "interactive-hook".
+# interactive-hook is the default: interactive claude, no --print, via ConPTY/PTY; reads completion
+# from claude's persisted transcript. Needs Claude Code >= 2.1.177, which the setup preflight checks
+# (it fails clearly rather than falling back). Roll back to the legacy headless path (claude --print)
+# with: transport = "print".
 # max_output_tokens = 32000  # claude-code#24159 caps Opus 4.6 at 32000; do not raise above this
 
 # Claude tiers use stable aliases (haiku/sonnet/opus) that auto-track the current

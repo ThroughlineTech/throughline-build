@@ -18,7 +18,7 @@ command performs a local fast-forward merge using git.
 **Worker agent CLI** - Install exactly one of the following; it must be on your PATH before running
 any ticket phase command:
 
-- `claude` (claude-code) - confirm with `claude --version` (the opt-in interactive-hook transport
+- `claude` (claude-code) - confirm with `claude --version` (the default interactive-hook transport
   needs Claude Code >= 2.1.177; see "Claude Code transport" below)
 - `codex` - confirm with `codex --version`
 - `gemini` - confirm with `gemini --version`
@@ -54,12 +54,13 @@ under `[workers]`.
 When the worker agent is `claude-code`, `build` runs Claude through one of two transports, selected by
 the `transport` key under `[workers.claude-code]`:
 
-- `print` (current default) - the legacy headless path: `claude --print --verbose --output-format stream-json`.
-- `interactive-hook` (opt-in; the Stage 07 cutover target) - launches an interactive Claude Code session
-  in a terminal host (ConPTY on Windows, a PTY on Unix); Claude's argv never contains `--print`. The
-  phase result is read from Claude's own persisted transcript. **Requires Claude Code >= 2.1.177.** This
-  becomes the default after operator dogfood validation; until then, opt in with
-  `transport = "interactive-hook"`.
+- `interactive-hook` (default) - launches an interactive Claude Code session in a terminal host
+  (ConPTY on Windows, a PTY on Unix); Claude's argv never contains `--print`. The phase result is read
+  from Claude's own persisted transcript. **Requires Claude Code >= 2.1.177**, which `build setup`
+  preflights. Generated configs set this explicitly; a `[workers.claude-code]` block that omits
+  `transport` also resolves to it.
+- `print` (rollback) - the legacy headless path: `claude --print --verbose --output-format stream-json`.
+  Select it with `transport = "print"` to return to the pre-cutover behavior.
 
 The interactive transport launches interactive Claude without `--print`; which invocation mode draws on
 which usage allowance is controlled by Anthropic's current policy, not by this tool.

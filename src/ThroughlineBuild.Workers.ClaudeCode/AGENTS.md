@@ -1,13 +1,13 @@
 # ThroughlineBuild.Workers.ClaudeCode - vendor worker (template)
 
 `ClaudeCodeAgent : IWorkerAgent` (`Name => "claude-code"`). The DEFAULT transport is
-`print` (`claude --print --verbose --output-format stream-json`, brief on stdin)
-pending the Stage 07 cutover; interactive-hook is the validated cutover target and is
-opt-in (`transport = "interactive-hook"`, honored on any Claude-family agent block, not
-just `claude-code`) until the default flips after operator dogfood. The interactive
-transport runs an interactive Claude session under a terminal host (argv never contains
+`interactive-hook` after the Stage 07 cutover (validated by the npt5 operator dogfood):
+it runs an interactive Claude session under a terminal host (argv never contains
 `--print`) and recovers telemetry through the isolated `ClaudePersistedTranscriptReader`
-adapter. `ClaudeCodePreflight` gates the interactive path before any side effect - in
+adapter. The omitted-value default in the config loader and the generated `build init`
+template both resolve to it; `transport` is honored on any Claude-family agent block, not
+just `claude-code`. `print` (`claude --print --verbose --output-format stream-json`,
+brief on stdin) is the documented rollback (`transport = "print"`). `ClaudeCodePreflight` gates the interactive path before any side effect - in
 `build setup`, before the worker-spawning phase verbs, AND at the transport entry itself
 (`ExecuteAsync`, so every path is covered: draft, investigate-plan, scaffold, batch) -
 checking claude is runnable, version >= 2.1.177, platform supported, and never silently
