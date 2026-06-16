@@ -31,7 +31,11 @@ public sealed record ErrorEnvelope(int SchemaVersion, bool Ok, CliError Error);
 /// <summary>A relation edge on a ticket, projected for the wire.</summary>
 public sealed record RelationView(string Kind, string TargetId);
 
-/// <summary>A ticket projected for the wire. Mirrors <see cref="Ticket"/>'s scalar fields.</summary>
+/// <summary>
+/// A ticket projected for the wire. Mirrors <see cref="Ticket"/>'s scalar fields.
+/// <see cref="Description"/> is the readable plain-text rendering of the body; the raw
+/// Plane editor HTML is kept in <see cref="DescriptionHtml"/> for callers that need markup.
+/// </summary>
 public sealed record TicketView(
     string Id,
     string Uuid,
@@ -40,6 +44,7 @@ public sealed record TicketView(
     TicketState State,
     Size Size,
     Risk Risk,
+    string Description,
     string DescriptionHtml,
     string? ParentId,
     IReadOnlyList<string> Labels,
@@ -115,6 +120,14 @@ public sealed record TransitionView(string Id, TicketState State);
 /// <summary>Success envelope for <c>build transition --json</c>.</summary>
 public sealed record TransitionEnvelope(int SchemaVersion, bool Ok, TransitionView Data);
 
+// ---- build close / defer / reopen / amend --json -----------------------------------
+
+/// <summary>Acknowledgement payload for a lifecycle verb: the ticket id and which action ran.</summary>
+public sealed record AckView(string Id, string Action);
+
+/// <summary>Success envelope for the lifecycle verbs (close, defer, reopen, amend).</summary>
+public sealed record AckEnvelope(int SchemaVersion, bool Ok, AckView Data);
+
 // Source-generated context keeps the --json path statically analyzable under PublishAot=true
 // (reflection-based serialization trips IL2026/IL3050). UseStringEnumConverter renders
 // State/Size/Risk as their names rather than integers. Mirrors PhaseSummaryJsonContext.
@@ -131,4 +144,5 @@ public sealed record TransitionEnvelope(int SchemaVersion, bool Ok, TransitionVi
 [JsonSerializable(typeof(CommentsEnvelope))]
 [JsonSerializable(typeof(CommentCreatedEnvelope))]
 [JsonSerializable(typeof(TransitionEnvelope))]
+[JsonSerializable(typeof(AckEnvelope))]
 internal partial class CliJsonContext : JsonSerializerContext { }

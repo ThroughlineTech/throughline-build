@@ -80,4 +80,17 @@ public class Phase2EnvelopeTests
         Assert.Equal("TLB-541", data.GetProperty("id").GetString());
         Assert.Equal("InProgress", data.GetProperty("state").GetString());
     }
+
+    [Fact]
+    public void WriteAck_EmitsIdAndAction()
+    {
+        var sw = new StringWriter();
+        CliEnvelopeWriter.WriteAck(sw, "TLB-541", "close");
+
+        using var doc = JsonDocument.Parse(sw.ToString());
+        Assert.True(doc.RootElement.GetProperty("ok").GetBoolean());
+        var data = doc.RootElement.GetProperty("data");
+        Assert.Equal("TLB-541", data.GetProperty("id").GetString());
+        Assert.Equal("close", data.GetProperty("action").GetString());
+    }
 }

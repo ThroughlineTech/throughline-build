@@ -987,13 +987,18 @@ static async Task<int> RunAsync(string[] args)
         var wireUpError = WireUpConditionalCommands(verb, registry, secrets2, config2.Llm, http2, ticketing2, eventSink2, cwd2);
         if (wireUpError is not null)
         {
-            Console.Error.WriteLine($"Secret error: {wireUpError}");
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.MissingSecret, wireUpError);
+            else Console.Error.WriteLine($"Secret error: {wireUpError}");
             return 3;
         }
         if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]))
         {
-            Console.Error.WriteLine($"Error: ticket-id is required");
-            Console.Error.WriteLine($"Usage: build {verb} <ticket-id>");
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "ticket-id is required");
+            else
+            {
+                Console.Error.WriteLine($"Error: ticket-id is required");
+                Console.Error.WriteLine($"Usage: build {verb} <ticket-id>");
+            }
             return 2;
         }
 
@@ -1042,12 +1047,33 @@ static async Task<int> RunAsync(string[] args)
             var verbResult = await cmd.ExecuteAsync(ctx, verbCts.Token);
             if (!verbResult.Success)
             {
-                Console.Error.WriteLine($"Command '{verb}' failed: {verbResult.Message}");
+                if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, verbResult.Message ?? "command failed");
+                else Console.Error.WriteLine($"Command '{verb}' failed: {verbResult.Message}");
                 return 1;
             }
-            if (!string.IsNullOrEmpty(verbResult.Message))
+            if (jsonOutput)
+                CliEnvelopeWriter.WriteAck(Console.Out, verbTicketId, verb);
+            else if (!string.IsNullOrEmpty(verbResult.Message))
                 Console.WriteLine(verbResult.Message);
             return 0;
+        }
+        catch (ArgumentException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, ex.Message);
+            else Console.Error.WriteLine($"Error: {ex.Message}");
+            return 2;
+        }
+        catch (KeyNotFoundException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.NotFound, ex.Message);
+            else Console.Error.WriteLine($"Command '{verb}' failed: {ex.Message}");
+            return 1;
+        }
+        catch (PlaneApiException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
+            else Console.Error.WriteLine($"Command '{verb}' failed: Plane API {ex.Status}: {ex.Body}");
+            return 1;
         }
         catch (OperationCanceledException)
         {

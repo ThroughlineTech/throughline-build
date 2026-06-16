@@ -66,6 +66,9 @@ public class CliEnvelopeWriterTests
         Assert.Equal("M", data.GetProperty("size").GetString());
         Assert.Equal("Medium", data.GetProperty("risk").GetString());
         Assert.Equal("TLB-500", data.GetProperty("parentId").GetString());
+        // Body is exposed both as readable plain text and as the raw Plane HTML.
+        Assert.Equal("body", data.GetProperty("description").GetString());
+        Assert.Equal("<p>body</p>", data.GetProperty("descriptionHtml").GetString());
 
         var labels = data.GetProperty("labels").EnumerateArray().Select(e => e.GetString()).ToArray();
         Assert.Equal(new[] { "build", "tooling" }, labels);
@@ -84,6 +87,7 @@ public class CliEnvelopeWriterTests
         Assert.Equal("feature", view.Type);
         Assert.Equal(TicketState.InProgress, view.State);
         Assert.Equal("<p>body</p>", view.DescriptionHtml);
+        Assert.Equal("body", view.Description);
         Assert.Equal("TLB-500", view.ParentId);
         Assert.Equal(2, view.Labels.Count);
         var rel = Assert.Single(view.Relations);

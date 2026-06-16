@@ -72,6 +72,13 @@ public static class CliEnvelopeWriter
         output.WriteLine(JsonSerializer.Serialize(envelope, CliJsonContext.Default.TransitionEnvelope));
     }
 
+    /// <summary>Write a success acknowledgement for a lifecycle verb (close, defer, reopen, amend).</summary>
+    public static void WriteAck(TextWriter output, string ticketId, string action)
+    {
+        var envelope = new AckEnvelope(SchemaVersion, Ok: true, new AckView(ticketId, action));
+        output.WriteLine(JsonSerializer.Serialize(envelope, CliJsonContext.Default.AckEnvelope));
+    }
+
     /// <summary>Project a domain <see cref="Ticket"/> onto its wire shape.</summary>
     public static TicketView ToView(Ticket ticket) => new(
         Id: ticket.Id,
@@ -81,6 +88,7 @@ public static class CliEnvelopeWriter
         State: ticket.State,
         Size: ticket.Size,
         Risk: ticket.Risk,
+        Description: HtmlToText.Render(ticket.DescriptionHtml),
         DescriptionHtml: ticket.DescriptionHtml,
         ParentId: ticket.ParentId,
         Labels: ticket.Labels,

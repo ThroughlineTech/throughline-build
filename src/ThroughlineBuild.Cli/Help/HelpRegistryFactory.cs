@@ -354,13 +354,14 @@ public static class HelpRegistryFactory
         Name:    "amend",
         Group:   CommandGroup.WorkItems,
         Summary: "Amend an existing ticket",
-        Usage:   "amend <ticket-id> (--size S|M|L | --note \"...\" | --description <path|-> | --ac <path|->) [...]",
+        Usage:   "amend <ticket-id> (--size S|M|L | --note \"...\" | --description <path|-> | --ac <path|->) [--json]",
         Options:
         [
             new("--size S|M|L",         "Update the size label",                               false),
             new("--note \"...\"",       "Append a context note to the description",            false),
             new("--description <path>", "Replace the description from a file or stdin (-)",    false),
             new("--ac <path>",          "Replace the acceptance criteria from a file or stdin (-)", false),
+            new("--json",               "Emit the result as a JSON envelope instead of text",  false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2],
         Examples:  []
@@ -370,10 +371,11 @@ public static class HelpRegistryFactory
         Name:    "close",
         Group:   CommandGroup.WorkItems,
         Summary: "Close a ticket",
-        Usage:   "close <ticket-id> <reason> [--no-cascade]",
+        Usage:   "close <ticket-id> <reason> [--no-cascade] [--json]",
         Options:
         [
             new("--no-cascade", "Do not close non-terminal child tickets", false),
+            new("--json",       "Emit the result as a JSON envelope instead of text", false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2],
         Examples:  []
@@ -383,10 +385,11 @@ public static class HelpRegistryFactory
         Name:    "defer",
         Group:   CommandGroup.WorkItems,
         Summary: "Defer a ticket",
-        Usage:   "defer <ticket-id> <reason> [--no-cascade]",
+        Usage:   "defer <ticket-id> <reason> [--no-cascade] [--json]",
         Options:
         [
             new("--no-cascade", "Do not defer non-terminal child tickets", false),
+            new("--json",       "Emit the result as a JSON envelope instead of text", false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2],
         Examples:  []
@@ -396,8 +399,11 @@ public static class HelpRegistryFactory
         Name:    "reopen",
         Group:   CommandGroup.WorkItems,
         Summary: "Reopen a closed or deferred ticket",
-        Usage:   "reopen <ticket-id> [reason]",
-        Options:  [],
+        Usage:   "reopen <ticket-id> [reason] [--json]",
+        Options:
+        [
+            new("--json", "Emit the result as a JSON envelope instead of text", false),
+        ],
         ExitCodes: [s_exit0, s_exit1, s_exit2],
         Examples:  []
     );
