@@ -53,7 +53,8 @@ public class Phase2EnvelopeTests
         var data = doc.RootElement.GetProperty("data");
         var c0 = Assert.Single(data.EnumerateArray());
         Assert.Equal("c1", c0.GetProperty("id").GetString());
-        Assert.Equal("<p>first note</p>", c0.GetProperty("body").GetString());
+        // Plane HTML is rendered to plain text for the envelope.
+        Assert.Equal("first note", c0.GetProperty("body").GetString());
         Assert.True(c0.TryGetProperty("createdAt", out _));
     }
 

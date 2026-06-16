@@ -45,11 +45,14 @@ public static class CliEnvelopeWriter
         output.WriteLine(JsonSerializer.Serialize(envelope, CliJsonContext.Default.ListEnvelope));
     }
 
-    /// <summary>Write a success envelope wrapping a ticket's comments.</summary>
+    /// <summary>
+    /// Write a success envelope wrapping a ticket's comments. Bodies are rendered from Plane's
+    /// stored HTML to plain text so the envelope is readable (agents and humans), not markup.
+    /// </summary>
     public static void WriteComments(TextWriter output, IReadOnlyList<TicketComment> comments)
     {
         var rows = comments
-            .Select(c => new CommentView(c.Id, c.Body, c.CreatedAt))
+            .Select(c => new CommentView(c.Id, HtmlToText.Render(c.Body), c.CreatedAt))
             .ToList();
         var envelope = new CommentsEnvelope(SchemaVersion, Ok: true, rows);
         output.WriteLine(JsonSerializer.Serialize(envelope, CliJsonContext.Default.CommentsEnvelope));

@@ -735,7 +735,7 @@ static async Task<int> RunAsync(string[] args)
                 foreach (var c in comments)
                 {
                     Console.WriteLine($"[{c.CreatedAt:u}] {c.Id}");
-                    Console.WriteLine(c.Body);
+                    Console.WriteLine(HtmlToText.Render(c.Body));
                     Console.WriteLine();
                 }
             }
