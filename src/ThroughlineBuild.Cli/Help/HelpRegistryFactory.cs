@@ -37,6 +37,7 @@ public static class HelpRegistryFactory
         // Work items
         r.Register(New());
         r.Register(List());
+        r.Register(Get());
         r.Register(Amend());
         r.Register(Close());
         r.Register(Defer());
@@ -271,6 +272,23 @@ public static class HelpRegistryFactory
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2],
         Examples:  []
+    );
+
+    private static CommandHelp Get() => new(
+        Name:    "get",
+        Group:   CommandGroup.WorkItems,
+        Summary: "Read a single ticket",
+        Usage:   "get <ticket-id> [--json]",
+        Options:
+        [
+            new("--json", "Emit the ticket as a versioned JSON envelope on stdout instead of text", false),
+        ],
+        ExitCodes: [s_exit0, s_exit1, s_exit2],
+        Examples:
+        [
+            new("get TLB-541",        "Print a ticket as human-readable text"),
+            new("get TLB-541 --json", "Print the ticket as a JSON envelope for an agent to parse"),
+        ]
     );
 
     private static CommandHelp Amend() => new(

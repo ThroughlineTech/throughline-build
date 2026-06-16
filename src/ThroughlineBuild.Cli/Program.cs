@@ -1,5 +1,6 @@
 using System.Net.Http;
 using ThroughlineBuild.Cli;
+using ThroughlineBuild.Cli.Json;
 using ThroughlineBuild.Commands;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
@@ -58,12 +59,13 @@ static async Task<int> RunAsync(string[] args)
         return 2;
     }
 
-    // Pre-pass: strip --debug, --quiet, --summary-json, and --error-location from args before any positional parser sees them.
-    // All four are bare bool flags (no value); the existing key/value parser expects pairs
+    // Pre-pass: strip --debug, --quiet, --summary-json, --json, and --error-location from args before any positional parser sees them.
+    // All are bare bool flags (no value); the existing key/value parser expects pairs
     // and would mangle subsequent args if they were left in.
     bool debugMode = false;
     bool quietMode = false;
     bool summaryJson = false;
+    bool jsonOutput = false;
     bool errorLocation = false;
     bool noAutoResolve = false;
     bool noAutoMerge = false;
@@ -83,6 +85,8 @@ static async Task<int> RunAsync(string[] args)
             quietMode = true;
         else if (a == "--summary-json")
             summaryJson = true;
+        else if (a == "--json")
+            jsonOutput = true;
         else if (a == "--error-location")
             errorLocation = true;
         else if (a == "--no-auto-resolve")
@@ -435,8 +439,12 @@ static async Task<int> RunAsync(string[] args)
     }
     catch (ConfigException ex)
     {
-        Console.Error.WriteLine($"Config error: {ex.Message}");
-        if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+        if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.ConfigError, ex.Message);
+        else
+        {
+            Console.Error.WriteLine($"Config error: {ex.Message}");
+            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+        }
         return 2;
     }
 
@@ -449,8 +457,12 @@ static async Task<int> RunAsync(string[] args)
     }
     catch (ConfigException ex)
     {
-        Console.Error.WriteLine($"Config error: {ex.Message}");
-        if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+        if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.ConfigError, ex.Message);
+        else
+        {
+            Console.Error.WriteLine($"Config error: {ex.Message}");
+            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+        }
         return 2;
     }
 
@@ -461,8 +473,12 @@ static async Task<int> RunAsync(string[] args)
     }
     catch (ConfigException ex)
     {
-        Console.Error.WriteLine($"Secret error: {ex.Message}");
-        if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+        if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.MissingSecret, ex.Message);
+        else
+        {
+            Console.Error.WriteLine($"Secret error: {ex.Message}");
+            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+        }
         return 3;
     }
 
@@ -553,6 +569,89 @@ static async Task<int> RunAsync(string[] args)
                 return 1;
             }
             return 0;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+    }
+
+    // 'build get <ticket-id> [--json]' reads a single ticket. The first read verb on the
+    // versioned --json envelope (TLB-541): the agent shells out and parses the envelope
+    // instead of curling Plane itself. No worker, no event log - a thin Plane read.
+    if (verb == "get")
+    {
+        if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]) || args[1].StartsWith("--"))
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "ticket-id is required");
+            else
+            {
+                Console.Error.WriteLine("Error: ticket-id is required");
+                Console.Error.WriteLine("Usage: build get <ticket-id> [--json]");
+            }
+            return 2;
+        }
+
+        var getTicketId = args[1];
+        var http2 = new HttpClient();
+        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
+        {
+            BaseUrl = config2.Ticketing.PlaneBaseUrl,
+            ApiToken = secrets2.PlaneApiToken,
+            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
+            ProjectId = config2.Ticketing.PlaneProjectId,
+            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
+        });
+
+        try
+        {
+            using var verbCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+            var ticket = await ticketing2.GetAsync(getTicketId, verbCts.Token);
+
+            if (jsonOutput)
+            {
+                CliEnvelopeWriter.WriteTicket(Console.Out, CliEnvelopeWriter.ToView(ticket));
+            }
+            else
+            {
+                Console.WriteLine($"{ticket.Id}  {ticket.Title}");
+                Console.WriteLine($"  state:  {ticket.State}");
+                Console.WriteLine($"  type:   {(string.IsNullOrEmpty(ticket.Type) ? "-" : ticket.Type)}");
+                Console.WriteLine($"  size:   {ticket.Size}    risk: {ticket.Risk}");
+                if (ticket.ParentId is not null) Console.WriteLine($"  parent: {ticket.ParentId}");
+                if (ticket.Labels.Count > 0) Console.WriteLine($"  labels: {string.Join(", ", ticket.Labels)}");
+                foreach (var rel in ticket.Relations) Console.WriteLine($"  rel:    {rel.Kind} -> {rel.TargetId}");
+            }
+            return 0;
+        }
+        catch (ArgumentException ex)
+        {
+            // ParseSequenceId rejects a malformed id ("abc", "TLB-") - a usage error, not a miss.
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, ex.Message);
+            else Console.Error.WriteLine($"Error: {ex.Message}");
+            return 2;
+        }
+        catch (KeyNotFoundException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.NotFound, ex.Message);
+            else Console.Error.WriteLine($"Command 'get' failed: {ex.Message}");
+            return 1;
+        }
+        catch (PlaneApiException ex) when (ex.Status == 404)
+        {
+            var msg = PlaneTicketingClient.BuildProjectNotFoundMessage(
+                config2.Ticketing.PlaneWorkspaceSlug, config2.Ticketing.PlaneProjectId, ex);
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.ConfigError, msg);
+            else Console.Error.WriteLine("Command 'get' failed: " + msg);
+            return 1;
+        }
+        catch (PlaneApiException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
+            else Console.Error.WriteLine($"Command 'get' failed: Plane API {ex.Status}: {ex.Body}");
+            return 1;
         }
         catch (OperationCanceledException)
         {
