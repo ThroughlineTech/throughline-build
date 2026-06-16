@@ -18,3 +18,8 @@ src/tools/artifacts/
 /Directory.Build.props
 /Directory.Build.targets
 .DS_Store
+
+# Throughline Build (managed by 'build setup')
+.build/*.md
+Thumbs.db
+*.swp
