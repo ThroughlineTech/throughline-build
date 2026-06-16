@@ -25,4 +25,13 @@ public class ClaudeCodeOptions
     // false from config to opt back into the gate (rarely useful for workers,
     // but kept as an escape hatch).
     public bool BypassPermissions { get; init; } = true;
+    // Interactive-hook runs do not rely on Claude's Stop hook for correctness anymore:
+    // completion is synthesized from the persisted transcript. Keeping the hook enabled
+    // preserves the build CLI's fast-path/debug behavior, while reusable library hosts can
+    // disable it when they do not expose an "internal claude-stop-hook" command.
+    public bool EnableStopHook { get; init; } = true;
+    // Optional command prefix for the Claude Stop hook in interactive-hook mode. When null
+    // and EnableStopHook is true, the transport infers the current build executable. Library
+    // consumers that do host the bridge can pass their own executable/argument vector here.
+    public IReadOnlyList<string>? StopHookCommandPrefix { get; init; } = null;
 }

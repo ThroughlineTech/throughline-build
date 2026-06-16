@@ -156,11 +156,11 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
             // Permissions mode" acceptance dialog (the flag alone does not auto-accept it, and
             // an unattended PTY launch would otherwise hang at it). This is the narrowly-scoped
             // mechanism - NOT IS_SANDBOX, which would falsely flip claude's global sandbox state.
+            // The Stop hook itself is optional for library hosts: completion is synthesized from
+            // the persisted transcript, and the hook is only a best-effort fast-path/debug aid.
             await File.WriteAllTextAsync(
                 settingsPath,
-                ClaudeHookSettingsBuilder.Build(
-                    _hookCommandPrefix ?? ResolveHookCommandPrefix(), run.Path, run.RunId,
-                    skipDangerousModePermissionPrompt: _options.BypassPermissions),
+                BuildSettingsJson(run),
                 ct);
 
             _options.Sizes.TryGetValue(options.Size, out var tier);
@@ -683,6 +683,19 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
         if (!File.Exists(buildAssembly))
             throw new InvalidOperationException($"Current build assembly was not found at '{buildAssembly}'.");
         return [processPath, buildAssembly];
+    }
+
+    private string BuildSettingsJson(ClaudeRunDirectory run)
+    {
+        if (!_options.EnableStopHook)
+            return ClaudeHookSettingsBuilder.BuildWithoutStopHook(
+                skipDangerousModePermissionPrompt: _options.BypassPermissions);
+
+        return ClaudeHookSettingsBuilder.Build(
+            _hookCommandPrefix ?? _options.StopHookCommandPrefix ?? ResolveHookCommandPrefix(),
+            run.Path,
+            run.RunId,
+            skipDangerousModePermissionPrompt: _options.BypassPermissions);
     }
 
     private static WorkerResult Failure(string summary, string reason) =>

@@ -39,6 +39,14 @@ public static class ClaudeHookSettingsBuilder
         return JsonSerializer.Serialize(settings, ClaudeHookJsonContext.Default.ClaudeHookSettings);
     }
 
+    public static string BuildWithoutStopHook(bool skipDangerousModePermissionPrompt = false)
+    {
+        var settings = new ClaudeHookSettings(
+            skipDangerousModePermissionPrompt ? true : null,
+            new Dictionary<string, ClaudeHookMatcher[]>());
+        return JsonSerializer.Serialize(settings, ClaudeHookJsonContext.Default.ClaudeHookSettings);
+    }
+
     internal static string Quote(string value)
     {
         var normalized = value.Replace('\\', '/');

@@ -495,6 +495,16 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
     }
 
     [Fact]
+    public void SettingsBuilder_CanOmitStopHookForLibraryHosts()
+    {
+        var json = ClaudeHookSettingsBuilder.BuildWithoutStopHook(skipDangerousModePermissionPrompt: true);
+        using var document = JsonDocument.Parse(json);
+
+        Assert.True(document.RootElement.GetProperty("skipDangerousModePermissionPrompt").GetBoolean());
+        Assert.Empty(document.RootElement.GetProperty("hooks").EnumerateObject());
+    }
+
+    [Fact]
     public async Task SameWorktreeCollision_IsPreventedWithoutLaunchingClaude()
     {
         var worktree = Path.Combine(_root, "shared worktree");
