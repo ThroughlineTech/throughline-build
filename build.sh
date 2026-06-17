@@ -15,7 +15,12 @@ fi
 EXT=""
 [[ "$RID" == win-* ]] && EXT=".exe"
 
+# Also install the binaries to a directory on PATH so they are runnable from
+# anywhere (e.g. the VS Code integrated terminal). Override with INSTALL_DIR=...
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
+
 mkdir -p bin
+mkdir -p "$INSTALL_DIR"
 
 echo "==> Publishing ThroughlineBuild.Cli ($RID)"
 dotnet publish src/ThroughlineBuild.Cli -r "$RID" -c Release --nologo -v q
@@ -30,5 +35,16 @@ dotnet publish src/tools/analyze-event-log.cs -r "$RID" -c Release --nologo -v q
 cp "src/tools/artifacts/analyze-event-log/analyze-event-log$EXT" "bin/analyze-event-log$EXT"
 
 echo
-echo "Done. Binaries copied to bin/:"
+echo "==> Installing to $INSTALL_DIR"
+for b in "build$EXT" "token-audit$EXT" "analyze-event-log$EXT"; do
+  cp "bin/$b" "$INSTALL_DIR/$b"
+done
+
+echo
+echo "Done. Binaries copied to bin/ and installed to $INSTALL_DIR:"
 ls -1 "bin/build$EXT" "bin/token-audit$EXT" "bin/analyze-event-log$EXT"
+
+case ":$PATH:" in
+  *":$INSTALL_DIR:"*) ;;
+  *) echo; echo "Note: $INSTALL_DIR is not on your PATH; add it to run these from anywhere." ;;
+esac
