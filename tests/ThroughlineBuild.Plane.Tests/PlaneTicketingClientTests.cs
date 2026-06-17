@@ -160,7 +160,8 @@ internal static class TestData
         """
         {
           "results": [
-            { "id": "eeeeeeee-0000-0000-0000-000000000001", "relation_type": "blocks", "related_issue": "ffffffff-0000-0000-0000-000000000001" }
+            { "id": "eeeeeeee-0000-0000-0000-000000000001", "relation_type": "blocks",
+              "related_issue": { "id": "ffffffff-0000-0000-0000-000000000001", "sequence_id": 999, "name": "related" } }
           ]
         }
         """;
@@ -650,7 +651,9 @@ public class GetRelationsAsyncTests
 
         Assert.Single(relations);
         Assert.Equal("blocks", relations[0].Kind);
-        Assert.Equal("ffffffff-0000-0000-0000-000000000001", relations[0].TargetId);
+        // TargetId is the canonical display id (FormatTicketId of the nested sequence_id),
+        // not the related issue's raw UUID - that is the form the chain graph keys on.
+        Assert.Equal("TLB-999", relations[0].TargetId);
     }
 
     [Fact]
@@ -660,6 +663,21 @@ public class GetRelationsAsyncTests
         var handler = new FakeMessageHandler();
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
         handler.Enqueue(FakeMessageHandler.OkJson("""{"results": null}"""));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var relations = await client.GetRelationsAsync("TLB-24", CancellationToken.None);
+
+        Assert.Empty(relations);
+    }
+
+    [Fact]
+    public async Task GetRelationsAsync_EndpointReturns404_DegradesToEmpty()
+    {
+        // Regression: the relations lookup is an optional dependency-graph read. A 404 from the
+        // endpoint must degrade to "no relations", never bubble out and abort a `build chain` run.
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson())); // issue lookup
+        handler.Enqueue(FakeMessageHandler.ErrorJson(404, """{"error": "Page not found."}"""));
 
         var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
         var relations = await client.GetRelationsAsync("TLB-24", CancellationToken.None);
@@ -684,7 +702,7 @@ public class GetRelationsAsyncTests
 
         var relationGets = handler.Requests
             .Where(r => r.Method == HttpMethod.Get
-                && r.RequestUri!.ToString().Contains("/relations/"))
+                && r.RequestUri!.ToString().Contains("/issue-relation/"))
             .ToList();
         Assert.Single(relationGets);
     }
@@ -1522,7 +1540,7 @@ public class AddRelationAsyncTests
 
         var postReq = handler.Requests[^1];
         Assert.Equal(HttpMethod.Post, postReq.Method);
-        Assert.EndsWith($"issues/{TestData.IssueUuid}/relations/", postReq.RequestUri!.AbsolutePath);
+        Assert.EndsWith($"issues/{TestData.IssueUuid}/issue-relation/", postReq.RequestUri!.AbsolutePath);
         Assert.Contains("\"relation_type\":\"blocked_by\"", postReq.Body);
         Assert.Contains($"\"issues\":[\"{TestData.IssueUuid}\"]", postReq.Body);
         Assert.DoesNotContain("related_issue", postReq.Body);

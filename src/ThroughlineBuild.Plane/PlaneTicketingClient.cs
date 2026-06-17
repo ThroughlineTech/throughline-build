@@ -829,14 +829,25 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
             if (_relationsByIssueUuid.TryGetValue(issue.Id, out var cached))
                 return cached;
 
-            var relationList = await GetJsonAsync<PlaneRelationList>(
-                $"{IssuesBase}{issue.Id}/relations/", PlaneJsonContext.Default, token).ConfigureAwait(false);
+            try
+            {
+                var relationList = await GetJsonAsync<PlaneRelationList>(
+                    $"{IssuesBase}{issue.Id}/issue-relation/", PlaneJsonContext.Default, token).ConfigureAwait(false);
 
-            var relations = (relationList.Results ?? [])
-                .Select(r => new Relation(r.RelationType, r.RelatedIssue))
-                .ToList()
-                .AsReadOnly();
-            return _relationsByIssueUuid.GetOrAdd(issue.Id, relations);
+                var relations = (relationList.Results ?? [])
+                    .Where(r => r.RelatedIssue is not null)
+                    .Select(r => new Relation(r.RelationType, FormatTicketId(r.RelatedIssue!.SequenceId)))
+                    .ToList()
+                    .AsReadOnly();
+                return _relationsByIssueUuid.GetOrAdd(issue.Id, relations);
+            }
+            catch (PlaneApiException ex) when (ex.Status == 404)
+            {
+                // Relations are an optional dependency-graph lookup; a missing endpoint or
+                // resource must degrade to "no relations", never abort a chain run.
+                return _relationsByIssueUuid.GetOrAdd(
+                    issue.Id, (IReadOnlyList<Relation>)Array.Empty<Relation>());
+            }
         }, ct).ConfigureAwait(false);
     }
 
@@ -1314,7 +1325,7 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
             var blockerIssue = await FindIssueAsync(blockerSeq, token).ConfigureAwait(false);
 
             await PostJsonAsync(
-                $"{IssuesBase}{blockedIssue.Id}/relations/",
+                $"{IssuesBase}{blockedIssue.Id}/issue-relation/",
                 new CreateRelationRequest("blocked_by", new List<string> { blockerIssue.Id }),
                 PlaneJsonContext.Default,
                 token).ConfigureAwait(false);

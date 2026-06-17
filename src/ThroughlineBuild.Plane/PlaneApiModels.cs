@@ -59,10 +59,19 @@ public record PlaneCommentList(
     [property: JsonPropertyName("results")] List<PlaneCommentListItem> Results
 );
 
+// The relations GET response nests the related issue as an object, not a bare UUID
+// string: {"id": "<uuid>", "sequence_id": 560, "name": "..."}. Deserializing that into a
+// string throws JsonException, so the related side must be modeled as a record.
+public record PlaneRelatedIssueRef(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("sequence_id")] int SequenceId,
+    [property: JsonPropertyName("name")] string? Name
+);
+
 public record PlaneRelationItem(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("relation_type")] string RelationType,
-    [property: JsonPropertyName("related_issue")] string RelatedIssue
+    [property: JsonPropertyName("related_issue")] PlaneRelatedIssueRef? RelatedIssue
 );
 
 public record PlaneRelationList(
@@ -199,6 +208,7 @@ public record PlaneCreateProjectResponse(
 [JsonSerializable(typeof(PlaneCommentListItem))]
 [JsonSerializable(typeof(PlaneCommentList))]
 [JsonSerializable(typeof(List<PlaneCommentListItem>))]
+[JsonSerializable(typeof(PlaneRelatedIssueRef))]
 [JsonSerializable(typeof(PlaneRelationItem))]
 [JsonSerializable(typeof(PlaneRelationList))]
 [JsonSerializable(typeof(PlaneStateExpansion))]

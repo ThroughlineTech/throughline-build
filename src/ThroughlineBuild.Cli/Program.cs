@@ -2485,31 +2485,26 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             return (1, true);
         }
 
-        var ticketIdSet = new HashSet<string>(allTicketIds, StringComparer.OrdinalIgnoreCase);
-        var graph = new ThroughlineBuild.Phases.TicketGraph();
-        foreach (var id in allTicketIds)
-            graph.AddNode(id);
-
-        // Add edges for blocked_by relations that are within the dispatched set.
+        // Fetch each dispatched ticket's relations, then build the blocked_by dependency graph.
+        // ChainDependencyGraph normalizes CLI ids ("92") against relation targets ("TLB-92") so
+        // ordering forms regardless of which id form was typed.
+        var relationsByTicketId =
+            new Dictionary<string, IReadOnlyList<ThroughlineBuild.Contracts.Models.Relation>>();
         try
         {
             using var relCts = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; relCts.Cancel(); };
             foreach (var id in allTicketIds)
-            {
-                var relations = await ticketing.GetRelationsAsync(id, relCts.Token).ConfigureAwait(false);
-                foreach (var rel in relations)
-                {
-                    if (rel.Kind == "blocked_by" && ticketIdSet.Contains(rel.TargetId))
-                        graph.AddEdge(rel.TargetId, id); // TargetId blocks id
-                }
-            }
+                relationsByTicketId[id] =
+                    await ticketing.GetRelationsAsync(id, relCts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
             Console.Error.WriteLine("Cancelled.");
             return (1, true);
         }
+
+        var graph = ThroughlineBuild.Phases.ChainDependencyGraph.Build(allTicketIds, relationsByTicketId);
 
         var dispatcher = new ThroughlineBuild.Phases.ParallelDispatcher(
             chainPhase,
