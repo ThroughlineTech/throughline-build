@@ -9,7 +9,10 @@
 //     dotnet publish analyze_event_log.cs -c Release
 //
 // Reports per-phase LLM token usage, estimated cost, and timing.
-// Event-supplied cost_usd is authoritative; the pricing table is a fallback.
+// The pricing table is authoritative for recognized models; event-supplied
+// cost_usd is the fallback for unrecognized models only. Worker CLIs can carry
+// stale per-model pricing (a new model billed at an old model's rates), so when
+// both are available and disagree by more than 10% a warning shows both sums.
 
 using System.Text.Json;
 
@@ -32,6 +35,14 @@ if (args.Length == 0 || (args.Length > 0 && (args[0] == "--help" || args[0] == "
 // input_tokens, so the estimator subtracts them before applying the full input rate.
 var pricing = new Pricing[]
 {
+    // First prefix match wins: specific rows must precede the generic "claude-opus-4" row,
+    // which catches only the older dated IDs (claude-opus-4-20250514, claude-opus-4-1-...)
+    // still priced at $15/$75. Opus was repriced to $5/$25 from 4.5 onward.
+    new("claude-fable-5",   10.00m, 50.00m, 1.00m, 12.50m, CachedTokensIncludedInInput: false),
+    new("claude-opus-4-5",   5.00m, 25.00m, 0.50m,  6.25m, CachedTokensIncludedInInput: false),
+    new("claude-opus-4-6",   5.00m, 25.00m, 0.50m,  6.25m, CachedTokensIncludedInInput: false),
+    new("claude-opus-4-7",   5.00m, 25.00m, 0.50m,  6.25m, CachedTokensIncludedInInput: false),
+    new("claude-opus-4-8",   5.00m, 25.00m, 0.50m,  6.25m, CachedTokensIncludedInInput: false),
     new("claude-opus-4",    15.00m, 75.00m, 1.50m, 18.75m, CachedTokensIncludedInInput: false),
     new("claude-sonnet-4",   3.00m, 15.00m, 0.30m,  3.75m, CachedTokensIncludedInInput: false),
     new("claude-haiku-4",    1.00m,  5.00m, 0.10m,  1.25m, CachedTokensIncludedInInput: false),
@@ -48,6 +59,11 @@ var phaseNames = new Dictionary<int, string>
     [3] = "Ship",
     [4] = "Chain",
     [5] = "New",
+    [6] = "Command",
+    [7] = "Draft",
+    [8] = "Scaffold",
+    [9] = "Decompose",
+    [10] = "Gate",
 };
 
 var files = ResolveFiles(args);
@@ -100,10 +116,10 @@ static Bucket AnalyzeAndReport(
     Dictionary<int, string> phaseNames)
 {
     var byPhase = new SortedDictionary<int, Bucket>();
-    string? projectId = null, workspaceSlug = null, buildVersion = null, ticketId = null;
+    string? projectId = null, workspaceSlug = null, buildVersion = null;
     string? firstTs = null, lastTs = null;
-    JsonElement chainEndData = default;
-    bool sawChainEnd = false;
+    var tickets = new List<string>();
+    var chainEnds = new List<(string TicketId, string Outcome, long PhasesRun, long TotalMs)>();
     var subsumedEvents = new List<(string ticketId, string commit)>();
     var reworkByTicket = new SortedDictionary<string, long>(StringComparer.Ordinal);
 
@@ -136,7 +152,9 @@ static Bucket AnalyzeAndReport(
 
         int kind = root.GetProperty("Kind").GetInt32();
         int phase = root.GetProperty("Phase").GetInt32();
-        ticketId ??= root.GetProperty("TicketId").GetString();
+        var ticketId = root.GetProperty("TicketId").GetString();
+        if (ticketId is not null && !tickets.Contains(ticketId))
+            tickets.Add(ticketId);
         var ts = root.GetProperty("Timestamp").GetString();
         firstTs ??= ts;
         lastTs = ts;
@@ -147,9 +165,13 @@ static Bucket AnalyzeAndReport(
 
         if (kind == 7) // ChainEnd
         {
-            // Clone because the JsonDocument is disposed at end of scope.
-            chainEndData = root.GetProperty("Data").Clone();
-            sawChainEnd = true;
+            // A log file can hold many sequential chains (one per ticket in an
+            // op run) -- collect every ChainEnd, not just the last one.
+            var data = root.GetProperty("Data");
+            var outcome = TryGetString(data, "outcome", out var o) ? o! : "n/a";
+            TryGetLong(data, "phases_run", out var phasesRun);
+            TryGetLong(data, "total_duration_ms", out var totalMs);
+            chainEnds.Add((ticketId ?? "n/a", outcome, phasesRun, totalMs));
         }
         else if (kind == 9) // TicketSubsumed
         {
@@ -158,17 +180,16 @@ static Bucket AnalyzeAndReport(
             TryGetString(data, "subsumed_by_commit", out var subCommit);
             subsumedEvents.Add((subTicketId ?? ticketId ?? "n/a", subCommit ?? ""));
         }
-        else if (kind == 3) // VerifierVerdict
+        else if (kind == 8) // ReworkRound
         {
-            var data = root.GetProperty("Data");
-            if (TryGetString(data, "kind", out var verdictKind)
-                && string.Equals(verdictKind, "Rework", StringComparison.Ordinal))
-            {
-                var verdictTicketId = root.GetProperty("TicketId").GetString() ?? "n/a";
-                reworkByTicket[verdictTicketId] = reworkByTicket.TryGetValue(verdictTicketId, out var count)
-                    ? count + 1
-                    : 1;
-            }
+            // Emitted once per rework round that actually runs, whether triggered
+            // by a verifier Rework verdict or a gate failure. Counting verifier
+            // verdicts instead would miss gate-triggered rounds entirely and count
+            // a Rework verdict at the round cap that never executes.
+            var reworkTicketId = ticketId ?? "n/a";
+            reworkByTicket[reworkTicketId] = reworkByTicket.TryGetValue(reworkTicketId, out var count)
+                ? count + 1
+                : 1;
         }
 
         if (!byPhase.TryGetValue(phase, out var bucket))
@@ -190,15 +211,29 @@ static Bucket AnalyzeAndReport(
             bucket.WallClockMs       += GetLong(data, "wall_clock_ms");
             var model = TryGetString(data, "model", out var m) ? m! : "unknown";
             bucket.Models.Add(model);
-            if (TryGetDecimal(data, "cost_usd", out var eventCost))
+            // Pricing table first: worker CLIs have shipped stale per-model
+            // pricing (a new model billed at an old model's rates), so the
+            // event-supplied cost_usd is only trusted for models the table
+            // does not know. When both exist, track the event sum so the
+            // report can flag a divergence.
+            var tableCost = ComputeCost(data, model, pricing);
+            bool hasEventCost = TryGetDecimal(data, "cost_usd", out var eventCost);
+            if (tableCost is decimal computed)
+            {
+                bucket.CostUsd += computed;
+                if (hasEventCost)
+                {
+                    bucket.EventCostUsd += eventCost;
+                    bucket.EventCostCalls++;
+                }
+            }
+            else if (hasEventCost)
             {
                 bucket.CostUsd += eventCost;
             }
             else
             {
-                var cost = ComputeCost(data, model, pricing);
-                if (cost is null) bucket.UnknownModelCost = true;
-                else bucket.CostUsd += cost.Value;
+                bucket.UnknownModelCost = true;
             }
         }
         }
@@ -219,28 +254,43 @@ static Bucket AnalyzeAndReport(
     Console.WriteLine($"Project:        {projectId ?? "n/a"}");
     Console.WriteLine($"Workspace:      {workspaceSlug ?? "n/a"}");
     Console.WriteLine($"Build version:  {buildVersion ?? "n/a"}");
-    Console.WriteLine($"Ticket:         {ticketId ?? "n/a"}");
+    var ticketLabel = tickets.Count > 1 ? "Tickets:" : "Ticket:";
+    var ticketValue = tickets.Count > 0 ? string.Join(", ", tickets) : "n/a";
+    Console.WriteLine($"{ticketLabel,-15} {ticketValue}");
     Console.WriteLine($"First event:    {firstTs ?? "n/a"}");
     Console.WriteLine($"Last event:     {lastTs ?? "n/a"}");
 
-    if (sawChainEnd)
+    if (chainEnds.Count == 1)
     {
-        var outcome = TryGetString(chainEndData, "outcome", out var o) ? o : "n/a";
-        var phasesRun = TryGetLong(chainEndData, "phases_run", out var pr) ? pr.ToString() : "n/a";
+        var (_, outcome, phasesRun, totalMs) = chainEnds[0];
         var rework = reworkByTicket.Values.Sum();
-        var totalMs = TryGetLong(chainEndData, "total_duration_ms", out var td) ? td : 0;
         Console.WriteLine($"Chain outcome:  {outcome}");
         Console.WriteLine($"Phases run:     {phasesRun}");
         Console.WriteLine($"Rework rounds:  {rework}");
         foreach (var (tid, count) in reworkByTicket)
             Console.WriteLine($"  {tid}: {count}");
         Console.WriteLine($"Chain duration: {totalMs / 1000.0:F1}s ({totalMs / 60000.0:F2}m)");
-        if (subsumedEvents.Count > 0)
-        {
-            Console.WriteLine($"Subsumed:       {subsumedEvents.Count} ticket(s) auto-resolved");
-            foreach (var (tid, commit) in subsumedEvents)
-                Console.WriteLine($"  {tid}  subsumed_by {commit}");
-        }
+    }
+    else if (chainEnds.Count > 1)
+    {
+        var rework = reworkByTicket.Values.Sum();
+        var sumMs = chainEnds.Sum(c => c.TotalMs);
+        var sumPhases = chainEnds.Sum(c => c.PhasesRun);
+        Console.WriteLine($"Chains:         {chainEnds.Count}");
+        foreach (var (tid, outcome, phasesRun, totalMs) in chainEnds)
+            Console.WriteLine($"  {tid}: {outcome}, {phasesRun} phases, {totalMs / 1000.0:F1}s");
+        Console.WriteLine($"Phases run:     {sumPhases} (all chains)");
+        Console.WriteLine($"Rework rounds:  {rework}");
+        foreach (var (tid, count) in reworkByTicket)
+            Console.WriteLine($"  {tid}: {count}");
+        Console.WriteLine($"Chain duration: {sumMs / 1000.0:F1}s ({sumMs / 60000.0:F2}m) across {chainEnds.Count} chains");
+    }
+
+    if (chainEnds.Count > 0 && subsumedEvents.Count > 0)
+    {
+        Console.WriteLine($"Subsumed:       {subsumedEvents.Count} ticket(s) auto-resolved");
+        foreach (var (tid, commit) in subsumedEvents)
+            Console.WriteLine($"  {tid}  subsumed_by {commit}");
     }
 
     Console.WriteLine();
@@ -280,6 +330,16 @@ static Bucket AnalyzeAndReport(
 
     if (totals.UnknownModelCost)
         Console.WriteLine("\n* cost is partial; one or more LlmCalls used a model not in the pricing table");
+
+    if (totals.EventCostCalls > 0)
+    {
+        var diff = Math.Abs(totals.CostUsd - totals.EventCostUsd);
+        var baseline = Math.Max(totals.CostUsd, totals.EventCostUsd);
+        if (baseline > 0 && diff / baseline > 0.10m)
+            Console.WriteLine($"\n!! WARNING: worker-reported cost_usd sums to ${totals.EventCostUsd:F4} but the "
+                + $"pricing table computes ${totals.CostUsd:F4} for the same {totals.EventCostCalls} call(s). "
+                + "Reporting the table value; the worker CLI likely has stale pricing for this model.");
+    }
 
     totals.SkippedLines = skipped;
     if (skipped > 0)
@@ -332,10 +392,24 @@ static List<string> ResolveFiles(string[] patterns)
         .ToList();
 }
 
+// Claude Code tier aliases can land in the event log verbatim (a run configured with an
+// alias echoes it in the init system event; an invalid-model failure records the raw
+// configured value). Map them to the slug of the model the alias currently resolves to
+// so those runs do not silently drop out of cost reporting.
+static string NormalizeModelAlias(string model) => model.Trim().ToLowerInvariant() switch
+{
+    "fable" => "claude-fable-5",
+    "opus" => "claude-opus-4-8",
+    "sonnet" => "claude-sonnet-4-6",
+    "haiku" => "claude-haiku-4-5",
+    _ => model,
+};
+
 static decimal? ComputeCost(
     JsonElement data, string model,
     Pricing[] pricing)
 {
+    model = NormalizeModelAlias(model);
     foreach (var p in pricing)
     {
         if (model.StartsWith(p.Prefix, StringComparison.Ordinal))
@@ -411,6 +485,8 @@ sealed class Bucket
     public long ReasoningOutputTokens;
     public long WallClockMs;
     public decimal CostUsd;
+    public decimal EventCostUsd;   // worker-reported cost for calls where the table was used
+    public int EventCostCalls;
     public bool UnknownModelCost;
     public int SkippedLines;
     public HashSet<string> Models = new();
@@ -426,6 +502,8 @@ sealed class Bucket
         ReasoningOutputTokens += other.ReasoningOutputTokens;
         WallClockMs       += other.WallClockMs;
         CostUsd           += other.CostUsd;
+        EventCostUsd      += other.EventCostUsd;
+        EventCostCalls    += other.EventCostCalls;
         SkippedLines      += other.SkippedLines;
         if (other.UnknownModelCost) UnknownModelCost = true;
         foreach (var m in other.Models) Models.Add(m);

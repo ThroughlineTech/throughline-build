@@ -59,7 +59,7 @@ Write a concise summary for ticket 1. Include files changed, key design decision
 
 Repeat for every ticket in the batch.
 
-Then emit one batch WORKER_RESULT envelope:
+Then emit one batch WORKER_RESULT envelope. Emit the summary blocks and the envelope together in your final message - do not split them across separate messages, and write nothing after the envelope JSON:
 
 WORKER_RESULT
 {{worker_result_json}}

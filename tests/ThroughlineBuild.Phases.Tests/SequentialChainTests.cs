@@ -110,7 +110,7 @@ public class SequentialChainTests
     private ChainPhase BuildChain(
         SeqFakeTicketing ticketing,
         Queue<IVerifier> verifierQueue,
-        SeqFakeGitClient git,
+        IGitClient git,
         bool planWorkerFails = false)
     {
         _sessionCounter = 0;
@@ -370,11 +370,11 @@ public class SequentialChainTests
     }
 
     // ==========================================================================
-    // Test 3: multi-ticket parent chain creates and removes exactly one worktree
+    // Test 3: a SUCCESSFUL multi-ticket parent chain sweeps its ticket/chain worktrees
     // ==========================================================================
 
     [Fact]
-    public async Task ParentChain_TwoChildren_CreatesAndRemovesExactlyOneWorktree()
+    public async Task ParentChain_TwoChildren_Success_SweepsTicketAndChainWorktrees()
     {
         // Arrange: two independent children; no blocked_by edges -> both in level 0.
         var parent = MakeParent();
@@ -438,14 +438,22 @@ public class SequentialChainTests
         var result = await chain.RunAsync(new ChainPhaseOptions(ParentId, false), CancellationToken.None);
 
         // Assert: chain completed and created one integration worktree plus one fresh
-        // worktree per leaf. Integration branches/worktrees are retained for resume.
+        // worktree per leaf.
         Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
 
         // Total creates: 1 parent integration worktree + 2 child leaf worktrees.
         Assert.Equal(3, git.CreateWorktreeCallCount);
 
-        // Chain-level cleanup no longer deletes the accumulated integration topology.
-        Assert.Equal(0, git.RemoveWorktreeCallCount);
+        // Defect 2 (commit 6): on a SUCCESSFUL parent chain, the chain-end sweep prunes this
+        // chain's ticket/ and chain/ worktrees so a later glob-based runner does not collect
+        // stale worktree copies and report a false red. All three accumulated worktrees here
+        // are on ticket/ branches and get swept; the main worktree is preserved. (Failure
+        // PRESERVES worktrees for resume - see the preserve-on-failure tests.)
+        Assert.Equal(3, git.RemoveWorktreeCallCount);
+        Assert.All(git.RemovedWorktreePaths, p =>
+            Assert.Contains(".worktrees", p, StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("main", git.BranchAt("/fake/main"));
+        Assert.DoesNotContain("/fake/main", git.RemovedWorktreePaths);
     }
 
     // ==========================================================================
@@ -531,6 +539,142 @@ public class SequentialChainTests
 
         Assert.DoesNotContain(PhaseWorktreeLayout.BranchName(Child1Id), git.DeletedBranches);
         Assert.DoesNotContain(PhaseWorktreeLayout.BranchName(Child2Id), git.DeletedBranches);
+    }
+
+    // ==========================================================================
+    // Test 5: TLB-546 - a reused integration branch is refreshed against its base
+    // ref BEFORE any child dispatches
+    // ==========================================================================
+
+    private const string StaleChainSha = "1111111111111111111111111111111111111111";
+    private const string AheadChainSha = "2222222222222222222222222222222222222222";
+
+    private static string ChainBranchFor(string parentId, string parentTitle) =>
+        "chain/" + PhaseWorktreeLayout.Compute(parentId, parentTitle, Path.GetTempPath()).Slug;
+
+    [Fact]
+    public async Task ParentChain_ReusedStaleIntegrationBranch_RebasesOntoBaseBeforeDispatch()
+    {
+        // A chain/<slug> branch retained by a prior interrupted run is frozen at the base tip
+        // it forked from (a downstream chain: 12 hours stale). The chain must rebase it onto the
+        // current base BEFORE dispatching any child, so children implement against reality.
+        var parent = MakeParent();
+        var child1 = MakeChild(Child1Id, Child1Uuid, TicketState.Backlog);
+
+        var ticketing = new SeqFakeTicketing(parent);
+        ticketing.SeedChildren(ParentUuid, new[] { child1 });
+
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new SeqPassVerifier());
+
+        var chainBranch = ChainBranchFor(ParentId, ParentTitle);
+        // Chain branch resolves to an old sha; base ("main") resolves to MainSha; the refresh
+        // ancestry probe (base-sha ancestor-of chain-sha?) answers NO -> the base advanced.
+        var git = new SeqRefreshGitClient(
+            existingChainBranch: chainBranch,
+            chainBranchSha: StaleChainSha,
+            isAncestor: (a, d) => !(a == MainSha && d == StaleChainSha));
+        var chain = BuildChain(ticketing, verifiers, git);
+
+        var result = await chain.RunAsync(new ChainPhaseOptions(ParentId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        var refreshIdx = git.Ops.FindIndex(o => o.StartsWith("rebase:main", StringComparison.Ordinal));
+        var firstChildIdx = git.Ops.FindIndex(o => o.StartsWith("create-worktree:ticket/", StringComparison.Ordinal));
+        Assert.True(refreshIdx >= 0, "stale integration branch must be rebased onto the base ref");
+        Assert.True(firstChildIdx > refreshIdx,
+            $"refresh must precede the first child dispatch (ops: {string.Join(" | ", git.Ops)})");
+    }
+
+    [Fact]
+    public async Task ParentChain_ReusedIntegrationBranch_AheadOfUnmovedBase_NoRefreshRebase()
+    {
+        // Normal resume: the retained branch carries accumulated child commits and the base has
+        // not moved (the branch's fork point is still the base tip). No rebase must happen -
+        // rewriting shipped-child shas for nothing.
+        var parent = MakeParent();
+        var child1 = MakeChild(Child1Id, Child1Uuid, TicketState.Backlog);
+
+        var ticketing = new SeqFakeTicketing(parent);
+        ticketing.SeedChildren(ParentUuid, new[] { child1 });
+
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new SeqPassVerifier());
+
+        var chainBranch = ChainBranchFor(ParentId, ParentTitle);
+        // Chain tip differs from the base tip, but the base IS an ancestor of the chain tip:
+        // the chain is strictly ahead. isAncestor defaults to true for every probe.
+        var git = new SeqRefreshGitClient(
+            existingChainBranch: chainBranch,
+            chainBranchSha: AheadChainSha);
+        var chain = BuildChain(ticketing, verifiers, git);
+
+        var result = await chain.RunAsync(new ChainPhaseOptions(ParentId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        var firstChildIdx = git.Ops.FindIndex(o => o.StartsWith("create-worktree:ticket/", StringComparison.Ordinal));
+        Assert.True(firstChildIdx >= 0);
+        Assert.DoesNotContain(git.Ops.Take(firstChildIdx),
+            o => o.StartsWith("rebase:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ParentChain_ReusedStaleIntegrationBranch_RefreshConflict_StopsBeforeAnyChild()
+    {
+        // When the refresh rebase conflicts, the chain must fail fast - BEFORE planning or
+        // implementing anything - instead of burning every child and failing at landing.
+        var parent = MakeParent();
+        var child1 = MakeChild(Child1Id, Child1Uuid, TicketState.Backlog);
+
+        var ticketing = new SeqFakeTicketing(parent);
+        ticketing.SeedChildren(ParentUuid, new[] { child1 });
+
+        var verifiers = new Queue<IVerifier>(); // never reached
+
+        var chainBranch = ChainBranchFor(ParentId, ParentTitle);
+        var git = new SeqRefreshGitClient(
+            existingChainBranch: chainBranch,
+            chainBranchSha: StaleChainSha,
+            isAncestor: (a, d) => !(a == MainSha && d == StaleChainSha),
+            conflictOnFirstRebase: true);
+        var chain = BuildChain(ticketing, verifiers, git);
+
+        var result = await chain.RunAsync(new ChainPhaseOptions(ParentId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentStoppedEarly, result.Outcome);
+        Assert.NotNull(result.FinalRationale);
+        Assert.Contains("conflicts", result.FinalRationale);
+        Assert.Contains(chainBranch, result.FinalRationale);
+        Assert.NotNull(result.ChildResults);
+        Assert.Empty(result.ChildResults!);
+        Assert.Contains("rebase-abort", git.Ops);
+        Assert.DoesNotContain(git.Ops, o => o.StartsWith("create-worktree:ticket/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ParentChain_FreshIntegrationBranch_NoRefreshRebase()
+    {
+        // A freshly created integration branch is at the base tip by construction; the refresh
+        // must be a no-op (no rebase before the first child dispatch).
+        var parent = MakeParent();
+        var child1 = MakeChild(Child1Id, Child1Uuid, TicketState.Backlog);
+
+        var ticketing = new SeqFakeTicketing(parent);
+        ticketing.SeedChildren(ParentUuid, new[] { child1 });
+
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new SeqPassVerifier());
+
+        var git = new SeqRefreshGitClient(existingChainBranch: null, chainBranchSha: null);
+        var chain = BuildChain(ticketing, verifiers, git);
+
+        var result = await chain.RunAsync(new ChainPhaseOptions(ParentId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentCompleted, result.Outcome);
+        var firstChildIdx = git.Ops.FindIndex(o => o.StartsWith("create-worktree:ticket/", StringComparison.Ordinal));
+        Assert.True(firstChildIdx >= 0);
+        Assert.DoesNotContain(git.Ops.Take(firstChildIdx),
+            o => o.StartsWith("rebase:", StringComparison.Ordinal));
     }
 
     // ==========================================================================
@@ -728,8 +872,10 @@ public class SequentialChainTests
         public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
             Task.FromResult(MainSha);
 
+        // Snapshot, not a live view: matches production ListWorktreesAsync so a caller can
+        // enumerate one result while a later RemoveWorktreeAsync mutates state.
         public Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<WorktreeInfo>>(_worktrees.AsReadOnly());
+            Task.FromResult<IReadOnlyList<WorktreeInfo>>(_worktrees.ToList());
 
         public Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct)
         {
@@ -833,6 +979,147 @@ public class SequentialChainTests
     }
 
     /// <summary>
+    /// Git fake for the TLB-546 integration-branch refresh tests: per-ref RevParse results, a
+    /// configurable ancestry answer for the refresh probe, an optional conflicting first rebase,
+    /// and an ordered op log so tests can assert the refresh happens BEFORE any child dispatch.
+    /// </summary>
+    private sealed class SeqRefreshGitClient : IGitClient
+    {
+        private readonly List<WorktreeInfo> _worktrees = new();
+        private readonly HashSet<string> _existingBranches = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> _revParseMap = new(StringComparer.Ordinal);
+        private readonly Func<string, string, bool> _isAncestor;
+        private readonly bool _conflictOnFirstRebase;
+        private bool _rebaseSeen;
+
+        public List<string> Ops { get; } = new();
+
+        public SeqRefreshGitClient(
+            string? existingChainBranch,
+            string? chainBranchSha,
+            Func<string, string, bool>? isAncestor = null,
+            bool conflictOnFirstRebase = false)
+        {
+            _worktrees.Add(new WorktreeInfo("/fake/main", "main", MainSha, true, false));
+            if (existingChainBranch is not null)
+            {
+                _existingBranches.Add(existingChainBranch);
+                _revParseMap[existingChainBranch] = chainBranchSha ?? MainSha;
+            }
+            _isAncestor = isAncestor ?? ((_, _) => true);
+            _conflictOnFirstRebase = conflictOnFirstRebase;
+        }
+
+        private static bool PathsEqual(string a, string b)
+        {
+            string af, bf;
+            try { af = Path.GetFullPath(a); } catch { af = a; }
+            try { bf = Path.GetFullPath(b); } catch { bf = b; }
+            return string.Equals(af, bf, StringComparison.OrdinalIgnoreCase);
+        }
+
+        public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(_revParseMap.TryGetValue(refspec, out var sha) ? sha : MainSha);
+
+        public Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<WorktreeInfo>>(_worktrees.ToList());
+
+        public Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct)
+        {
+            _worktrees.RemoveAll(w => string.Equals(w.Path, path, StringComparison.OrdinalIgnoreCase));
+            return Task.FromResult(new WorktreeRemoveResult(true, null));
+        }
+
+        public Task<IReadOnlyList<string>> GetBranchesNotMergedAsync(string pattern, string baseBranch, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+        public Task<WorktreeCreateResult> CreateWorktreeAsync(string worktreePath, string newBranch, string fromRef, string mainWorktreePath, CancellationToken ct)
+        {
+            Ops.Add($"create-worktree:{newBranch}");
+            Directory.CreateDirectory(worktreePath);
+            _worktrees.Add(new WorktreeInfo(worktreePath, newBranch, CommitSha, false, false));
+            return Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
+        }
+
+        public Task<IReadOnlyList<string>> ListLocalBranchesAsync(string pattern, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>(
+                _existingBranches.Contains(pattern) ? new[] { pattern } : Array.Empty<string>());
+
+        public Task<WorktreeCreateResult> CheckoutWorktreeAsync(string worktreePath, string existingBranch, string mainWorktreePath, CancellationToken ct)
+        {
+            Ops.Add($"checkout-worktree:{existingBranch}");
+            Directory.CreateDirectory(worktreePath);
+            _worktrees.Add(new WorktreeInfo(worktreePath, existingBranch, CommitSha, false, false));
+            return Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
+        }
+
+        public Task<string> HeadShaAsync(string worktreePath, CancellationToken ct) =>
+            Task.FromResult(CommitSha);
+
+        public Task<GitDiff> DiffAsync(string fromRef, string toRef, string mainWorktreePath, bool includePatchContent, CancellationToken ct) =>
+            Task.FromResult(new GitDiff(fromRef, toRef, Array.Empty<DiffEntry>()));
+
+        public Task<GitOpResult> FetchAsync(string remote, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+
+        public Task<RebaseResult> RebaseAsync(string ontoRef, string featureWorktreePath, CancellationToken ct)
+        {
+            Ops.Add($"rebase:{ontoRef}");
+            if (_conflictOnFirstRebase && !_rebaseSeen)
+            {
+                _rebaseSeen = true;
+                return Task.FromResult(new RebaseResult(false, true,
+                    new[] { "src/Services/Scheduler.swift" }, "add/add conflict"));
+            }
+            _rebaseSeen = true;
+            // A successful rebase moves the branch checked out at this worktree to the onto
+            // tip (the refresh scenarios carry no unique commits, so it is a fast-forward).
+            var branch = _worktrees.FirstOrDefault(w => PathsEqual(w.Path, featureWorktreePath))?.Branch;
+            if (branch is not null)
+                _revParseMap[branch] = _revParseMap.TryGetValue(ontoRef, out var s) ? s : MainSha;
+            return Task.FromResult(new RebaseResult(true, false, Array.Empty<string>(), null));
+        }
+
+        public Task<GitOpResult> RebaseAbortAsync(string featureWorktreePath, CancellationToken ct)
+        {
+            Ops.Add("rebase-abort");
+            return Task.FromResult(new GitOpResult(true, null));
+        }
+
+        public Task<GitOpResult> FastForwardMergeAsync(string mergeRef, string mainWorktreePath, CancellationToken ct) =>
+            Task.FromResult(new GitOpResult(true, null));
+
+        public Task<GitOpResult> DeleteBranchAsync(string branch, bool force, string mainWorktreePath, CancellationToken ct)
+        {
+            _existingBranches.Remove(branch);
+            return Task.FromResult(new GitOpResult(true, null));
+        }
+
+        public Task<int> RevListCountAsync(string range, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(0);
+
+        public Task<IReadOnlyList<string>> LogOnelineAsync(string range, int limit, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+        public Task<bool> IsAncestorAsync(string ancestor, string descendant, string workingDirectory, CancellationToken ct) =>
+            Task.FromResult(_isAncestor(ancestor, descendant));
+
+        public Task<GitOpResult> CreateBranchAsync(string branch, string fromRef, string worktreePath, CancellationToken ct)
+        {
+            Ops.Add($"create-branch:{branch}");
+            for (int i = 0; i < _worktrees.Count; i++)
+            {
+                if (PathsEqual(_worktrees[i].Path, worktreePath))
+                {
+                    _worktrees[i] = _worktrees[i] with { Branch = branch };
+                    break;
+                }
+            }
+            return Task.FromResult(new GitOpResult(true, null));
+        }
+    }
+
+    /// <summary>
     /// A tracking git fake identical to SeqFakeGitClient but with worktree counts
     /// exposed explicitly. Alias used by the single-worktree test to make intent clear.
     /// </summary>
@@ -847,19 +1134,29 @@ public class SequentialChainTests
 
         public int CreateWorktreeCallCount { get; private set; }
         public int RemoveWorktreeCallCount { get; private set; }
+        public List<string> RemovedWorktreePaths { get; } = new();
 
         public Task<string> RevParseAsync(string refspec, string workingDirectory, CancellationToken ct) =>
             Task.FromResult(MainSha);
 
+        // Snapshot, not a live view: production ListWorktreesAsync re-parses git output into a
+        // fresh list each call, so a caller enumerating one result while a later
+        // RemoveWorktreeAsync mutates state never sees a concurrent-modification throw.
         public Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<WorktreeInfo>>(_worktrees.AsReadOnly());
+            Task.FromResult<IReadOnlyList<WorktreeInfo>>(_worktrees.ToList());
 
         public Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct)
         {
             RemoveWorktreeCallCount++;
+            RemovedWorktreePaths.Add(path);
             _worktrees.RemoveAll(w => string.Equals(w.Path, path, StringComparison.OrdinalIgnoreCase));
             return Task.FromResult(new WorktreeRemoveResult(true, null));
         }
+
+        // Exposes the branch of the worktree at the given path (null if not tracked) so a test
+        // can assert which kinds of worktrees the chain-end sweep removed vs preserved.
+        public string? BranchAt(string path) => _worktrees
+            .FirstOrDefault(w => string.Equals(w.Path, path, StringComparison.OrdinalIgnoreCase))?.Branch;
 
         public Task<IReadOnlyList<string>> GetBranchesNotMergedAsync(string pattern, string baseBranch, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());

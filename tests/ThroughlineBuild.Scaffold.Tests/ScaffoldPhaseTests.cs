@@ -326,6 +326,55 @@ OOS:
     }
 
     [Fact]
+    public async Task HappyPath_BriefTicketsCarrySizeLabelFromPlanEffort()
+    {
+        var path = WriteOpDoc(ValidOpDoc);
+        var ticketing = new FakeTicketing();
+        var events = new FakeEventSink();
+        var phase = new ScaffoldPhase(ticketing, events, "session-1");
+
+        await phase.RunAsync(
+            new ScaffoldOptions(path, DryRun: false, AcceptWarnings: true),
+            CancellationToken.None);
+
+        // Plan A is Effort M -> both its briefs get size:m; Plan B is Effort S -> its brief gets size:s.
+        // The size label is the only label on a brief (briefs never carry plan-ticket).
+        var briefCreates = ticketing.Calls
+            .Where(c => c.LabelNames != null
+                && c.LabelNames.Any(l => l.StartsWith("size:", StringComparison.Ordinal)))
+            .ToList();
+        Assert.Equal(3, briefCreates.Count);
+
+        string SizeOf(string slug) => briefCreates.Single(c => c.Title == slug).LabelNames!.Single();
+        Assert.Equal("size:m", SizeOf("alpha-one"));
+        Assert.Equal("size:m", SizeOf("alpha-two"));
+        Assert.Equal("size:s", SizeOf("beta-one"));
+    }
+
+    [Fact]
+    public async Task NonStandardEffort_DefaultsBriefToSizeM_AndEmitsWarningEvent()
+    {
+        // OpDocWithWarnings declares Plan A with the non-standard effort "XL".
+        var path = WriteOpDoc(OpDocWithWarnings);
+        var ticketing = new FakeTicketing();
+        var events = new FakeEventSink();
+        var phase = new ScaffoldPhase(ticketing, events, "session-1");
+
+        await phase.RunAsync(
+            new ScaffoldOptions(path, DryRun: false, AcceptWarnings: true),
+            CancellationToken.None);
+
+        var briefCreate = ticketing.Calls.Single(c => c.LabelNames != null
+            && c.LabelNames.Any(l => l.StartsWith("size:", StringComparison.Ordinal)));
+        Assert.Equal("size:m", briefCreate.LabelNames!.Single());
+
+        var warning = events.Events.Single(e =>
+            e.Data.TryGetValue("action", out var a) && a.ToString() == "size_label_defaulted");
+        Assert.Equal("XL", warning.Data["effort"].ToString());
+        Assert.Equal("size:m", warning.Data["applied"].ToString());
+    }
+
+    [Fact]
     public async Task HappyPath_ParentLinksUsePlanUuid()
     {
         var path = WriteOpDoc(ValidOpDoc);

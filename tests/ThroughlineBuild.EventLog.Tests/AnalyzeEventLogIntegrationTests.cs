@@ -21,6 +21,107 @@ public class AnalyzeEventLogIntegrationTests
         return dir;
     }
 
+    private static async Task<(string Output, string Error, int ExitCode)> RunAnalyzerAsync(string[] lines)
+    {
+        var solutionRoot = GetSolutionRoot();
+        var toolPath = Path.Combine(solutionRoot, "src", "tools", "analyze-event-log.cs");
+
+        var tempFile = Path.Combine(Path.GetTempPath(), $"analyze-test-{Guid.NewGuid():N}.jsonl");
+        try
+        {
+            await File.WriteAllLinesAsync(tempFile, lines);
+
+            var psi = new ProcessStartInfo("dotnet");
+            psi.ArgumentList.Add("run");
+            psi.ArgumentList.Add(toolPath);
+            psi.ArgumentList.Add(tempFile);
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
+            psi.UseShellExecute = false;
+
+            using var proc = Process.Start(psi)!;
+            var output = await proc.StandardOutput.ReadToEndAsync();
+            var error = await proc.StandardError.ReadToEndAsync();
+            await proc.WaitForExitAsync();
+            return (output, error, proc.ExitCode);
+        }
+        finally
+        {
+            if (File.Exists(tempFile))
+                File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public async Task MultiChainFile_ListsEveryChainAndSumsDurations()
+    {
+        // One op run appends several sequential chains to a single log file;
+        // the summary must cover all of them, not just the last ChainEnd.
+        var (output, error, exitCode) = await RunAnalyzerAsync(new[]
+        {
+            """{"SessionId":"s1","Timestamp":"2026-06-10T21:10:27+00:00","Kind":6,"TicketId":"3","Phase":4,"Data":{"starting_at_phase":"plan"}}""",
+            """{"SessionId":"s1","Timestamp":"2026-06-10T21:16:41+00:00","Kind":7,"TicketId":"3","Phase":4,"Data":{"outcome":"Completed","phases_run":5,"rework_rounds":0,"total_duration_ms":374128}}""",
+            """{"SessionId":"s2","Timestamp":"2026-06-10T21:16:42+00:00","Kind":6,"TicketId":"4","Phase":4,"Data":{"starting_at_phase":"plan"}}""",
+            """{"SessionId":"s2","Timestamp":"2026-06-10T21:21:54+00:00","Kind":7,"TicketId":"4","Phase":4,"Data":{"outcome":"Completed","phases_run":5,"rework_rounds":0,"total_duration_ms":312864}}"""
+        });
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Tickets:        3, 4", output);
+        Assert.Contains("Chains:         2", output);
+        Assert.Contains("3: Completed, 5 phases, 374.1s", output);
+        Assert.Contains("4: Completed, 5 phases, 312.9s", output);
+        Assert.Contains("Phases run:     10", output);
+        Assert.Contains("687.0s", output);  // 374128 + 312864 = 686,992 ms summed across chains
+        Assert.True(string.IsNullOrWhiteSpace(error), error);
+    }
+
+    [Fact]
+    public async Task KnownModel_PricingTableOverridesMispricedEventCost_AndWarns()
+    {
+        // claude-fable-5 is $10/MTok input in the table; the event carries a
+        // worker-computed cost at the wrong (older-model) rate. The table wins
+        // and the divergence is flagged.
+        var (output, error, exitCode) = await RunAnalyzerAsync(new[]
+        {
+            """{"SessionId":"s1","Timestamp":"2026-06-10T21:10:27+00:00","Kind":1,"TicketId":"3","Phase":1,"Data":{"model":"claude-fable-5","vendor":"anthropic","input_tokens":1000000,"output_tokens":0,"cache_read_tokens":0,"cache_create_tokens":0,"wall_clock_ms":1000,"cost_usd":3.0}}"""
+        });
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("$10.0000", output);
+        Assert.Contains("worker-reported cost_usd sums to $3.0000", output);
+        Assert.Contains("pricing table computes $10.0000", output);
+        Assert.DoesNotContain("cost is partial", output);
+        Assert.True(string.IsNullOrWhiteSpace(error), error);
+    }
+
+    [Fact]
+    public async Task KnownModel_AgreeingEventCost_DoesNotWarn()
+    {
+        var (output, error, exitCode) = await RunAnalyzerAsync(new[]
+        {
+            """{"SessionId":"s1","Timestamp":"2026-06-10T21:10:27+00:00","Kind":1,"TicketId":"3","Phase":1,"Data":{"model":"claude-fable-5","vendor":"anthropic","input_tokens":1000000,"output_tokens":0,"cache_read_tokens":0,"cache_create_tokens":0,"wall_clock_ms":1000,"cost_usd":10.0}}"""
+        });
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("$10.0000", output);
+        Assert.DoesNotContain("worker-reported cost_usd", output);
+        Assert.True(string.IsNullOrWhiteSpace(error), error);
+    }
+
+    [Fact]
+    public async Task GatePhaseEvents_AreNamedGateNotPhase10()
+    {
+        var (output, error, exitCode) = await RunAnalyzerAsync(new[]
+        {
+            """{"SessionId":"s1","Timestamp":"2026-06-10T21:16:30+00:00","Kind":13,"TicketId":"3","Phase":10,"Data":{"gate_wall_ms":6860,"gate_attributable_rework_rounds":0,"cascade_caught":0,"false_fails":0}}"""
+        });
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Gate", output);
+        Assert.DoesNotContain("Phase10", output);
+        Assert.True(string.IsNullOrWhiteSpace(error), error);
+    }
+
     [Fact]
     public async Task TicketSubsumedEvent_AppearsInChainSummaryOutput()
     {
@@ -112,11 +213,14 @@ public class AnalyzeEventLogIntegrationTests
         var tempFile = Path.Combine(Path.GetTempPath(), $"analyze-test-{Guid.NewGuid():N}.jsonl");
         try
         {
+            // A verifier Rework verdict (Kind=3) that runs a round is always followed
+            // by a ReworkRound event (Kind=8); the analyzer counts the Kind=8 event.
             var lines = new[]
             {
                 """{"SessionId":"test-session","Timestamp":"2026-06-03T00:00:00+00:00","Kind":1,"TicketId":"TLB-419","Phase":1,"Data":{"model":"unpriced-model","vendor":"anthropic","input_tokens":1000000,"output_tokens":1000000,"cache_read_tokens":1000000,"cache_create_tokens":1000000,"wall_clock_ms":1000,"cost_usd":11.7001}}""",
                 """{"SessionId":"test-session","Timestamp":"2026-06-03T00:00:01+00:00","Kind":3,"TicketId":"TLB-419","Phase":2,"Data":{"kind":"Rework","rationale":"needs one fix"}}""",
-                """{"SessionId":"test-session","Timestamp":"2026-06-03T00:00:02+00:00","Kind":7,"TicketId":"TLB-419","Phase":4,"Data":{"outcome":"Pass","phases_run":4,"rework_rounds":0,"total_duration_ms":5000}}"""
+                """{"SessionId":"test-session","Timestamp":"2026-06-03T00:00:02+00:00","Kind":8,"TicketId":"TLB-419","Phase":1,"Data":{"round":1,"verdict_that_triggered":"Rework","rationale_preview":"needs one fix"}}""",
+                """{"SessionId":"test-session","Timestamp":"2026-06-03T00:00:03+00:00","Kind":7,"TicketId":"TLB-419","Phase":4,"Data":{"outcome":"Pass","phases_run":6,"rework_rounds":1,"total_duration_ms":5000}}"""
             };
             await File.WriteAllLinesAsync(tempFile, lines);
 
@@ -145,5 +249,43 @@ public class AnalyzeEventLogIntegrationTests
             if (File.Exists(tempFile))
                 File.Delete(tempFile);
         }
+    }
+
+    [Fact]
+    public async Task GateTriggeredRework_CountsInReworkRounds()
+    {
+        // A gate failure triggers rework without any verifier Rework verdict:
+        // the chain emits Kind=4 (GateFailure) then Kind=8 (ReworkRound) with
+        // verdict_that_triggered=GateFailure. The round must still be counted.
+        var (output, error, exitCode) = await RunAnalyzerAsync(new[]
+        {
+            """{"SessionId":"s1","Timestamp":"2026-06-10T06:53:00+00:00","Kind":4,"TicketId":"3","Phase":10,"Data":{"kind":"gating_checks_failed","checks_failed":["typecheck","build"]}}""",
+            """{"SessionId":"s1","Timestamp":"2026-06-10T06:53:01+00:00","Kind":8,"TicketId":"3","Phase":1,"Data":{"round":1,"verdict_that_triggered":"GateFailure","rationale_preview":"gate: typecheck, build failed"}}""",
+            """{"SessionId":"s1","Timestamp":"2026-06-10T07:10:06+00:00","Kind":7,"TicketId":"3","Phase":4,"Data":{"outcome":"Completed","phases_run":7,"rework_rounds":1,"total_duration_ms":1026400}}"""
+        });
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Rework rounds:  1", output);
+        Assert.Contains("3: 1", output);
+        Assert.True(string.IsNullOrWhiteSpace(error), error);
+    }
+
+    [Fact]
+    public async Task ReworkVerdictAtRoundCap_DoesNotCountAsExecutedRound()
+    {
+        // A Rework verdict that lands when the round cap is already spent never
+        // runs (ChainOutcome.ReworkCapExceeded) and emits no ReworkRound event,
+        // so it must not inflate the executed-round count: 2 rounds ran, not 3.
+        var (output, error, exitCode) = await RunAnalyzerAsync(new[]
+        {
+            """{"SessionId":"s1","Timestamp":"2026-06-10T06:53:00+00:00","Kind":8,"TicketId":"3","Phase":1,"Data":{"round":1,"verdict_that_triggered":"Rework","rationale_preview":"fix A"}}""",
+            """{"SessionId":"s1","Timestamp":"2026-06-10T06:58:00+00:00","Kind":8,"TicketId":"3","Phase":1,"Data":{"round":2,"verdict_that_triggered":"Rework","rationale_preview":"fix B"}}""",
+            """{"SessionId":"s1","Timestamp":"2026-06-10T07:05:00+00:00","Kind":3,"TicketId":"3","Phase":2,"Data":{"kind":"Rework","rationale":"still broken"}}""",
+            """{"SessionId":"s1","Timestamp":"2026-06-10T07:10:06+00:00","Kind":7,"TicketId":"3","Phase":4,"Data":{"outcome":"ReworkCapExceeded","phases_run":7,"rework_rounds":2,"total_duration_ms":1026400}}"""
+        });
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Rework rounds:  2", output);
+        Assert.True(string.IsNullOrWhiteSpace(error), error);
     }
 }

@@ -1,3 +1,5 @@
+using System.Linq;
+using ThroughlineBuild.Briefs;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Phases;
@@ -577,6 +579,195 @@ public class ImplementPhaseTests
         }
     }
 
+    // ---- Experiment 3: pre-load build + telemetry (Defects 2 & 3) ----
+
+    private const string PreloadHtmlTwo =
+        "<h3>Preload</h3><ul><li><code>src/a.ts</code></li><li><code>src/b.ts</code></li></ul>";
+
+    private static WorkflowEvent? Preload(FakeEventSink events, EventKind kind, string discriminator) =>
+        events.Events.FirstOrDefault(e =>
+            e.Kind == kind && e.Data.TryGetValue("kind", out var k) && (string)k == discriminator);
+
+    [Fact]
+    public async Task BuildAndReportPreload_LoadsDeclaredFiles_EmitsSummaryWithFilesLoaded_NoEmpty()
+    {
+        var events = new FakeEventSink();
+        var phase = new ImplementPhase(new FakeTicketing(MakeTicket(TicketState.Ready)),
+            new FakeWorkerAgent(OkWorkerResult()), events, MakeOptions(), new FakeGitClient(MainSha, CommitSha));
+        Func<string, string?> reader = p => p == "src/a.ts" ? "AAA" : (p == "src/b.ts" ? "BBB" : null);
+
+        var section = await phase.BuildAndReportPreloadAsync("TLB-1", PreloadHtmlTwo, reader, CancellationToken.None);
+
+        Assert.Contains("## Pre-loaded context", section);
+        var summary = Preload(events, EventKind.CostLedger, "preload_summary");
+        Assert.NotNull(summary);
+        Assert.Equal(2, (int)summary!.Data["files_loaded"]);
+        Assert.Equal(2, (int)summary.Data["files_requested"]);
+        Assert.Equal(0, (int)summary.Data["files_truncated"]);
+        // Mechanism fired -> NO preload_empty, NO preload_file_not_found.
+        Assert.Null(Preload(events, EventKind.GateFailure, "preload_empty"));
+        Assert.Null(Preload(events, EventKind.GateFailure, "preload_file_not_found"));
+    }
+
+    [Fact]
+    public async Task BuildAndReportPreload_DeclaredButAllMissing_EmitsEmptyAndNotFound_ReturnsEmptySection()
+    {
+        var events = new FakeEventSink();
+        var phase = new ImplementPhase(new FakeTicketing(MakeTicket(TicketState.Ready)),
+            new FakeWorkerAgent(OkWorkerResult()), events, MakeOptions(), new FakeGitClient(MainSha, CommitSha));
+        var html = "<h3>Preload</h3><ul><li><code>src/missing.ts</code></li></ul>";
+
+        var section = await phase.BuildAndReportPreloadAsync("TLB-1", html, _ => null, CancellationToken.None);
+
+        Assert.Equal(string.Empty, section); // not-found is telemetry, never prompt noise
+        var empty = Preload(events, EventKind.GateFailure, "preload_empty");
+        Assert.NotNull(empty);
+        Assert.Equal(1, (int)empty!.Data["requested"]);
+        var notFound = Preload(events, EventKind.GateFailure, "preload_file_not_found");
+        Assert.NotNull(notFound);
+        Assert.Equal("src/missing.ts", (string)notFound!.Data["file"]);
+        Assert.Equal(0, (int)Preload(events, EventKind.CostLedger, "preload_summary")!.Data["files_loaded"]);
+    }
+
+    [Fact]
+    public async Task BuildAndReportPreload_GateOff_NoEvents_NoSection()
+    {
+        var events = new FakeEventSink();
+        var project = ProjectContext.Empty with { PreloadContext = false };
+        var phase = new ImplementPhase(new FakeTicketing(MakeTicket(TicketState.Ready)),
+            new FakeWorkerAgent(OkWorkerResult()), events, MakeOptions(), new FakeGitClient(MainSha, CommitSha), project);
+
+        var section = await phase.BuildAndReportPreloadAsync("TLB-1", PreloadHtmlTwo, _ => "X", CancellationToken.None);
+
+        Assert.Equal(string.Empty, section);
+        Assert.DoesNotContain(events.Events, e =>
+            e.Data.TryGetValue("kind", out var k) && ((string)k).StartsWith("preload_"));
+    }
+
+    [Fact]
+    public async Task RunAsync_PreloadDeclaredButWorktreeEmpty_EmitsPreloadEmpty_StillSucceeds()
+    {
+        // Advisory-not-fatal: a no-op pre-load emits a loud signal but the phase proceeds to success.
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.Ready,
+            "<h3>Preload</h3><ul><li><code>src/contract.ts</code></li></ul>"));
+        var events = new FakeEventSink();
+        var phase = new ImplementPhase(ticketing, new FakeWorkerAgent(OkWorkerResult()), events,
+            MakeOptions(), new FakeGitClient(MainSha, CommitSha));
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.True(result.Success, result.FailureReason);
+        Assert.NotNull(Preload(events, EventKind.GateFailure, "preload_empty"));
+        Assert.NotNull(Preload(events, EventKind.CostLedger, "preload_summary"));
+    }
+
+    [Fact]
+    public async Task RunAsync_PreloadReadsWorktreeMaterializedAtCheckout_FilesLoaded()
+    {
+        // Defect 2 proof: the contract file exists ONLY because CreateWorktreeAsync (Step 9) materialized
+        // it; the pre-load build reads it afterward. If the build ran before Step 9 (the old bug), the
+        // file would be absent and files_loaded would be 0.
+        var tempRoot = Path.Combine(Path.GetTempPath(), "tlb-preload-phase-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        try
+        {
+            var ticketing = new FakeTicketing(MakeTicket(TicketState.Ready,
+                "<h3>Preload</h3><ul><li><code>src/contract.ts</code></li></ul>"));
+            var events = new FakeEventSink();
+            var git = new FakeGitClient(MainSha, CommitSha)
+            {
+                MaterializeOnCreate = new Dictionary<string, string> { ["src/contract.ts"] = "export const CONTRACT = 1;" }
+            };
+            var phase = new ImplementPhase(ticketing, new FakeWorkerAgent(OkWorkerResult()), events, MakeOptions(), git);
+
+            var result = await phase.RunAsync("TLB-1", tempRoot, CancellationToken.None);
+
+            Assert.True(result.Success, result.FailureReason);
+            var summary = Preload(events, EventKind.CostLedger, "preload_summary");
+            Assert.NotNull(summary);
+            Assert.Equal(1, (int)summary!.Data["files_loaded"]);
+            // The mechanism fired against the materialized tree - no empty/not-found signal.
+            Assert.Null(Preload(events, EventKind.GateFailure, "preload_empty"));
+            Assert.Null(Preload(events, EventKind.GateFailure, "preload_file_not_found"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+                Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_WorkerReturnsContextTurns_EmitsContextAttributionCostLedger()
+    {
+        // Experiment 4: the worker stashed a flat per-turn context-attribution series on
+        // Metadata["context_turns"]; ImplementPhase re-emits it as a CostLedger event.
+        var workerResult = new WorkerResult(
+            Status.Ok, "implemented", new[] { "src/Foo.cs" }, null,
+            new Dictionary<string, object>
+            {
+                ["commit_sha"] = CommitSha,
+                ["files_changed"] = new[] { "src/Foo.cs" },
+                ["context_turns"] = new Dictionary<string, object>
+                {
+                    ["turns"] = (int)3,
+                    ["total_cache_read"] = (long)143000,
+                    ["slope_ratio"] = 1.7d,
+                    ["cache_read_series"] = new List<long> { 35000, 48000, 60000 },
+                    ["read_bytes"] = (long)1000,
+                    ["write_bytes"] = (long)2000,
+                    ["todo_bytes"] = (long)0,
+                    ["task_bytes"] = (long)0,
+                    ["bash_bytes"] = (long)0,
+                    ["other_bytes"] = (long)0,
+                    ["cache_creation_series"] = new List<long> { 10, 20, 30 },
+                    ["output_series"] = new List<long> { 1, 2, 3 }
+                }
+            });
+
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.Ready));
+        var worker = new FakeWorkerAgent(workerResult);
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, CommitSha);
+        var phase = new ImplementPhase(ticketing, worker, events, MakeOptions(), git);
+
+        var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+
+        Assert.True(result.Success);
+
+        var attr = Preload(events, EventKind.CostLedger, "context_attribution");
+        Assert.NotNull(attr);
+        Assert.Equal(143000L, (long)attr!.Data["total_cache_read"]);
+        Assert.Equal(3, (int)attr.Data["turns"]);
+        var series = Assert.IsType<List<long>>(attr.Data["cache_read_series"]);
+        Assert.Equal(new List<long> { 35000, 48000, 60000 }, series);
+        Assert.Equal("cache_creation lags tool_use ~1 turn; per-class split is approximate", (string)attr.Data["attribution_note"]);
+    }
+
+    [Fact]
+    public async Task RunAsync_LeanPlanning_SetTrueOnlyForSEffortWithFlagOn()
+    {
+        async Task<bool> LeanFor(Size size, bool hygieneOn)
+        {
+            var ticket = MakeTicket(TicketState.Ready) with { Size = size };
+            var worker = new OptionCapturingWorkerAgent(OkWorkerResult());
+            var project = ProjectContext.Empty with { ContextHygiene = hygieneOn };
+            var phase = new ImplementPhase(new FakeTicketing(ticket), worker, new FakeEventSink(),
+                MakeOptions(), new FakeGitClient(MainSha, CommitSha), project);
+
+            var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
+            Assert.True(result.Success, result.FailureReason);
+            Assert.NotNull(worker.LastOptions);
+            return worker.LastOptions!.LeanPlanning;
+        }
+
+        // Lean ONLY when S-effort AND the flag is on.
+        Assert.True(await LeanFor(Size.S, hygieneOn: true));
+        Assert.False(await LeanFor(Size.S, hygieneOn: false));
+        Assert.False(await LeanFor(Size.M, hygieneOn: true));
+        Assert.False(await LeanFor(Size.L, hygieneOn: true));
+    }
+
     private sealed class FakeTicketing : ITicketing
     {
         private readonly Ticket _ticket;
@@ -658,6 +849,20 @@ public class ImplementPhaseTests
         }
     }
 
+    private sealed class OptionCapturingWorkerAgent : IWorkerAgent
+    {
+        private readonly WorkerResult _result;
+        public WorkerOptions? LastOptions { get; private set; }
+        public OptionCapturingWorkerAgent(WorkerResult result) { _result = result; }
+        public string Name => "claude-code";
+        public IWorkerProgressDigester? Digester => null;
+        public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
+        {
+            LastOptions = options;
+            return Task.FromResult(_result);
+        }
+    }
+
     private sealed class FakeEventSink : IEventSink
     {
         public List<WorkflowEvent> Events { get; } = new();
@@ -699,12 +904,26 @@ public class ImplementPhaseTests
         public Task<IReadOnlyList<string>> GetBranchesNotMergedAsync(string pattern, string baseBranch, CancellationToken ct) =>
             Task.FromResult((IReadOnlyList<string>)Array.Empty<string>());
 
+        // When set, CreateWorktreeAsync writes these {relPath: content} files into the new worktree, so a
+        // post-Step-9 reader sees contents that exist ONLY because checkout ran first - the experiment-3
+        // Defect-2 proof that the pre-load build happens AFTER the worktree is materialized.
+        public IReadOnlyDictionary<string, string>? MaterializeOnCreate { get; set; }
+
         public Task<WorktreeCreateResult> CreateWorktreeAsync(string worktreePath, string newBranch, string fromRef, string mainWorktreePath, CancellationToken ct)
         {
             CreateWorktreeCalls++;
-            return Task.FromResult(CreateWorktreeFailure is null
-                ? new WorktreeCreateResult(true, null, worktreePath)
-                : new WorktreeCreateResult(false, CreateWorktreeFailure, null));
+            if (CreateWorktreeFailure is not null)
+                return Task.FromResult(new WorktreeCreateResult(false, CreateWorktreeFailure, null));
+            if (MaterializeOnCreate is not null)
+            {
+                foreach (var kvp in MaterializeOnCreate)
+                {
+                    var full = Path.Combine(worktreePath, kvp.Key);
+                    Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+                    File.WriteAllText(full, kvp.Value);
+                }
+            }
+            return Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
         }
 
         public Task<string> HeadShaAsync(string worktreePath, CancellationToken ct) =>

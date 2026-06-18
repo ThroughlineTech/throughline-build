@@ -18,6 +18,11 @@ public class AutomatedChecksRunner
         string workingDirectory,
         CancellationToken ct)
     {
+        // Setup-role specs are prerequisites (a codegen/install step the real checks depend on); run
+        // them FIRST so the gating/advisory checks they enable see a prepared worktree. Stable, and a
+        // no-op when no setup spec is present, so single-role check lists keep their original order.
+        specs = OrderSetupFirst(specs);
+
         var results = new List<CheckResult>(specs.Count);
         bool shouldSkipRemaining = false;
 
@@ -28,14 +33,14 @@ public class AutomatedChecksRunner
             // If we should skip (due to cancellation or stopOnFirstFailure), add not-run result
             if (shouldSkipRemaining)
             {
-                results.Add(new CheckResult(spec.Name, false, -1, "", "", TimeSpan.Zero, spec.Role));
+                results.Add(new CheckResult(spec.Name, false, -1, "", "", TimeSpan.Zero, spec.Role, CommandLine: FormatCommandLine(spec)));
                 continue;
             }
 
             // Check caller cancellation before starting
             if (ct.IsCancellationRequested)
             {
-                results.Add(new CheckResult(spec.Name, false, -1, "", "", TimeSpan.Zero, spec.Role));
+                results.Add(new CheckResult(spec.Name, false, -1, "", "", TimeSpan.Zero, spec.Role, CommandLine: FormatCommandLine(spec)));
                 shouldSkipRemaining = true;
                 continue;
             }
@@ -72,11 +77,40 @@ public class AutomatedChecksRunner
         return await RunSingleAsync(spec, workingDirectory, ct);
     }
 
+    // Reorder so every CheckRole.Setup spec runs before the rest, preserving relative order within each
+    // group (stable). Returns the input unchanged when there is nothing to reorder (no setup specs, or
+    // only setup specs), so existing single-role check lists run byte-for-byte as before.
+    public static IReadOnlyList<CheckSpec> OrderSetupFirst(IReadOnlyList<CheckSpec> specs)
+    {
+        if (specs.Count < 2)
+            return specs;
+
+        bool anySetup = false, anyOther = false;
+        foreach (var s in specs)
+        {
+            if (s.Role == CheckRole.Setup) anySetup = true;
+            else anyOther = true;
+        }
+        if (!anySetup || !anyOther)
+            return specs;
+
+        var ordered = new List<CheckSpec>(specs.Count);
+        foreach (var s in specs) if (s.Role == CheckRole.Setup) ordered.Add(s);
+        foreach (var s in specs) if (s.Role != CheckRole.Setup) ordered.Add(s);
+        return ordered;
+    }
+
+    // The launchable form of a spec, recorded on every result so rework briefs can instruct
+    // the worker to re-run the exact failing command and confirm exit 0 before committing.
+    public static string FormatCommandLine(CheckSpec spec) =>
+        spec.Arguments.Count == 0 ? spec.Executable : spec.Executable + " " + string.Join(" ", spec.Arguments);
+
     private static async Task<CheckResult> RunSingleAsync(
         CheckSpec spec,
         string workingDirectory,
         CancellationToken callerCt)
     {
+        var commandLine = FormatCommandLine(spec);
         var psi = new ProcessStartInfo
         {
             // Resolve bare names to a launchable path on Windows (npm -> npm.cmd). No-op elsewhere.
@@ -112,13 +146,13 @@ public class AutomatedChecksRunner
         catch (Exception ex)
         {
             sw.Stop();
-            return new CheckResult(spec.Name, false, -1, "", ex.Message, sw.Elapsed, spec.Role);
+            return new CheckResult(spec.Name, false, -1, "", ex.Message, sw.Elapsed, spec.Role, CommandLine: commandLine);
         }
 
         if (proc == null)
         {
             sw.Stop();
-            return new CheckResult(spec.Name, false, -1, "", "[runner] failed to start process", sw.Elapsed, spec.Role);
+            return new CheckResult(spec.Name, false, -1, "", "[runner] failed to start process", sw.Elapsed, spec.Role, CommandLine: commandLine);
         }
 
         // Read stdout and stderr concurrently to avoid deadlock
@@ -176,16 +210,16 @@ public class AutomatedChecksRunner
                 ? stderrText + $"\n[runner] timeout after {seconds}s"
                 : $"[runner] timeout after {seconds}s";
 
-            return new CheckResult(spec.Name, false, exitCode, stdoutText, stderrText, sw.Elapsed, spec.Role);
+            return new CheckResult(spec.Name, false, exitCode, stdoutText, stderrText, sw.Elapsed, spec.Role, CommandLine: commandLine);
         }
 
         if (callerCancelled)
         {
-            return new CheckResult(spec.Name, false, exitCode, stdoutText, stderrText, sw.Elapsed, spec.Role);
+            return new CheckResult(spec.Name, false, exitCode, stdoutText, stderrText, sw.Elapsed, spec.Role, CommandLine: commandLine);
         }
 
         bool passed = exitCode == 0;
-        return new CheckResult(spec.Name, passed, exitCode, stdoutText, stderrText, sw.Elapsed, spec.Role);
+        return new CheckResult(spec.Name, passed, exitCode, stdoutText, stderrText, sw.Elapsed, spec.Role, CommandLine: commandLine);
     }
 
     private static async Task ReadStreamAsync(

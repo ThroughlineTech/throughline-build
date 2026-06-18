@@ -1,4 +1,4 @@
-﻿# Throughline Build - Getting Started
+# Throughline Build - Getting Started
 
 Throughline Build (`build`) is a CLI that drives AI coding agents through a plan-implement-review-ship
 cycle, using Plane as the ticketing backend. This guide covers installation, configuration, and
@@ -18,7 +18,8 @@ command performs a local fast-forward merge using git.
 **Worker agent CLI** - Install exactly one of the following; it must be on your PATH before running
 any ticket phase command:
 
-- `claude` (claude-code) - confirm with `claude --version`
+- `claude` (claude-code) - confirm with `claude --version` (the default interactive-hook transport
+  needs Claude Code >= 2.1.177; see "Claude Code transport" below)
 - `codex` - confirm with `codex --version`
 - `gemini` - confirm with `gemini --version`
 - `copilot` - confirm with `copilot --version`
@@ -47,6 +48,45 @@ under `[workers]`.
 
 **Agent executable** - The command name on your PATH for the agent CLI you chose above
 (e.g. `claude` for claude-code, `codex` for codex). Written to `executable` under the agent block.
+
+## Claude Code transport (interactive-hook)
+
+When the worker agent is `claude-code`, `build` runs Claude through one of two transports, selected by
+the `transport` key under `[workers.claude-code]`:
+
+- `interactive-hook` (default) - launches an interactive Claude Code session in a terminal host
+  (ConPTY on Windows, a PTY on Unix); Claude's argv never contains `--print`. The phase result is read
+  from Claude's own persisted transcript. **Requires Claude Code >= 2.1.177**, which `build setup`
+  preflights. Generated configs set this explicitly; a `[workers.claude-code]` block that omits
+  `transport` also resolves to it.
+- `print` (rollback) - the legacy headless path: `claude --print --verbose --output-format stream-json`.
+  Select it with `transport = "print"` to return to the pre-cutover behavior.
+
+The interactive transport launches interactive Claude without `--print`; which invocation mode draws on
+which usage allowance is controlled by Anthropic's current policy, not by this tool.
+
+### Verify your setup
+
+Run `build setup`: it provisions Plane and then runs a Claude transport preflight. The preflight reports
+each Claude agent's transport and whether this host can support it - it checks that `claude` is runnable,
+that `claude --version` meets the supported minimum for interactive-hook, and that the platform is
+supported. If the selected transport cannot run, the preflight fails clearly here, and any phase you
+start then fails before doing work rather than silently falling back to `print`. A transport-capability
+failure is distinct from a provider quota, model, permission, or WORKER_RESULT protocol failure, and the
+message says which it is.
+
+### Roll back to the print transport
+
+To return to the legacy headless path, change exactly one value in `.build/config.toml`:
+
+```
+[workers.claude-code]
+transport = "print"
+```
+
+No other change is required. Rolling back restores the `claude --print` invocation; the interactive
+transport launches interactive Claude without `--print`. Usage/billing classification is governed by
+Anthropic's current policy in either mode.
 
 ## First Ticket Walkthrough
 

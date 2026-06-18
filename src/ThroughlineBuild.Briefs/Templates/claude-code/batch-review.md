@@ -24,7 +24,7 @@ Before emitting the WORKER_RESULT envelope, emit your review critique as a named
 Write your detailed review rationale here. For each ticket, assess its acceptance criteria against the commits in its range. Also assess cross-ticket integration: do the seams between commits hold together? Name specific tickets when identifying issues.
 <<<REVIEW_CRITIQUE_END
 
-Then emit exactly one WORKER_RESULT block at the end of your response:
+Then emit exactly one WORKER_RESULT block at the end of your response. Emit the critique block and the envelope together in your final message - do not split them across separate messages, and write nothing after the envelope JSON:
 
 WORKER_RESULT
 {{worker_result_json}}
@@ -39,6 +39,8 @@ WORKER_RESULT
 
 **Discriminating question:** Can the implementer fix the issues with the current plans, or do the plans themselves need revision? Yes -> Rework. No -> Fail.
 
-**Automated check failures - do not dismiss by file type:** A failing automated check must appear in `checks_failed` and the verdict must be at least Rework. The reasoning "only markdown/text/config files changed, therefore this failure is pre-existing" is not valid. The only valid basis for treating a failing check as pre-existing is concrete evidence in the git log or the check's own output that it was failing before this branch's first commit.
+**Automated check failures - do not dismiss by file type:** A failing gating check must appear in `checks_failed` and the verdict must be at least Rework. The reasoning "only markdown/text/config files changed, therefore this failure is pre-existing" is not valid. The only valid basis for treating a failing check as pre-existing is concrete evidence in the git log or the check's own output that it was failing before this branch's first commit.
 
-The checks_failed array should list names of specific automated checks that failed, if any.
+**Advisory checks are informational only:** Checks listed under "Advisory checks (informational)" never block. Never list them in `checks_failed`, and never return a Rework or Fail verdict whose only grounds are advisory findings. Mention them in your rationale as notes if useful.
+
+The checks_failed array should list names of specific gating checks that failed, if any. Never include advisory checks.

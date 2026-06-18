@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ThroughlineBuild.Contracts;
 
 namespace ThroughlineBuild.Scaffold;
 
@@ -21,13 +22,30 @@ public sealed record ProjectProfile(
     string TestCommand,
     string DevCommand,
     IReadOnlyList<ProfileCheck> ReviewChecks,
-    IReadOnlyList<ProfileCheck> RegressionChecks);
+    IReadOnlyList<ProfileCheck> RegressionChecks)
+{
+    /// <summary>
+    /// Stable, project-wide convention files (test harness/config + one canonical test example) to
+    /// inline into EVERY implement brief so the worker does not re-discover them. Paths relative to the
+    /// project root; empty when the deriver emitted none. Stack-agnostic: the deriver chose them per
+    /// stack, the engine only carries the paths and reads whatever they are.
+    /// </summary>
+    public IReadOnlyList<string> ConventionFiles { get; init; } = Array.Empty<string>();
+}
 
 public sealed record ProfileCheck(
     string Name,
     string Executable,
     IReadOnlyList<string> Arguments,
-    int TimeoutMinutes);
+    int TimeoutMinutes,
+    IReadOnlyList<CanaryFile>? Canary = null,
+    // gating: a non-zero exit hard-fails the build gate; advisory: recorded and shown to the reviewer
+    // but never hard-fails (op-30: lint/format are never hard gates). Defaults to gating, matching
+    // CheckSpec; ProjectProfileParser resolves the real role from the deriver's "role" field, with a
+    // name-based fallback (lint/format -> advisory) for profiles an older worker emitted.
+    CheckRole Role = CheckRole.Gating,
+    // tracked project files/directories required before the check can run meaningfully on a base tree
+    IReadOnlyList<string>? RequiredPaths = null);
 
 // --- JSON DTOs (source-gen; AOT-safe) -------------------------------------------------
 
@@ -42,6 +60,7 @@ internal sealed class ProjectProfileDto
     [JsonPropertyName("dev_command")] public string? DevCommand { get; set; }
     [JsonPropertyName("review_checks")] public List<ProfileCheckDto>? ReviewChecks { get; set; }
     [JsonPropertyName("regression_checks")] public List<ProfileCheckDto>? RegressionChecks { get; set; }
+    [JsonPropertyName("convention_files")] public List<string>? ConventionFiles { get; set; }
 }
 
 internal sealed class ProfileCheckDto
@@ -50,10 +69,21 @@ internal sealed class ProfileCheckDto
     [JsonPropertyName("executable")] public string? Executable { get; set; }
     [JsonPropertyName("arguments")] public List<string>? Arguments { get; set; }
     [JsonPropertyName("timeout_minutes")] public int? TimeoutMinutes { get; set; }
+    [JsonPropertyName("canary")] public List<CanaryFileDto>? Canary { get; set; }
+    [JsonPropertyName("role")] public string? Role { get; set; }
+    [JsonPropertyName("required_paths")] public List<string>? RequiredPaths { get; set; }
+}
+
+internal sealed class CanaryFileDto
+{
+    [JsonPropertyName("path")] public string? Path { get; set; }
+    [JsonPropertyName("content")] public string? Content { get; set; }
 }
 
 [JsonSerializable(typeof(ProjectProfileDto))]
 [JsonSerializable(typeof(ProfileCheckDto))]
+[JsonSerializable(typeof(CanaryFileDto))]
+[JsonSerializable(typeof(List<CanaryFileDto>))]
 internal partial class ProfileJsonContext : JsonSerializerContext { }
 
 /// <summary>
@@ -123,6 +153,13 @@ public static class ProjectProfileParser
             regressionChecks = reviewChecks;
         }
 
+        // Convention bundle is optional/best-effort: trim, drop blank entries, never throw.
+        var conventionFiles = (dto.ConventionFiles ?? new List<string>())
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => p.Trim())
+            .ToList()
+            .AsReadOnly();
+
         profile = new ProjectProfile(
             Language: dto.Language?.Trim() ?? "",
             Framework: dto.Framework?.Trim() ?? "",
@@ -132,7 +169,10 @@ public static class ProjectProfileParser
             TestCommand: dto.TestCommand!.Trim(),
             DevCommand: dto.DevCommand?.Trim() ?? "",
             ReviewChecks: reviewChecks,
-            RegressionChecks: regressionChecks);
+            RegressionChecks: regressionChecks)
+        {
+            ConventionFiles = conventionFiles
+        };
         return true;
     }
 
@@ -170,10 +210,58 @@ public static class ProjectProfileParser
                 .Select(a => a.Trim())
                 .ToList();
             int timeout = c.TimeoutMinutes is > 0 ? c.TimeoutMinutes.Value : DefaultTimeoutMinutes;
-            list.Add(new ProfileCheck(c.Name!.Trim(), c.Executable!.Trim(), args, timeout));
+
+            // Canary is optional/best-effort: map non-empty-Path entries, skip blanks, never throw.
+            IReadOnlyList<CanaryFile>? canary = null;
+            if (c.Canary is { Count: > 0 })
+            {
+                var canaryFiles = new List<CanaryFile>();
+                foreach (var cf in c.Canary)
+                {
+                    if (cf is null || string.IsNullOrWhiteSpace(cf.Path))
+                        continue;
+                    canaryFiles.Add(new CanaryFile(cf.Path.Trim(), cf.Content ?? ""));
+                }
+                if (canaryFiles.Count > 0)
+                    canary = canaryFiles;
+            }
+
+            var role = ResolveCheckRole(c.Role, c.Name!);
+            var requiredPaths = (c.RequiredPaths ?? new List<string>())
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Select(path => path.Trim())
+                .Distinct(StringComparer.Ordinal)
+                .ToList()
+                .AsReadOnly();
+
+            list.Add(new ProfileCheck(c.Name!.Trim(), c.Executable!.Trim(), args, timeout, canary, role,
+                requiredPaths.Count > 0 ? requiredPaths : null));
         }
 
         checks = list;
         return true;
+    }
+
+    // Resolve a check's gating/advisory role. An explicit "advisory"/"gating" from the deriver wins;
+    // anything else (omitted, blank, or unrecognized) is inferred from the check NAME so a profile
+    // emitted by an older worker - or a model that ignores the role instruction - still de-gates
+    // lint/format. The asymmetry is deliberate (op-30): a false-advisory is cheap, a false-gating
+    // burns a cold rework loop on a cosmetic, auto-fixable finding, so an unknown check name stays
+    // gating but a clearly-cosmetic one (lint/format/style) does not.
+    private static CheckRole ResolveCheckRole(string? role, string name)
+    {
+        switch (role?.Trim().ToLowerInvariant())
+        {
+            case "advisory": return CheckRole.Advisory;
+            case "gating": return CheckRole.Gating;
+            case "setup": return CheckRole.Setup;
+            default: return IsCosmeticCheckName(name) ? CheckRole.Advisory : CheckRole.Gating;
+        }
+    }
+
+    private static bool IsCosmeticCheckName(string name)
+    {
+        var n = name.Trim().ToLowerInvariant();
+        return n.Contains("lint") || n.Contains("format") || n is "fmt" or "prettier" or "style";
     }
 }

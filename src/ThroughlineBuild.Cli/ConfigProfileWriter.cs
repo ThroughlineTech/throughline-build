@@ -1,6 +1,7 @@
 using System.Text;
 using Tomlyn;
 using Tomlyn.Model;
+using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Scaffold;
 
 namespace ThroughlineBuild.Cli;
@@ -135,6 +136,8 @@ public static class ConfigProfileWriter
             lines.Add("[project]");
             foreach (var key in ProjectKeysOwnedByProfile)
                 lines.Add($"{key} = {TomlString(values[key])}");
+            if (profile.ConventionFiles.Count > 0)
+                lines.Add($"convention_files = {TomlStringArray(profile.ConventionFiles)}");
             return true;
         }
 
@@ -151,6 +154,24 @@ public static class ConfigProfileWriter
             {
                 lines.Insert(start + 1, newLine);
                 end++;
+                changed = true;
+            }
+        }
+
+        // convention_files is an ARRAY key (not a scalar), so it is handled apart from the owned scalar
+        // keys above. Write it only when the profile carries a bundle; replace an existing active line,
+        // insert when absent. A commented template line is skipped by FindKeyLine, so it survives.
+        if (profile.ConventionFiles.Count > 0)
+        {
+            var cfLine = $"convention_files = {TomlStringArray(profile.ConventionFiles)}";
+            int cfKeyLine = FindKeyLine(lines, start + 1, end, "convention_files");
+            if (cfKeyLine >= 0)
+            {
+                if (lines[cfKeyLine] != cfLine) { lines[cfKeyLine] = cfLine; changed = true; }
+            }
+            else
+            {
+                lines.Insert(start + 1, cfLine);
                 changed = true;
             }
         }
@@ -233,8 +254,34 @@ public static class ConfigProfileWriter
             rendered.Add($"executable = {TomlString(c.Executable)}");
             rendered.Add($"arguments = {TomlStringArray(c.Arguments)}");
             rendered.Add($"timeout_minutes = {c.TimeoutMinutes}");
+            rendered.Add($"role = {TomlString(RoleToToml(c.Role))}");
+            if (c.Canary is { Count: > 0 })
+                rendered.Add($"canary = {TomlCanaryArray(c.Canary)}");
+            if (c.RequiredPaths is { Count: > 0 })
+                rendered.Add($"required_paths = {TomlStringArray(c.RequiredPaths)}");
         }
         return rendered;
+    }
+
+    // Render the check role as the TOML string the config loader's ParseCheckRole expects. Written on
+    // every check (not just advisory) so the scaffolded config states the gating decision explicitly
+    // rather than leaning on the loader's implicit default - an operator can see and flip it.
+    private static string RoleToToml(CheckRole role) => role switch
+    {
+        CheckRole.Advisory => "advisory",
+        CheckRole.Setup => "setup",
+        _ => "gating"
+    };
+
+    // Renders the canary files as a TOML inline-table array:
+    //   canary = [{ path = "...", content = "..." }, { ... }]
+    // Uses the newline-safe basic-string escaper since canary content commonly contains
+    // newlines/tabs (a deliberately-broken source file).
+    private static string TomlCanaryArray(IReadOnlyList<CanaryFile> canary)
+    {
+        var items = canary.Select(cf =>
+            $"{{ path = {TomlBasicString(cf.Path)}, content = {TomlBasicString(cf.Content)} }}");
+        return "[" + string.Join(", ", items) + "]";
     }
 
     // ------------------------------------------------------------------
@@ -244,6 +291,22 @@ public static class ConfigProfileWriter
     private static string TomlString(string value)
     {
         var escaped = value.Replace("\\", "\\\\").Replace("\"", "\\\"");
+        return $"\"{escaped}\"";
+    }
+
+    // Newline-safe TOML basic string. TOML basic strings cannot carry literal control
+    // characters, so escape (in order) backslash, double-quote, then CR/LF/TAB as the
+    // two-character escape sequences. Used for canary path+content, which may contain
+    // newlines and tabs. TomlString is intentionally left alone so existing outputs stay
+    // byte-identical.
+    private static string TomlBasicString(string value)
+    {
+        var escaped = value
+            .Replace("\\", "\\\\")
+            .Replace("\"", "\\\"")
+            .Replace("\r", "\\r")
+            .Replace("\n", "\\n")
+            .Replace("\t", "\\t");
         return $"\"{escaped}\"";
     }
 

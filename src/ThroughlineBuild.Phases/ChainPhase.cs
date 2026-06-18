@@ -6,6 +6,7 @@ using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Git;
 using ThroughlineBuild.Helpers;
+using ThroughlineBuild.Verification;
 using ThroughlineBuild.Workers.Common;
 
 namespace ThroughlineBuild.Phases;
@@ -58,6 +59,12 @@ public record ChainPhaseOptions(
 public class ChainPhase
 {
     private const int MaxReworkRounds = 2;
+    // Bound on the deterministic check-recheck loop: when a rework round was triggered by named
+    // failing checks and the worker's fix still fails the re-run, the raw output loops straight
+    // back to the worker up to this many times per rework round - without consuming a rework
+    // round or a verifier call. A check is an oracle; a subprocess re-run proves in seconds what
+    // a verifier LLM call rediscovers in minutes.
+    private const int MaxCheckRetriesPerReworkRound = 2;
     private static readonly object DebugIndexLock = new();
 
     private readonly ITicketing _ticketing;
@@ -88,6 +95,10 @@ public class ChainPhase
     // operator must push the target manually.
     private readonly string? _landingRemote;
     private readonly bool _landingPushEnabled;
+    // Optional: the configured check specs + runner for the post-rework deterministic re-run.
+    // When either is null the recheck is skipped and rework rounds flow exactly as before.
+    private readonly IReadOnlyList<CheckSpec>? _reworkRecheckSpecs;
+    private readonly AutomatedChecksRunner? _reworkRecheckRunner;
 
     public ChainPhase(
         ITicketing ticketing,
@@ -106,7 +117,9 @@ public class ChainPhase
         IWorkerAgent? batchWorker = null,
         string? landingRemote = null,
         bool landingPushEnabled = false,
-        Func<BuildOptions, GatePhase>? gateFactory = null)
+        Func<BuildOptions, GatePhase>? gateFactory = null,
+        IReadOnlyList<CheckSpec>? reworkRecheckSpecs = null,
+        AutomatedChecksRunner? reworkRecheckRunner = null)
     {
         _ticketing = ticketing;
         _events = events;
@@ -125,6 +138,8 @@ public class ChainPhase
         _batchWorker = batchWorker;
         _landingRemote = landingRemote;
         _landingPushEnabled = landingPushEnabled;
+        _reworkRecheckSpecs = reworkRecheckSpecs;
+        _reworkRecheckRunner = reworkRecheckRunner;
     }
 
     // Inert read-only accessors over the wired collaborators, for composition-root tests that
@@ -135,6 +150,38 @@ public class ChainPhase
     internal Func<BuildOptions, ShipPhase>? ChainShipFactory => _chainShipFactory;
 
     public async Task<ChainResult> RunAsync(ChainPhaseOptions options, CancellationToken ct)
+    {
+        // TLB-545: a ticketing backend that is unreachable at the transport level (after the
+        // client's own retries) is an environmental failure, not the ticket's fault - and the
+        // ticket's work is always committed to its branch before any ticketing write, so the
+        // chain is resumable. Classify it here, at the same per-ticket boundary the recursion
+        // uses for children, so one dead backend stops the run cleanly instead of crashing the
+        // process: the parent loop and dispatcher see a result (not an exception) and mark the
+        // remaining siblings/roots Skipped via ContainsEnvironmentalStop.
+        var classifySw = Stopwatch.StartNew();
+        try
+        {
+            return await RunChainCoreAsync(options, ct).ConfigureAwait(false);
+        }
+        catch (TicketingUnavailableException ex)
+        {
+            classifySw.Stop();
+            Console.Error.WriteLine(
+                $"[{options.TicketId}] chain stopped: ticketing backend unreachable - {ex.Message}");
+            var result = new ChainResult(options.TicketId, Array.Empty<ChainStep>(),
+                ChainOutcome.TicketingUnavailable, classifySw.Elapsed, ex.Message);
+            // Best-effort forensics: the event log is local (file sink), but never let a
+            // logging failure mask the classified result.
+            try
+            {
+                await EmitChainEndAsync(result, _sessionIdGenerator(), options.TicketId, ct).ConfigureAwait(false);
+            }
+            catch { /* non-fatal */ }
+            return result;
+        }
+    }
+
+    private async Task<ChainResult> RunChainCoreAsync(ChainPhaseOptions options, CancellationToken ct)
     {
         var totalSw = Stopwatch.StartNew();
         var steps = new List<ChainStep>();
@@ -372,7 +419,8 @@ public class ChainPhase
                         var evidence = ExtractSubsumedByEvidence(planResult.EscalationWorkerResult);
                         var finalRationale = FormatSubsumedRationale(evidence);
                         await _ticketing.TransitionAsync(options.TicketId, TicketState.Done, ct).ConfigureAwait(false);
-                        await _ticketing.CreateCommentAsync(options.TicketId, "<p>" + WebUtility.HtmlEncode(finalRationale) + "</p>", ct).ConfigureAwait(false);
+                        await BestEffortTicketWriteAsync(chainSessionId, options.TicketId, "subsumed_rationale_comment",
+                            () => _ticketing.CreateCommentAsync(options.TicketId, "<p>" + WebUtility.HtmlEncode(finalRationale) + "</p>", ct), ct).ConfigureAwait(false);
                         await _events.EmitAsync(new WorkflowEvent(
                             SessionId: chainSessionId,
                             Timestamp: DateTimeOffset.UtcNow,
@@ -481,6 +529,8 @@ public class ChainPhase
 
         var completed = new ChainResult(options.TicketId, steps, ChainOutcome.Completed, totalSw.Elapsed, null,
             ShippedProvides: shippedProvides);
+        if (options.ChainTargetBranch is null)
+            await SweepChainWorktreesAsync(options.TicketId, chainSessionId, ct).ConfigureAwait(false);
         await EmitChainEndAsync(completed, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
         return completed;
     }
@@ -524,6 +574,50 @@ public class ChainPhase
             Data: data), ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Runs a non-state-bearing ticketing write (informational comment, label apply) without
+    /// letting its failure abort the run: on final failure (the client layer has already spent
+    /// its transport retries) the write is event-logged as <c>ticketing_write_failed</c> with a
+    /// stderr warning, and the chain continues (TLB-545). State-bearing writes - state
+    /// transitions and the [implemented_at:]/[planned_at:] marker comments downstream phases
+    /// parse to reconstruct state - must NOT route through here; their failure stops the ticket
+    /// with a resumable outcome instead. Batch-path writes that were already deliberately
+    /// non-fatal route through here too so their failures stop being silent.
+    /// </summary>
+    private async Task BestEffortTicketWriteAsync(
+        string sessionId, string ticketId, string operation, Func<Task> write, CancellationToken ct)
+    {
+        try
+        {
+            await write().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(
+                $"[{ticketId}] warning: ticketing write '{operation}' failed ({ex.Message}); continuing");
+            try
+            {
+                await _events.EmitAsync(new WorkflowEvent(
+                    SessionId: sessionId,
+                    Timestamp: DateTimeOffset.UtcNow,
+                    Kind: EventKind.TicketWrite,
+                    TicketId: ticketId,
+                    Phase: Phase.Chain,
+                    Data: new Dictionary<string, object>
+                    {
+                        ["action"] = "ticketing_write_failed",
+                        ["operation"] = operation,
+                        ["error"] = ex.Message
+                    }), ct).ConfigureAwait(false);
+            }
+            catch { /* the event log must never abort the run either */ }
+        }
+    }
+
     private async Task<(ChainResult? abort, IReadOnlyList<string>? successProvides)> RunImplementReviewLoopAsync(
         ChainPhaseOptions options,
         List<ChainStep> steps,
@@ -536,6 +630,11 @@ public class ChainPhase
         int round = startRound;
         ReviewFeedback? feedback = initialFeedback;
 
+        // Carries the prior round's HEAD across iterations so a rework round can record the
+        // commit sha BEFORE it ran (sha_after comes from the round's own implResult). Null on
+        // the first round (or a resume), where the prior sha is not known in this invocation.
+        string? priorCommitSha = null;
+
         // Gate cost ledger accumulators: track gate wall time and gate-attributable rework tokens
         // across all iterations so a single CostLedger event is emitted per ticket at exit.
         long gateWallMs = 0;
@@ -545,6 +644,12 @@ public class ChainPhase
         bool gateAttributableReworkTokensTracked = false;
         bool thisRoundIsGateAttributable = false;
         bool gateWasEngaged = false;
+
+        // Check-recheck retry state: retries within one rework round (does not consume `round`),
+        // plus whether the round being retried was gate-originated so the cost ledger keeps
+        // attributing the retry implements to the gate.
+        int checkRetriesThisRound = 0;
+        bool recheckRetryGateAttributable = false;
 
         while (true)
         {
@@ -571,6 +676,15 @@ public class ChainPhase
                 PhaseSessionId: implSessionId);
             steps.Add(implStep);
             options.OnStep?.Invoke(options.TicketId, implStep);
+
+            // --debug side channel: when this implement round was driven by prior feedback it
+            // IS a rework. Record what triggered it (gate vs reviewer), the failure payload
+            // verbatim, and the commit shas before/after - the inputs analysis needs to split
+            // design misses from hygiene slips. No-op when debug capture is off.
+            if (feedback is not null)
+                ReworkRoundManifest.Write(implBuildOpts.DebugCaptureDirectory, round, feedback,
+                    shaBefore: priorCommitSha, shaAfter: implResult.CommitSha);
+            priorCommitSha = implResult.CommitSha;
 
             // Accumulate gate-attributable rework tokens if this implement round was triggered
             // by a gate hard-fail (identified by the flag set in the prior gate-failure branch).
@@ -601,7 +715,8 @@ public class ChainPhase
                         var evidence = ExtractSubsumedByEvidence(implResult.EscalationWorkerResult);
                         var finalRationale = FormatSubsumedRationale(evidence);
                         await _ticketing.TransitionAsync(options.TicketId, TicketState.Done, ct).ConfigureAwait(false);
-                        await _ticketing.CreateCommentAsync(options.TicketId, "<p>" + WebUtility.HtmlEncode(finalRationale) + "</p>", ct).ConfigureAwait(false);
+                        await BestEffortTicketWriteAsync(chainSessionId, options.TicketId, "subsumed_rationale_comment",
+                            () => _ticketing.CreateCommentAsync(options.TicketId, "<p>" + WebUtility.HtmlEncode(finalRationale) + "</p>", ct), ct).ConfigureAwait(false);
                         await _events.EmitAsync(new WorkflowEvent(
                             SessionId: chainSessionId,
                             Timestamp: DateTimeOffset.UtcNow,
@@ -625,6 +740,83 @@ public class ChainPhase
                     await EmitCostLedgerAsync(chainSessionId, options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
                 return (new ChainResult(options.TicketId, steps, ChainOutcome.StoppedAtImplement,
                     TimeSpan.Zero, null), null);
+            }
+
+            // Deterministic post-rework check re-run: when this implement round was rework
+            // triggered by named failing checks, re-run exactly those checks (pure subprocess,
+            // no LLM) before spending a gate run or a verifier call. The check is the oracle for
+            // a check-driven rework - a worker that "fixed" the violation without ever re-running
+            // the check is caught here in seconds instead of by the next verifier round. Still-
+            // failing gating/setup checks loop the raw output straight back to the worker
+            // (bounded by MaxCheckRetriesPerReworkRound, not consuming a rework round); advisory
+            // results never trigger the short-circuit (role semantics are a cross-phase contract).
+            if (feedback is not null && feedback.ChecksFailed.Count > 0
+                && _reworkRecheckSpecs is { Count: > 0 } && _reworkRecheckRunner is not null)
+            {
+                var recheckWorktree = implResult.WorktreePath ?? _workingDirectory;
+                var recheckResults = new List<CheckResult>();
+                foreach (var name in feedback.ChecksFailed.Distinct(StringComparer.Ordinal))
+                {
+                    recheckResults.Add(await _reworkRecheckRunner
+                        .RunNamedAsync(name, _reworkRecheckSpecs, recheckWorktree, ct).ConfigureAwait(false));
+                }
+                var stillFailing = recheckResults
+                    .Where(r => !r.Skipped && !r.Passed && r.Role != CheckRole.Advisory)
+                    .ToList();
+
+                if (stillFailing.Count > 0)
+                {
+                    var stillFailingNames = stillFailing.Select(r => r.Name).ToList();
+                    await _events.EmitAsync(new WorkflowEvent(
+                        SessionId: chainSessionId,
+                        Timestamp: DateTimeOffset.UtcNow,
+                        Kind: EventKind.GateFailure,
+                        TicketId: options.TicketId,
+                        Phase: Phase.Implement,
+                        Data: new Dictionary<string, object>
+                        {
+                            ["kind"] = "rework_recheck_failed",
+                            ["round"] = round,
+                            ["retry"] = checkRetriesThisRound + 1,
+                            ["checks_still_failing"] = stillFailingNames
+                        }), ct).ConfigureAwait(false);
+
+                    var recheckRationale =
+                        $"Post-rework re-run: the failing check(s) that triggered rework round {round} " +
+                        $"STILL FAIL after the changes: {string.Join(", ", stillFailingNames)}. " +
+                        "The previous fix attempt did not satisfy the check; its verbatim output follows.";
+
+                    if (checkRetriesThisRound < MaxCheckRetriesPerReworkRound)
+                    {
+                        // First retry inherits the round's gate attribution; later retries keep it.
+                        if (checkRetriesThisRound == 0)
+                            recheckRetryGateAttributable = feedback.GateFailedChecks is { Count: > 0 };
+                        thisRoundIsGateAttributable = recheckRetryGateAttributable;
+                        checkRetriesThisRound++;
+
+                        // Implement left the ticket InReview; a rework implement requires
+                        // InProgress (the gate does this same bounce on a hard-fail).
+                        await _ticketing.TransitionAsync(options.TicketId, TicketState.InProgress, ct).ConfigureAwait(false);
+
+                        feedback = new ReviewFeedback(recheckRationale, stillFailingNames, round,
+                            FailedCheckDetails: stillFailing);
+                        continue;
+                    }
+
+                    // Retries exhausted: surface the raw check output in the abort rationale (the
+                    // triage) instead of burning rework rounds or a verifier call on a fix the
+                    // checks already disprove.
+                    var failTail = string.Join("\n", stillFailing.Select(r =>
+                        $"- {r.Name} (exit {r.ExitCode}; command: {r.CommandLine}): " +
+                        (string.IsNullOrWhiteSpace(r.StderrTail) ? r.StdoutTail.Trim() : r.StderrTail.Trim())));
+                    if (gateWasEngaged)
+                        await EmitCostLedgerAsync(chainSessionId, options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
+                    return (new ChainResult(options.TicketId, steps, ChainOutcome.ReworkCapExceeded,
+                        TimeSpan.Zero, recheckRationale + "\n" + failTail), null);
+                }
+
+                checkRetriesThisRound = 0;
+                recheckRetryGateAttributable = false;
             }
 
             // Gate phase: run checks once on the warm worktree and collect smoke signals.
@@ -673,6 +865,31 @@ public class ChainPhase
 
                 if (!gateOutcome.Passed)
                 {
+                    if (gateOutcome.Vacuous)
+                    {
+                        // Gate integrity failure (vacuous gating check or canary cleanup failure): a config/setup
+                        // defect, not a code defect. Reworking the implementer cannot fix it, so hard-fail the chain
+                        // here WITHOUT a rework round. As a chain FAILURE, preserve-on-failure leaves the worktrees
+                        // in place for inspection.
+                        if (gateWasEngaged)
+                            await EmitCostLedgerAsync(chainSessionId, options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
+                        return (new ChainResult(options.TicketId, steps, ChainOutcome.GateVacuous, TimeSpan.Zero, gateOutcome.HardFailReason), null);
+                    }
+
+                    if (gateOutcome.EnvironmentFailure)
+                    {
+                        // Environment failure (TLB-538): the control run proved the same gating checks
+                        // fail on the untouched base ref, so reworking the implementer cannot fix it -
+                        // hard-fail WITHOUT a rework round. The gate left the ticket InReview (no
+                        // InProgress bounce), so a re-run after the environment fix resumes cleanly.
+                        // false_fails records how many gate hard-fails were proven environmental.
+                        var falseFails = gateOutcome.CheckResults
+                            .Count(r => r.Role == CheckRole.Gating && !r.Passed && !r.Skipped);
+                        if (gateWasEngaged)
+                            await EmitCostLedgerAsync(chainSessionId, options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct, falseFails: Math.Max(falseFails, 1)).ConfigureAwait(false);
+                        return (new ChainResult(options.TicketId, steps, ChainOutcome.GateEnvironmentFailure, TimeSpan.Zero, gateOutcome.HardFailReason), null);
+                    }
+
                     // Gate already transitioned InReview -> InProgress. Re-enter the rework loop
                     // with the gate failure as feedback so the next implement knows what broke.
                     var gatingFailedResults = gateOutcome.CheckResults
@@ -735,7 +952,8 @@ public class ChainPhase
 
             if (round < MaxReworkRounds)
             {
-                feedback = new ReviewFeedback(rv.Rationale, rv.ChecksFailed, round + 1);
+                feedback = new ReviewFeedback(rv.Rationale, rv.ChecksFailed, round + 1,
+                    FailedCheckDetails: MatchFailedCheckDetails(rv.ChecksFailed, reviewResult.checkResults));
                 await _events.EmitAsync(new WorkflowEvent(
                     SessionId: chainSessionId,
                     Timestamp: DateTimeOffset.UtcNow,
@@ -783,7 +1001,8 @@ public class ChainPhase
             return (new ChainResult(options.TicketId, steps, ChainOutcome.StoppedAtReview,
                 TimeSpan.Zero, rv.Rationale), null);
 
-        var feedback = new ReviewFeedback(rv.Rationale, rv.ChecksFailed, round + 1);
+        var feedback = new ReviewFeedback(rv.Rationale, rv.ChecksFailed, round + 1,
+            FailedCheckDetails: MatchFailedCheckDetails(rv.ChecksFailed, reviewResult.checkResults));
         await _events.EmitAsync(new WorkflowEvent(
             SessionId: chainSessionId,
             Timestamp: DateTimeOffset.UtcNow,
@@ -810,14 +1029,18 @@ public class ChainPhase
         long gateAttributableReworkInputTokens,
         long gateAttributableReworkOutputTokens,
         bool gateAttributableReworkTokensTracked,
-        CancellationToken ct)
+        CancellationToken ct,
+        // Gate hard-fails proven environmental by the base-ref control run (TLB-538). Zero on
+        // every path except the GateEnvironmentFailure stop, where the failure was a false fail
+        // by construction - the same checks fail on code identical to the base.
+        int falseFails = 0)
     {
         var data = new Dictionary<string, object>
         {
             ["gate_wall_ms"] = gateWallMs,
             ["gate_attributable_rework_rounds"] = gateAttributableReworkRounds,
             ["cascade_caught"] = 0,
-            ["false_fails"] = 0
+            ["false_fails"] = falseFails
         };
         if (gateAttributableReworkRounds > 0 && gateAttributableReworkTokensTracked)
         {
@@ -837,7 +1060,7 @@ public class ChainPhase
             Data: data), ct).ConfigureAwait(false);
     }
 
-    private async Task<(ChainResult? abort, Verdict? verdict)> RunOneReviewAsync(
+    private async Task<(ChainResult? abort, Verdict? verdict, IReadOnlyList<CheckResult>? checkResults)> RunOneReviewAsync(
         ChainPhaseOptions options,
         List<ChainStep> steps,
         int round,
@@ -869,8 +1092,17 @@ public class ChainPhase
                 PhaseSessionId: revSessionId);
             steps.Add(failedRevStep);
             options.OnStep?.Invoke(options.TicketId, failedRevStep);
-            return (new ChainResult(options.TicketId, steps, ChainOutcome.StoppedAtReview,
-                TimeSpan.Zero, revResult.FailureReason), null);
+
+            // A provider block (quota/rate-limit/auth) is not a review failure - the verifier never
+            // ran. Surface a distinct, resumable ReviewUnavailable outcome instead of StoppedAtReview,
+            // so the operator sees "re-run once quota resets", not "review rejected the diff". This
+            // single branch covers both the implement->review loop and the InReview resume path, since
+            // both funnel a provider error through ReviewPhase returning Success=false. See TLB-527.
+            var failOutcome = revResult.ProviderUnavailable is not null
+                ? ChainOutcome.ReviewUnavailable
+                : ChainOutcome.StoppedAtReview;
+            return (new ChainResult(options.TicketId, steps, failOutcome,
+                TimeSpan.Zero, revResult.FailureReason), null, null);
         }
 
         var revStep = new ChainStep(
@@ -884,7 +1116,22 @@ public class ChainPhase
         steps.Add(revStep);
         options.OnStep?.Invoke(options.TicketId, revStep);
 
-        return (null, new Verdict(revResult.Verdict!.Value, revResult.VerdictRationale ?? "", revResult.ChecksFailed));
+        return (null, new Verdict(revResult.Verdict!.Value, revResult.VerdictRationale ?? "", revResult.ChecksFailed),
+            revResult.CheckResults);
+    }
+
+    // Raw results for the checks the verifier cited, so review-originated rework feedback carries
+    // the checks' own output (command, exit code, stdout/stderr) - not just names plus the
+    // reviewer's theory of why the tool failed, which can be confidently wrong.
+    private static IReadOnlyList<CheckResult>? MatchFailedCheckDetails(
+        IReadOnlyList<string> checksFailed,
+        IReadOnlyList<CheckResult>? checkResults)
+    {
+        if (checksFailed.Count == 0 || checkResults is null)
+            return null;
+        var named = new HashSet<string>(checksFailed, StringComparer.Ordinal);
+        var details = checkResults.Where(r => named.Contains(r.Name) && !r.Passed && !r.Skipped).ToList();
+        return details.Count > 0 ? details : null;
     }
 
     private static string FormatSubsumedRationale(SubsumedByEvidence? evidence)
@@ -1164,7 +1411,9 @@ public class ChainPhase
             LiveStdoutSink: _baseOptions.LiveStdoutSink,
             LiveStderrSink: _baseOptions.LiveStderrSink,
             ProgressDigestSink: _baseOptions.ProgressDigestSink,
-            Size: maxSize);
+            Size: maxSize,
+            DebugTranscript: new DebugTranscriptContext(
+                BuildVersion: _baseOptions.BuildVersion, SessionId: batchSessionId));
         if (batchBuildOpts.DebugCaptureDirectory is not null)
             Directory.CreateDirectory(batchBuildOpts.DebugCaptureDirectory);
 
@@ -1216,17 +1465,11 @@ public class ChainPhase
                         var markerHtml =
                             $"<p>[implemented_at: {confirmedTicket.CommitSha}] (branch {batchBranchName})" +
                             $" (batch: stack_position={confirmedTicket.StackPosition})</p>{summaryHtml}";
-                        try
-                        {
-                            await _ticketing.CreateCommentAsync(batchTicket.Id, markerHtml, ct).ConfigureAwait(false);
-                        }
-                        catch { /* non-fatal */ }
+                        await BestEffortTicketWriteAsync(batchSessionId, batchTicket.Id, "batch_implemented_marker",
+                            () => _ticketing.CreateCommentAsync(batchTicket.Id, markerHtml, ct), ct).ConfigureAwait(false);
 
-                        try
-                        {
-                            await _ticketing.TransitionAsync(batchTicket.Id, TicketState.InReview, ct).ConfigureAwait(false);
-                        }
-                        catch { /* non-fatal */ }
+                        await BestEffortTicketWriteAsync(batchSessionId, batchTicket.Id, "batch_transition_in_review",
+                            () => _ticketing.TransitionAsync(batchTicket.Id, TicketState.InReview, ct), ct).ConfigureAwait(false);
                     }
 
                     // Post failure reason to the first incomplete ticket so the operator
@@ -1234,12 +1477,9 @@ public class ChainPhase
                     var firstIncomplete = batchTickets.FirstOrDefault(t => !confirmedIds.Contains(t.Id));
                     if (firstIncomplete is not null)
                     {
-                        try
-                        {
-                            var failHtml = $"<p>batch implement stopped: {WebUtility.HtmlEncode(failureReason)}</p>";
-                            await _ticketing.CreateCommentAsync(firstIncomplete.Id, failHtml, ct).ConfigureAwait(false);
-                        }
-                        catch { /* non-fatal */ }
+                        var failHtml = $"<p>batch implement stopped: {WebUtility.HtmlEncode(failureReason)}</p>";
+                        await BestEffortTicketWriteAsync(batchSessionId, firstIncomplete.Id, "batch_stopped_comment",
+                            () => _ticketing.CreateCommentAsync(firstIncomplete.Id, failHtml, ct), ct).ConfigureAwait(false);
                     }
 
                     // Return mixed results: confirmed tickets -> BatchImplemented,
@@ -1297,8 +1537,34 @@ public class ChainPhase
         // exists in the branch in declared stack order. Fail before any marker is posted
         // when the check does not hold, naming the first ticket that fails.
         var verifyBase = !string.IsNullOrEmpty(mainSha) ? mainSha : baseRef;
+
+        // Prefer the worker's per-ticket self-report; if it omitted the tickets array,
+        // reconstruct attribution from the actual commits. The brief mandates one commit
+        // per ticket in declared stack order, so the commits map 1:1 onto the tickets -
+        // git is the source of truth and a forgotten echo must not discard real work.
+        var reportedTickets = workerResult.Tickets;
+        if (reportedTickets is null || reportedTickets.Count == 0)
+        {
+            var recon = await BatchCommitVerifier
+                .ReconstructFromGitAsync(
+                    _git, sharedWorktreePath, verifyBase,
+                    batchTickets.Select(t => t.Id).ToList(), ct)
+                .ConfigureAwait(false);
+            if (!recon.Success)
+            {
+                batchSw.Stop();
+                return new BatchImplementOutcome(
+                    batchTickets.Select(t => new ChainResult(
+                        t.Id, Array.Empty<ChainStep>(),
+                        ChainOutcome.StoppedAtImplement, batchSw.Elapsed,
+                        recon.FailureReason)).ToList().AsReadOnly(),
+                    null, batchBranchName, verifyBase);
+            }
+            reportedTickets = recon.ConfirmedTickets;
+        }
+
         var verifyResult = await BatchCommitVerifier
-            .VerifyAsync(_git, sharedWorktreePath, verifyBase, workerResult.Tickets, ct)
+            .VerifyAsync(_git, sharedWorktreePath, verifyBase, reportedTickets, ct)
             .ConfigureAwait(false);
         if (!verifyResult.Success)
         {
@@ -1324,37 +1590,48 @@ public class ChainPhase
             var perTicket = perTicketResults.FirstOrDefault(
                 r => string.Equals(r.TicketId, ticket.Id, StringComparison.Ordinal));
 
-            if (perTicket is not null)
+            if (perTicket is null)
             {
-                // Resolve per-ticket summary markdown from the worker's fenced blocks (best-effort).
-                string summaryHtml = "";
-                if (workerResult.Blocks is not null &&
-                    !string.IsNullOrEmpty(perTicket.SummaryRef) &&
-                    workerResult.Blocks.TryGetValue(perTicket.SummaryRef, out var summaryMarkdown) &&
-                    !string.IsNullOrEmpty(summaryMarkdown))
-                {
-                    summaryHtml = MarkdownRenderer.Render(summaryMarkdown);
-                }
-
-                // Post the implemented_at marker in the same shape as a single-ticket run.
-                // Batch fields use parens (not brackets) so the marker parser does not read
-                // them as additional markers.
-                var commentHtml =
-                    $"<p>[implemented_at: {perTicket.CommitSha}] (branch {batchBranchName})" +
-                    $" (batch: stack_position={perTicket.StackPosition})</p>{summaryHtml}";
-                try
-                {
-                    await _ticketing.CreateCommentAsync(ticket.Id, commentHtml, ct).ConfigureAwait(false);
-                }
-                catch { /* non-fatal: marker posting failure must not block the batch result */ }
-
-                // Transition InProgress -> InReview to match single-ticket run observable state.
-                try
-                {
-                    await _ticketing.TransitionAsync(ticket.Id, TicketState.InReview, ct).ConfigureAwait(false);
-                }
-                catch { /* non-fatal: transition failure must not block the batch result */ }
+                // No commit attribution for this ticket: without a SHA we cannot post the
+                // implemented_at marker, transition to InReview, or ship it. Stop it
+                // explicitly rather than laundering it into a BatchImplemented success that
+                // never advances - that silent half-complete is what made a fully-committed
+                // batch read as "child did not complete" to the parent chain.
+                results.Add(new ChainResult(
+                    TicketId: ticket.Id,
+                    Steps: Array.Empty<ChainStep>(),
+                    Outcome: ChainOutcome.StoppedAtImplement,
+                    TotalDuration: batchSw.Elapsed,
+                    FinalRationale:
+                        $"batch implement: no commit attribution for {ticket.Id}; the worker " +
+                        "self-report omitted it and it could not be reconstructed from git"));
+                continue;
             }
+
+            // Resolve per-ticket summary markdown from the worker's fenced blocks (best-effort).
+            string summaryHtml = "";
+            if (workerResult.Blocks is not null &&
+                !string.IsNullOrEmpty(perTicket.SummaryRef) &&
+                workerResult.Blocks.TryGetValue(perTicket.SummaryRef, out var summaryMarkdown) &&
+                !string.IsNullOrEmpty(summaryMarkdown))
+            {
+                summaryHtml = MarkdownRenderer.Render(summaryMarkdown);
+            }
+
+            // Post the implemented_at marker in the same shape as a single-ticket run.
+            // Batch fields use parens (not brackets) so the marker parser does not read
+            // them as additional markers.
+            var commentHtml =
+                $"<p>[implemented_at: {perTicket.CommitSha}] (branch {batchBranchName})" +
+                $" (batch: stack_position={perTicket.StackPosition})</p>{summaryHtml}";
+            // Marker posting failure must not block the batch result.
+            await BestEffortTicketWriteAsync(batchSessionId, ticket.Id, "batch_implemented_marker",
+                () => _ticketing.CreateCommentAsync(ticket.Id, commentHtml, ct), ct).ConfigureAwait(false);
+
+            // Transition InProgress -> InReview to match single-ticket run observable state;
+            // its failure must not block the batch result either.
+            await BestEffortTicketWriteAsync(batchSessionId, ticket.Id, "batch_transition_in_review",
+                () => _ticketing.TransitionAsync(ticket.Id, TicketState.InReview, ct), ct).ConfigureAwait(false);
 
             var implStep = new ChainStep(
                 PhaseName: "batch-implement",
@@ -1370,9 +1647,7 @@ public class ChainPhase
                 Steps: new[] { implStep },
                 Outcome: ChainOutcome.BatchImplemented,
                 TotalDuration: batchSw.Elapsed,
-                FinalRationale: perTicket is not null
-                    ? $"batch implement succeeded; commit {perTicket.CommitSha}"
-                    : "batch implement succeeded"));
+                FinalRationale: $"batch implement succeeded; commit {perTicket.CommitSha}"));
         }
 
         return new BatchImplementOutcome(
@@ -1518,7 +1793,9 @@ public class ChainPhase
             LiveStdoutSink: _baseOptions.LiveStdoutSink,
             LiveStderrSink: _baseOptions.LiveStderrSink,
             ProgressDigestSink: _baseOptions.ProgressDigestSink,
-            Size: maxSize);
+            Size: maxSize,
+            DebugTranscript: new DebugTranscriptContext(
+                BuildVersion: _baseOptions.BuildVersion, SessionId: reviewSessionId));
 
         // Workers run in the shared worktree (where the batch branch is checked out).
         var workerResult = await _batchWorker!
@@ -1573,18 +1850,15 @@ public class ChainPhase
         IReadOnlyList<string> checksFailed,
         CancellationToken ct)
     {
-        try
-        {
-            var checksNote = checksFailed.Count > 0
-                ? $" checks_failed: {string.Join(", ", checksFailed)}"
-                : "";
-            var passNote = pass > 1 ? $" (pass {pass})" : "";
-            var commentHtml =
-                $"<p>[batch_review{passNote}: {verdict}]{checksNote}</p>" +
-                $"<p>{System.Net.WebUtility.HtmlEncode(rationale)}</p>";
-            await _ticketing.CreateCommentAsync(ticketId, commentHtml, ct).ConfigureAwait(false);
-        }
-        catch { /* non-fatal */ }
+        var checksNote = checksFailed.Count > 0
+            ? $" checks_failed: {string.Join(", ", checksFailed)}"
+            : "";
+        var passNote = pass > 1 ? $" (pass {pass})" : "";
+        var commentHtml =
+            $"<p>[batch_review{passNote}: {verdict}]{checksNote}</p>" +
+            $"<p>{System.Net.WebUtility.HtmlEncode(rationale)}</p>";
+        await BestEffortTicketWriteAsync(_sessionIdGenerator(), ticketId, "batch_review_comment",
+            () => _ticketing.CreateCommentAsync(ticketId, commentHtml, ct), ct).ConfigureAwait(false);
     }
 
     private static string? TryGetBatchReviewMetadataString(
@@ -1855,7 +2129,10 @@ public class ChainPhase
             LiveStdoutSink: _baseOptions.LiveStdoutSink,
             LiveStderrSink: _baseOptions.LiveStderrSink,
             ProgressDigestSink: _baseOptions.ProgressDigestSink,
-            Size: maxSize);
+            Size: maxSize,
+            DebugTranscript: new DebugTranscriptContext(
+                BuildVersion: _baseOptions.BuildVersion, SessionId: reworkSessionId,
+                ReworkRound: feedback?.ReworkRoundNumber));
         if (batchBuildOpts.DebugCaptureDirectory is not null)
             Directory.CreateDirectory(batchBuildOpts.DebugCaptureDirectory);
 
@@ -1883,18 +2160,10 @@ public class ChainPhase
             var markerHtml =
                 $"<p>[implemented_at: {confirmed.CommitSha}] (branch {batchBranchName})" +
                 $" (batch-rework: stack_position={confirmed.StackPosition})</p>";
-            try
-            {
-                await _ticketing.CreateCommentAsync(confirmed.TicketId, markerHtml, ct)
-                    .ConfigureAwait(false);
-            }
-            catch { /* non-fatal */ }
-            try
-            {
-                await _ticketing.TransitionAsync(confirmed.TicketId, TicketState.InReview, ct)
-                    .ConfigureAwait(false);
-            }
-            catch { /* non-fatal */ }
+            await BestEffortTicketWriteAsync(reworkSessionId, confirmed.TicketId, "batch_rework_marker",
+                () => _ticketing.CreateCommentAsync(confirmed.TicketId, markerHtml, ct), ct).ConfigureAwait(false);
+            await BestEffortTicketWriteAsync(reworkSessionId, confirmed.TicketId, "batch_transition_in_review",
+                () => _ticketing.TransitionAsync(confirmed.TicketId, TicketState.InReview, ct), ct).ConfigureAwait(false);
         }
 
         return verifyResult.ConfirmedTickets;
@@ -1955,6 +2224,25 @@ public class ChainPhase
             if (createResult.Success)
             {
                 sharedWorktreePath = createResult.AbsolutePath ?? integrationWorktreePath;
+
+                // TLB-546: a retained chain/{slug} branch from a prior run stays frozen at the
+                // base tip it forked from. Reconcile it with the CURRENT base before any child
+                // dispatches - otherwise every child implements against a stale snapshot and the
+                // divergence only surfaces at the root landing, after all the work is burned.
+                var refreshFailure = await RefreshIntegrationBranchAsync(
+                    parentTicket.Id, integrationBranch, sharedWorktreePath,
+                    integrationBaseRef, ct).ConfigureAwait(false);
+                if (refreshFailure is not null)
+                {
+                    totalSw.Stop();
+                    return new ChainResult(
+                        options.TicketId,
+                        Array.Empty<ChainStep>(),
+                        ChainOutcome.ParentStoppedEarly,
+                        totalSw.Elapsed,
+                        refreshFailure,
+                        ChildResults: Array.Empty<ChainResult>());
+                }
             }
             else
             {
@@ -1987,6 +2275,12 @@ public class ChainPhase
 
         var allChildResults = new List<ChainResult>();
         bool anyStoppedEarly = false;
+        // TLB-538/TLB-545: set when a stopped child's failure was environmental - an environment
+        // gate failure or an unreachable ticketing backend. Both are global to the machine/config,
+        // so the remaining siblings are marked Skipped instead of silently omitted - the operator
+        // sees the full blast radius, and nothing else is dispatched into the same wall.
+        bool environmentFailureDetected = false;
+        string? environmentSkipReason = null;
 
         HashSet<string>? batchedTicketIds = null;
         if (options.BatchImplementGroup is not null
@@ -2275,6 +2569,11 @@ public class ChainPhase
                 if (!ok)
                 {
                     anyStoppedEarly = true;
+                    environmentFailureDetected = childResult.ContainsEnvironmentalStop();
+                    if (environmentFailureDetected)
+                        environmentSkipReason = childResult.ContainsTicketingUnavailable()
+                            ? "ticketing backend unreachable while running a sibling; restore connectivity and re-run the chain"
+                            : "environment gate failure in a sibling; fix the environment once and re-run the chain";
                     break;
                 }
 
@@ -2313,6 +2612,21 @@ public class ChainPhase
             }
         }
 
+        // TLB-538/TLB-545: after an environmental stop, mark every undispatched child Skipped with
+        // the reason. They were not failures and they were not silently dropped - the environment
+        // must be fixed once, then a re-run picks them all up.
+        if (environmentFailureDetected)
+        {
+            var dispatched = new HashSet<string>(allChildResults.Select(r => r.TicketId), StringComparer.Ordinal);
+            foreach (var level in levels)
+                foreach (var id in level)
+                    if (!dispatched.Contains(id) && (batchedTicketIds is null || !batchedTicketIds.Contains(id)))
+                        allChildResults.Add(new ChainResult(id, Array.Empty<ChainStep>(), ChainOutcome.Skipped,
+                            TimeSpan.Zero, null,
+                            SkipReason: environmentSkipReason
+                                ?? "environment gate failure in a sibling; fix the environment once and re-run the chain"));
+        }
+
         var childResults = allChildResults;
 
         // Root-chain landing (TLB-492): a nested parent merges its integration branch up into
@@ -2340,9 +2654,16 @@ public class ChainPhase
         totalSw.Stop();
         var outcome = anyStoppedEarly ? ChainOutcome.ParentStoppedEarly : ChainOutcome.ParentCompleted;
         var finalRationale = landingRationale
-            ?? (anyStoppedEarly
-                ? $"One or more children did not complete: {string.Join(", ", childResults.Where(r => !IsChainSuccess(r.Outcome)).Select(r => r.TicketId))}"
-                : $"All {eligible.Count} eligible children completed.");
+            ?? (environmentFailureDetected
+                ? (childResults.Any(r => r.ContainsTicketingUnavailable())
+                    ? $"Ticketing backend unreachable: {string.Join(", ", childResults.Where(r => r.ContainsTicketingUnavailable()).Select(r => r.TicketId))} stopped because the ticketing service could not be reached after transport retries; remaining children were skipped. Restore connectivity, then re-run."
+                    : $"Environment gate failure: {string.Join(", ", childResults.Where(r => r.ContainsEnvironmentFailure()).Select(r => r.TicketId))} stopped because the gate also fails on the untouched base ref; remaining children were skipped. Fix the environment once, then re-run.")
+                : anyStoppedEarly
+                    ? $"One or more children did not complete: {string.Join(", ", childResults.Where(r => !IsChainSuccess(r.Outcome) && r.Outcome != ChainOutcome.Skipped).Select(r => r.TicketId))}"
+                    : $"All {eligible.Count} eligible children completed.");
+
+        if (options.ChainTargetBranch is null && IsChainSuccess(outcome))
+            await SweepChainWorktreesAsync(options.TicketId, _sessionIdGenerator(), ct).ConfigureAwait(false);
 
         return new ChainResult(
             TicketId: options.TicketId,
@@ -2428,17 +2749,13 @@ public class ChainPhase
 
         foreach (var ticket in batchTickets)
         {
-            try
-            {
-                await _ticketing.CreateCommentAsync(ticket.Id,
-                    $"<p>[shipped_at: {shippedSha}] (batch into {integrationBranch})</p>", ct).ConfigureAwait(false);
-            }
-            catch { /* non-fatal: marker posting must not unwind the ship */ }
-            try
-            {
-                await _ticketing.TransitionAsync(ticket.Id, TicketState.Done, ct).ConfigureAwait(false);
-            }
-            catch { /* non-fatal: transition failure must not unwind the ship */ }
+            // The batch is already merged at this point, so neither the marker post nor the
+            // Done transition may unwind the ship.
+            await BestEffortTicketWriteAsync(_sessionIdGenerator(), ticket.Id, "batch_shipped_marker",
+                () => _ticketing.CreateCommentAsync(ticket.Id,
+                    $"<p>[shipped_at: {shippedSha}] (batch into {integrationBranch})</p>", ct), ct).ConfigureAwait(false);
+            await BestEffortTicketWriteAsync(_sessionIdGenerator(), ticket.Id, "batch_transition_done",
+                () => _ticketing.TransitionAsync(ticket.Id, TicketState.Done, ct), ct).ConfigureAwait(false);
             await _events.EmitAsync(new WorkflowEvent(
                 SessionId: _sessionIdGenerator(),
                 Timestamp: DateTimeOffset.UtcNow,
@@ -2680,6 +2997,103 @@ public class ChainPhase
         return createResult;
     }
 
+    /// <summary>
+    /// Reconciles a (possibly reused) integration branch with the current tip of its base ref
+    /// BEFORE any child dispatches (TLB-546). Integration branches are intentionally retained
+    /// across runs so a failed or interrupted chain can resume its accumulated topology - but a
+    /// retained branch stays frozen at the base tip it forked from, while the base keeps moving
+    /// (other chains landing, tickets shipping directly). Reusing it verbatim makes every child
+    /// implement, gate, and review against a stale snapshot; the divergence then surfaces only
+    /// at the root landing, after all the work is done, where a semantic collision between the
+    /// chain's work and what landed on the base in the meantime cannot be resolved automatically.
+    /// Rebases - never resets - so commits accumulated by already-shipped children survive; a
+    /// branch with no commits of its own just fast-forwards to the base tip. Returns null when
+    /// the branch is fresh or successfully refreshed, or a human-readable rationale when the
+    /// refresh hit conflicts and the chain must stop before dispatching anything.
+    /// </summary>
+    private async Task<string?> RefreshIntegrationBranchAsync(
+        string ticketId,
+        string integrationBranch,
+        string integrationWorktreePath,
+        string baseRef,
+        CancellationToken ct)
+    {
+        string chainSha;
+        string baseSha;
+        try
+        {
+            chainSha = await _git.RevParseAsync(integrationBranch, _workingDirectory, ct).ConfigureAwait(false);
+            baseSha = await _git.RevParseAsync(baseRef, _workingDirectory, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Probe failure (e.g. an unborn base in a fixture repo) is not staleness evidence.
+            // Proceed exactly as the chain did before this guard existed.
+            return null;
+        }
+
+        if (string.Equals(chainSha, baseSha, StringComparison.Ordinal))
+            return null; // freshly created, or already at the base tip
+
+        var baseIsAncestor = await _git.IsAncestorAsync(baseSha, chainSha, _workingDirectory, ct).ConfigureAwait(false);
+        if (baseIsAncestor)
+            return null; // chain is strictly ahead (accumulated child work); base unmoved
+
+        // The base advanced after this branch forked. Replay the chain's commits onto the
+        // current tip so children build on reality instead of the fork-time snapshot.
+        var rebase = await _git.RebaseAsync(baseRef, integrationWorktreePath, ct).ConfigureAwait(false);
+        if (rebase.HadConflicts)
+        {
+            await _git.RebaseAbortAsync(integrationWorktreePath, ct).ConfigureAwait(false);
+            var paths = string.Join(", ", rebase.ConflictingPaths);
+            await EmitChainGateFailureAsync(ticketId, "chain_refresh_rebase_conflicts", new Dictionary<string, object>
+            {
+                ["integration_branch"] = integrationBranch,
+                ["base_ref"] = baseRef,
+                ["conflicting_paths"] = rebase.ConflictingPaths
+            }, ct).ConfigureAwait(false);
+            return $"{integrationBranch} forked from an older {baseRef} and rebasing it onto the " +
+                $"current tip hit conflicts in: {paths}. No child was dispatched. Resolve the rebase " +
+                $"manually (the accumulated work is safe on {integrationBranch}), or delete the " +
+                $"branch to restart the chain from the current {baseRef}, then re-run.";
+        }
+        if (!rebase.Success)
+        {
+            await EmitChainGateFailureAsync(ticketId, "chain_refresh_rebase_failed", new Dictionary<string, object>
+            {
+                ["integration_branch"] = integrationBranch,
+                ["base_ref"] = baseRef,
+                ["detail"] = rebase.FailureReason ?? "unknown"
+            }, ct).ConfigureAwait(false);
+            return $"refreshing {integrationBranch} onto {baseRef} failed: {rebase.FailureReason}. " +
+                $"No child was dispatched; the accumulated work is safe on {integrationBranch}.";
+        }
+
+        string refreshedSha;
+        try { refreshedSha = await _git.HeadShaAsync(integrationWorktreePath, ct).ConfigureAwait(false); }
+        catch { refreshedSha = "(unknown)"; }
+
+        Console.WriteLine(
+            $"[{ticketId}] {integrationBranch} was behind {baseRef}; rebased onto the current tip " +
+            "before dispatching children.");
+        await _events.EmitAsync(new WorkflowEvent(
+            SessionId: _sessionIdGenerator(),
+            Timestamp: DateTimeOffset.UtcNow,
+            Kind: EventKind.TicketWrite,
+            TicketId: ticketId,
+            Phase: Phase.Chain,
+            Data: new Dictionary<string, object>
+            {
+                ["action"] = "chain_refresh_rebased",
+                ["integration_branch"] = integrationBranch,
+                ["base_ref"] = baseRef,
+                ["old_tip"] = chainSha,
+                ["new_tip"] = refreshedSha
+            }), ct).ConfigureAwait(false);
+
+        return null;
+    }
+
     private sealed record DryRunItem(
         Ticket Ticket,
         int Depth,
@@ -2846,6 +3260,52 @@ public class ChainPhase
             or ChainOutcome.RatifiedObsolete
             or ChainOutcome.ParentCompleted
             or ChainOutcome.BatchImplemented;
+
+    // Success-only sweep of this chain's worktrees. Reuses the stack-agnostic WorktreeDecrufter
+    // (git + filesystem only). Branch-prefix filtering (ticket/, chain/) is safer than nuking
+    // .worktrees/: it never removes the main worktree or an unrelated checkout. Dispatch is serial
+    // (concurrency pinned to 1), so no concurrent chain owns a ticket/ or chain/ worktree here.
+    // A cleanup miss must NEVER fail an otherwise-successful chain - it is swallowed/advisory only.
+    //
+    // This removes WORKTREES only and deliberately leaves the ticket/ and chain/ BRANCHES in place:
+    // the integration branch is the accumulated subtree and an interrupted/retried chain resumes by
+    // checking it out (see SequentialChainTests.ParentChain_LeftoverChainBranch_*). Tearing the
+    // branches down is the operator's explicit call once the operation is truly finished - that is
+    // what `build sweep` (ChainWorktreeSweeper) does, merged-gated so it never drops resumable work.
+    internal async Task SweepChainWorktreesAsync(string ticketId, string sessionId, CancellationToken ct)
+    {
+        try
+        {
+            var worktrees = await _git.ListWorktreesAsync(ct).ConfigureAwait(false);
+            var decrufter = new WorktreeDecrufter(_git);
+            var halted = new List<string>();
+            foreach (var w in worktrees)
+            {
+                if (string.IsNullOrEmpty(w.Branch)) continue;
+                if (!(w.Branch.StartsWith("ticket/", StringComparison.Ordinal)
+                      || w.Branch.StartsWith("chain/", StringComparison.Ordinal)))
+                    continue;
+                var result = await decrufter.DecruftAsync(w.Path, _workingDirectory, ct).ConfigureAwait(false);
+                if (result.HaltedAt is not null && result.HaltedAt != DecruftStep.WorktreeNotFound)
+                    halted.Add($"{w.Path} (halted at {result.HaltedAt})");
+            }
+            if (halted.Count > 0)
+            {
+                await _events.EmitAsync(new WorkflowEvent(
+                    SessionId: sessionId,
+                    Timestamp: DateTimeOffset.UtcNow,
+                    Kind: EventKind.GateFailure,
+                    TicketId: ticketId,
+                    Phase: Phase.Chain,
+                    Data: new Dictionary<string, object>
+                    {
+                        ["kind"] = "worktree_sweep_incomplete",
+                        ["halted"] = halted.ToArray()
+                    }), ct).ConfigureAwait(false);
+            }
+        }
+        catch { /* cleanup must never fail a successful chain */ }
+    }
 
     /// <summary>
     /// Decides where the chain enters for a single (leaf) ticket and performs any state-reconciliation

@@ -3,6 +3,7 @@ using Tomlyn.Model;
 using ThroughlineBuild.Briefs;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Workers.ClaudeCode;
 
 namespace ThroughlineBuild.Cli;
 
@@ -21,7 +22,12 @@ public record LlmConfig(
     string AnthropicApiKeyEnv,
     string? AnthropicApiKey = null);
 
-public record AgentConfig(string Executable, int? MaxOutputTokens, IReadOnlyDictionary<WorkerSize, ModelTier> Sizes, bool BypassPermissions = true);
+public record AgentConfig(
+    string Executable,
+    int? MaxOutputTokens,
+    IReadOnlyDictionary<WorkerSize, ModelTier> Sizes,
+    bool BypassPermissions = true,
+    ClaudeCodeTransport Transport = ClaudeCodeTransport.Print);
 
 public record WorkersConfig(
     string DefaultAgent,
@@ -35,7 +41,8 @@ public record EventsConfig(string LogDirectory);
 public record ReviewConfig(
     int VerifierTimeoutMinutes,
     IReadOnlyList<string> VerifierAllowedTools,
-    IReadOnlyList<CheckSpec> Checks);
+    IReadOnlyList<CheckSpec> Checks,
+    bool VerifyGateVacuity = true);
 
 public record ShipConfig(
     string Remote,
@@ -239,12 +246,12 @@ public static class BuildConfigLoader
 
     private static readonly HashSet<string> KnownReviewKeys = new(StringComparer.Ordinal)
     {
-        "verifier_timeout_minutes", "verifier_allowed_tools", "checks"
+        "verifier_timeout_minutes", "verifier_allowed_tools", "checks", "verify_gate_vacuity"
     };
 
     private static readonly HashSet<string> KnownCheckEntryKeys = new(StringComparer.Ordinal)
     {
-        "name", "executable", "arguments", "timeout_minutes", "role"
+        "name", "executable", "arguments", "timeout_minutes", "role", "canary", "required_paths"
     };
 
     private static readonly HashSet<string> KnownShipKeys = new(StringComparer.Ordinal)
@@ -265,7 +272,8 @@ public static class BuildConfigLoader
     private static readonly HashSet<string> KnownProjectKeys = new(StringComparer.Ordinal)
     {
         "language", "framework", "package_manager", "build_command", "test_command",
-        "install_command", "dev_command", "plane_project_url", "workflow_tool", "notes_file"
+        "install_command", "dev_command", "plane_project_url", "workflow_tool", "notes_file",
+        "convention_files", "preload_context", "context_hygiene"
     };
 
     private static readonly HashSet<string> KnownBatchKeys = new(StringComparer.Ordinal)
@@ -336,7 +344,11 @@ public static class BuildConfigLoader
                                 }
                             }
                         }
-                        else if (!KnownAgentKeys.Contains(agentKv.Key))
+                        else if (!KnownAgentKeys.Contains(agentKv.Key)
+                                 // `transport` is valid on any Claude-family agent (anything mapping to
+                                 // ClaudeCodeAgent), not just the literal claude-code block; only warn
+                                 // when it appears on gemini/codex/copilot.
+                                 && !(kv.Key is not ("gemini" or "codex" or "copilot") && agentKv.Key == "transport"))
                         {
                             warnings.Add($"warning: unknown config key workers.{kv.Key}.{agentKv.Key} - ignored");
                         }
@@ -460,9 +472,43 @@ public static class BuildConfigLoader
         {
             "gating"   => CheckRole.Gating,
             "advisory" => CheckRole.Advisory,
+            "setup"    => CheckRole.Setup,
             _ => throw new ConfigException(
-                $"key 'role' in [{context}] must be either \"gating\" or \"advisory\", got \"{raw}\"")
+                $"key 'role' in [{context}] must be \"gating\", \"advisory\", or \"setup\", got \"{raw}\"")
         };
+    }
+
+    // Parses the optional inline-table array `canary = [{ path = "...", content = "..." }, ...]`.
+    // Returns null when absent or empty; entries lacking a non-empty path are skipped (canary is
+    // optional/best-effort). Every cast is guarded.
+    private static IReadOnlyList<CanaryFile>? ParseCanary(TomlTable entry)
+    {
+        if (!entry.TryGetValue("canary", out var raw) || raw is not TomlArray arr || arr.Count == 0)
+            return null;
+
+        var files = new List<CanaryFile>(arr.Count);
+        foreach (var item in arr)
+        {
+            if (item is not TomlTable cf)
+                continue;
+            var path = cf.TryGetValue("path", out var pVal) && pVal is string p ? p : null;
+            if (string.IsNullOrWhiteSpace(path))
+                continue;
+            var content = cf.TryGetValue("content", out var cVal) && cVal is string c ? c : "";
+            files.Add(new CanaryFile(path.Trim(), content));
+        }
+
+        return files.Count > 0 ? files.AsReadOnly() : null;
+    }
+
+    private static IReadOnlyList<string>? ParseRequiredPaths(TomlTable entry)
+    {
+        var paths = OptionalStringList(entry, "required_paths", Array.Empty<string>())
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => path.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        return paths.Count > 0 ? paths.AsReadOnly() : null;
     }
 
     private static string RequireString(TomlTable section, string sectionName, string key)
@@ -488,6 +534,13 @@ public static class BuildConfigLoader
         if (val is long l) return (int)l;
         if (val is int i) return i;
         return defaultValue;
+    }
+
+    private static bool OptionalBool(TomlTable section, string key, bool defaultValue)
+    {
+        if (!section.TryGetValue(key, out var val) || val is not bool b)
+            return defaultValue;
+        return b;
     }
 
     private static IReadOnlyList<string> OptionalStringList(TomlTable section, string key, IReadOnlyList<string> defaultValue)
@@ -585,6 +638,30 @@ public static class BuildConfigLoader
             if (subTable.TryGetValue("bypass_permissions", out var bpVal) && bpVal is bool bp)
                 bypassPermissions = bp;
 
+            // Omitted-value default for a Claude-family agent's transport. The Stage 07 cutover flipped
+            // it to interactive-hook after operator dogfood (the npt5 clean interactive chain;
+            // docs/heartbeat/evidence/stage-07-dogfood.md). This is the load-bearing default: a Claude
+            // block with no transport key now runs interactive-hook (requires Claude Code >= 2.1.177,
+            // gated by ClaudeCodePreflight). Roll back to the legacy headless path with
+            // transport = "print". Transport is honored for any agent name that maps to ClaudeCodeAgent
+            // in WorkerAgentBuilder - i.e. anything that is not gemini/codex/copilot - so a custom-named
+            // Claude block (e.g. [workers.my-claude]) can select print/interactive-hook too.
+            var transport = ClaudeCodeTransport.InteractiveHook;
+            bool isClaudeAgent = kv.Key is not ("gemini" or "codex" or "copilot");
+            if (isClaudeAgent && subTable.TryGetValue("transport", out var transportValue))
+            {
+                if (transportValue is not string transportName)
+                    throw new ConfigException(
+                        $"[workers.{kv.Key}] transport must be a string: print or interactive-hook");
+                transport = transportName switch
+                {
+                    "print" => ClaudeCodeTransport.Print,
+                    "interactive-hook" => ClaudeCodeTransport.InteractiveHook,
+                    _ => throw new ConfigException(
+                        $"unknown [workers.{kv.Key}] transport '{transportName}'; supported values are: print, interactive-hook"),
+                };
+            }
+
             var sizes = new Dictionary<WorkerSize, ModelTier>();
             if (!subTable.TryGetValue("sizes", out var sizesVal) || sizesVal is not TomlTable sizesTable)
                 throw new ConfigException(
@@ -606,6 +683,13 @@ public static class BuildConfigLoader
                     if (tierTable.TryGetValue("effort", out var effortVal) && effortVal is string effortStr && !string.IsNullOrEmpty(effortStr))
                         effort = effortStr;
 
+                    // claude-code only: reject model values the CLI cannot resolve (e.g. the
+                    // "fable" alias trap) at config load, instead of letting them fail as an
+                    // opaque is_error envelope deep inside a chain run.
+                    if (kv.Key == "claude-code" && ClaudeCodeModelValidator.Validate(modelStr) is string modelError)
+                        throw new ConfigException(
+                            $"[workers.{kv.Key}.sizes.{key}] model: {modelError}");
+
                     sizes[ws] = new ModelTier(modelStr, effort);
                 }
                 else if (sizesTable.ContainsKey(key))
@@ -623,7 +707,7 @@ public static class BuildConfigLoader
             if (missing.Count > 0)
                 throw new ConfigException(
                     $"[workers.{kv.Key}.sizes] is missing required size keys: {string.Join(", ", missing)}");
-            agents[kv.Key] = new AgentConfig(executable, maxOutputTokens, sizes.AsReadOnly(), bypassPermissions);
+            agents[kv.Key] = new AgentConfig(executable, maxOutputTokens, sizes.AsReadOnly(), bypassPermissions, transport);
         }
 
         // Validate that default_agent and every phase agent resolve to a defined
@@ -688,11 +772,13 @@ public static class BuildConfigLoader
             return new ReviewConfig(
                 VerifierTimeoutMinutes: 15,
                 VerifierAllowedTools: DefaultVerifierAllowedTools,
-                Checks: Array.Empty<CheckSpec>());
+                Checks: Array.Empty<CheckSpec>(),
+                VerifyGateVacuity: true);
         }
 
         var timeoutMinutes = OptionalInt(t, "verifier_timeout_minutes", 15);
         var allowedTools = OptionalStringList(t, "verifier_allowed_tools", DefaultVerifierAllowedTools);
+        var verifyGateVacuity = t.TryGetValue("verify_gate_vacuity", out var vgv) && vgv is bool vgvb ? vgvb : true;
 
         var checks = new List<CheckSpec>();
         if (t.TryGetValue("checks", out var checksVal) && checksVal is TomlTableArray checksArr)
@@ -704,19 +790,24 @@ public static class BuildConfigLoader
                 var arguments = OptionalStringList(entry, "arguments", Array.Empty<string>());
                 var timeoutMins = OptionalInt(entry, "timeout_minutes", 5);
                 var role = ParseCheckRole(entry, "review.checks");
+                var canary = ParseCanary(entry);
+                var requiredPaths = ParseRequiredPaths(entry);
                 checks.Add(new CheckSpec(
                     Name: name,
                     Executable: executable,
                     Arguments: arguments,
                     Timeout: TimeSpan.FromMinutes(timeoutMins),
-                    Role: role));
+                    Role: role,
+                    Canary: canary,
+                    RequiredPaths: requiredPaths));
             }
         }
 
         return new ReviewConfig(
             VerifierTimeoutMinutes: timeoutMinutes,
             VerifierAllowedTools: allowedTools,
-            Checks: checks.AsReadOnly());
+            Checks: checks.AsReadOnly(),
+            VerifyGateVacuity: verifyGateVacuity);
     }
 
     private static ShipConfig ReadShipSection(TomlTable root)
@@ -750,12 +841,16 @@ public static class BuildConfigLoader
                 var arguments = OptionalStringList(entry, "arguments", Array.Empty<string>());
                 var timeoutMins = OptionalInt(entry, "timeout_minutes", 5);
                 var role = ParseCheckRole(entry, "ship.regression_checks");
+                var canary = ParseCanary(entry);
+                var requiredPaths = ParseRequiredPaths(entry);
                 checks.Add(new CheckSpec(
                     Name: name,
                     Executable: executable,
                     Arguments: arguments,
                     Timeout: TimeSpan.FromMinutes(timeoutMins),
-                    Role: role));
+                    Role: role,
+                    Canary: canary,
+                    RequiredPaths: requiredPaths));
             }
         }
 
@@ -854,6 +949,21 @@ public static class BuildConfigLoader
             }
         }
 
+        // Project-convention bundle (derived; the deriver chose these paths). Read as a plain list of
+        // relative paths; their CONTENTS are read lazily at brief-build from the live worktree, not
+        // here (the target source may not exist yet at config load). Blank entries are dropped.
+        var conventionFiles = OptionalStringList(t, "convention_files", Array.Empty<string>())
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => p.Trim())
+            .ToList()
+            .AsReadOnly();
+
+        // Pre-load gate: default ON; set false to ablate the lever (restore the pre-preload brief).
+        var preloadContext = OptionalBool(t, "preload_context", true);
+
+        // Context-hygiene gate: default OFF (opt-in). Enables effort-gated lean planning for S briefs.
+        var contextHygiene = OptionalBool(t, "context_hygiene", false);
+
         return new ProjectContext(
             Language: language,
             Framework: framework,
@@ -864,6 +974,11 @@ public static class BuildConfigLoader
             DevCommand: devCommand,
             PlaneProjectUrl: planeProjectUrl,
             Notes: notes,
-            WorkflowTool: workflowTool);
+            WorkflowTool: workflowTool)
+        {
+            ConventionFiles = conventionFiles,
+            PreloadContext = preloadContext,
+            ContextHygiene = contextHygiene
+        };
     }
 }

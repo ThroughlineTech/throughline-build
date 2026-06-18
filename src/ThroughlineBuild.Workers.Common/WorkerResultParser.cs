@@ -107,6 +107,10 @@ internal partial class WorkersCommonJsonContext : JsonSerializerContext { }
 ///       with ValidationError. Unknown reasons pass through without a subsumed_by check.
 ///   - Multiple markers are tolerated; the LAST valid envelope wins (the first
 ///     marker is often a template echo with placeholder text).
+///   - Fenced-block pre-pass: blocks are scanned up to the LAST marker line, and a
+///     duplicated block name is last-wins (mirrors the envelope rule). Workers whose
+///     output spans several messages may re-emit a block or an intermediate envelope;
+///     neither voids the blocks emitted before the final envelope.
 /// </summary>
 internal static class WorkerResultParser
 {
@@ -143,7 +147,7 @@ internal static class WorkerResultParser
         for (int idx = markerIndices.Count - 1; idx >= 0; idx--)
         {
             int i = markerIndices[idx];
-            var json = StripCodeFence(string.Join("\n", lines, i + 1, lines.Length - i - 1).Trim());
+            var json = ExtractLeadingJsonValue(StripCodeFence(string.Join("\n", lines, i + 1, lines.Length - i - 1).Trim()));
             try
             {
                 var dto = JsonSerializer.Deserialize(json, WorkersCommonJsonContext.Default.WorkerResultDto);
@@ -265,7 +269,7 @@ internal static class WorkerResultParser
         for (int idx = markerIndices.Count - 1; idx >= 0; idx--)
         {
             int i = markerIndices[idx];
-            var json = StripCodeFence(string.Join("\n", lines, i + 1, lines.Length - i - 1).Trim());
+            var json = ExtractLeadingJsonValue(StripCodeFence(string.Join("\n", lines, i + 1, lines.Length - i - 1).Trim()));
             try
             {
                 var dto = JsonSerializer.Deserialize(json, WorkersCommonJsonContext.Default.BatchWorkerResultDto);
@@ -340,6 +344,33 @@ internal static class WorkerResultParser
             }
         }
         return lastFailure;
+    }
+
+    // Trims the payload to its first complete JSON value. The envelope payload is
+    // "everything after the marker line", which historically had to END the output -
+    // any narration after the closing brace made deserialization fail with a
+    // trailing-content JsonException. Workers whose output spans several messages
+    // (observed with Fable) routinely narrate after the envelope, so the parser now
+    // takes the first complete JSON value and ignores the remainder. Malformed or
+    // non-JSON payloads are returned unchanged so the deserializer reports the same
+    // error it always did. AOT-safe: Utf8JsonReader only.
+    private static string ExtractLeadingJsonValue(string payload)
+    {
+        if (payload.Length == 0) return payload;
+        var bytes = System.Text.Encoding.UTF8.GetBytes(payload);
+        var reader = new Utf8JsonReader(bytes, isFinalBlock: true, state: default);
+        try
+        {
+            if (!reader.Read()) return payload;
+            reader.Skip(); // advance past the first complete value (object, array, or scalar)
+            int consumed = (int)reader.BytesConsumed;
+            if (consumed <= 0 || consumed >= bytes.Length) return payload;
+            return System.Text.Encoding.UTF8.GetString(bytes, 0, consumed);
+        }
+        catch (JsonException)
+        {
+            return payload;
+        }
     }
 
     // Strips a leading markdown opening fence (```, optionally followed by a
@@ -421,17 +452,28 @@ internal static class WorkerResultParser
         errorType = null;
         errorMessage = null;
 
+        // The fence scan covers everything BEFORE the LAST WORKER_RESULT marker - the marker
+        // whose envelope wins. Scanning only to the FIRST marker was tuned for single-message
+        // input; over a full multi-message transcript an early echoed envelope would truncate
+        // the scan and drop blocks emitted after it. A bare WORKER_RESULT line before the last
+        // marker is ordinary content here (it may legitimately appear inside a block body).
+        int scanEnd = lines.Length;
+        for (int i = lines.Length - 1; i >= 0; i--)
+        {
+            if (lines[i].Trim() == "WORKER_RESULT")
+            {
+                scanEnd = i;
+                break;
+            }
+        }
+
         string? currentName = null;
         var currentContent = new System.Text.StringBuilder();
         int currentStartLine = -1;
 
-        for (int i = 0; i < lines.Length; i++)
+        for (int i = 0; i < scanEnd; i++)
         {
             var trimmed = lines[i].Trim();
-
-            // Stop scanning when we hit the WORKER_RESULT marker
-            if (trimmed == "WORKER_RESULT")
-                break;
 
             if (trimmed.StartsWith("<<<", StringComparison.Ordinal))
             {
@@ -451,12 +493,10 @@ internal static class WorkerResultParser
                         errorMessage = $"invalid block name '{name}' at line {i}; must match ^[A-Z][A-Z0-9_]*$";
                         return false;
                     }
-                    if (blocks.ContainsKey(name))
-                    {
-                        errorType = "FenceScanError";
-                        errorMessage = $"duplicate block name '{name}' at line {i}";
-                        return false;
-                    }
+                    // Duplicate names are last-wins, mirroring the envelope's last-wins rule:
+                    // a worker that re-emits a corrected block (common when output spans
+                    // multiple messages) supersedes its earlier attempt rather than failing
+                    // the whole parse.
                     currentName = name;
                     currentStartLine = i;
                     currentContent.Clear();
@@ -494,7 +534,7 @@ internal static class WorkerResultParser
         if (currentName != null)
         {
             errorType = "FenceScanError";
-            errorMessage = $"unclosed fenced block '{currentName}' (opened at line {currentStartLine}); reached end of output without '<<<{currentName}_END'";
+            errorMessage = $"unclosed fenced block '{currentName}' (opened at line {currentStartLine}); reached the WORKER_RESULT envelope or end of output without '<<<{currentName}_END'";
             return false;
         }
 

@@ -27,7 +27,11 @@ public static class PlanBriefBuilder
             ["top_level_entries"] = topLevelEntries,
             ["main_sha"] = repo.MainSha,
             ["project_notes_section"] = projectNotesSection,
-            ["workflow_tool"] = proj.WorkflowTool
+            ["workflow_tool"] = proj.WorkflowTool,
+            // Agent-agnostic obsolete-detection prose + escalate envelope example, shared across
+            // all four plan templates (mirrors ImplementBriefBuilder). Plan is one-shot (no rework
+            // round), so there is no suppressed variant - always the initial template.
+            ["obsolete_detection_section"] = TemplateLoader.LoadShared("plan-obsolete-initial.md")
         };
 
         var instruction = TemplateLoader.Load(agentName, "plan.md").Substitute(vars);

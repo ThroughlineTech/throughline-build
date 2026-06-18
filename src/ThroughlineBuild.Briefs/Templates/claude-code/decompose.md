@@ -34,7 +34,7 @@ Analyze the parent ticket content and produce a structured list of child specs. 
 
 ## WORKER_RESULT envelope
 
-When decomposition is complete, emit the envelope as the LAST output. A bare `WORKER_RESULT` marker on its own line, followed by JSON:
+When decomposition is complete, emit the envelope as the LAST output of your final message - write nothing after the envelope JSON. A bare `WORKER_RESULT` marker on its own line, followed by JSON:
 
 WORKER_RESULT
 {

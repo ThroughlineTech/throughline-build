@@ -83,7 +83,7 @@ Write a concise summary for ticket 1. Include files changed, key design decision
 
 Repeat for every ticket in the batch.
 
-Then emit one batch WORKER_RESULT envelope:
+Then emit one batch WORKER_RESULT envelope. Emit the summary blocks and the envelope together in your final message - do not split them across separate messages, and write nothing after the envelope JSON:
 
 WORKER_RESULT
 {"status":"Ok","summary":"Implemented batch TLB-201, TLB-202","files_changed":["path/relative/to/worktree"],"failure_reason":null,"metadata":{"base_commit_sha":"<base commit pointer from brief>","head_commit_sha":"<HEAD SHA after all ticket commits>","files_changed":["path/relative/to/worktree"]},"tickets":[{"ticket_id":"TLB-201","commit_sha":"<commit SHA after TLB-201>","stack_position":1,"files_changed":["path/relative/to/worktree"],"summary_ref":"IMPLEMENT_SUMMARY_1"},{"ticket_id":"TLB-202","commit_sha":"<commit SHA after TLB-202>","stack_position":2,"files_changed":["path/relative/to/worktree"],"summary_ref":"IMPLEMENT_SUMMARY_2"}]}

@@ -37,6 +37,10 @@ public static class HelpRegistryFactory
         // Work items
         r.Register(New());
         r.Register(List());
+        r.Register(Get());
+        r.Register(Comments());
+        r.Register(Comment());
+        r.Register(Transition());
         r.Register(Amend());
         r.Register(Close());
         r.Register(Defer());
@@ -237,6 +241,7 @@ public static class HelpRegistryFactory
             "new <body-path> [--title \"...\"] [--type \"...\"] [--label \"...\"]* [--debug]\n" +
             "new <text>      [--title \"...\"] [--type \"...\"] [--label \"...\"]* [--review] [--debug|--quiet]\n" +
             "new -           [--title \"...\"] [--type \"...\"] [--label \"...\"]* [--review] [--debug|--quiet]\n" +
+            "new - --json    (read a strict JSON ticket draft from stdin; emit a JSON envelope)\n" +
             "new --print-template",
         Options:
         [
@@ -244,6 +249,7 @@ public static class HelpRegistryFactory
             new("--type \"...\"",   "Set the work item type",                                                 false),
             new("--label \"...\"",  "Add a label (may be repeated)",                                          false),
             new("--review",         "Draft mode only: open an interactive review loop before filing",         false),
+            new("--json",           "Read a strict JSON draft (title,type,description,acceptanceCriteria,labels,parent) from stdin and emit a JSON envelope; no drafting worker", false),
             new("--debug",          "Draft/file mode: stream worker output when drafting and capture artifacts", false),
             new("--quiet",          "Draft mode only: suppress the worker progress digest",                   false),
             new("--print-template", "Print the body template to stdout; ignores other input forms",           false),
@@ -254,6 +260,7 @@ public static class HelpRegistryFactory
             new("new body.md", "If body.md exists, file it as the ticket body"),
             new("new \"fix the onboarding typo\"", "If the first argument is not an existing file, draft from text"),
             new("new - --review", "Read draft input from stdin, then review before filing"),
+            new("echo '{\"title\":\"...\"}' | new - --json", "File a structured draft and print {id,uuid,...}"),
             new("new --print-template", "Print the file-mode body template and exit"),
         ]
     );
@@ -262,28 +269,99 @@ public static class HelpRegistryFactory
         Name:    "list",
         Group:   CommandGroup.WorkItems,
         Summary: "List tickets with optional filters",
-        Usage:   "list [--state <name>] [--parent <id>] [--type <name>]",
+        Usage:   "list [--state <name>] [--parent <id>] [--type <name>] [--json]",
         Options:
         [
             new("--state <name>",  "Filter by state name",                  false),
             new("--parent <id>",   "Filter by parent ticket ID",            false),
             new("--type <name>",   "Filter by work item type",              false),
+            new("--json",          "Emit the rows as a versioned JSON envelope instead of a table", false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2],
         Examples:  []
+    );
+
+    private static CommandHelp Get() => new(
+        Name:    "get",
+        Group:   CommandGroup.WorkItems,
+        Summary: "Read a single ticket",
+        Usage:   "get <ticket-id> [--json]",
+        Options:
+        [
+            new("--json", "Emit the ticket as a versioned JSON envelope on stdout instead of text", false),
+        ],
+        ExitCodes: [s_exit0, s_exit1, s_exit2],
+        Examples:
+        [
+            new("get TLB-541",        "Print a ticket as human-readable text"),
+            new("get TLB-541 --json", "Print the ticket as a JSON envelope for an agent to parse"),
+        ]
+    );
+
+    private static CommandHelp Comments() => new(
+        Name:    "comments",
+        Group:   CommandGroup.WorkItems,
+        Summary: "List a ticket's comments",
+        Usage:   "comments <ticket-id> [--json]",
+        Options:
+        [
+            new("--json", "Emit the comments as a versioned JSON envelope instead of text", false),
+        ],
+        ExitCodes: [s_exit0, s_exit1, s_exit2],
+        Examples:
+        [
+            new("comments TLB-541 --json", "Print a ticket's comments for an agent to read"),
+        ]
+    );
+
+    private static CommandHelp Comment() => new(
+        Name:    "comment",
+        Group:   CommandGroup.WorkItems,
+        Summary: "Post a comment on a ticket",
+        Usage:   "comment <ticket-id> <body|-> [--json]",
+        Options:
+        [
+            new("<body|->", "Comment body as markdown, or '-' to read it from stdin", false),
+            new("--json",   "Emit the created comment id as a JSON envelope instead of text", false),
+        ],
+        ExitCodes: [s_exit0, s_exit1, s_exit2],
+        Examples:
+        [
+            new("comment TLB-541 \"investigated; root cause is X\"", "Post a short note"),
+            new("build review-notes.md | build comment TLB-541 -", "Post a long body from stdin"),
+        ]
+    );
+
+    private static CommandHelp Transition() => new(
+        Name:    "transition",
+        Group:   CommandGroup.WorkItems,
+        Summary: "Move a ticket to a new state",
+        Usage:   "transition <ticket-id> <state> [--json]",
+        Options:
+        [
+            new("<state>", "Target state: Backlog, Planning, Ready, InProgress, InReview, Done, Cancelled (space/hyphen tolerant)", false),
+            new("--json",  "Emit the result as a JSON envelope instead of text", false),
+        ],
+        ExitCodes: [s_exit0, s_exit1, s_exit2],
+        Examples:
+        [
+            new("transition TLB-541 InProgress", "Move a ticket into progress"),
+            new("transition TLB-541 \"In Review\" --json", "Move to In Review, machine-readable"),
+        ]
     );
 
     private static CommandHelp Amend() => new(
         Name:    "amend",
         Group:   CommandGroup.WorkItems,
         Summary: "Amend an existing ticket",
-        Usage:   "amend <ticket-id> (--size S|M|L | --note \"...\" | --description <path|-> | --ac <path|->) [...]",
+        Usage:   "amend <ticket-id> (--size S|M|L | --note \"...\" | --description <path|-> | --ac <path|->) [--json]",
         Options:
         [
             new("--size S|M|L",         "Update the size label",                               false),
             new("--note \"...\"",       "Append a context note to the description",            false),
             new("--description <path>", "Replace the description from a file or stdin (-)",    false),
             new("--ac <path>",          "Replace the acceptance criteria from a file or stdin (-)", false),
+            new("--json",               "Emit the result as a JSON envelope instead of text",  false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2],
         Examples:  []
@@ -293,10 +371,11 @@ public static class HelpRegistryFactory
         Name:    "close",
         Group:   CommandGroup.WorkItems,
         Summary: "Close a ticket",
-        Usage:   "close <ticket-id> <reason> [--no-cascade]",
+        Usage:   "close <ticket-id> <reason> [--no-cascade] [--json]",
         Options:
         [
             new("--no-cascade", "Do not close non-terminal child tickets", false),
+            new("--json",       "Emit the result as a JSON envelope instead of text", false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2],
         Examples:  []
@@ -306,10 +385,11 @@ public static class HelpRegistryFactory
         Name:    "defer",
         Group:   CommandGroup.WorkItems,
         Summary: "Defer a ticket",
-        Usage:   "defer <ticket-id> <reason> [--no-cascade]",
+        Usage:   "defer <ticket-id> <reason> [--no-cascade] [--json]",
         Options:
         [
             new("--no-cascade", "Do not defer non-terminal child tickets", false),
+            new("--json",       "Emit the result as a JSON envelope instead of text", false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2],
         Examples:  []
@@ -319,8 +399,11 @@ public static class HelpRegistryFactory
         Name:    "reopen",
         Group:   CommandGroup.WorkItems,
         Summary: "Reopen a closed or deferred ticket",
-        Usage:   "reopen <ticket-id> [reason]",
-        Options:  [],
+        Usage:   "reopen <ticket-id> [reason] [--json]",
+        Options:
+        [
+            new("--json", "Emit the result as a JSON envelope instead of text", false),
+        ],
         ExitCodes: [s_exit0, s_exit1, s_exit2],
         Examples:  []
     );

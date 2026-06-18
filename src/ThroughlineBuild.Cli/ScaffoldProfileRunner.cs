@@ -19,6 +19,7 @@ public static class ScaffoldProfileRunner
         string cwd,
         WorkersConfig workers,
         bool force,
+        string? debugCaptureDirectory,
         CancellationToken ct)
     {
         if (!workers.Agents.TryGetValue(workers.DefaultAgent, out var agentCfg))
@@ -74,7 +75,7 @@ public static class ScaffoldProfileRunner
         ProfileDerivationResult derivation;
         try
         {
-            derivation = await deriver.DeriveAsync(opDocMarkdown, cwd, timeout, ct).ConfigureAwait(false);
+            derivation = await deriver.DeriveAsync(opDocMarkdown, cwd, timeout, debugCaptureDirectory, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {

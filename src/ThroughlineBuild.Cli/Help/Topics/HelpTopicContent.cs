@@ -23,6 +23,8 @@ Command-specific overrides:
     5  StoppedAtReview.
     6  ReworkCapExceeded.
     7  StoppedAtShip.
+    8  GateVacuous.
+    9  ReviewUnavailable (verifier blocked by a provider quota/rate-limit/auth error; review never ran).
 
   build rework
     0  Rework implementation succeeded and the ticket transitioned to InReview.

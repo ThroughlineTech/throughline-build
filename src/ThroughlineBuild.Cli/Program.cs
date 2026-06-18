@@ -1,5 +1,6 @@
 using System.Net.Http;
 using ThroughlineBuild.Cli;
+using ThroughlineBuild.Cli.Json;
 using ThroughlineBuild.Commands;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
@@ -12,6 +13,7 @@ using ThroughlineBuild.Phases;
 using ThroughlineBuild.Plane;
 using ThroughlineBuild.Scaffold;
 using ThroughlineBuild.Verification;
+using ThroughlineBuild.Workers.Common;
 using ThroughlineBuild.Workers.ClaudeCode;
 using ThroughlineBuild.Workers.Codex;
 using ThroughlineBuild.Workers.Copilot;
@@ -21,6 +23,9 @@ return await RunAsync(args);
 
 static async Task<int> RunAsync(string[] args)
 {
+    if (ClaudeStopHookCommand.IsMatch(args))
+        return await ClaudeStopHookCommand.RunAsync(args);
+
     var helpRegistry = HelpRegistryFactory.Build();
     var helpTopicRegistry = HelpTopicRegistry.Build();
 
@@ -55,12 +60,13 @@ static async Task<int> RunAsync(string[] args)
         return 2;
     }
 
-    // Pre-pass: strip --debug, --quiet, --summary-json, and --error-location from args before any positional parser sees them.
-    // All four are bare bool flags (no value); the existing key/value parser expects pairs
+    // Pre-pass: strip --debug, --quiet, --summary-json, --json, and --error-location from args before any positional parser sees them.
+    // All are bare bool flags (no value); the existing key/value parser expects pairs
     // and would mangle subsequent args if they were left in.
     bool debugMode = false;
     bool quietMode = false;
     bool summaryJson = false;
+    bool jsonOutput = false;
     bool errorLocation = false;
     bool noAutoResolve = false;
     bool noAutoMerge = false;
@@ -80,6 +86,8 @@ static async Task<int> RunAsync(string[] args)
             quietMode = true;
         else if (a == "--summary-json")
             summaryJson = true;
+        else if (a == "--json")
+            jsonOutput = true;
         else if (a == "--error-location")
             errorLocation = true;
         else if (a == "--no-auto-resolve")
@@ -432,8 +440,12 @@ static async Task<int> RunAsync(string[] args)
     }
     catch (ConfigException ex)
     {
-        Console.Error.WriteLine($"Config error: {ex.Message}");
-        if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+        if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.ConfigError, ex.Message);
+        else
+        {
+            Console.Error.WriteLine($"Config error: {ex.Message}");
+            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+        }
         return 2;
     }
 
@@ -446,8 +458,12 @@ static async Task<int> RunAsync(string[] args)
     }
     catch (ConfigException ex)
     {
-        Console.Error.WriteLine($"Config error: {ex.Message}");
-        if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+        if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.ConfigError, ex.Message);
+        else
+        {
+            Console.Error.WriteLine($"Config error: {ex.Message}");
+            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+        }
         return 2;
     }
 
@@ -458,8 +474,12 @@ static async Task<int> RunAsync(string[] args)
     }
     catch (ConfigException ex)
     {
-        Console.Error.WriteLine($"Secret error: {ex.Message}");
-        if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+        if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.MissingSecret, ex.Message);
+        else
+        {
+            Console.Error.WriteLine($"Secret error: {ex.Message}");
+            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+        }
         return 3;
     }
 
@@ -470,6 +490,51 @@ static async Task<int> RunAsync(string[] args)
         ProjectName: string.IsNullOrEmpty(config2.Ticketing.PlaneProjectName) ? null : config2.Ticketing.PlaneProjectName,
         WorkspaceSlug: config2.Ticketing.PlaneWorkspaceSlug,
         BuildVersion: BuildVersion.Current);
+
+    // 'build sweep' removes leftover chain worktrees and merged branches that a prior
+    // 'build chain' left behind - the recovery path when a chain was interrupted or
+    // preserved-on-failure and so never reached its own end-of-chain sweep. Stack-agnostic:
+    // pure git + filesystem, no worker, no Plane. Branch deletion is merged-gated against the
+    // target (or --target), so it never discards unshipped commits; --force additionally removes
+    // worktrees whose branch is not merged (the branch itself is still kept).
+    if (verb == "sweep")
+    {
+        var sweepTarget = CliArgParser.GetFlagValue(args, "--target") ?? config2.ResolveTargetBranch();
+        var sweepForce = Array.IndexOf(args, "--force") >= 0;
+        var sweepGit = new ProcessGitClient(cwd2);
+        var sweeper = new ChainWorktreeSweeper(sweepGit);
+        try
+        {
+            using var sweepCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; sweepCts.Cancel(); };
+            var sweepResult = await sweeper.SweepAsync(cwd2, sweepTarget, sweepForce, sweepCts.Token);
+
+            Console.WriteLine($"Swept chain artifacts (merge target: {sweepTarget}):");
+            Console.WriteLine($"  worktrees removed: {sweepResult.WorktreesRemoved.Count}");
+            Console.WriteLine($"  branches deleted:  {sweepResult.BranchesDeleted.Count}");
+            foreach (var b in sweepResult.BranchesDeleted)
+                Console.WriteLine($"    - {b}");
+            if (sweepResult.BranchesKeptUnmerged.Count > 0)
+            {
+                Console.WriteLine("  kept (not merged into target - left intact):");
+                foreach (var b in sweepResult.BranchesKeptUnmerged)
+                    Console.WriteLine($"    - {b}");
+            }
+            if (sweepResult.WorktreesHalted.Count > 0)
+            {
+                Console.Error.WriteLine("  worktrees that could not be removed:");
+                foreach (var h in sweepResult.WorktreesHalted)
+                    Console.Error.WriteLine($"    - {h}");
+                return 1;
+            }
+            return 0;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+    }
 
     if (verb == "list")
     {
@@ -492,6 +557,43 @@ static async Task<int> RunAsync(string[] args)
                 key = key.Substring(2);
             extraArgs[key] = args[i + 1];
         }
+
+        // --json: emit the result as a versioned envelope instead of the human table.
+        if (jsonOutput)
+        {
+            TicketState? listState = null;
+            if (extraArgs.TryGetValue("state", out var stateArg) && !string.IsNullOrWhiteSpace(stateArg))
+            {
+                if (!Enum.TryParse<TicketState>(stateArg, ignoreCase: true, out var parsedState))
+                {
+                    CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, $"invalid --state value: {stateArg}");
+                    return 2;
+                }
+                listState = parsedState;
+            }
+            extraArgs.TryGetValue("parent", out var listParent);
+            extraArgs.TryGetValue("type", out var listType);
+
+            using var jsonListCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; jsonListCts.Cancel(); };
+            try
+            {
+                var listed = await ticketing2.QueryAsync(new TicketQuery(listState, listParent, listType), jsonListCts.Token);
+                CliEnvelopeWriter.WriteList(Console.Out, listed);
+                return 0;
+            }
+            catch (PlaneApiException ex)
+            {
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
+                return 1;
+            }
+            catch (OperationCanceledException)
+            {
+                Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
+        }
+
         var ctx = new TicketCommandContext("", extraArgs);
 
         try
@@ -505,6 +607,298 @@ static async Task<int> RunAsync(string[] args)
                 return 1;
             }
             return 0;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+    }
+
+    // 'build get <ticket-id> [--json]' reads a single ticket. The first read verb on the
+    // versioned --json envelope (TLB-541): the agent shells out and parses the envelope
+    // instead of curling Plane itself. No worker, no event log - a thin Plane read.
+    if (verb == "get")
+    {
+        if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]) || args[1].StartsWith("--"))
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "ticket-id is required");
+            else
+            {
+                Console.Error.WriteLine("Error: ticket-id is required");
+                Console.Error.WriteLine("Usage: build get <ticket-id> [--json]");
+            }
+            return 2;
+        }
+
+        var getTicketId = args[1];
+        var http2 = new HttpClient();
+        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
+        {
+            BaseUrl = config2.Ticketing.PlaneBaseUrl,
+            ApiToken = secrets2.PlaneApiToken,
+            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
+            ProjectId = config2.Ticketing.PlaneProjectId,
+            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
+        });
+
+        try
+        {
+            using var verbCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+            var ticket = await ticketing2.GetAsync(getTicketId, verbCts.Token);
+
+            if (jsonOutput)
+            {
+                CliEnvelopeWriter.WriteTicket(Console.Out, CliEnvelopeWriter.ToView(ticket));
+            }
+            else
+            {
+                Console.WriteLine($"{ticket.Id}  {ticket.Title}");
+                Console.WriteLine($"  state:  {ticket.State}");
+                Console.WriteLine($"  type:   {(string.IsNullOrEmpty(ticket.Type) ? "-" : ticket.Type)}");
+                Console.WriteLine($"  size:   {ticket.Size}    risk: {ticket.Risk}");
+                if (ticket.ParentId is not null) Console.WriteLine($"  parent: {ticket.ParentId}");
+                if (ticket.Labels.Count > 0) Console.WriteLine($"  labels: {string.Join(", ", ticket.Labels)}");
+                foreach (var rel in ticket.Relations) Console.WriteLine($"  rel:    {rel.Kind} -> {rel.TargetId}");
+            }
+            return 0;
+        }
+        catch (ArgumentException ex)
+        {
+            // ParseSequenceId rejects a malformed id ("abc", "TLB-") - a usage error, not a miss.
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, ex.Message);
+            else Console.Error.WriteLine($"Error: {ex.Message}");
+            return 2;
+        }
+        catch (KeyNotFoundException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.NotFound, ex.Message);
+            else Console.Error.WriteLine($"Command 'get' failed: {ex.Message}");
+            return 1;
+        }
+        catch (PlaneApiException ex) when (ex.Status == 404)
+        {
+            var msg = PlaneTicketingClient.BuildProjectNotFoundMessage(
+                config2.Ticketing.PlaneWorkspaceSlug, config2.Ticketing.PlaneProjectId, ex);
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.ConfigError, msg);
+            else Console.Error.WriteLine("Command 'get' failed: " + msg);
+            return 1;
+        }
+        catch (PlaneApiException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
+            else Console.Error.WriteLine($"Command 'get' failed: Plane API {ex.Status}: {ex.Body}");
+            return 1;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+    }
+
+    // 'build comments <ticket-id> [--json]' lists a ticket's comments (read).
+    if (verb == "comments")
+    {
+        if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]) || args[1].StartsWith("--"))
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "ticket-id is required");
+            else { Console.Error.WriteLine("Error: ticket-id is required"); Console.Error.WriteLine("Usage: build comments <ticket-id> [--json]"); }
+            return 2;
+        }
+        var commentsId = args[1];
+        var http2 = new HttpClient();
+        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
+        {
+            BaseUrl = config2.Ticketing.PlaneBaseUrl,
+            ApiToken = secrets2.PlaneApiToken,
+            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
+            ProjectId = config2.Ticketing.PlaneProjectId,
+            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
+        });
+        try
+        {
+            using var verbCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+            var comments = await ticketing2.GetCommentsAsync(commentsId, verbCts.Token);
+            if (jsonOutput)
+            {
+                CliEnvelopeWriter.WriteComments(Console.Out, comments);
+            }
+            else if (comments.Count == 0)
+            {
+                Console.WriteLine("no comments");
+            }
+            else
+            {
+                foreach (var c in comments)
+                {
+                    Console.WriteLine($"[{c.CreatedAt:u}] {c.Id}");
+                    Console.WriteLine(HtmlToText.Render(c.Body));
+                    Console.WriteLine();
+                }
+            }
+            return 0;
+        }
+        catch (ArgumentException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, ex.Message);
+            else Console.Error.WriteLine($"Error: {ex.Message}");
+            return 2;
+        }
+        catch (KeyNotFoundException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.NotFound, ex.Message);
+            else Console.Error.WriteLine($"Command 'comments' failed: {ex.Message}");
+            return 1;
+        }
+        catch (PlaneApiException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
+            else Console.Error.WriteLine($"Command 'comments' failed: Plane API {ex.Status}: {ex.Body}");
+            return 1;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+    }
+
+    // 'build comment <ticket-id> <body|-> [--json]' posts a comment (write). The body is markdown
+    // (or "-" to read from stdin) and is rendered to Plane HTML. This is the agent's write-back path.
+    if (verb == "comment")
+    {
+        if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]) || args[1].StartsWith("--"))
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "ticket-id is required");
+            else { Console.Error.WriteLine("Error: ticket-id is required"); Console.Error.WriteLine("Usage: build comment <ticket-id> <body|-> [--json]"); }
+            return 2;
+        }
+        var commentTicketId = args[1];
+        string commentBody;
+        if (args.Length >= 3 && args[2] == "-")
+            commentBody = Console.In.ReadToEnd();
+        else if (args.Length >= 3 && !args[2].StartsWith("--"))
+            commentBody = args[2];
+        else
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "comment body is required (pass text or '-' to read stdin)");
+            else { Console.Error.WriteLine("Error: comment body is required"); Console.Error.WriteLine("Usage: build comment <ticket-id> <body|-> [--json]"); }
+            return 2;
+        }
+        if (string.IsNullOrWhiteSpace(commentBody))
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "comment body is empty");
+            else Console.Error.WriteLine("Error: comment body is empty");
+            return 2;
+        }
+        var commentHtml = MarkdownHtml.Render(commentBody);
+        var http2 = new HttpClient();
+        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
+        {
+            BaseUrl = config2.Ticketing.PlaneBaseUrl,
+            ApiToken = secrets2.PlaneApiToken,
+            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
+            ProjectId = config2.Ticketing.PlaneProjectId,
+            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
+        });
+        try
+        {
+            using var verbCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+            var newCommentId = await ticketing2.CreateCommentAsync(commentTicketId, commentHtml, verbCts.Token);
+            if (jsonOutput) CliEnvelopeWriter.WriteCommentCreated(Console.Out, newCommentId);
+            else Console.WriteLine($"Commented on {commentTicketId} (comment {newCommentId})");
+            return 0;
+        }
+        catch (ArgumentException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, ex.Message);
+            else Console.Error.WriteLine($"Error: {ex.Message}");
+            return 2;
+        }
+        catch (KeyNotFoundException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.NotFound, ex.Message);
+            else Console.Error.WriteLine($"Command 'comment' failed: {ex.Message}");
+            return 1;
+        }
+        catch (PlaneApiException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
+            else Console.Error.WriteLine($"Command 'comment' failed: Plane API {ex.Status}: {ex.Body}");
+            return 1;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+    }
+
+    // 'build transition <ticket-id> <state> [--json]' moves a ticket to a new state (write).
+    // State is matched case/space/hyphen-insensitively to the TicketState names.
+    if (verb == "transition")
+    {
+        if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]) || args[1].StartsWith("--"))
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "ticket-id is required");
+            else { Console.Error.WriteLine("Error: ticket-id is required"); Console.Error.WriteLine("Usage: build transition <ticket-id> <state> [--json]"); }
+            return 2;
+        }
+        if (args.Length < 3 || string.IsNullOrWhiteSpace(args[2]) || args[2].StartsWith("--"))
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "state is required");
+            else { Console.Error.WriteLine("Error: state is required"); Console.Error.WriteLine($"Usage: build transition <ticket-id> <state> [--json]   (states: {string.Join(", ", Enum.GetNames<TicketState>())})"); }
+            return 2;
+        }
+        var transitionId = args[1];
+        var stateRaw = args[2];
+        var stateNormalized = stateRaw.Replace(" ", "").Replace("-", "").Replace("_", "");
+        if (!Enum.TryParse<TicketState>(stateNormalized, ignoreCase: true, out var targetState))
+        {
+            var validStates = string.Join(", ", Enum.GetNames<TicketState>());
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, $"invalid state '{stateRaw}'; valid states: {validStates}");
+            else Console.Error.WriteLine($"Error: invalid state '{stateRaw}'; valid states: {validStates}");
+            return 2;
+        }
+        var http2 = new HttpClient();
+        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
+        {
+            BaseUrl = config2.Ticketing.PlaneBaseUrl,
+            ApiToken = secrets2.PlaneApiToken,
+            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
+            ProjectId = config2.Ticketing.PlaneProjectId,
+            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
+        });
+        try
+        {
+            using var verbCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+            await ticketing2.TransitionAsync(transitionId, targetState, verbCts.Token);
+            if (jsonOutput) CliEnvelopeWriter.WriteTransition(Console.Out, transitionId, targetState);
+            else Console.WriteLine($"{transitionId} -> {targetState}");
+            return 0;
+        }
+        catch (ArgumentException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, ex.Message);
+            else Console.Error.WriteLine($"Error: {ex.Message}");
+            return 2;
+        }
+        catch (KeyNotFoundException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.NotFound, ex.Message);
+            else Console.Error.WriteLine($"Command 'transition' failed: {ex.Message}");
+            return 1;
+        }
+        catch (PlaneApiException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
+            else Console.Error.WriteLine($"Command 'transition' failed: Plane API {ex.Status}: {ex.Body}");
+            return 1;
         }
         catch (OperationCanceledException)
         {
@@ -532,7 +926,12 @@ static async Task<int> RunAsync(string[] args)
         {
             using var verbCts = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
-            return await setupCmd.ExecuteAsync(checkOnly, SystemConsole.Instance, verbCts.Token);
+            var setupExit = await setupCmd.ExecuteAsync(checkOnly, SystemConsole.Instance, verbCts.Token);
+            // Diagnose the configured Claude transport (executable, version, platform) so an operator
+            // learns about an unsupported interactive-hook setup here, before running a phase.
+            var transportExit = await ClaudeTransportPreflight.ReportAsync(
+                config2.Workers, Console.Out, Console.Error, verbCts.Token);
+            return setupExit != 0 ? setupExit : transportExit;
         }
         catch (OperationCanceledException)
         {
@@ -588,13 +987,18 @@ static async Task<int> RunAsync(string[] args)
         var wireUpError = WireUpConditionalCommands(verb, registry, secrets2, config2.Llm, http2, ticketing2, eventSink2, cwd2);
         if (wireUpError is not null)
         {
-            Console.Error.WriteLine($"Secret error: {wireUpError}");
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.MissingSecret, wireUpError);
+            else Console.Error.WriteLine($"Secret error: {wireUpError}");
             return 3;
         }
         if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]))
         {
-            Console.Error.WriteLine($"Error: ticket-id is required");
-            Console.Error.WriteLine($"Usage: build {verb} <ticket-id>");
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "ticket-id is required");
+            else
+            {
+                Console.Error.WriteLine($"Error: ticket-id is required");
+                Console.Error.WriteLine($"Usage: build {verb} <ticket-id>");
+            }
             return 2;
         }
 
@@ -643,12 +1047,33 @@ static async Task<int> RunAsync(string[] args)
             var verbResult = await cmd.ExecuteAsync(ctx, verbCts.Token);
             if (!verbResult.Success)
             {
-                Console.Error.WriteLine($"Command '{verb}' failed: {verbResult.Message}");
+                if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, verbResult.Message ?? "command failed");
+                else Console.Error.WriteLine($"Command '{verb}' failed: {verbResult.Message}");
                 return 1;
             }
-            if (!string.IsNullOrEmpty(verbResult.Message))
+            if (jsonOutput)
+                CliEnvelopeWriter.WriteAck(Console.Out, verbTicketId, verb);
+            else if (!string.IsNullOrEmpty(verbResult.Message))
                 Console.WriteLine(verbResult.Message);
             return 0;
+        }
+        catch (ArgumentException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, ex.Message);
+            else Console.Error.WriteLine($"Error: {ex.Message}");
+            return 2;
+        }
+        catch (KeyNotFoundException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.NotFound, ex.Message);
+            else Console.Error.WriteLine($"Command '{verb}' failed: {ex.Message}");
+            return 1;
+        }
+        catch (PlaneApiException ex)
+        {
+            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
+            else Console.Error.WriteLine($"Command '{verb}' failed: Plane API {ex.Status}: {ex.Body}");
+            return 1;
         }
         catch (OperationCanceledException)
         {
@@ -709,7 +1134,8 @@ static async Task<int> RunAsync(string[] args)
                 LiveStderrSink: debugMode ? Console.Error : null,
                 ProgressDigestSink: (!debugMode && !quietMode
                     && (!Console.IsErrorRedirected || Environment.GetEnvironmentVariable("BUILD_PROGRESS") == "1"))
-                    ? Console.Error : null);
+                    ? Console.Error : null,
+                BuildVersion: BuildVersion.Current);
         }
         else
         {
@@ -717,10 +1143,78 @@ static async Task<int> RunAsync(string[] args)
                 SessionId: sessionId2,
                 WorkerName: "",
                 WorkerTimeout: TimeSpan.Zero,
-                DebugCaptureDirectory: debugCaptureDir2);
+                DebugCaptureDirectory: debugCaptureDir2,
+                BuildVersion: BuildVersion.Current);
         }
 
         var newPhase2 = new NewPhase(ticketing2, eventSink2, buildOptions2);
+
+        // build new - --json: strict JSON draft on stdin, no LLM drafter. Create deterministically
+        // via NewPhase.RunFromStructuredAsync and emit the {id,uuid,labels,parent,relations} envelope.
+        // This is the path that replaces /ticket-new (the agent assembles the draft and shells out).
+        if (jsonOutput && classification.Kind == NewVerbKind.StdinDraftMode)
+        {
+            var draftJson = Console.In.ReadToEnd();
+            if (!TicketDraftParser.TryParse(draftJson, out var draft, out var parseError))
+            {
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, parseError!);
+                return 2;
+            }
+            if (string.IsNullOrWhiteSpace(draft!.Title))
+            {
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "ticket draft requires a non-empty title");
+                return 2;
+            }
+            if (draft.Relations is { Count: > 0 })
+            {
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage,
+                    "relations are not yet supported by 'build new --json'; file the ticket, then add relations once the relate verb lands");
+                return 2;
+            }
+
+            using var jsonNewCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; jsonNewCts.Cancel(); };
+            try
+            {
+                var created = await newPhase2.RunFromStructuredAsync(
+                    draft.Title, draft.Type, draft.Description, draft.AcceptanceCriteria,
+                    draft.Labels, draft.Parent, jsonNewCts.Token);
+                CliEnvelopeWriter.WriteNewTicket(Console.Out, new NewTicketView(
+                    created.Id,
+                    created.Uuid,
+                    draft.Labels ?? Array.Empty<string>(),
+                    draft.Parent,
+                    Array.Empty<RelationView>()));
+                return 0;
+            }
+            catch (NewPhaseValidationException ex)
+            {
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, ex.Message);
+                return 2;
+            }
+            catch (KeyNotFoundException ex)
+            {
+                // The parent id did not resolve to a ticket.
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.NotFound, ex.Message);
+                return 1;
+            }
+            catch (PlaneApiException ex)
+            {
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
+                return 1;
+            }
+            catch (InvalidOperationException ex)
+            {
+                // e.g. an unknown label name or issue type rejected by CreateTicketAsync.
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, ex.Message);
+                return 1;
+            }
+            catch (OperationCanceledException)
+            {
+                Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
+        }
 
         var newCommandArgs = new Dictionary<string, string>(StringComparer.Ordinal);
 
@@ -844,10 +1338,17 @@ static async Task<int> RunAsync(string[] args)
                 {
                     ExecutablePath = draftAgentCfg.Executable,
                     MaxOutputTokens = draftAgentCfg.MaxOutputTokens,
-                    Sizes = draftAgentCfg.Sizes
+                    Sizes = draftAgentCfg.Sizes,
+                    Transport = draftAgentCfg.Transport,
                 })
             });
         var draftWorker = draftWorkerFactory.Create(draftImplementAgentName);
+
+        // Fail before the draft worker runs if its interactive-hook transport is unsupported here.
+        var draftGateExit = await ClaudeTransportPreflight.GateAsync(
+            config2.Workers, [draftImplementAgentName], Console.Error, CancellationToken.None);
+        if (draftGateExit != 0)
+            return draftGateExit;
 
         var draftPhase = new DraftPhase(draftWorker, buildOptions2);
         var draftSw = System.Diagnostics.Stopwatch.StartNew();
@@ -1025,8 +1526,29 @@ static async Task<int> RunAsync(string[] args)
             bool ticketsCreated = tag == ScaffoldExitCategory.Clean || tag == ScaffoldExitCategory.PartialCreation;
             if (ticketsCreated && !validateOnlyFlag && !dryRunFlag && !noProfile)
             {
-                await ScaffoldProfileRunner.RunAsync(
-                    args[1], resolvedCwd, config2.Workers, forceProfile, scaffoldCts.Token);
+                // Under --debug, capture the derivation worker's raw stdin/stdout/stderr and
+                // structured transcript like any phase worker. Without it, a derivation failure
+                // (e.g. a missing PROJECT_PROFILE block) leaves no diagnosable artifact.
+                string? scaffoldDebugDir = debugMode
+                    ? Path.GetFullPath(Path.Combine(resolvedCwd, ".build", "sessions",
+                        $"scaffold-profile-{DateTimeOffset.Now:yyyy-MM-dd-HHmmss}"))
+                    : null;
+                // Gate the profile-derivation worker (the default agent) before it launches. Derivation
+                // is best-effort and never changes the scaffold exit code, so on an unsupported host we
+                // skip it with a clear note rather than fail the scaffold whose ticket tree already exists.
+                var scaffoldGateExit = await ClaudeTransportPreflight.GateAsync(
+                    config2.Workers, [config2.Workers.DefaultAgent], Console.Error, scaffoldCts.Token);
+                if (scaffoldGateExit != 0)
+                {
+                    Console.Error.WriteLine(
+                        "[build] Skipping profile derivation: the configured Claude transport is unsupported on this " +
+                        "host (see above). The ticket tree was created; derive checks later or set transport = \"print\".");
+                }
+                else
+                {
+                    await ScaffoldProfileRunner.RunAsync(
+                        args[1], resolvedCwd, config2.Workers, forceProfile, scaffoldDebugDir, scaffoldCts.Token);
+                }
             }
             else if (noProfile)
             {
@@ -1097,6 +1619,26 @@ static async Task<int> RunAsync(string[] args)
         phase == "implement" ? (agentImplementFlag ?? agentAll ?? AgentFor("implement")) :
         phase == "review"    ? (agentReviewFlag ?? agentAll ?? AgentFor("review")) :
         AgentFor(phase);
+
+    // Capability check for the worker-spawning phase verbs: when the resolved agent uses the
+    // interactive-hook Claude transport, verify this host can support it (claude present, version
+    // >= minimum, platform) BEFORE the phase starts, so the failure is clean (no worktree cut, no
+    // ticket transition) and never falls back to print. The transport's own entry guard
+    // (ClaudeCodeInteractiveTransport.ExecuteAsync) backstops every path, but failing here keeps the
+    // before-phase contract. The verb -> gated-phases routing (incl. plan only in investigate mode)
+    // lives in ClaudeTransportPreflight.PhasesToGateForVerb so it is unit-tested; build new draft and
+    // build scaffold gate at their own dispatch sites above.
+    var phasesToGate = ClaudeTransportPreflight.PhasesToGateForVerb(verb, config2.Plan.IsPromote, fromBrief);
+    if (phasesToGate.Count > 0)
+    {
+        var transportGateExit = await ClaudeTransportPreflight.GateAsync(
+            config2.Workers,
+            phasesToGate.Select(EffectiveAgentFor),
+            Console.Error,
+            CancellationToken.None);
+        if (transportGateExit != 0)
+            return transportGateExit;
+    }
 
     // Shared git client (read-only ops only at this layer) for summary-block construction.
     var summaryGit = new ProcessGitClient(cwd);
@@ -1169,7 +1711,8 @@ static async Task<int> RunAsync(string[] args)
             LiveStdoutSink: debugMode ? Console.Out : null,
             LiveStderrSink: debugMode ? Console.Error : null,
             ProgressDigestSink: enableDigest ? Console.Error : null,
-            TargetBranch: config2.ResolveTargetBranch());
+            TargetBranch: config2.ResolveTargetBranch(),
+            BuildVersion: BuildVersion.Current);
 
         string PlaneUrl() => BuildPlaneUrl(config2.Ticketing.PlaneBaseUrl, config2.Ticketing.PlaneWorkspaceSlug, singleTicketId);
         string? ArtifactsPath() => debugCaptureDir is not null
@@ -1375,7 +1918,8 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
         PromotePlan: effectivePromotePlan,
         BatchMaxTickets: config2.Batch.MaxTickets,
         BatchMaxSizeScore: config2.Batch.MaxSizeScore,
-        BatchMaxDescriptionBytes: config2.Batch.MaxDescriptionBytes);
+        BatchMaxDescriptionBytes: config2.Batch.MaxDescriptionBytes,
+        BuildVersion: BuildVersion.Current);
 
     string planeUrl = BuildPlaneUrl(config2.Ticketing.PlaneBaseUrl, config2.Ticketing.PlaneWorkspaceSlug, ticketId);
     string? artifactsPath = debugCaptureDir is not null
@@ -1512,7 +2056,9 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
             DebugCaptureDirectory: debugCaptureDir,
             LiveStdoutSink: debugMode ? Console.Out : null,
             LiveStderrSink: debugMode ? Console.Error : null,
-            ProgressDigestSink: enableDigest ? Console.Error : null);
+            ProgressDigestSink: enableDigest ? Console.Error : null,
+            DebugTranscript: new DebugTranscriptContext(
+                BuildVersion: buildOptions.BuildVersion, SessionId: buildOptions.SessionId));
         var reviewToolWarning = VerifierToolEnforcement.UnenforcedWarning(effectiveAgentFor("review"), config2.Review.VerifierAllowedTools);
         if (reviewToolWarning is not null) Console.Error.WriteLine($"[build] {reviewToolWarning}");
         var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
@@ -1575,7 +2121,8 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
         var gitClient = new ProcessGitClient(cwd);
         var checksRunner = new AutomatedChecksRunner();
         var shipProgress = quietMode || summaryJson ? null : Console.Error;
-        var phase = new ShipPhase(ticketing, eventSink, buildOptions, shipOptions, gitClient: gitClient, checksRunner: checksRunner, progressWriter: shipProgress, verbose: debugMode);
+        var phase = new ShipPhase(ticketing, eventSink, buildOptions, shipOptions, gitClient: gitClient, checksRunner: checksRunner, progressWriter: shipProgress, verbose: debugMode,
+            baselineProber: new GateControlProber());
         ShipResult result;
         try
         {
@@ -1749,10 +2296,32 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
 
     // Gate factory: runs the configured review checks once on the warm worktree after implement.
     // Uses the same check set as review so the relocation is transparent to the operator.
+    // One shared prover instance per chain run so its per-check-once state persists across every
+    // gate invocation (each gating check is probed at most once per chain). Null disables the probe.
+    var gateVacuityProver = config2.Review.VerifyGateVacuity ? new GateVacuityProver() : null;
+    // TLB-538: environment-failure classification. The control prober re-runs failed gating
+    // checks against the untouched base ref so a broken environment is never attributed to the
+    // ticket; the reloader re-reads the gate checks from disk (config is otherwise loaded once
+    // at startup) so a config fixed mid-run recovers without restarting the chain. Best-effort:
+    // any reload failure returns null and the gate behaves as if nothing changed.
+    // Also shared with the chain's ship phases as the baseline contradiction re-check prober.
+    var gateControlProber = new GateControlProber();
+    Func<IReadOnlyList<CheckSpec>?> gateChecksReloader = () =>
+    {
+        try
+        {
+            var freshPath = BuildConfigLoader.FindConfigFile(cwd);
+            if (freshPath is null) return null;
+            var freshConfig = BuildConfigLoader.Load(freshPath, branchExists: _ => true);
+            return freshConfig.Review.Checks;
+        }
+        catch { return null; }
+    };
     var gatePhaseFactory = (BuildOptions buildOpts) =>
     {
         var gateOptions = new GateOptions(config2.Review.Checks);
-        return new GatePhase(ticketing, eventSink, buildOpts, gateOptions);
+        return new GatePhase(ticketing, eventSink, buildOpts, gateOptions, vacuityProver: gateVacuityProver,
+            controlProber: gateControlProber, gateChecksReloader: gateChecksReloader);
     };
 
     var reviewPhaseFactory = (BuildOptions buildOpts, GateOutcome? gateOutcome) =>
@@ -1763,7 +2332,9 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             DebugCaptureDirectory: debugCaptureDir,
             LiveStdoutSink: debugMode ? Console.Out : null,
             LiveStderrSink: debugMode ? Console.Error : null,
-            ProgressDigestSink: enableDigest ? Console.Error : null);
+            ProgressDigestSink: enableDigest ? Console.Error : null,
+            DebugTranscript: new DebugTranscriptContext(
+                BuildVersion: buildOpts.BuildVersion, SessionId: buildOpts.SessionId));
         var reviewOptions = new ReviewOptions(config2.Review.Checks, verifierWorkerOptions);
         // When the gate ran its checks, pass its results to ReviewPhase so it reuses them
         // rather than running the checks a second time (one build per ticket).
@@ -1797,10 +2368,11 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             BaselineCache: skipBaseline ? null : chainBaselineCache);
         var gitClient = new ProcessGitClient(cwd);
         var checksRunner = new AutomatedChecksRunner();
-        return new ShipPhase(ticketing, eventSink, buildOpts, shipOptions, gitClient: gitClient, checksRunner: checksRunner, progressWriter: buildOpts.ProgressDigestSink, verbose: debugMode);
+        return new ShipPhase(ticketing, eventSink, buildOpts, shipOptions, gitClient: gitClient, checksRunner: checksRunner, progressWriter: buildOpts.ProgressDigestSink, verbose: debugMode,
+            baselineProber: gateControlProber);
     };
 
-    var ratifierFactory = (BuildOptions _) =>
+    var ratifierFactory = (BuildOptions ratifyBuildOpts) =>
     {
         var ratifierWorkerOptions = new WorkerOptions(
             TimeSpan.FromMinutes(config2.Review.VerifierTimeoutMinutes),
@@ -1808,7 +2380,9 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             DebugCaptureDirectory: debugCaptureDir,
             LiveStdoutSink: debugMode ? Console.Out : null,
             LiveStderrSink: debugMode ? Console.Error : null,
-            ProgressDigestSink: enableDigest ? Console.Error : null);
+            ProgressDigestSink: enableDigest ? Console.Error : null,
+            DebugTranscript: new DebugTranscriptContext(
+                BuildVersion: ratifyBuildOpts.BuildVersion, SessionId: ratifyBuildOpts.SessionId));
         return (IObsoleteRatifier)new ObsoleteRatifier(
             workerFactory.Create(effectiveAgentFor("review")),
             ratifierWorkerOptions,
@@ -1838,7 +2412,8 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             BaselineCache: skipBaseline ? null : chainBaselineCache);
         var gitClient = new ProcessGitClient(cwd);
         var checksRunner = new AutomatedChecksRunner();
-        return new ShipPhase(ticketing, eventSink, buildOpts, chainShipOptions, gitClient: gitClient, checksRunner: checksRunner, progressWriter: buildOpts.ProgressDigestSink, verbose: debugMode);
+        return new ShipPhase(ticketing, eventSink, buildOpts, chainShipOptions, gitClient: gitClient, checksRunner: checksRunner, progressWriter: buildOpts.ProgressDigestSink, verbose: debugMode,
+            baselineProber: gateControlProber);
     };
 
     // Wire the chain phase through the composition helper so the construction has a single
@@ -1861,7 +2436,10 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
         effectiveAgentFor,
         landingRemote: config2.Ship.Remote,
         landingPushEnabled: !(noPush || !config2.Ship.Push),
-        gateFactory: gatePhaseFactory);
+        gateFactory: gatePhaseFactory,
+        // Post-rework check re-run uses the same check set the gate and review run, so the
+        // recheck's verdict on a named check matches what the gate would conclude later.
+        reworkRecheckSpecs: config2.Review.Checks);
 
     ChainBatchImplementGroup? batchImplementGroup = null;
     if (batchImplementAllChildren)
@@ -1907,31 +2485,26 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             return (1, true);
         }
 
-        var ticketIdSet = new HashSet<string>(allTicketIds, StringComparer.OrdinalIgnoreCase);
-        var graph = new ThroughlineBuild.Phases.TicketGraph();
-        foreach (var id in allTicketIds)
-            graph.AddNode(id);
-
-        // Add edges for blocked_by relations that are within the dispatched set.
+        // Fetch each dispatched ticket's relations, then build the blocked_by dependency graph.
+        // ChainDependencyGraph normalizes CLI ids ("92") against relation targets ("TLB-92") so
+        // ordering forms regardless of which id form was typed.
+        var relationsByTicketId =
+            new Dictionary<string, IReadOnlyList<ThroughlineBuild.Contracts.Models.Relation>>();
         try
         {
             using var relCts = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; relCts.Cancel(); };
             foreach (var id in allTicketIds)
-            {
-                var relations = await ticketing.GetRelationsAsync(id, relCts.Token).ConfigureAwait(false);
-                foreach (var rel in relations)
-                {
-                    if (rel.Kind == "blocked_by" && ticketIdSet.Contains(rel.TargetId))
-                        graph.AddEdge(rel.TargetId, id); // TargetId blocks id
-                }
-            }
+                relationsByTicketId[id] =
+                    await ticketing.GetRelationsAsync(id, relCts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
             Console.Error.WriteLine("Cancelled.");
             return (1, true);
         }
+
+        var graph = ThroughlineBuild.Phases.ChainDependencyGraph.Build(allTicketIds, relationsByTicketId);
 
         var dispatcher = new ThroughlineBuild.Phases.ParallelDispatcher(
             chainPhase,

@@ -1,19 +1,23 @@
 # ThroughlineBuild.Plane - the ticketing backend
 
-`PlaneTicketingClient` is the SOLE `ITicketing` implementation, and also
-implements `ITicketingProvisioner` (create states/labels), `IProjectDiscovery`
-(list/find/create projects), and `ITicketingConnectivity` (op-34, driving
-`build setup` and connected `build init`). `ProjectResolver` (find-or-create a
-project by name) lives here too. GET/PATCH/POST against the Plane REST API. No
-GitHub or Linear adapter exists.
+`PlaneTicketingClient` is the SOLE `ITicketing` implementation (it also
+implements `ITicketingProvisioner`, `ITicketingConnectivity`, and
+`IProjectDiscovery`). No GitHub or Linear adapter exists. `ProjectResolver`
+resolves/creates a project from raw credentials, pre-config (used by setup).
 
 Key behaviors to know before touching it:
 - Per-run issue snapshot cache: the whole project is paginated once into
   `_seqToUuid` + `_issueByUuid`; `FindIssueAsync`/`QueryAsync` answer from
-  memory, with write-through `AddOrUpdate` on every PATCH (TLB-366). If you add a
-  mutation, keep the cache write-through or lookups go stale within a run.
-- `RequestThrottle` caps at 40 requests/min per process; Polly handles retry.
-- State-name and label-name maps are lazily cached.
+  memory, with write-through `AddOrUpdate` on every PATCH (TLB-366). If you add
+  a mutation, keep the cache write-through or lookups go stale within a run.
+- `RequestThrottle` caps requests/min per process (default 40, configurable);
+  Polly retries HTTP 429/5xx honoring Retry-After.
+- All HTTP goes through `SendWithTransportRetryAsync` (TLB-545): fresh request
+  per attempt, throttle re-acquired; exhausted transport failures surface as
+  `TicketingUnavailableException` so orchestration classifies them as
+  environmental instead of crashing or reworking.
+- State-name and label-name maps are lazily cached; the canonical set lives in
+  `Contracts.WorkspaceSchema` (shared with `build setup`).
 - AOT: JSON via source-generated context - no reflection serialization.
 
 External-dependency and state detail:

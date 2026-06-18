@@ -60,6 +60,11 @@ log_directory = ".build/events"
             Assert.Equal("ANTHROPIC_KEY", config.Llm.AnthropicApiKeyEnv);
             Assert.Equal("claude-code", config.Workers.DefaultAgent);
             Assert.Equal("claude", config.Workers.Agents["claude-code"].Executable);
+            // Omitted-value default: a [workers.claude-code] block with no `transport` key resolves to
+            // InteractiveHook after the Stage 07 cutover (interactive-hook is the default; print is the
+            // documented rollback).
+            Assert.Equal(ThroughlineBuild.Workers.ClaudeCode.ClaudeCodeTransport.InteractiveHook,
+                config.Workers.Agents["claude-code"].Transport);
             Assert.Equal(20, config.Workers.TimeoutMinutes);
             Assert.Equal(".build/events", config.Events.LogDirectory);
         }
@@ -439,6 +444,127 @@ log_directory = ".build/events"
     }
 
     [Fact]
+    public void ClaudeCode_sizes_fable_alias_throws_ConfigException_with_full_slug_hint()
+    {
+        // "fable" is not a Claude Code tier alias; without load-time validation it only
+        // fails at session init deep inside a chain run ("There's an issue with the
+        // selected model (fable)"). The config loader must reject it up front and point
+        // at the full slug.
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "abc-123"
+plane_api_token_env = "PLANE_TOKEN"
+
+[workers]
+default_agent = "claude-code"
+
+[workers.claude-code]
+executable = "claude"
+
+[workers.claude-code.sizes]
+small  = { model = "haiku" }
+medium = { model = "fable" }
+large  = { model = "fable" }
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var ex = Assert.Throws<ConfigException>(() => BuildConfigLoader.Load(path));
+            Assert.Contains("workers.claude-code.sizes.medium", ex.Message);
+            Assert.Contains("claude-fable-5", ex.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ClaudeCode_sizes_full_fable_slug_and_aliases_load()
+    {
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "abc-123"
+plane_api_token_env = "PLANE_TOKEN"
+
+[workers]
+default_agent = "claude-code"
+
+[workers.claude-code]
+executable = "claude"
+
+[workers.claude-code.sizes]
+small  = { model = "haiku" }
+medium = { model = "claude-fable-5" }
+large  = { model = "anthropic:claude-fable-5" }
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            var sizes = config.Workers.Agents["claude-code"].Sizes;
+            Assert.Equal("haiku", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Small].Model);
+            Assert.Equal("claude-fable-5", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Medium].Model);
+            Assert.Equal("anthropic:claude-fable-5", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Large].Model);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void NonClaude_agents_are_not_subject_to_claude_model_validation()
+    {
+        // The model-shape rule is claude-code-specific; a codex block with OpenAI ids
+        // (which would fail the claude-* check) must load untouched.
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "abc-123"
+plane_api_token_env = "PLANE_TOKEN"
+
+[workers]
+default_agent = "codex"
+
+[workers.codex]
+executable = "codex"
+
+[workers.codex.sizes]
+small  = { model = "gpt-5.4-mini" }
+medium = { model = "gpt-5.4" }
+large  = { model = "gpt-5.5" }
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Equal("gpt-5.5", config.Workers.Agents["codex"].Sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Large].Model);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Missing_sizes_table_throws_ConfigException()
     {
         var toml = """
@@ -758,6 +884,103 @@ log_directory = ".build/events"
         }
     }
 
+    [Theory]
+    [InlineData("print", ThroughlineBuild.Workers.ClaudeCode.ClaudeCodeTransport.Print)]
+    [InlineData("interactive-hook", ThroughlineBuild.Workers.ClaudeCode.ClaudeCodeTransport.InteractiveHook)]
+    public void Load_ClaudeTransport_ParsesSupportedValues(
+        string value,
+        ThroughlineBuild.Workers.ClaudeCode.ClaudeCodeTransport expected)
+    {
+        var path = WriteToml(ValidToml.Replace(
+            "executable = \"claude\"",
+            $"executable = \"claude\"\ntransport = \"{value}\""));
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Equal(expected, config.Workers.Agents["claude-code"].Transport);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_GeneratedConfigTemplate_DefaultsToInteractiveHook()
+    {
+        // The generated `build init` config sets transport = "interactive-hook" explicitly after the
+        // Stage 07 cutover, so it resolves to InteractiveHook. (print is the documented rollback.)
+        var filled = ThroughlineBuild.Commands.ConfigTemplateLoader.Load()
+            .Replace("REQUIRED_PLANE_BASE_URL", "https://api.plane.so")
+            .Replace("REQUIRED_PLANE_WORKSPACE_SLUG", "my-workspace")
+            .Replace("REQUIRED_PLANE_PROJECT_ID", "abc-123")
+            .Replace("REQUIRED_PLANE_API_TOKEN", "PLANE_TOKEN");
+        var path = WriteToml(filled);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Equal(
+                ThroughlineBuild.Workers.ClaudeCode.ClaudeCodeTransport.InteractiveHook,
+                config.Workers.Agents["claude-code"].Transport);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_TransportInCustomNamedClaudeAgent_ParsesAndDoesNotWarn()
+    {
+        // A custom-named agent block maps to ClaudeCodeAgent in WorkerAgentBuilder, so its `transport`
+        // key must be honored (and not warned as unknown) - the documented print rollback works there.
+        var toml = ValidToml.Replace("[events]", """
+[workers.my-claude]
+executable = "claude"
+transport = "interactive-hook"
+
+[workers.my-claude.sizes]
+small  = { model = "haiku" }
+medium = { model = "sonnet" }
+large  = { model = "opus" }
+
+[events]
+""");
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            var config = BuildConfigLoader.Load(path, captured.Add);
+            Assert.Equal(
+                ThroughlineBuild.Workers.ClaudeCode.ClaudeCodeTransport.InteractiveHook,
+                config.Workers.Agents["my-claude"].Transport);
+            Assert.DoesNotContain(captured, w => w.Contains("my-claude.transport"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_ClaudeTransportUnknown_ThrowsActionableConfigException()
+    {
+        var path = WriteToml(ValidToml.Replace(
+            "executable = \"claude\"",
+            "executable = \"claude\"\ntransport = \"telepathy\""));
+        try
+        {
+            var ex = Assert.Throws<ConfigException>(() => BuildConfigLoader.Load(path));
+            Assert.Contains("telepathy", ex.Message);
+            Assert.Contains("print", ex.Message);
+            Assert.Contains("interactive-hook", ex.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     [Fact]
     public void Load_WorkTargetBranchSet_ResolvesToTargetBranch()
     {
@@ -907,6 +1130,56 @@ log_directory = ".build/events"
             Assert.Contains(captured, w => w.Contains("bypass_permission") && w.Contains("workers.claude-code"));
             // Config still loads successfully (non-fatal)
             Assert.Equal("plane", config.Ticketing.BackendName);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_TransportInNonClaudeAgent_EmitsWarning()
+    {
+        var toml = ValidToml.Replace("[events]", """
+[workers.codex]
+executable = "codex"
+transport = "print"
+
+[workers.codex.sizes]
+small  = { model = "gpt-5.4-mini" }
+medium = { model = "gpt-5.5" }
+large  = { model = "gpt-5.5" }
+
+[events]
+""");
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            BuildConfigLoader.Load(path, captured.Add);
+
+            Assert.Contains(captured, w =>
+                w.Contains("workers.codex.transport") && w.Contains("ignored"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_TransportInClaudeAgent_DoesNotWarn()
+    {
+        var toml = ValidToml.Replace(
+            "executable = \"claude\"",
+            "executable = \"claude\"\ntransport = \"print\"");
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            BuildConfigLoader.Load(path, captured.Add);
+
+            Assert.DoesNotContain(captured, w => w.Contains("workers.claude-code.transport"));
         }
         finally
         {
@@ -1100,15 +1373,15 @@ plane_project_id = "abc-123"
 plane_api_token_env = "PLANE_TOKEN"
 
 [workers]
-default_agent = "claude-code"
+default_agent = "codex"
 
-[workers.claude-code]
-executable = "claude"
+[workers.codex]
+executable = "codex"
 
-[workers.claude-code.sizes]
+[workers.codex.sizes]
 small  = { model = "gpt-5.4-mini", effort = "low" }
-medium = { model = "claude-sonnet-4-6" }
-large  = { model = "claude-opus-4-7" }
+medium = { model = "gpt-5.4" }
+large  = { model = "gpt-5.5" }
 
 [events]
 log_directory = ".build/events"
@@ -1118,7 +1391,7 @@ log_directory = ".build/events"
         {
             var config = BuildConfigLoader.Load(path);
 
-            var sizes = config.Workers.Agents["claude-code"].Sizes;
+            var sizes = config.Workers.Agents["codex"].Sizes;
             Assert.Equal("gpt-5.4-mini", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Small].Model);
             Assert.Equal("low", sizes[ThroughlineBuild.Contracts.Models.WorkerSize.Small].Effort);
         }
@@ -1429,6 +1702,63 @@ role = "advisory"
     }
 
     [Fact]
+    public void Load_ReviewChecks_SetupRole_Parsed()
+    {
+        var toml = ValidToml + """
+
+[[review.checks]]
+name = "xcodegen"
+executable = "xcodegen"
+arguments = ["generate"]
+role = "setup"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Equal(CheckRole.Setup, config.Review.Checks[0].Role);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_CheckRequiredPaths_ParsedForReviewAndShipWithoutUnknownWarnings()
+    {
+        var toml = ValidToml + """
+
+[[review.checks]]
+name = "build"
+executable = "npm"
+arguments = ["run", "build"]
+required_paths = ["package.json", "  src  ", "", "src"]
+
+[[ship.regression_checks]]
+name = "xcodegen"
+executable = "xcodegen"
+arguments = ["generate"]
+role = "setup"
+required_paths = ["project.yml"]
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            var config = BuildConfigLoader.Load(path, captured.Add);
+
+            Assert.Equal(new[] { "package.json", "src" }, config.Review.Checks[0].RequiredPaths);
+            Assert.Equal(new[] { "project.yml" }, config.Ship.RegressionChecks[0].RequiredPaths);
+            Assert.DoesNotContain(captured, warning => warning.Contains("required_paths"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Load_ReviewChecks_InvalidRole_ThrowsConfigException()
     {
         var toml = ValidToml + """
@@ -1459,6 +1789,231 @@ role = "blocking"
         {
             var config = BuildConfigLoader.Load(path);
             Assert.Empty(config.Review.Checks);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_VerifyGateVacuity_DefaultsToTrue_WhenReviewOmitsIt()
+    {
+        var toml = ValidToml + """
+
+[[review.checks]]
+name = "build"
+executable = "dotnet"
+arguments = ["build"]
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.True(config.Review.VerifyGateVacuity);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_VerifyGateVacuity_DefaultsToTrue_WhenReviewSectionAbsent()
+    {
+        var path = WriteToml(ValidToml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.True(config.Review.VerifyGateVacuity);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_VerifyGateVacuity_ParsesFalse_WhenSet()
+    {
+        var toml = ValidToml + """
+
+[review]
+verify_gate_vacuity = false
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.False(config.Review.VerifyGateVacuity);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_VerifyGateVacuity_DoesNotWarnAsUnknownKey()
+    {
+        var toml = ValidToml + """
+
+[review]
+verify_gate_vacuity = false
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            BuildConfigLoader.Load(path, w => captured.Add(w));
+            Assert.DoesNotContain(captured, w => w.Contains("verify_gate_vacuity"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_ConventionFiles_ParsedIntoProjectContext()
+    {
+        var toml = ValidToml + "\n[project]\nconvention_files = [\"src/setupTests.ts\", \"vite.config.ts\"]";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Equal(new[] { "src/setupTests.ts", "vite.config.ts" }, config.Project.ConventionFiles);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_ConventionFilesAbsent_DefaultsToEmpty()
+    {
+        var toml = ValidToml + "\n[project]\nlanguage = \"typescript\"";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Empty(config.Project.ConventionFiles);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_ConventionFiles_BlankEntriesDropped()
+    {
+        var toml = ValidToml + "\n[project]\nconvention_files = [\"src/setupTests.ts\", \"\", \"  \"]";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Equal(new[] { "src/setupTests.ts" }, config.Project.ConventionFiles);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_PreloadContext_DefaultsTrueWhenAbsent()
+    {
+        var toml = ValidToml + "\n[project]\nlanguage = \"typescript\"";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.True(config.Project.PreloadContext);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_PreloadContext_ParsesFalse()
+    {
+        var toml = ValidToml + "\n[project]\npreload_context = false";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.False(config.Project.PreloadContext);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_ConventionFilesAndPreloadContext_DoNotWarnAsUnknownKeys()
+    {
+        var toml = ValidToml + "\n[project]\nconvention_files = [\"a.ts\"]\npreload_context = false";
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            BuildConfigLoader.Load(path, w => captured.Add(w));
+            Assert.DoesNotContain(captured, w => w.Contains("convention_files"));
+            Assert.DoesNotContain(captured, w => w.Contains("preload_context"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_ContextHygiene_DefaultsFalseWhenAbsent()
+    {
+        var toml = ValidToml + "\n[project]\nlanguage = \"typescript\"";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.False(config.Project.ContextHygiene);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_ContextHygiene_ParsesTrue()
+    {
+        var toml = ValidToml + "\n[project]\ncontext_hygiene = true";
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.True(config.Project.ContextHygiene);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_ContextHygiene_DoesNotWarnAsUnknownKey()
+    {
+        var toml = ValidToml + "\n[project]\ncontext_hygiene = true";
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            BuildConfigLoader.Load(path, w => captured.Add(w));
+            Assert.DoesNotContain(captured, w => w.Contains("context_hygiene"));
         }
         finally
         {

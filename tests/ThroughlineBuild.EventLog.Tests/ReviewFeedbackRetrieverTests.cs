@@ -238,6 +238,86 @@ public class ReviewFeedbackRetrieverTests
     }
 
     // -----------------------------------------------------------------------
+    // checks_failed_details round-trip: a rework resumed from the event log must
+    // rebuild its brief from the failing check's own evidence (command, exit code,
+    // output tails), not just names plus the reviewer's prose.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void GetLatestRework_WithChecksFailedDetails_ReconstructsFailedCheckDetails()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var line =
+                "{\"SessionId\":\"s1\",\"Timestamp\":\"2026-06-10T10:00:00+00:00\",\"Kind\":3,\"TicketId\":\"TLB-42\",\"Phase\":2," +
+                "\"Data\":{\"kind\":\"Rework\",\"checks_failed_count\":1,\"rationale\":\"lint fails\",\"checks_failed\":[\"lint\"]," +
+                "\"checks_failed_details\":[{\"name\":\"lint\",\"role\":\"Gating\",\"exit_code\":1," +
+                "\"command\":\"swiftlint --strict --no-cache\",\"stdout_tail\":\"file.swift:2:8 sorted_imports\",\"stderr_tail\":\"\"}]}}";
+            WriteLines(Path.Combine(dir, "session1.jsonl"), line);
+
+            var retriever = new ReviewFeedbackRetriever(dir);
+            var result = retriever.GetLatestRework("TLB-42");
+
+            Assert.NotNull(result);
+            Assert.NotNull(result!.FailedCheckDetails);
+            var detail = Assert.Single(result.FailedCheckDetails!);
+            Assert.Equal("lint", detail.Name);
+            Assert.False(detail.Passed);
+            Assert.Equal(1, detail.ExitCode);
+            Assert.Equal("swiftlint --strict --no-cache", detail.CommandLine);
+            Assert.Equal("file.swift:2:8 sorted_imports", detail.StdoutTail);
+            Assert.Equal(ThroughlineBuild.Contracts.CheckRole.Gating, detail.Role);
+        }
+        finally { Cleanup(dir); }
+    }
+
+    [Fact]
+    public void GetLatestRework_LegacyEventWithoutDetails_FailedCheckDetailsIsNull()
+    {
+        // Events written before checks_failed_details existed must keep resuming, names-only.
+        var dir = MakeTempDir();
+        try
+        {
+            WriteLines(Path.Combine(dir, "session1.jsonl"),
+                MakeVerifierVerdictLine("TLB-42", "Rework", "missing tests", new[] { "build" }));
+
+            var retriever = new ReviewFeedbackRetriever(dir);
+            var result = retriever.GetLatestRework("TLB-42");
+
+            Assert.NotNull(result);
+            Assert.Null(result!.FailedCheckDetails);
+        }
+        finally { Cleanup(dir); }
+    }
+
+    [Fact]
+    public void GetLatestRework_MalformedDetailEntries_AreSkippedNotFatal()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            // First entry has no name (malformed), second is valid: parse must keep the valid one.
+            var line =
+                "{\"SessionId\":\"s1\",\"Timestamp\":\"2026-06-10T10:00:00+00:00\",\"Kind\":3,\"TicketId\":\"TLB-42\",\"Phase\":2," +
+                "\"Data\":{\"kind\":\"Rework\",\"rationale\":\"r\",\"checks_failed\":[\"lint\"]," +
+                "\"checks_failed_details\":[{\"exit_code\":1},\"notanobject\",{\"name\":\"lint\",\"exit_code\":2}]}}";
+            WriteLines(Path.Combine(dir, "session1.jsonl"), line);
+
+            var retriever = new ReviewFeedbackRetriever(dir);
+            var result = retriever.GetLatestRework("TLB-42");
+
+            Assert.NotNull(result);
+            var detail = Assert.Single(result!.FailedCheckDetails!);
+            Assert.Equal("lint", detail.Name);
+            Assert.Equal(2, detail.ExitCode);
+            // Missing role/command/tails degrade to defaults, never to a parse failure.
+            Assert.Equal("", detail.CommandLine);
+        }
+        finally { Cleanup(dir); }
+    }
+
+    // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
 

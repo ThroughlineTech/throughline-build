@@ -177,6 +177,47 @@ public class WorkerAgentReviewerTests
     }
 
     // -------------------------------------------------------------------------
+    // TLB-527: a provider quota/rate-limit block sets LastProviderError so ReviewPhase can route
+    // it to "review unavailable" instead of recording the (defensive) Fall-through Fail verdict.
+    // -------------------------------------------------------------------------
+    [Fact]
+    public async Task ProviderQuotaError_SetsLastProviderError()
+    {
+        var quota = new WorkerResult(Status.Failed, "Process exited with non-zero code",
+            Array.Empty<string>(),
+            "Exit code 1. Codex error: You've hit your usage limit. Upgrade to Pro or try again at Jun 10th, 2026 5:27 PM.",
+            new Dictionary<string, object>());
+        var agent = new StubWorkerAgent(quota);
+        var reviewer = BuildReviewer(agent);
+
+        var verdict = await reviewer.VerifyAsync(
+            BuildImplementerBrief(), BuildDiff(), BuildImplementerResult(), CancellationToken.None);
+
+        Assert.NotNull(reviewer.LastProviderError);
+        Assert.Equal(ProviderErrorKind.RateLimitOrQuota, reviewer.LastProviderError!.Kind);
+        Assert.Equal("claude-code", reviewer.LastProviderError.Provider); // StubWorkerAgent.Name
+        // The defensive Fail verdict is still returned, but ReviewPhase consults LastProviderError first.
+        Assert.Equal(VerdictKind.Fail, verdict.Kind);
+    }
+
+    [Fact]
+    public async Task GenuineWorkerFailure_LeavesLastProviderErrorNull()
+    {
+        var crash = new WorkerResult(Status.Failed, "No WORKER_RESULT found in output",
+            Array.Empty<string>(),
+            "No WORKER_RESULT block found in stdout. Stderr: ",
+            new Dictionary<string, object>());
+        var agent = new StubWorkerAgent(crash);
+        var reviewer = BuildReviewer(agent);
+
+        var verdict = await reviewer.VerifyAsync(
+            BuildImplementerBrief(), BuildDiff(), BuildImplementerResult(), CancellationToken.None);
+
+        Assert.Null(reviewer.LastProviderError);
+        Assert.Equal(VerdictKind.Fail, verdict.Kind);
+    }
+
+    // -------------------------------------------------------------------------
     // Test 4: Malformed verdict string maps to Fail with rationale noting the bad value
     // -------------------------------------------------------------------------
     [Fact]
@@ -602,5 +643,88 @@ public class WorkerAgentReviewerTests
         var instruction = agent.CapturedBrief!.Instruction;
         Assert.Contains("src/Bar.cs", instruction, StringComparison.Ordinal);
         Assert.Contains("FAIL", instruction, StringComparison.Ordinal);
+    }
+
+    // -------------------------------------------------------------------------
+    // Advisory role enforcement at the verifier boundary: a verifier that lists
+    // an advisory check in checks_failed must not be able to drive check-rework
+    // for it. The incident chain (a downstream repository 25) died at the rework cap with
+    // every acceptance criterion passing because a cosmetic lint failure flowed
+    // through checks_failed undifferentiated. Filtered by construction here.
+    // -------------------------------------------------------------------------
+
+    private static WorkerAgentReviewer BuildReviewerWithChecks(StubWorkerAgent agent, IReadOnlyList<CheckResult> checks) =>
+        new WorkerAgentReviewer(agent, BuildTicket(), checks, new WorkerOptions(TimeSpan.FromMinutes(5)), "/repo");
+
+    [Fact]
+    public async Task ReworkVerdict_AdvisoryCheckInChecksFailed_IsFilteredOut()
+    {
+        var checks = new[]
+        {
+            new CheckResult("build", true, 0, "", "", TimeSpan.Zero, CheckRole.Gating),
+            new CheckResult("lint", false, 1, "file.swift:2:8 sorted_imports", "", TimeSpan.Zero, CheckRole.Advisory)
+        };
+        var metadata = new Dictionary<string, object>
+        {
+            ["verdict"] = "Rework",
+            ["rationale"] = "import ordering violates the linter",
+            ["checks_failed"] = new List<string> { "lint" }
+        };
+        var agent = new StubWorkerAgent(OkResultWithMetadata(metadata));
+        var reviewer = BuildReviewerWithChecks(agent, checks);
+
+        var verdict = await reviewer.VerifyAsync(
+            BuildImplementerBrief(), BuildDiff(), BuildImplementerResult(), CancellationToken.None);
+
+        // The verdict kind is the verifier's call; the advisory name must not survive into
+        // ChecksFailed, so downstream consumers never see advisory-driven check-rework.
+        Assert.Equal(VerdictKind.Rework, verdict.Kind);
+        Assert.Empty(verdict.ChecksFailed);
+    }
+
+    [Fact]
+    public async Task ReworkVerdict_MixedAdvisoryAndGatingChecksFailed_KeepsGatingOnly()
+    {
+        var checks = new[]
+        {
+            new CheckResult("test", false, 1, "1 failed", "", TimeSpan.Zero, CheckRole.Gating),
+            new CheckResult("lint", false, 1, "style warning", "", TimeSpan.Zero, CheckRole.Advisory)
+        };
+        var metadata = new Dictionary<string, object>
+        {
+            ["verdict"] = "Rework",
+            ["rationale"] = "tests fail and lint complains",
+            ["checks_failed"] = new List<string> { "test", "lint" }
+        };
+        var agent = new StubWorkerAgent(OkResultWithMetadata(metadata));
+        var reviewer = BuildReviewerWithChecks(agent, checks);
+
+        var verdict = await reviewer.VerifyAsync(
+            BuildImplementerBrief(), BuildDiff(), BuildImplementerResult(), CancellationToken.None);
+
+        Assert.Equal(new[] { "test" }, verdict.ChecksFailed);
+    }
+
+    [Fact]
+    public async Task ReworkVerdict_GatingNameSharedWithNoAdvisoryConfig_PassesThroughUnchanged()
+    {
+        // No advisory checks configured: the filter must be a no-op (zero behavior drift).
+        var checks = new[]
+        {
+            new CheckResult("build", false, 1, "broken", "", TimeSpan.Zero, CheckRole.Gating)
+        };
+        var metadata = new Dictionary<string, object>
+        {
+            ["verdict"] = "Rework",
+            ["rationale"] = "build broken",
+            ["checks_failed"] = new List<string> { "build" }
+        };
+        var agent = new StubWorkerAgent(OkResultWithMetadata(metadata));
+        var reviewer = BuildReviewerWithChecks(agent, checks);
+
+        var verdict = await reviewer.VerifyAsync(
+            BuildImplementerBrief(), BuildDiff(), BuildImplementerResult(), CancellationToken.None);
+
+        Assert.Equal(new[] { "build" }, verdict.ChecksFailed);
     }
 }

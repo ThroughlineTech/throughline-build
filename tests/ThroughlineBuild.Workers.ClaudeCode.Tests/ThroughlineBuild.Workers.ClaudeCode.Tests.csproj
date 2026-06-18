@@ -15,6 +15,7 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\tools\ClaudeInteractiveProbe\ClaudeInteractiveProbe.csproj" />
     <ProjectReference Include="..\..\src\ThroughlineBuild.Workers.ClaudeCode\ThroughlineBuild.Workers.ClaudeCode.csproj" />
     <ProjectReference Include="..\..\src\ThroughlineBuild.Workers.Common\ThroughlineBuild.Workers.Common.csproj" />
     <ProjectReference Include="..\..\src\ThroughlineBuild.Contracts\ThroughlineBuild.Contracts.csproj" />
@@ -22,6 +23,6 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Fixtures\**\*.ndjson" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Fixtures\**\*.jsonl" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
-

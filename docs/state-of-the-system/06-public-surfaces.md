@@ -1,5 +1,7 @@
 # 06 - Public Surfaces
 
+Last refreshed: 2026-06-11 (HEAD 3a73eb9); `build setup` entry updated 2026-06-14 (`heartbeat-stage-07-cutover`: setup now also runs the Claude transport preflight)
+
 The CLI surface, the exported library interfaces, and the inter-project contracts that anything outside this repo (or any unfamiliar reader inside it) might depend on. Status for each.
 
 For inter-project contracts (records and interfaces) in detail, see [07-contracts.md](07-contracts.md). For verb behavior in detail, see [01-inventory.md](01-inventory.md).
@@ -12,77 +14,81 @@ The whole user-facing API of this repository.
 
 ```
 build <verb> [args] [--debug | --quiet] [--summary-json] [--error-location]
-build --version | -V
-build help [config | digest | exit-codes | summary]
 
   plan <id> [id ...]      [--agent <name>] [--from-brief]
   implement <id> [id ...] [--agent <name>]
   review <id> [id ...]    [--agent <name>]
   ship <id> [id ...]      [--no-auto-merge] [--no-push] [--skip-baseline]
-  chain <id> [id ...]     [--batch-implement <id,...>] [--dry-run] [--max-depth <n>] [--agent <name>] [--agent-plan <name>] [--agent-implement <name>] [--agent-review <name>] [--from-brief] [--no-auto-resolve] [--no-auto-merge] [--continue-past-failure]
+  chain <id> [id ...]     [--batch-implement [<id,...>]] [--dry-run] [--max-depth <n>]
+                          [--agent <name>] [--agent-plan <name>] [--agent-implement <name>] [--agent-review <name>]
+                          [--from-brief] [--no-auto-resolve] [--no-auto-merge] [--continue-past-failure]
   rework <id> [--feedback "..."]
   decompose <id> [--agent <name>]
   new <body-path | text | -> [--title "..."] [--type "..."] [--label "..."]* [--review]
   new --print-template
   scaffold <op-doc-path> [--validate-only] [--dry-run] [--accept-warnings] [--no-profile] [--force-profile]
-  init [--force] [--print-template] [--no-interactive] [--from FILE] [--plane-url URL] [--workspace SLUG] [--project-id UUID] [--project-name NAME] [--token TOKEN | --token-env VAR]
+  init [--force] [--print-template] [--no-interactive] [--from FILE] [--plane-url URL] [--workspace SLUG]
+       [--project-id UUID | --project-name NAME] [--token TOKEN | --token-env VAR]
   setup [--check]
   user-guide [--force] [--print-template]
   op-doc spec [--print] [--write] [--force]
   op-doc new <slug> [--write]
   models refresh
   settarget [<branch> | --unset]
+  sweep [--target <branch>] [--force]
   list [--state <name>] [--parent <id>] [--type <name>]
   amend <id> [--size S|M|L] [--note "..."] [--description <path|->] [--ac <path|->]
   close <id> <reason>
   defer <id> <reason>
   reopen <id> [reason]
-  -h | --help
+  help [<topic>]
+  --help | -h
+  --version | -V
 ```
 
-There are **20 dispatchable action verbs** (plus `help` and `-V`/`--version`): the pipeline verbs `plan`, `implement`, `review`, `ship`, `chain`, `rework`, `decompose`; the work-item verbs `new`, `list`, `amend`, `close`, `defer`, `reopen`; and the configure/tooling verbs `init`, `setup`, `user-guide`, `op-doc`, `scaffold`, `settarget`, `models`. Dispatch is an `if (verb == ...)` chain in [Program.cs](../../src/ThroughlineBuild.Cli/Program.cs), not a switch/registry. Verbs that run *before* config load because they edit or bootstrap config / write docs: `init` ([Program.cs:231-290](../../src/ThroughlineBuild.Cli/Program.cs#L231-L290)), `settarget` ([Program.cs:294-301](../../src/ThroughlineBuild.Cli/Program.cs#L294-L301)), `user-guide` ([Program.cs:304-309](../../src/ThroughlineBuild.Cli/Program.cs#L304-L309)), `op-doc` ([Program.cs:313-398](../../src/ThroughlineBuild.Cli/Program.cs#L313-L398)), and `models` ([Program.cs:403-420](../../src/ThroughlineBuild.Cli/Program.cs#L403-L420)). `setup` runs *after* config load (it needs Plane credentials, [Program.cs:518-555](../../src/ThroughlineBuild.Cli/Program.cs#L518-L555)).
+There are **21 dispatchable verbs**: `plan`, `implement`, `review`, `ship`, `chain`, `rework`, `decompose`, `new`, `scaffold`, `init`, `setup`, `user-guide`, `op-doc`, `models`, `settarget`, `sweep`, `list`, `amend`, `close`, `defer`, `reopen` - plus `help`, `--help`, and `--version`, which short-circuit before verb dispatch. Dispatch is still an `if (verb == ...)` chain in [Program.cs](../../src/ThroughlineBuild.Cli/Program.cs), not a switch/registry. Five verbs run *before* config load because they bootstrap or edit config / write docs: the `init` branch ([Program.cs:231](../../src/ThroughlineBuild.Cli/Program.cs#L231)), `settarget` ([Program.cs:294](../../src/ThroughlineBuild.Cli/Program.cs#L294)), `user-guide` ([Program.cs:304](../../src/ThroughlineBuild.Cli/Program.cs#L304)), `op-doc` ([Program.cs:313](../../src/ThroughlineBuild.Cli/Program.cs#L313)), and `models` ([Program.cs:403](../../src/ThroughlineBuild.Cli/Program.cs#L403)).
 
-**`build --version` / `-V`** prints `BuildVersion.Current` ([Program.cs:27-31](../../src/ThroughlineBuild.Cli/Program.cs#L27-L31)), a compile-time const of the form `{VersionPrefix}+{shortSha}` (e.g. `0.1.0+09172e5`) generated by the `GenerateBuildVersionSource` MSBuild target ([ThroughlineBuild.Cli.csproj:54-79](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L54-L79)) into `BuildVersion.g.cs`; the SourceRevisionId-less build degrades to just the version with no trailing `+`. Staying a const keeps the AOT publish reflection-free.
+New or changed since the last refresh:
 
-**Help authority moved to the `Help/` registry.** Top-level `build` / `build -h` / `build --help` / `build help` render the grouped Tier-0 view (Pipeline / WorkItems / Configure) via `Tier0Renderer` from the `HelpRegistry` built by `HelpRegistryFactory.Build()` ([src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs)). `build <verb> -h` renders the per-command Tier-1 view via `Tier1Renderer`. `build help <topic>` renders one of the four `HelpTopicRegistry` topics - `config`, `digest`, `exit-codes`, `summary` - via `HelpTopicRenderer`; an unknown topic exits 2 ([Program.cs:39-56](../../src/ThroughlineBuild.Cli/Program.cs#L39-L56)). `CliUsage.cs` is now **Legacy / dead-in-production**: it is no longer the live help surface (only tests still assert against it).
+- **`setup`** (TLB-460, op-34): makes a fresh project workflow-ready. Does `git init` plus a standard ignore list when needed, then diffs the live Plane project against the canonical `WorkspaceSchema` (states + labels, see 07-contracts) and creates whatever is missing via `ITicketingProvisioner`. `--check` verifies only (exit 1 when anything is missing). Implemented by the `SetupCommand` class ([SetupCommand.cs:18](../../src/ThroughlineBuild.Cli/SetupCommand.cs#L18)); dispatched after config load ([Program.cs:563](../../src/ThroughlineBuild.Cli/Program.cs#L563)). Since the Stage 07 cutover it then runs a Claude transport capability preflight (`ClaudeTransportPreflight.ReportAsync`), returning non-zero when a configured `interactive-hook` agent cannot run on this host. Status: Functional.
+- **`sweep`** (TLB-531): the recovery verb after an interrupted chain. Removes leftover `.worktrees/ticket-*` / `chain-*` worktrees and deletes their branches when fully merged into the target; `--force` also removes worktrees whose branch is unmerged (the branch itself is kept). Pure git + filesystem, no worker, no Plane. The work is done by `ChainWorktreeSweeper.SweepAsync` ([ChainWorktreeSweeper.cs:47](../../src/ThroughlineBuild.Helpers/ChainWorktreeSweeper.cs#L47)); dispatch at [Program.cs:480](../../src/ThroughlineBuild.Cli/Program.cs#L480). Status: Functional.
+- **`models refresh`** (op-33): re-probes Codex (`codex debug models`) and rewrites the `[workers.codex.sizes]` block in `.build/config.toml` in place, printing a current-to-proposed diff; a probe failure leaves the file unchanged. Implemented by the `ModelsRefreshCommand` class ([ModelsRefreshCommand.cs:18](../../src/ThroughlineBuild.Cli/ModelsRefreshCommand.cs#L18)). Status: Functional.
+- **`op-doc spec` / `op-doc new`** (TLB-456/457): `spec` prints (or `--write`s) the embedded op-doc authoring spec via the `OpDocSpecCommand` class ([OpDocSpecCommand.cs:9](../../src/ThroughlineBuild.Cli/OpDocSpecCommand.cs#L9)); `new <slug>` emits a minimal valid op-doc skeleton via `OpDocSkeletonGenerator` ([OpDocSkeletonGenerator.cs:5](../../src/ThroughlineBuild.Scaffold/OpDocSkeletonGenerator.cs#L5)). This makes the op-doc format itself a published surface - see the stability call-outs below. Status: Functional.
+- **`chain` traversal flags**: `--dry-run` prints the full post-order tree schedule and branch topology without executing phases; `--max-depth <n>` is root-based (0 = root only); `--batch-implement` (TLB-444/447/473) batches the implement phase for direct children in one warm worker session - bare flag batches ALL eligible children, a comma list batches exactly that group, and an oversized group falls back to per-ticket chaining. Flag extraction happens before dispatch ([Program.cs:110-135](../../src/ThroughlineBuild.Cli/Program.cs#L110-L135)). Status: Functional.
+- **`init`** grew a guided connected mode (op-34): at a TTY it prompts for base URL / workspace / token, then offers create-or-pick from a most-recently-used project menu (no UUID pasting), provisions, makes a welcome commit, and verifies connectivity. Non-interactive paths: `--project-name` resolves or creates by name via `IProjectResolver`; `--from FILE` (or redirected stdin) reads a key=value credentials file; unknown flags are rejected with exit 2 ([Program.cs:236-250](../../src/ThroughlineBuild.Cli/Program.cs#L236-L250)). Status: Functional.
+- **`scaffold`** gained `--no-profile` / `--force-profile` ([Program.cs:1032-1033](../../src/ThroughlineBuild.Cli/Program.cs#L1032-L1033)) controlling the profile-derivation worker run by the `ScaffoldProfileRunner` class ([ScaffoldProfileRunner.cs:15](../../src/ThroughlineBuild.Cli/ScaffoldProfileRunner.cs#L15)); derivation is skipped automatically when config is already configured (TLB-491). Status: Functional.
+- **`--version` / `-V`** (TLB-459) prints `0.1.0+<shortsha>`. The value is the `BuildVersion.Current` constant - `BuildVersion` is a generated partial class ([BuildVersion.cs:3](../../src/ThroughlineBuild.Cli/BuildVersion.cs#L3)) whose other half is emitted by the `GenerateBuildVersionSource` MSBuild target ([ThroughlineBuild.Cli.csproj:54](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L54)). The same string is stamped into the event log (`SessionContext.BuildVersion`) and debug transcripts. Status: Functional.
 
-- **`user-guide`** (TLB-322) writes the embedded operator guide to `docs/throughline_build_userguide.md`; `--force` overwrites (exit 2 if the file exists without `--force`), `--print-template` dumps to stdout. Runs with no config.
-- **`init` interactive prompting** (TLB-370): when stdin is a TTY, `init` prompts for any `REQUIRED_` config values (Plane base URL / workspace / project ID / API token) not supplied as flags; flag values win over prompts. Non-interactive (redirected stdin) keeps the old template-with-placeholders behavior.
-- **`--from-brief`** (the promote flag, plan + chain only, [Program.cs:93-94](../../src/ThroughlineBuild.Cli/Program.cs#L93-L94)) skips the worker investigation and promotes a Backlog ticket to Ready in place, using the existing ticket description as the plan. Equivalent to `[plan] mode = "promote"`; the flag wins when both are set.
-- **`--no-push`** (ship, [Program.cs:89-90](../../src/ThroughlineBuild.Cli/Program.cs#L89-L90)) makes ship a fully local fast-forward merge with no remote push. It folds into `ShipOptions.NoPush = noPush || !config.Ship.Push`, so `[ship] push = false` has the same effect.
-- **`--skip-baseline`** (ship, [Program.cs:95-96](../../src/ThroughlineBuild.Cli/Program.cs#L95-L96)) sets `ShipOptions.SkipBaseline`, which bypasses the baseline-aware regression-check comparison (TLB-401) and falls back to the legacy gate where any failing check blocks.
-- **`--batch-implement <ids>`** / **`--dry-run`** / **`--max-depth <n>`** (chain only) are extracted before dispatch ([Program.cs:110-123](../../src/ThroughlineBuild.Cli/Program.cs#L110-L123)): `--batch-implement` opts an ordered direct-child sibling group into one warm batch session, `--dry-run` prints the post-order schedule + branch topology without running phases (outcome `DryRunPreview`, exit 0), `--max-depth` caps the root-based traversal depth.
+Full usage text: the `CliUsage.UsageText` constant in [CliUsage.cs](../../src/ThroughlineBuild.Cli/CliUsage.cs). `--agent` (and the per-phase `--agent-plan` / `--agent-implement` / `--agent-review` for `chain`) selects which worker agent runs the phase; the name must be a key in the `[workers.<name>]` config sub-table. See [11-llm-architecture.md](11-llm-architecture.md).
 
-Full usage/help text now lives in the `Help/` registry ([HelpRegistryFactory.cs](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs) for per-command help + exit codes, [Help/Topics/HelpTopicRegistry.cs](../../src/ThroughlineBuild.Cli/Help/Topics/HelpTopicRegistry.cs) for the `help <topic>` topics), rendered by `Tier0Renderer` / `Tier1Renderer` / `HelpTopicRenderer`. The old single `CliUsage.cs` is retained only for test assertions. All verbs are dispatched from [src/ThroughlineBuild.Cli/Program.cs](../../src/ThroughlineBuild.Cli/Program.cs).
+### Tiered help system (op-30)
 
-`--agent` (and the per-phase `--agent-plan` / `--agent-implement` / `--agent-review` for `chain`) selects which worker agent runs the phase; the name must be a key in the `[workers.<name>]` config sub-table. See [11-llm-architecture.md](11-llm-architecture.md) for the four wired agents and the selection precedence.
+Help is no longer one usage dump. Three tiers, all AOT-safe and I/O-free:
+
+- **Tier 0**: `build`, `build --help`, `build help` render a grouped command index via the `Tier0Renderer` class ([Tier0Renderer.cs](../../src/ThroughlineBuild.Cli/Help/Tier0Renderer.cs)).
+- **Tier 1**: `build <verb> --help` (any position) renders that verb's options/exit-codes/examples via the `Tier1Renderer` class ([Tier1Renderer.cs](../../src/ThroughlineBuild.Cli/Help/Tier1Renderer.cs)).
+- **Topics**: `build help <topic>` renders one of four prose topics - `config`, `digest`, `exit-codes`, `summary` - registered in `HelpTopicRegistry.Build` ([HelpTopicRegistry.cs:32-35](../../src/ThroughlineBuild.Cli/Help/Topics/HelpTopicRegistry.cs#L32-L35)); an unknown topic lists the valid names and exits 2.
+
+The model behind tiers 0/1 is the `HelpRegistry` populated by `HelpRegistryFactory.Build` ([HelpRegistryFactory.cs:24](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs#L24)), which registers **19** commands in three groups (Pipeline / Work items / Configure). Status: Functional, with a gap: `models` and `sweep` are dispatchable but NOT registered in the help registry, so `build models --help` falls back to the Tier 0 index.
 
 ### Stable contracts on the CLI
 
 These are not just convenience flags - downstream tooling (CI, the operator's other agents, the `analyze-event-log` tool) reads them.
 
-| Contract | Where | Status |
-|---|---|---|
-| **Exit codes** are deterministic. Global: 0 ok, 1 phase/command failure, 2 config/bad-args/unknown verb, 3 missing secret, 4 phase infra failure (review verifier crash, ship worktree missing, git unavailable). `settarget` folds into the global scheme (0 ok / 2 branch-not-found). Per-verb exit codes are declared in the help registry's `ExitCodes` per `CommandHelp` ([HelpRegistryFactory.cs](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs)). The chain `ChainOutcome -> exit code` mapping is now `ChainExitCodeMapper.GetExitCode` ([src/ThroughlineBuild.Cli/ChainExitCodeMapper.cs:13-31](../../src/ThroughlineBuild.Cli/ChainExitCodeMapper.cs#L13-L31)). | Program.cs throughout | Functional |
-| **`--summary-json`** emits a structured JSON object on stdout (in addition to stderr noise) - the schema is the `PhaseSummary` records ([src/ThroughlineBuild.Helpers/PhaseSummary.cs](../../src/ThroughlineBuild.Helpers/PhaseSummary.cs)) rendered by `PhaseSummaryRenderer.RenderJson` ([src/ThroughlineBuild.Helpers/PhaseSummaryRenderer.cs](../../src/ThroughlineBuild.Helpers/PhaseSummaryRenderer.cs)). | per phase | Functional |
-| **Default summary text block** is stable per-phase (documented in the `summary` help topic, `build help summary`). Operators redirect it (`build plan TLB-N 2>/dev/null > summary.txt`). | per phase | Functional |
-| **`--debug`** captures worker stdio to `.build/sessions/<stem>/` with a stable layout: `worker-stdin.txt`, `worker-stdout.txt`, `worker-stderr.txt`, `envelope-result.txt` (or `parse-error.txt` on failure), `worker-result.json`. Non-Claude agents that deliver the brief via args write a placeholder `worker-stdin.txt` and a `worker-result-summary.txt` instead of `envelope-result.txt`; see the per-agent `WriteDebugCapture` methods. `--debug` is a no-op for `ship` (no worker subprocess). | per phase | Functional |
-| **Progress digest** (default behavior, `[m:ss] kind <payload>`) auto-suppresses when stderr is redirected unless `BUILD_PROGRESS=1` (the `!Console.IsErrorRedirected || BUILD_PROGRESS==1` predicate is repeated per verb-branch, e.g. [Program.cs:710-711,1361-1373](../../src/ThroughlineBuild.Cli/Program.cs#L710-L711)). The per-line format is produced by each agent's `IWorkerProgressDigester` (null for Copilot, which has no digest). Under a multi-ticket `chain`, each ticket's progress lines are additionally prefixed `[{ticketId}] ` (TLB-403) via `PrefixedTextWriter` wrapping the digest sink ([ChainPhase.cs:914-928](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L914-L928)), so interleaved per-ticket output stays attributable. | Program.cs per verb | Functional |
-| **Plane comment markers** `[planned_at: <sha>]`, `[implemented_at: <sha>]`, `[decomposed_at: <sha>]`, `[shipped_at: <sha>]`, `[gate: hard-fail]`, `[batch_review: <verdict>]`, `<strong>wontfix:</strong>`, `<strong>deferred:</strong>`, `<strong>reopened:</strong>` are load-bearing - downstream phases parse them. Batch markers add parenthesized context (`(branch ...)`, `(batch: stack_position=N)`, `(batch into ...)`) that the marker parser ignores because it only matches `[...]`. See the marker subsection below. | per phase | Functional |
+| Contract | Status |
+|---|---|
+| **Exit codes** are deterministic. Global scheme plus per-verb overrides for `chain`, `rework`, `scaffold` - full enumeration below. | Functional |
+| **`--summary-json`** emits a structured JSON object on stdout - the schema is the `PhaseSummary` records ([PhaseSummary.cs](../../src/ThroughlineBuild.Helpers/PhaseSummary.cs)) rendered by `PhaseSummaryRenderer` ([PhaseSummaryRenderer.cs](../../src/ThroughlineBuild.Helpers/PhaseSummaryRenderer.cs)). | Functional |
+| **Default summary text block** is stable per-phase; operators redirect it (`build plan TLB-N 2>/dev/null > summary.txt`). | Functional |
+| **`--debug`** captures worker stdio to `.build/sessions/<stem>/` with a stable layout: `worker-stdin.txt`, `worker-stdout.txt`, `worker-stderr.txt`, `envelope-result.txt` (or `parse-error.txt`), `worker-result.json`, plus a structured per-turn `transcript.jsonl` side channel keyed by `DebugTranscriptContext` (build version, session id, rework round - see [debug-transcript-format.md](../debug-transcript-format.md)). `--debug` is a no-op for `ship` (no worker subprocess). | Functional |
+| **Progress digest** (default, `[m:ss] kind <payload>`) auto-suppresses when stderr is redirected unless `BUILD_PROGRESS=1`. Produced per-agent by `IWorkerProgressDigester` (null for Copilot). Under a multi-ticket `chain` each ticket's lines are prefixed `[{ticketId}] ` by a `PrefixedTextWriter` wrapping the digest sink ([ChainPhase.cs:1175](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1175)). The Claude digester now filters system stream events by subtype and throttles the thinking-tokens ticker. | Functional |
+| **Plane comment markers** `[planned_at: <sha>]`, `[implemented_at: <sha>]`, `[decomposed_at: <sha>]`, `[shipped_at: <sha>]`, `<strong>wontfix:</strong>`, `<strong>deferred:</strong>`, `<strong>reopened:</strong>` are load-bearing - downstream phases parse them. The gate also posts advisory `[gate: hard-fail]` comments, which nothing parses back. See the marker call-out below. | Functional |
 
 ### Exit codes (full enumeration)
 
-The global mapping (any verb that does not override it):
+The global mapping (any verb that does not override it): 0 success, 1 phase/command failure, 2 config error or unknown verb, 3 missing secret, 4 phase infrastructure failure. Documented in the exit-codes section of `CliUsage.UsageText` ([CliUsage.cs:89-118](../../src/ThroughlineBuild.Cli/CliUsage.cs#L89-L118)) and in the `exit-codes` help topic.
 
-| Code | Meaning |
-|---|---|
-| 0 | Success |
-| 1 | Phase or command failure |
-| 2 | Config error or unknown verb |
-| 3 | Missing secret (env var not set) |
-| 4 | Phase infrastructure failure (review verifier crash, ship worktree missing, git unavailable) |
-
-`chain` overrides these via `ChainExitCodeMapper.GetExitCode(ChainOutcome)` ([src/ThroughlineBuild.Cli/ChainExitCodeMapper.cs:13-31](../../src/ThroughlineBuild.Cli/ChainExitCodeMapper.cs#L13-L31), enum at [src/ThroughlineBuild.Contracts/Models/ChainOutcome.cs:3-21](../../src/ThroughlineBuild.Contracts/Models/ChainOutcome.cs#L3-L21)). There is also an overload `GetExitCode(ParallelDispatchResult)` ([:7-11](../../src/ThroughlineBuild.Cli/ChainExitCodeMapper.cs#L7-L11)) that returns 0 on success, else maps the preserved outcome, else 1:
+`chain` overrides these via the public `ChainExitCodeMapper.GetExitCode` switch ([ChainExitCodeMapper.cs:13-35](../../src/ThroughlineBuild.Cli/ChainExitCodeMapper.cs#L13-L35)), keyed on the `ChainOutcome` enum ([ChainOutcome.cs:3-25](../../src/ThroughlineBuild.Contracts/Models/ChainOutcome.cs#L3-L25), now 20 members):
 
 | Code | ChainOutcome |
 |---|---|
@@ -93,97 +99,66 @@ The global mapping (any verb that does not override it):
 | 5 | `StoppedAtReview` |
 | 6 | `ReworkCapExceeded` |
 | 7 | `StoppedAtShip` |
-| 1 | default - any `ChainOutcome` not listed above, including `BatchImplemented` |
+| 8 | `GateVacuous` |
+| 9 | `ReviewUnavailable` |
+| 10 | `GateEnvironmentFailure` |
+| 11 | `TicketingUnavailable` |
 
-`RefusedDirtyTree` (chain preflight hygiene gate refusal) and `RefusedWrongBranch` (main worktree not on the ship target at chain start) both map to 2 alongside `RefusedInitialState`. `DryRunPreview` (the `--dry-run` schedule print) maps to 0. `Skipped` (TLB-313) is the outcome for a ticket whose ancestor failed when `--continue-past-failure` is not set; in the multi-ticket aggregate path a `Skipped` result still counts as "all good" for the overall exit code. `rework` and `scaffold` carry their own per-verb exit codes in the help registry (see `Rework()` / `Scaffold()` in [HelpRegistryFactory.cs](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs)).
+The four codes new since the last refresh classify *environmental* stops that must not look like code failures: `GateVacuous` (a gating check could not be proven to fail on broken input - config defect, no rework), `ReviewUnavailable` (TLB-527 - provider quota/rate-limit/auth blocked the verifier; review never ran, ticket left InReview and resumable), `GateEnvironmentFailure` (TLB-538 - the failed checks also fail on the untouched base ref), and `TicketingUnavailable` (TLB-545 - Plane unreachable at the transport level after retries). Disagreement note: the usage text in `CliUsage.UsageText` enumerates chain codes only through 9; codes 10 and 11 exist in `ChainExitCodeMapper` but are not yet documented there - code wins. `rework` overrides codes 2/4 and `scaffold` overrides codes 2/3 as spelled out in the same `CliUsage` block. `BatchImplemented` is an internal per-ticket outcome (the aggregate run maps it, not the operator).
 
 ### Conventions the CLI follows
 
 - Always reads `.build/config.toml` from the nearest ancestor directory.
 - Always resolves the main worktree root before phase dispatch, so `build` invoked from inside a feature worktree still operates on the right paths.
-- `ship` pushes the merge target to the configured remote after a fast-forward merge (no other verb pushes), *unless* `--no-push` (or `[ship] push = false`) is set, in which case the merge stays fully local and no push happens; see [05-state-and-persistence.md](05-state-and-persistence.md).
-- Never amends or force-resets anything (no `git push --force`, `git reset --hard`, or interactive rebase anywhere).
-- Single-shot, no daemon, no shared state between invocations.
+- `ship` pushes the merge target after a fast-forward merge (no other verb pushes), unless `--no-push` / `[ship] push = false`; see [05-state-and-persistence.md](05-state-and-persistence.md).
+- Never amends or force-resets anything (no `git push --force`, `git reset --hard`, or interactive rebase anywhere). `sweep` deletes branches only when merged-gated.
+- Single-shot, no daemon, no shared state between invocations - with one new caveat: `GatePhase` may re-read the gate check specs from disk mid-run via its `gateChecksReloader` recovery arm (TLB-538).
 
 ### Loose ends (CLI surface)
 
-- The `init` verb is implemented and now also has a **connected mode**: with `--project-name` + credentials (or at an interactive TTY) it resolves/creates the Plane project and delegates to `SetupCommand` for git init + `.gitignore` + welcome commit + states/labels provisioning. The standalone `setup` verb (`setup [--check]`) exposes the same provisioning idempotently; `--check` reports gaps and exits 1 without mutating. See [05-state-and-persistence.md](05-state-and-persistence.md).
-- `op-doc` (`op-doc spec [--print|--write|--force]`, `op-doc new <slug> [--write]`) and `models refresh` are dispatched verbs that run before config load; `op-doc ... --write` writes `docs/op-docs/*.md` and `models refresh` rewrites the `[workers.codex.sizes]` config block in place.
-- The `decompose` verb is a first-class dispatched verb ([Program.cs:704](../../src/ThroughlineBuild.Cli/Program.cs#L704)) but is not invoked through an `ITicketCommand`; it runs `DecomposePhase` directly.
-- `--agent` selection names are validated against config sub-tables at construction time; an unknown name surfaces as a `ConfigException` from `WorkerAgentFactory.Create`, not a usage error.
+- `models` and `sweep` are missing from the tiered help registry (`HelpRegistryFactory.Build` registers 19 of the 21 verbs).
+- `CliUsage.UsageText` lags `ChainExitCodeMapper` on chain exit codes 10/11.
+- The `decompose` verb is dispatched directly to `DecomposePhase`, not through an `ITicketCommand`.
+- `--agent` selection names are validated at construction; an unknown name surfaces as a `ConfigException` from `WorkerAgentFactory.Create` - and a `[workers] default_agent` naming an undefined worker is now a clear Config error (TLB-512).
 
 ---
 
 ## Exported library surfaces
 
-Each `ThroughlineBuild.X.csproj` library is technically public if referenced by another project. In practice only `ThroughlineBuild.Cli` is consumed by anything outside the solution (it produces the binary). Library projects are private to the solution today.
+Each `ThroughlineBuild.X.csproj` library is technically public if referenced by another project. In practice only `ThroughlineBuild.Cli` is consumed by anything outside the solution (it produces the binary). Library projects are private to the solution today. (An empty `src/ThroughlineBuild.Linear/` directory holds only stale build artifacts - there is no `.csproj` and it is not in the solution.)
 
-Below: the interfaces and record types that have the most consumer surface area - the ones that would matter most if anyone wrote a second binary or a plugin against this code.
+Below: the interfaces and record types with the most consumer surface area.
 
 ### `ThroughlineBuild.Contracts`
 
-The leaf of the dependency graph. Pure interfaces, records, enums - no I/O, no static state.
+The leaf of the dependency graph. Pure interfaces, records, enums - no I/O, no static state. 07-contracts.md tabulates the types file-by-file; the summary:
 
-| Type | Purpose | Implementations |
-|---|---|---|
-| `ITicketing` | All ticket reads / writes / transitions. | `PlaneTicketingClient` (only) |
-| `IWorkerAgent` | Spawn an agent subprocess against a `Brief`; exposes `Name` and an optional `IWorkerProgressDigester`. | `ClaudeCodeAgent`, `CodexAgent`, `GeminiAgent`, `CopilotAgent` - all wired (see [11-llm-architecture.md](11-llm-architecture.md)) |
-| `IWorkerAgentFactory` | Resolve a configured agent name to an `IWorkerAgent`. | `WorkerAgentFactory` (Cli; registry-backed) |
-| `IWorkerProgressDigester` | Format one raw NDJSON line into a one-line digest (best-effort, never throws). | `ClaudeCodeProgressDigester`, `CodexProgressDigester`, `GeminiProgressDigester` (Copilot returns null) |
-| `ILlmClient` | Direct LLM API call (judgment slot). | `AnthropicClient` (production, non-streaming, `InvokeStreamAsync` stubbed); `ModelClientLlmAdapter` exists but is unwired |
-| `IGitClient` | All git subprocess operations. | `ProcessGitClient` (only) |
-| `IEventSink` | Sink for `WorkflowEvent`. | `JsonlEventSink`, `RecordingEventSink` |
-| `IWorkflowPhase` | `Phase` + `RunAsync(ticketId, workingDirectory, ct) -> PhaseResult`. | `PlanPhase`, `ImplementPhase`, `ReviewPhase`, `ShipPhase`, `ChainPhase`, `ReworkPhase`, `NewPhase`, `DraftPhase`, `DecomposePhase`, `ScaffoldPhase` |
-| `IVerifier` | Take a brief + diff + worker result, return a `Verdict`. | `WorkerAgentReviewer` (only) - agent-agnostic; wraps any injected `IWorkerAgent` |
-| `IObsoleteRatifier` | Verify an `obsolete` escalation against the prior commit's evidence. | `ObsoleteRatifier` |
-| `IReviewFeedbackRetriever` | Most-recent `Rework` verdict for a ticket from the event log. | `ReviewFeedbackRetriever` |
-| `ITicketCommand` | Imperative ticket-touching command (`ExecuteAsync(ctx, ct)`). | `AmendCommand`, `ChainCommand`, `CloseCommand`, `DeferCommand`, `ListCommand`, `NewCommand`, `ReopenCommand`, `ReworkCommand`, `ScaffoldCommand` |
+- **Ticketing**: `ITicketing` (~13 methods), plus four bootstrap-era additions since the last refresh: `ITicketingConnectivity` (connectivity probe, declared alongside `ITicketing` at [ITicketing.cs:127](../../src/ThroughlineBuild.Contracts/ITicketing.cs#L127)), `IProjectDiscovery` (workspace-level list/find/create, [IProjectDiscovery.cs:15](../../src/ThroughlineBuild.Contracts/IProjectDiscovery.cs#L15)), `IProjectResolver` (name -> project id, found-or-created, [IProjectResolver.cs:28](../../src/ThroughlineBuild.Contracts/IProjectResolver.cs#L28)), `ITicketingProvisioner` (read/create states + labels, [ITicketingProvisioner.cs:14](../../src/ThroughlineBuild.Contracts/ITicketingProvisioner.cs#L14)). `TicketingUnavailableException` ([TicketingUnavailableException.cs:11](../../src/ThroughlineBuild.Contracts/TicketingUnavailableException.cs#L11)) is the typed transport-outage signal (TLB-545).
+- **`WorkspaceSchema`** ([WorkspaceSchema.cs:13](../../src/ThroughlineBuild.Contracts/WorkspaceSchema.cs#L13)): the canonical 7 states (with Plane state-groups) and 9 labels the workflow assumes; single source of truth shared by the Plane client's runtime state map and `build setup` provisioning. A shared artifact with Plane - see 07-contracts.
+- **Workers**: `IWorkerAgent`, `IWorkerAgentFactory`, `IWorkerProgressDigester`, `WorkerOptions` - `WorkerOptions` ([IWorkerAgent.cs:51](../../src/ThroughlineBuild.Contracts/IWorkerAgent.cs#L51)) gained `DebugTranscript` (a `DebugTranscriptContext`) and `LeanPlanning` (effort-gated hygiene, exp-4) on top of `Size`.
+- **Gate contract types** (op TLB-500..510, new): `CompletionClaim` + `AcBinding` + `VerifierKind` ([CompletionClaim.cs](../../src/ThroughlineBuild.Contracts/Models/CompletionClaim.cs) - the `CompletionClaim` record at `#L18` carries `Provides`/`Consumes`/`AcBindings`/`TestsAdded` plus three explicitly UNENFORCED hook fields), `SmokeSignal` + `SmokeSignalKind` ([SmokeSignal.cs:10](../../src/ThroughlineBuild.Contracts/Models/SmokeSignal.cs#L10)). `CheckSpec`/`CheckResult` grew `CheckRole` (`Gating`/`Advisory`/`Setup`, [CheckResult.cs:8](../../src/ThroughlineBuild.Contracts/Verifier/CheckResult.cs#L8)), per-check `CanaryFile` lists, and a `CommandLine` echo on results so rework briefs can carry the oracle verbatim.
+- **Provider/transport classification (new)**: `ProviderError` + `ProviderErrorKind` ([ProviderError.cs:10](../../src/ThroughlineBuild.Contracts/Models/ProviderError.cs#L10)) - a transient provider failure distinct from a verdict (TLB-527).
+- **Batch implement (new)**: `BatchWorkerResult` / `BatchTicketResult`; `WorkerResult` itself ([WorkerResult.cs:3](../../src/ThroughlineBuild.Contracts/Models/WorkerResult.cs#L3)) gained an optional `Tickets` list alongside `Blocks`.
+- **Misc new models**: `ModelTier` ([ModelTier.cs:9](../../src/ThroughlineBuild.Contracts/Models/ModelTier.cs#L9)) - `{model, effort}` per `WorkerSize` (op-33; effort acted on only by Codex); `WorkerResultMetadata` ([WorkerResultMetadata.cs:8](../../src/ThroughlineBuild.Contracts/Models/WorkerResultMetadata.cs#L8)) - well-known `envelope_status` key/values for salvage (TLB-471/476); `DirtyTreeCause`; `DebugTranscriptContext`.
+- **Phases/verifier**: `IWorkflowPhase`, `IVerifier`, `IObsoleteRatifier`, `IReviewFeedbackRetriever`, `ITicketCommand`, `IGitClient` (~33 async methods incl. interface defaults), `IEventSink`, `ILlmClient` - shapes unchanged at the interface level except where noted in 07.
 
-The four `IWorkerAgent` implementations live in their own `ThroughlineBuild.Workers.<Vendor>` projects ([ClaudeCodeAgent.cs](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs), [CodexAgent.cs](../../src/ThroughlineBuild.Workers.Codex/CodexAgent.cs), [GeminiAgent.cs](../../src/ThroughlineBuild.Workers.Gemini/GeminiAgent.cs), [CopilotAgent.cs](../../src/ThroughlineBuild.Workers.Copilot/CopilotAgent.cs)) and share the `WORKER_RESULT` parser in `ThroughlineBuild.Workers.Common`. `IVerifier`, `IObsoleteRatifier`, and `CheckResult` live under [src/ThroughlineBuild.Contracts/Verifier/](../../src/ThroughlineBuild.Contracts/Verifier/); the model records live under [src/ThroughlineBuild.Contracts/Models/](../../src/ThroughlineBuild.Contracts/Models/).
-
-Records that flow across boundaries: `Ticket`, `Brief`, `WorkerResult`, `WorkerOptions`, `WorkerSize`, `Verdict`, `WorkflowEvent`, `PhaseResult`, `GitDiff`, `DiffEntry`, `CheckSpec`, `CheckResult`, `Relation`, `ReviewFeedback`, `BackendCapabilities`, `NewTicketResult`, `TicketComment`, `RollupResult`, `ChainResult`, `ChainStep`, `DraftResult`, `NewResult`, `SubsumedByEvidence`, `ParallelDispatchResult`, `TicketGraph` / `TicketNode`. **New since this doc's prior refresh** (kept brief here - depth in [07-contracts.md](07-contracts.md)): `CompletionClaim` / `AcBinding` (the op-30 implement claim), `BatchTicketResult` (one stacked batch ticket), and `SmokeSignal` (advisory smoke-check result). Status: **Functional** - all are immutable records, all are consumed.
-
-Enums: `TicketState`, `Size`, `Risk`, `Phase`, `Status`, `VerdictKind`, `EventKind`, `ChainOutcome`, `DiffKind`, `DraftOutcome`, `WorkerSize`, plus the newer `VerifierKind` ([Models/CompletionClaim.cs:6](../../src/ThroughlineBuild.Contracts/Models/CompletionClaim.cs#L6)), `CheckRole` ([Verifier/CheckResult.cs](../../src/ThroughlineBuild.Contracts/Verifier/CheckResult.cs)), and `ModelTier` ([Models/ModelTier.cs](../../src/ThroughlineBuild.Contracts/Models/ModelTier.cs)). Status: **Functional** except `Size.S`, `Size.L`, `Risk.Low`, `Risk.High` which are declared but never constructed in production paths. `Phase` now has 11 members (`Gate` added, op-30; [Models/Phase.cs:3](../../src/ThroughlineBuild.Contracts/Models/Phase.cs#L3)) and `EventKind` 14 (`CostLedger` added; see the JSONL schema section). `Status` has four members: `Ok`, `NeedsRework`, `Failed`, `Escalate` ([src/ThroughlineBuild.Contracts/Models/WorkerResult.cs:12](../../src/ThroughlineBuild.Contracts/Models/WorkerResult.cs#L12)). `WorkerSize` (`Small`/`Medium`/`Large`, [src/ThroughlineBuild.Contracts/Models/WorkerSize.cs:8-13](../../src/ThroughlineBuild.Contracts/Models/WorkerSize.cs#L8-L13)) is the worker-domain size signal, distinct from the ticket-domain `Size`.
-
-New **interfaces** in `ThroughlineBuild.Contracts` for the connected-setup / provisioning surface (used by `init`/`setup`): `IProjectResolver` ([IProjectResolver.cs:28](../../src/ThroughlineBuild.Contracts/IProjectResolver.cs#L28)), `IProjectDiscovery` ([IProjectDiscovery.cs:15](../../src/ThroughlineBuild.Contracts/IProjectDiscovery.cs#L15)), `ITicketingProvisioner` ([ITicketingProvisioner.cs:14](../../src/ThroughlineBuild.Contracts/ITicketingProvisioner.cs#L14)), and `ITicketingConnectivity` ([ITicketing.cs:127](../../src/ThroughlineBuild.Contracts/ITicketing.cs#L127)) - all satisfied by `PlaneTicketingClient` / `ProjectResolver`. See [07-contracts.md](07-contracts.md).
+Enums: `TicketState` (7), `Size` (3), `Risk` (3), `Phase` (**11** - `Gate` added; [Phase.cs:3](../../src/ThroughlineBuild.Contracts/Models/Phase.cs#L3)), `Status` (4: `Ok`/`NeedsRework`/`Failed`/`Escalate`), `VerdictKind` (3), `EventKind` (**14** - see the JSONL section), `ChainOutcome` (20), `DiffKind` (4), `DraftOutcome`, `WorkerSize` (3), `CheckRole` (3), `VerifierKind` (7), `SmokeSignalKind` (3), `ProviderErrorKind` (2). The two size enums still coexist: ticket-domain `Size` and worker-domain `WorkerSize`, now joined by `ModelTier` for the per-size model mapping. Status: Functional.
 
 ### `ThroughlineBuild.Phases`
 
-The phase classes are the next-most-public surface - any new orchestrator (e.g., an MCP server) would consume them directly rather than reinvent the orchestration.
-
-| Class | Constructor takes | Returns |
-|---|---|---|
-| `PlanPhase` | `ITicketing, IWorkerAgent, IEventSink, BuildOptions, IGitClient?, ProjectContext?` | `PlanResult(Success, TicketId, RiskLabel, SizeLabel, PlannedAtSha, FailureReason)` |
-| `ImplementPhase` | same + optional `ImplementPhaseOptions` (for rework feedback) | `ImplementResult(Success, TicketId, CommitSha, BranchName, WorktreePath, FailureReason, ReworkRoundNumber)` |
-| `ReviewPhase` | same + `ReviewOptions` + optional `IVerifier`/`AutomatedChecksRunner` overrides | `ReviewResult(Success, TicketId, VerdictKind?, VerdictRationale, ChecksFailed[], FailureReason)` |
-| `ShipPhase` | `ITicketing, IEventSink, BuildOptions, ShipOptions (now carries `TargetBranch`), IGitClient?, AutomatedChecksRunner?, ConflictMarkerScannerFn?, WorktreeDecrufter?, processPathProvider?, TextWriter? progressWriter, bool verbose` | `ShipResult(Success, TicketId, MergedSha?, FailureReason, FailedAt?)` |
-| `ChainPhase` | `ITicketing, IEventSink, BuildOptions, planFactory, implementFactory, reviewFactory, shipFactory, sessionIdGenerator?, workingDirectory?` | `ChainResult(TicketId, Steps[], Outcome, TotalDuration, FinalRationale?)` |
-| `ReworkPhase` | `ITicketing, IWorkerAgent, IEventSink, BuildOptions, IReviewFeedbackRetriever, ReworkPhaseOptions, IGitClient?, ProjectContext?` | `ReworkResult(TicketId, Outcome, ImplementResult?, FailureReason, FeedbackSource)` |
-| `NewPhase` | `ITicketing, IEventSink, BuildOptions` | `NewResult(Id, Uuid, ValidationWarnings[])` |
-| `DraftPhase` | `IWorkerAgent, BuildOptions` | `DraftResult(Outcome, BodyMarkdown?, FailureReason)` |
-| `DecomposePhase` | `ITicketing, IWorkerAgent, IEventSink, BuildOptions, IGitClient?, ProjectContext?` | decompose result (writes a `[decomposed_at: <sha>]` marker; see [src/ThroughlineBuild.Phases/DecomposePhase.cs](../../src/ThroughlineBuild.Phases/DecomposePhase.cs)) |
-
-`ScaffoldPhase` lives in `ThroughlineBuild.Scaffold`, not `ThroughlineBuild.Phases` (see that project's surface below). Status: **Functional**. Each phase also implements `IWorkflowPhase` via an explicit interface method that adapts the typed result to a generic `PhaseResult`. `ThroughlineBuild.Phases` also exposes the parallel/dependency-ordered chain machinery (`ParallelDispatcher`, `AncestorSkipFilter`, `EarlyExitManifest`, `TicketGraph`) and the op-30 gate: `GatePhase` (a `public class`, chain-internal - not a dispatched verb, does not implement `IWorkflowPhase`) with its `GateOptions(Checks)` input and `GateOutcome(Passed, CheckResults, SmokeSignals, HardFailReason?)` output ([src/ThroughlineBuild.Phases/GatePhase.cs:9-23](../../src/ThroughlineBuild.Phases/GatePhase.cs#L9-L23)), plus `BatchCommitVerifier`.
+The phase classes are the next-most-public surface. Eleven phase/orchestration classes: `PlanPhase`, `ImplementPhase`, `ReviewPhase`, `ShipPhase`, `ChainPhase`, `ReworkPhase`, `NewPhase`, `DraftPhase`, `DecomposePhase`, and - new - the `GatePhase` class ([GatePhase.cs:34](../../src/ThroughlineBuild.Phases/GatePhase.cs#L34)), which runs between implement and review in the chain loop: validates the `CompletionClaim`, runs the configured checks once against the warm worktree, collects `SmokeSignal`s, runs the consumes-provides preflight, and classifies hard-fails as code vs environment via `GateControlProber`. Its `GateOutcome` record ([GatePhase.cs:12-27](../../src/ThroughlineBuild.Phases/GatePhase.cs#L12-L27)) carries `Vacuous` and `EnvironmentFailure` flags that drive the no-rework chain stops. Each phase takes its dependencies via constructor (no DI container) and returns a typed result record declared next to it; each also implements `IWorkflowPhase`. The parallel/dependency-ordered chain machinery (`ParallelDispatcher`, `AncestorSkipFilter`, `EarlyExitManifest`, `TicketGraph`, `BatchCommitVerifier`, `ReworkRoundManifest`, `WorkingTreeHygieneGate`) is also public here. The Cli-side `ChainPhaseComposition` ([ChainPhaseComposition.cs](../../src/ThroughlineBuild.Cli/ChainPhaseComposition.cs)) is the extracted, testable composition root for chain wiring. Status: Functional.
 
 ### `ThroughlineBuild.Briefs`
 
-Static `*BriefBuilder.Build(...)` factories. Each takes an `agentName` first argument, loads the matching per-agent Markdown template from embedded resources, and substitutes named placeholders. There is now a `DecomposeBriefBuilder` alongside the others.
+Static `*BriefBuilder.Build(...)` factories: `PlanBriefBuilder`, `ImplementBriefBuilder`, `ReviewBriefBuilder`, `DecomposeBriefBuilder`, `DraftBriefBuilder`, plus the new `BatchImplementBriefBuilder` and `BatchReviewBriefBuilder` for warm batch sessions, and `PreloadedContextBuilder` ([PreloadedContextBuilder.cs](../../src/ThroughlineBuild.Briefs/PreloadedContextBuilder.cs)), which inlines op-doc `Preload:` paths and `convention_files` contents into implement briefs from the live worktree (exp-2/3; gated by `[project].preload_context`).
 
-| Builder | Inputs | Output |
-|---|---|---|
-| `PlanBriefBuilder.Build(agentName, ticket, repoState, projectContext?)` | agent + ticket + main SHA + top-level entries | `Brief(Phase.Plan, ...)` |
-| `ImplementBriefBuilder.Build(agentName, ticket, repoState, branchName, worktreePath, projectContext?, reviewFeedback?)` | agent + full ticket context + worktree coords + optional prior review feedback | `Brief(Phase.Implement, ...)` |
-| `ReviewBriefBuilder.Build(agentName, ticket, diff, implementerResult, checkResults, projectContext?)` | agent + ticket + diff with patches + implementer summary + check results | `Brief(Phase.Review, ...)` with patch content budgeted |
-| `DecomposeBriefBuilder.Build(agentName, ...)` | agent + ticket context | `Brief(Phase.Decompose-equivalent, ...)` |
-| `DraftBriefBuilder.Build(agentName, operatorText)` | agent + free-form operator text | rendered `string` (caller wraps in a `Brief`) |
-
-The caller passes `_worker.Name` as `agentName` so the brief matches the dispatched agent (e.g. [PlanPhase.cs:83](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L83)). Templates live under per-agent subdirectories at [src/ThroughlineBuild.Briefs/Templates/](../../src/ThroughlineBuild.Briefs/Templates/): `claude-code/`, `codex/`, `gemini/`, `copilot/`, each holding `plan.md`, `implement.md`, `review.md`, `decompose.md`, `draft.md`. `TemplateLoader.Load(agentName, templateName)` ([src/ThroughlineBuild.Briefs/TemplateLoader.cs:14-33](../../src/ThroughlineBuild.Briefs/TemplateLoader.cs#L14-L33)) resolves the embedded resource (hyphens in the agent name map to underscores in the resource path). Substitution uses `{{key}}` syntax via `TemplateExtensions.Substitute` ([src/ThroughlineBuild.Briefs/TemplateExtensions.cs:5-18](../../src/ThroughlineBuild.Briefs/TemplateExtensions.cs#L5-L18)). The directory layout and resource-name mapping are a public-by-convention surface: renaming a subdirectory breaks the embedded-resource lookup at runtime.
+Templates live under per-agent subdirectories at [Templates/](../../src/ThroughlineBuild.Briefs/Templates/): `claude-code/`, `codex/`, `gemini/`, `copilot/`, each now holding **seven** templates (`plan`, `implement`, `review`, `decompose`, `draft`, `batch-implement`, `batch-review`), plus a `shared/` directory of ten cross-agent fragments (WORKER_RESULT envelope stubs, obsolete-detection blocks, patch-fetch directives, batch rework guidance) that the per-agent templates compose in - the shared fragments exist so the envelope contract is written once, not 4x. `TemplateLoader.Load(agentName, templateName)` ([TemplateLoader.cs:14](../../src/ThroughlineBuild.Briefs/TemplateLoader.cs#L14)) resolves embedded resources (hyphens map to underscores); substitution is `{{key}}` via `TemplateExtensions.Substitute`. The directory layout and resource-name mapping remain a public-by-convention surface. Status: Functional.
 
 ### `ThroughlineBuild.Workers.Common`
 
-This is the shared worker surface. Public type: nothing exported - the `WORKER_RESULT` parser is `internal`. The `WorkerResultParser` class moved here from `Workers.ClaudeCode` ([src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs)) and is `internal static` - it is exposed to the four worker assemblies and their test assemblies via `InternalsVisibleTo` ([ThroughlineBuild.Workers.Common.csproj:13-37](../../src/ThroughlineBuild.Workers.Common/ThroughlineBuild.Workers.Common.csproj#L13-L37)), not to the wider solution. All four agents call it to scan their output for the envelope.
+The shared worker surface. Two genuinely public types now: the `ProviderErrorClassifier` class ([ProviderErrorClassifier.cs:20](../../src/ThroughlineBuild.Workers.Common/ProviderErrorClassifier.cs#L20)), whose `Classify` method turns a failed `WorkerResult` into a `ProviderError?` (consumed by `WorkerAgentReviewer` and `ClaudeCodeAgent`), and `ProcessStreamEncoding` ([ProcessStreamEncoding.cs:17](../../src/ThroughlineBuild.Workers.Common/ProcessStreamEncoding.cs#L17)), which pins worker subprocess stdio to UTF-8 (TLB-439). Everything else is `internal`: `WorkerResultParser`, `CompletionClaimParser`, `FencedBlockResolver`, `MarkdownRenderer`, `WorkerDiagnostics`. The internals are shared via `InternalsVisibleTo` ([ThroughlineBuild.Workers.Common.csproj:13-52](../../src/ThroughlineBuild.Workers.Common/ThroughlineBuild.Workers.Common.csproj#L13-L52)) with the four worker assemblies, their tests, and - new - `ThroughlineBuild.Phases` and `ThroughlineBuild.Verification`, which now consume the parser internals directly (claim resolution, fenced-block resolution).
 
-The `WORKER_RESULT` envelope contract (what a worker must emit at the end of its session) is enforced at parse time by `WorkerResultParser.TryParse` ([WorkerResultParser.cs:113](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs#L113); the DTO is [WorkerResultParser.cs:13-35](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs#L13-L35)). Shape:
+The `WORKER_RESULT` envelope contract (what a worker must emit at the end of its session) is documented in the doc comment block of the `WorkerResultParser` class ([WorkerResultParser.cs:78-115](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs#L78-L115)). Shape:
 
 ```json
 {
@@ -196,51 +171,46 @@ The `WORKER_RESULT` envelope contract (what a worker must emit at the end of its
 }
 ```
 
-Parser rules ([WorkerResultParser.cs:113-247](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs#L113-L247)): the literal marker line `WORKER_RESULT` precedes the JSON payload (optionally fenced in triple backticks, with or without a `json` tag); multiple markers are tolerated and the LAST valid envelope wins (the first is often a template echo); `status` and a non-empty `summary` are required (a missing `status` fails loudly rather than defaulting to `Ok`).
+Parser rules, all in `WorkerResultParser.TryParse` ([WorkerResultParser.cs:117](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs#L117)):
 
-**Batch `tickets` array (TLB-499..510).** A batch implement session emits a top-level `tickets` array; each element parses into a `BatchTicketResult` ([src/ThroughlineBuild.Contracts/Models/BatchTicketResult.cs](../../src/ThroughlineBuild.Contracts/Models/BatchTicketResult.cs): `ticket_id`, `commit_sha`, `stack_position` int, `files_changed`, `summary_ref`) and lands on `WorkerResult.Tickets` ([src/ThroughlineBuild.Contracts/Models/WorkerResult.cs:10](../../src/ThroughlineBuild.Contracts/Models/WorkerResult.cs#L10)). There is also a dedicated `TryParseBatch` outcome ([WorkerResultParser.cs:248](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs#L248)) where the `tickets` array is required and non-empty. `ChainPhase` consumes these to post per-ticket markers and verify commit order (`BatchCommitVerifier`).
+- The literal marker line `WORKER_RESULT` precedes the JSON payload (optionally fenced in triple backticks); multiple markers are tolerated and the LAST valid envelope wins.
+- **Full-transcript parsing (945f4b4, new):** the input is no longer just the final message. `ClaudeCodeAgent.TryExtractAssistantTranscript` ([ClaudeCodeAgent.cs:268](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L268)) reconstructs the complete assistant-visible text from every `type=assistant` NDJSON event and feeds THAT to the parser (falling back to the envelope `result` field), so a worker that emits blocks across several messages still parses. Correspondingly the fenced-block pre-pass in `TryScanFencedBlocks` ([WorkerResultParser.cs:445](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs#L445)) scans up to the LAST marker (not the first) and duplicate block names are last-wins.
+- **Trailing narration tolerated:** `ExtractLeadingJsonValue` ([WorkerResultParser.cs:357](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs#L357)) takes the first complete JSON value after the marker and ignores anything after it.
+- `status` and a non-empty `summary` are required; the specific "valid JSON object but no `status` key" failure is flagged as `MissingStatus` so agents can tag the result `envelope_status=missing_status` and `ImplementPhase` can salvage a committed-but-non-conforming session (TLB-471/476).
+- An optional top-level `tickets` array (batch implement) is validated per-entry; `TryParseBatch` ([WorkerResultParser.cs:252](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs#L252)) is the batch-session variant that REQUIRES it.
 
-**`COMPLETION_CLAIM` fenced block (op-30).** The implement worker additionally emits a `COMPLETION_CLAIM` fenced payload block and references it via a `completion_claim_ref` metadata field. `ImplementPhase` resolves the ref through `FencedBlockResolver.TryResolveRef` and parses the block with `CompletionClaimParser.TryParse` ([src/ThroughlineBuild.Workers.Common/CompletionClaimParser.cs:37-90](../../src/ThroughlineBuild.Workers.Common/CompletionClaimParser.cs#L37-L90), consumed at [ImplementPhase.cs:410-432,648-671](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L410-L432)); a missing/invalid claim triggers a single re-ask brief before failing. The parsed `CompletionClaim` ([src/ThroughlineBuild.Contracts/Models/CompletionClaim.cs:18-34](../../src/ThroughlineBuild.Contracts/Models/CompletionClaim.cs#L18-L34)) carries four required arrays - `provides`, `consumes`, `ac_bindings` (each an `AcBinding(ac_ref, VerifierKind)`), `tests_added` - plus three UNENFORCED forward-compat hook fields (`RedGreenKind`, `Tier`, `RoutingKey`) ignored by every consumer. `VerifierKind` ([CompletionClaim.cs:6](../../src/ThroughlineBuild.Contracts/Models/CompletionClaim.cs#L6)) is `Test, GrepPresent, GrepAbsent, File, Exit, Golden` (hard-gating) plus `Smoke` (advisory). The `GatePhase` (op-30) is what hard-gates against the gating-check results derived from this claim.
-
-**Fenced-block payload protocol (op-27, TLB-333/334).** Large markdown payloads (plan bodies, implement summaries, review critiques, draft bodies) are no longer JSON-string fields - the JSON envelope grew brittle when bodies contained quotes/newlines. Instead the worker emits named fenced blocks *before* the `WORKER_RESULT` marker, delimited by `<<<NAME_START` / `<<<NAME_END` (block names must match `^[A-Z][A-Z0-9_]*$`), and the envelope references them by a `*_ref` metadata field. The parser runs a **fenced-block pre-pass** over stdout up to the marker, captures the blocks into a `Dictionary<string,string>`, and returns them alongside the parsed result; `FencedBlockResolver.TryResolveRef(blocks, metadata, "<field>_ref", out content, out error)` later resolves a ref field to its block body. The per-phase block names and ref fields:
+**Fenced-block payload protocol (op-27).** Large markdown payloads are emitted as named fenced blocks (`<<<NAME_START` / `<<<NAME_END`, names matching `^[A-Z][A-Z0-9_]*$`) before the marker, referenced by `*_ref` metadata fields, captured into `WorkerResult.Blocks`, and resolved by `FencedBlockResolver.TryResolveRef` ([WorkerResultParser.cs:664-705](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs#L664-L705)). Per-phase block names and consumers:
 
 | Phase | Block name | Metadata ref field | Consumer |
 |---|---|---|---|
 | plan | `PLAN_BODY` | `plan_body_ref` | `PlanPhase` -> `MarkdownRenderer.Render` -> Plane description |
 | implement | `IMPLEMENT_SUMMARY` | `summary_ref` | `ImplementPhase` -> rendered HTML comment (optional) |
+| implement | `COMPLETION_CLAIM` | `completion_claim_ref` | `ImplementPhase` -> `CompletionClaimParser` -> `GatePhase` (new, TLB-505) |
 | review | `REVIEW_CRITIQUE` | `rationale_ref` | `WorkerAgentReviewer` -> `Verdict.Rationale` (falls back to direct `rationale`) |
 | draft | `DRAFT_BODY` | `body_markdown_ref` | `DraftPhase` (falls back to legacy `body_markdown`) |
+| batch implement | per-ticket summary blocks | `tickets[].summary_ref` | `ChainPhase` batch path |
 
-`metadata` is otherwise the extension point for phase-specific scalar fields - `risk_label`, `size_label`, `planned_at_sha` for plan; `commit_sha` for implement; `verdict`, `checks_failed` for review. Required key sets are enforced per-phase, not at parse. The draft and review consumers retain backward-compatible fallbacks to the pre-op-27 direct-string fields.
+Since 3cbf64c the brief templates instruct workers to emit the blocks AND the envelope **in one final message**; combined with full-transcript parsing this closed the truncated-envelope failure class. The `COMPLETION_CLAIM` block body is JSON, not markdown - parsed by `CompletionClaimParser.TryParse` ([CompletionClaimParser.cs:37](../../src/ThroughlineBuild.Workers.Common/CompletionClaimParser.cs#L37)), which requires all four arrays (`provides`, `consumes`, `ac_bindings`, `tests_added`, each possibly empty). A null claim (pre-claim-format worker) is allowed by the gate.
 
-**`MarkdownRenderer` (TLB-335).** Resolved block bodies are markdown; `MarkdownRenderer.Render` ([src/ThroughlineBuild.Workers.Common/MarkdownRenderer.cs](../../src/ThroughlineBuild.Workers.Common/MarkdownRenderer.cs)) turns them into the HTML Plane stores. It is a hand-rolled CommonMark *subset* (headings, paragraphs, fenced/inline code, ordered+unordered lists, bold/italic, links, with HTML escaping) chosen over Markdig to stay AOT-safe with zero reflection. Constructs outside the subset (tables, blockquotes, strikethrough) pass through as literal text.
+`metadata.escalation` (obsolete escalation with required `subsumed_by`) and `metadata.llm_usage` are unchanged in shape; `MarkdownRenderer.Render` ([MarkdownRenderer.cs:9](../../src/ThroughlineBuild.Workers.Common/MarkdownRenderer.cs#L9)) remains the hand-rolled CommonMark-subset renderer for block bodies into Plane HTML. Status: Functional.
 
-Two `metadata` keys are parsed structurally:
+### `ThroughlineBuild.Workers.ClaudeCode` / `.Codex` / `.Gemini` / `.Copilot`
 
-- `metadata.escalation` (TLB-278): present when `status == Escalate` and the worker wants to convey structured escalation context. When `escalation.reason == "obsolete"` the parser requires a `subsumed_by` object with non-empty `commit` (string), `files` (non-empty array), and `rationale` (string), or the parse fails with a `ValidationError`. Unknown reasons pass through without a `subsumed_by` check ([WorkerResultParser.cs:173-197](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs#L173-L197)). Downstream, `ObsoleteRatifier` and `ChainPhase` consume `subsumed_by.commit` / `files` / `rationale` to decide whether to auto-resolve the ticket ([src/ThroughlineBuild.Verification/ObsoleteRatifier.cs:88-103](../../src/ThroughlineBuild.Verification/ObsoleteRatifier.cs#L88-L103)).
-- `metadata.llm_usage`: each agent merges this dictionary onto the parsed result. It carries `model`, `vendor`, `wall_clock_ms`, token counts, and (when the vendor reports it) `cost_usd`. The `vendor` string is per-agent: `anthropic` (Claude Code), `openai` (Codex), `google` (Gemini), `github` (Copilot). See [11-llm-architecture.md](11-llm-architecture.md) for the per-agent capture detail.
-
-### `ThroughlineBuild.Workers.ClaudeCode`
-
-Public types: `ClaudeCodeAgent` (the `IWorkerAgent`), `ClaudeCodeOptions`, `ClaudeCodeJsonEnvelope`, `ClaudeCodeStreamEvent`, `ClaudeCodeProgressDigester` (the public `IWorkerProgressDigester`; `WorkerProgressDigest` is now an internal static helper it delegates to), `ClaudeCodeJsonContext` (AOT source-gen). `WorkerResultParser` no longer lives here - it moved to `Workers.Common` (above).
-
-### `ThroughlineBuild.Workers.Codex` / `.Gemini` / `.Copilot`
-
-Each exports its `IWorkerAgent` plus an `*Options` record and AOT JSON DTO/context: `CodexAgent` + `CodexOptions` + `CodexProgressDigester`; `GeminiAgent` + `GeminiOptions` + `GeminiProgressDigester` (+ `GeminiResultEnvelope`); `CopilotAgent` + `CopilotOptions` (no digester - `CopilotAgent.Digester` returns null). All four emit the same `WORKER_RESULT` envelope contract through `Workers.Common`.
+Each exports its `IWorkerAgent` plus an `*Options` record, AOT JSON contexts, and (except Copilot) a progress digester. All four emit the same `WORKER_RESULT` contract through `Workers.Common`, print an agent/model startup line (TLB-468), and surface in-band worker errors instead of blank stderr (TLB-490). The Codex agent additionally carries reasoning-effort plumbing (`ModelTier.Effort`, op-33) and a model probe (`CodexModelProbe`) consumed by `init`/`models refresh`. The Claude agent fails fast with a clear classification when its configured model is unresolvable (TLB-544). Status: Functional.
 
 ### `ThroughlineBuild.Plane`
 
-Public type: `PlaneTicketingClient` + `PlaneClientOptions` + `PlaneApiException`. Internal model types in `PlaneApiModels.cs`. See [03-external-dependencies.md](03-external-dependencies.md) for endpoint detail.
+Public types: `PlaneTicketingClient` (implements `ITicketing`, `ITicketingConnectivity`, `IProjectDiscovery`, `ITicketingProvisioner`), `ProjectResolver` (implements `IProjectResolver`; [ProjectResolver.cs:13](../../src/ThroughlineBuild.Plane/ProjectResolver.cs#L13)), `PlaneClientOptions`, `PlaneApiException` (now carries `RetryAfter`), `RequestThrottle`. Retry policy is two-layered in `PlaneClientOptions` ([PlaneClientOptions.cs](../../src/ThroughlineBuild.Plane/PlaneClientOptions.cs)): HTTP-status retries (`MaxRetryAttempts`, 429/5xx, Retry-After-aware) and - new, TLB-545 - transport retries (`TransportRetryAttempts` at `#L47`, DNS/connect/TLS/timeout) that end in a typed `TicketingUnavailableException`. See [03-external-dependencies.md](03-external-dependencies.md). Status: Functional.
 
 ### `ThroughlineBuild.EventLog`
 
-Public types: `JsonlEventSink`, `RecordingEventSink` (mirrors emissions into memory + exposes `Snapshot()`), `EventLogOptions`, `SessionContext`, `SessionFileNameBuilder`, `ReviewFeedbackRetriever`, `EventLineDto` (`internal sealed class` - not actually public outside the assembly), and `EventLogJsonContext` (AOT source-gen).
+Public types: `JsonlEventSink`, `RecordingEventSink`, `EventLogOptions`, `SessionContext`, `SessionFileNameBuilder`, `ReviewFeedbackRetriever`; `EventLineDto` remains `internal` ([EventLineDto.cs:12](../../src/ThroughlineBuild.EventLog/EventLineDto.cs#L12)). `ReviewFeedbackRetriever.GetLatestRework` ([ReviewFeedbackRetriever.cs:30](../../src/ThroughlineBuild.EventLog/ReviewFeedbackRetriever.cs#L30)) now also reconstructs persisted failing-check evidence - see the JSONL section.
 
 #### JSONL event-log schema
 
-Each line is a serialized `EventLineDto` ([src/ThroughlineBuild.EventLog/EventLineDto.cs:12-36](../../src/ThroughlineBuild.EventLog/EventLineDto.cs#L12-L36)) wrapping a `WorkflowEvent` ([src/ThroughlineBuild.Contracts/Models/WorkflowEvent.cs:3-9](../../src/ThroughlineBuild.Contracts/Models/WorkflowEvent.cs#L3-L9)). The six original fields keep their PascalCase names (`SessionId`, `Timestamp`, `Kind`, `TicketId`, `Phase`, `Data`); the four newer session-level fields are snake_case and `[JsonIgnore(WhenWritingNull)]`, so a sink without a `SessionContext` emits the pre-TLB-147 shape unchanged: `project_id`, `project_name`, `workspace_slug`, `build_version`.
+Each line is a serialized `EventLineDto` wrapping a `WorkflowEvent` ([WorkflowEvent.cs:3-9](../../src/ThroughlineBuild.Contracts/Models/WorkflowEvent.cs#L3-L9)). The six original fields keep PascalCase names; the four newer session-level fields are snake_case and `[JsonIgnore(WhenWritingNull)]` (`project_id`, `project_name`, `workspace_slug`, `build_version`), preserving the pre-TLB-147 shape for sinks without a `SessionContext`.
 
-`Kind` serializes as the integer ordinal of `EventKind`. The enum has grown to 14 members ([WorkflowEvent.cs:14](../../src/ThroughlineBuild.Contracts/Models/WorkflowEvent.cs#L14), integer map comment at [:11-13](../../src/ThroughlineBuild.Contracts/Models/WorkflowEvent.cs#L11-L13)); the ordinals are load-bearing for the `analyze-event-log` and `token-audit` tools:
+`Kind` serializes as the integer ordinal of `EventKind`. The enum now has **14 members** ([WorkflowEvent.cs:14](../../src/ThroughlineBuild.Contracts/Models/WorkflowEvent.cs#L14)); ordinals are pinned in the comment above it and are load-bearing for the `analyze-event-log` and `token-audit` tools:
 
 | Ordinal | EventKind |
 |---|---|
@@ -254,69 +224,71 @@ Each line is a serialized `EventLineDto` ([src/ThroughlineBuild.EventLog/EventLi
 | 7 | `ChainEnd` |
 | 8 | `ReworkRound` |
 | 9 | `TicketSubsumed` |
-| 10 | `TargetAutoRebased` (renamed from `MainAutoRebased`; ordinal unchanged) |
+| 10 | `TargetAutoRebased` |
 | 11 | `DispatchStart` |
 | 12 | `DispatchEnd` |
-| 13 | `CostLedger` (TLB-510; emitted per gate-engaged chain ticket with `Phase = Gate`) |
+| 13 | `CostLedger` (new, TLB-510) |
 
-`DispatchStart` / `DispatchEnd` (11/12) frame parallel multi-ticket chain dispatch. `CostLedger` (13) carries gate-cost telemetry (`gate_wall_ms`, `gate_attributable_rework_rounds`, `cascade_caught`=0, `false_fails`=0, optional rework token counts) and is written-but-not-yet-consumed (see [05-state-and-persistence.md](05-state-and-persistence.md)). `Data` is an arbitrary `IReadOnlyDictionary<string, object>` whose contents are per-`Kind` and not statically typed. The format is documented in [docs/event-log-format.md](../event-log-format.md). The `Phase` enum these events carry also grew - it now has 11 members ([Phase.cs:3](../../src/ThroughlineBuild.Contracts/Models/Phase.cs#L3)): `Plan, Implement, Review, Ship, Chain, New, Command, Draft, Scaffold, Decompose, Gate` (`Gate` is new, op-30).
+`CostLedger` (13) is the cost/telemetry workhorse and, like `GateFailure`, carries a `kind` discriminator in `Data`: the per-ticket gate ledger emitted by `ChainPhase.EmitCostLedgerAsync` ([ChainPhase.cs:1024](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1024) - `gate_wall_ms`, gate-attributable rework rounds/tokens, `false_fails`, with `Phase: Phase.Gate`), `context_attribution` (per-turn context telemetry from claude-code workers, emitted in `ImplementPhase` at [ImplementPhase.cs:383-401](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L383-L401)), and `preload_summary` (pre-load telemetry from `ImplementPhase.BuildAndReportPreloadAsync` at [ImplementPhase.cs:644](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L644)).
 
-`GateFailure` (ordinal 4) is the workhorse refusal event: it carries a `kind` discriminator in its `Data` identifying which gate refused. The discriminator set has grown with the op-29 hygiene-gate and worktree-attribution work and now includes (non-exhaustive) `hygiene_gate` (pre-implement), `hygiene_gate_preflight` (chain outermost preflight), `pre_flight_hygiene` (pre-ship), `wrong_worktree_branch` (ship onto wrong/detached branch), `dirty_worktree_after_review` (post-review cleanliness hard-fail), `implemented_at_superseded` (review marker behind worktree HEAD), `gating_checks_failed` (op-30 completion-claim/gating-check hard-fail; the gate also posts a `[gate: hard-fail]` comment and transitions `InReview -> InProgress`), and `integration_worktree_unavailable` (chain integration worktree could not be created; the chain stops with `ParentStoppedEarly` - the prior `shared_worktree_unavailable` fallback kind was removed). The ordinal stays 4; tooling that buckets by `Kind` is unaffected, but anything that *reads* the discriminator must tolerate new `kind` values being added.
+The `GateFailure` (4) discriminator set keeps growing; new values since the last refresh include `claim_schema_invalid`, `setup_failed`, `gate_control_run` (all `GatePhase`), `preload_file_not_found`, `preload_empty` (`ImplementPhase`), alongside the existing hygiene/worktree kinds. Anything reading the discriminator must tolerate new `kind` values.
+
+**`VerifierVerdict` now persists the oracle (7af36fb, new):** when the verdict is Rework, `ReviewPhase` writes the cited failing checks' raw evidence (command line, exit code, output tails, re-capped) into the event's `Data` under `checks_failed_details` ([ReviewPhase.cs:457-476](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L457-L476)); `ReviewFeedbackRetriever.ParseFailedCheckDetails` ([ReviewFeedbackRetriever.cs:186](../../src/ThroughlineBuild.EventLog/ReviewFeedbackRetriever.cs#L186)) reconstructs them so a rework resumed in a fresh process still hands the worker the check's own output. Advisory check failures are excluded from `checks_failed` by construction (see 07-contracts).
+
+The format is documented in [docs/event-log-format.md](../event-log-format.md).
 
 ### `ThroughlineBuild.Helpers`
 
-Pure helpers + a few I/O-bearing helpers: `ConflictMarkerScanner`, `DocOnlyDetector`, `DriftComparator`, `LlmUsageFlattener`, `MainWorktreeResolver`, `MarkerParser`, `PhaseSummary` + `PhaseSummaryBuilder` + `PhaseSummaryRenderer`, `PhaseWorktreeLayout`, `SlugBuilder`, `WorktreeDecrufter`. `DocOnlyDetector` and `DriftComparator` are tested but unused in production.
+Pure helpers plus a few I/O-bearing ones: `ConflictMarkerScanner`, `DocOnlyDetector`, `DriftComparator`, `LlmUsageFlattener`, `MainWorktreeResolver`, `MarkerParser`, `PhaseSummary`/`PhaseSummaryBuilder`/`PhaseSummaryRenderer`, `PhaseWorktreeLayout`, `SlugBuilder`, `WorktreeDecrufter`, `TicketTreeWalker`, `ParentDetector` - and new since the last refresh: `BaselineCache`, `ChainCommitRange`, `ChainWorktreeSweeper` (the `sweep` engine), `MainWorktreeLock`, `PrefixedTextWriter`, `WorkerSizeMapper`. `DocOnlyDetector` and `DriftComparator` remain tested but unused in production.
 
 ### `ThroughlineBuild.Git`
 
-Public: `ProcessGitClient` (implements `IGitClient`), `BaseRefResolver`.
+Public: `ProcessGitClient` (implements `IGitClient`; hardened against subprocess deadlock since 6b78877), `BaseRefResolver`.
 
 ### `ThroughlineBuild.Verification`
 
-Public: `AutomatedChecksRunner`, `WorkerAgentReviewer` (implements `IVerifier`; renamed from the former `ClaudeCodeReviewer` - it is agent-agnostic and wraps whatever `IWorkerAgent` the caller injects, [src/ThroughlineBuild.Verification/WorkerAgentReviewer.cs:14-39](../../src/ThroughlineBuild.Verification/WorkerAgentReviewer.cs#L14-L39)), `ObsoleteRatifier` (implements `IObsoleteRatifier`). Newer op-30 gate-support types: `PreComputedChecksRunner` (feeds the gate's already-run check results into review without re-running them), `SmokeCollector` (gathers advisory `SmokeSignal`s), plus the helpers `ExecutableResolver` and `RatificationPromptLoader`.
+Public: `AutomatedChecksRunner` (now role-aware), `WorkerAgentReviewer` (the `IVerifier`; exposes `LastProviderError` for the TLB-527 ReviewUnavailable path, [WorkerAgentReviewer.cs:33](../../src/ThroughlineBuild.Verification/WorkerAgentReviewer.cs#L33)), `ObsoleteRatifier`, and the new gate-integrity types: `SmokeCollector` ([SmokeCollector.cs:11](../../src/ThroughlineBuild.Verification/SmokeCollector.cs#L11) - diff facts + grep signals, TLB-503), `GateVacuityProver` ([GateVacuityProver.cs:31](../../src/ThroughlineBuild.Verification/GateVacuityProver.cs#L31) - canary-driven non-vacuity proof on first green), `GateControlProber` ([GateControlProber.cs:32](../../src/ThroughlineBuild.Verification/GateControlProber.cs#L32) - base-ref control run, TLB-538), `PreComputedChecksRunner`, `ExecutableResolver`, `RatificationPromptLoader` (the obsolete-ratification prompt moved to an embedded template under this project's `Templates/`).
 
 ### `ThroughlineBuild.Scaffold`
 
-Public: `ScaffoldPhase`, `OpDocParser`, `OpDocValidator`, `BriefHtmlRenderer`, `ScaffoldOptions`, `ScaffoldResult`, `ParseResult`, `ValidationResult`, plus `OpDoc` / `Plan` / `Brief` / `DispatchEntry` / `OpDocParseError` records in `OpDocTypes.cs`.
+Public: `ScaffoldPhase`, `OpDocParser`, `OpDocValidator`, `BriefHtmlRenderer`, `ScaffoldOptions`, `ScaffoldResult`, `ParseResult`, `ValidationResult`, the `OpDoc`/`Plan`/`Brief`/`DispatchEntry` records in `OpDocTypes.cs`, and the new profile + spec machinery: the `ProjectProfile` record ([ProjectProfile.cs:16](../../src/ThroughlineBuild.Scaffold/ProjectProfile.cs#L16) - language/framework/package-manager/commands plus `ReviewChecks`/`RegressionChecks` as role-tagged `ProfileCheck`s with optional canaries, plus `ConventionFiles`), `ScaffoldProfileDeriver`, `OpDocSkeletonGenerator`, `OpDocDocsLoader` (the embedded op-doc spec), and prompt/template loaders. The op-doc `Brief` record gained the positive-only `PreloadFiles` property ([OpDocTypes.cs:43](../../src/ThroughlineBuild.Scaffold/OpDocTypes.cs#L43)) parsed from a `Preload:` label. Status: Functional.
 
 ### `ThroughlineBuild.Commands`
 
-Public: the `ITicketCommand` implementations and runners listed in [01-inventory.md](01-inventory.md). `TicketCommandRegistry` (a `Dictionary<string, ITicketCommand>` wrapper) is the dispatch surface. Also exposes the chain dispatch machinery (`IChainRunner` / `DefaultChainRunner`, `IReworkRunner` / `DefaultReworkRunner`, `SequentialChainDispatcher`) and `ListCommand`.
+Public: the `ITicketCommand` implementations (`AmendCommand`, `ChainCommand`, `CloseCommand`, `DeferCommand`, `ListCommand`, `NewCommand`, `ReopenCommand`, `ReworkCommand`, `ScaffoldCommand`), `TicketCommandRegistry`, the chain dispatch machinery (`IChainRunner`/`DefaultChainRunner`, `IReworkRunner`/`DefaultReworkRunner`, `SequentialChainDispatcher`), and template loaders.
 
 ### `ThroughlineBuild.JudgmentSlots`
 
-Public: `ReasonTranslator` only. It is constructed with an `ILlmClient`; its default model id is a `const` ([src/ThroughlineBuild.JudgmentSlots/ReasonTranslator.cs:15](../../src/ThroughlineBuild.JudgmentSlots/ReasonTranslator.cs#L15)), with a second constructor accepting a model-id override.
+Public: `ReasonTranslator` only, constructed with an `ILlmClient`; its default model id is the `ModelId` const ([ReasonTranslator.cs:15](../../src/ThroughlineBuild.JudgmentSlots/ReasonTranslator.cs#L15)).
 
-### `ThroughlineBuild.ModelClient`
+### `ThroughlineBuild.ModelClient` and `ThroughlineBuild.Anthropic`
 
-Public: `IModelClient` (`SendAsync` + `StreamAsync`), `ProviderConfig`, the `ModelRequest` / `ModelMessage` / `ContentBlock` (`TextContent`, `ToolUseContent`, `ToolResultContent`) / `ToolDefinition` request records, the `ModelResponse` / `Usage` / `ModelStreamEvent` hierarchy, `UsageMapper`, `ModelClientJsonContext`. This is a newer, richer LLM-call abstraction than `ILlmClient` (multi-block content, tool definitions, real streaming events, vendor-tagged usage with optional cost). It is **Partial as a public surface**: built and unit-tested, but no production path constructs an `IModelClient` yet. See [11-llm-architecture.md](11-llm-architecture.md).
-
-### `ThroughlineBuild.Anthropic`
-
-Public: `AnthropicClient` (implements `ILlmClient`, production), `AnthropicOptions`, `AnthropicApiException`, the `Anthropic*` API-model records, `AnthropicJsonContext` (AOT source-gen). `AnthropicClient.InvokeStreamAsync` is part of `ILlmClient` but throws `NotImplementedException` ([src/ThroughlineBuild.Anthropic/AnthropicClient.cs:99](../../src/ThroughlineBuild.Anthropic/AnthropicClient.cs#L99)).
-
-This project also holds two newer types that target the `IModelClient` abstraction: `AnthropicModelClient` (real SSE streaming via `StreamAsync`, TLB-244/245) and `ModelClientLlmAdapter` (wraps an `IModelClient` and presents it as an `ILlmClient`). Both are tested but **unwired** - nothing on the production path constructs them; the judgment-slot path still builds `AnthropicClient` directly via `LlmClientFactory`. `ModelClientLlmAdapter.InvokeStreamAsync` also throws `NotImplementedException` ([src/ThroughlineBuild.Anthropic/ModelClientLlmAdapter.cs:65-72](../../src/ThroughlineBuild.Anthropic/ModelClientLlmAdapter.cs#L65-L72)).
+Unchanged in status: `IModelClient` and its request/response records remain **Partial as a public surface** - built and unit-tested, but no production path constructs an `IModelClient`. The live LLM path is still `LlmClientFactory.Create` -> `AnthropicClient : ILlmClient` ([Program.cs:2255](../../src/ThroughlineBuild.Cli/Program.cs#L2255)); `AnthropicClient.InvokeStreamAsync` ([AnthropicClient.cs:93](../../src/ThroughlineBuild.Anthropic/AnthropicClient.cs#L93)) and `ModelClientLlmAdapter.InvokeStreamAsync` ([ModelClientLlmAdapter.cs:65](../../src/ThroughlineBuild.Anthropic/ModelClientLlmAdapter.cs#L65)) still throw `NotImplementedException`. See [11-llm-architecture.md](11-llm-architecture.md).
 
 ---
 
 ## Surfaces called out for stability
 
-- **`WORKER_RESULT` envelope JSON schema** is the contract between every worker agent and the orchestrator (all four agents emit it; the parser lives in `Workers.Common`). Breaking it breaks every phase that dispatches a worker. The `metadata.escalation` / `subsumed_by` sub-schema, the `metadata.llm_usage` shape, the implement worker's `COMPLETION_CLAIM` block + `completion_claim_ref` (op-30), and the batch session's top-level `tickets` array (`BatchTicketResult`) are part of this contract.
-- **Fenced-block payload protocol** (`<<<NAME_START`/`<<<NAME_END` markers + `*_ref` metadata fields, spec in `docs/op-docs/op-27-worker-result-fenced-payloads.md`) is now part of the worker contract for plan/implement/review/draft bodies; the per-agent brief templates emit it and `FencedBlockResolver` consumes it. The `MarkdownRenderer` CommonMark-subset is the rendering contract for those bodies into Plane HTML.
-- **Plane marker comment formats** (`[planned_at: <sha>]`, `[implemented_at: <sha>]`, `[decomposed_at: <sha>]`, `[shipped_at: <sha>]`, `[gate: hard-fail]`, `[batch_review: <verdict>]`, `<strong>wontfix:</strong>`, `<strong>deferred:</strong>`, `<strong>reopened:</strong>`). Changing any of these strings breaks subsequent phases / commands that read them (e.g. `ReopenCommand` keys off the prior `deferred:` / `wontfix:` marker). Markers are emitted as HTML `<p>`/`<strong>` and parsed back through `MarkerParser` after HTML-tag stripping ([src/ThroughlineBuild.Helpers/MarkerParser.cs:8](../../src/ThroughlineBuild.Helpers/MarkerParser.cs#L8)); the parser matches only `[...]` square-bracket markers, so the parenthesized batch annotations are ignored. When several markers of the same name accumulate (chain re-runs), `CommentMarkers.LatestValue` selects the freshest by `CreatedAt` (TLB-412), not by list order.
-- **JSONL event log line schema** (`EventLineDto`, including the `EventKind` integer ordinals) - the `analyze-event-log` and `token-audit` tools depend on it. Backward-compat is preserved via `[JsonIgnore(WhenWritingNull)]` on the four newer fields.
-- **CLI exit code mapping** is the contract any CI workflow relies on - including the `ChainOutcome` overrides for `chain`.
-- **`build new --print-template`** output - some operators script against it.
-- **Per-agent template directory layout** under `Templates/<agent>/` - renaming an agent subdirectory breaks the embedded-resource lookup in `TemplateLoader`.
+- **`WORKER_RESULT` envelope JSON schema** - the contract between every worker agent and the orchestrator. Now explicitly includes: the optional `tickets` array (batch), the `envelope_status` salvage metadata key (`WorkerResultMetadata`), the `metadata.escalation`/`subsumed_by` sub-schema, and `metadata.llm_usage`. Single-final-message emission (blocks + envelope together) is part of the brief contract since 3cbf64c.
+- **Fenced-block payload protocol** (`<<<NAME_START`/`<<<NAME_END` + `*_ref` fields; spec at [docs/op-docs/complete/op-27-worker-result-fenced-payloads.md](../op-docs/complete/op-27-worker-result-fenced-payloads.md)), now including the JSON-bodied `COMPLETION_CLAIM` block.
+- **`COMPLETION_CLAIM` schema** (TLB-500/505) - `provides`/`consumes`/`ac_bindings`/`tests_added`, all required arrays; `ac_bindings[].kind` is a `VerifierKind` name. The hook fields (`RedGreenKind`, `Tier`, `RoutingKey`) are declared but UNENFORCED by every consumer - do not build against them. Status: Functional (claim emission + gate validation), with the hook fields Aspirational.
+- **Plane marker comment formats** (`[planned_at:]`, `[implemented_at:]`, `[decomposed_at:]`, `[shipped_at:]`, `<strong>wontfix:</strong>`, `<strong>deferred:</strong>`, `<strong>reopened:</strong>`) - parsed back through the `MarkerParser` class ([MarkerParser.cs:5](../../src/ThroughlineBuild.Helpers/MarkerParser.cs#L5)) after HTML-tag stripping; freshest-by-timestamp lookup via `CommentMarkers.LatestValue`.
+- **JSONL event log line schema** (`EventLineDto` + the `EventKind` integer ordinals, now 0..13) - the `analyze-event-log` and `token-audit` tools (sources in [tools/](../../tools/)) depend on it.
+- **CLI exit code mapping**, including the `ChainOutcome` overrides (`ChainExitCodeMapper`).
+- **The op-doc authoring format** - now self-published by `build op-doc spec` from a single embedded source (TLB-456) and consumed by `OpDocParser`. Treat the embedded spec as the authoritative format document; `op-doc new` skeletons are guaranteed to validate against it.
+- **The derived-profile JSON schema** (`ProjectProfile` DTOs - `review_checks`/`regression_checks` with `role`, `canary`, `timeout_minutes`, plus `convention_files`) - produced by a worker during `scaffold`, written into `.build/config.toml` by `ConfigProfileWriter`, consumed by gate/review/ship checks. Stack knowledge lives in this derived data, not in engine code.
+- **`WorkspaceSchema` states + labels** - what `build setup` provisions and the runtime state map derives from. Renaming a state in Plane without updating this class breaks transitions.
+- **`build new --print-template`** output and the per-agent template directory layout under `Templates/<agent>/` (plus `Templates/shared/`).
 
 ---
 
 ## Loose ends
 
-- **Mostly no public-vs-internal distinction.** Most types in library projects default to `public` and could be referenced by anything that adds a project reference. There is no NuGet packaging and no API analyzer. The exceptions are `Workers.Common` (uses `InternalsVisibleTo` to share its `internal` `WorkerResultParser` with the four worker assemblies + their tests) and `EventLog` (`EventLineDto` is `internal`).
-- **`WorkerResultParser` is `internal`** in `ThroughlineBuild.Workers.Common`, not a public type. Code outside the worker assemblies cannot call it directly; the WORKER_RESULT contract it enforces is the durable surface, not the class.
-- **`EventLineDto` is `internal`** to `ThroughlineBuild.EventLog` ([src/ThroughlineBuild.EventLog/EventLineDto.cs:12](../../src/ThroughlineBuild.EventLog/EventLineDto.cs#L12)) so the on-disk format is technically not a typed public contract - it is documented in [docs/event-log-format.md](../event-log-format.md).
-- **The `IModelClient` surface is built but unwired.** `IModelClient` / `AnthropicModelClient` / `ModelClientLlmAdapter` are public and tested, but no production code constructs them. If they are wired onto the judgment-slot path later, that is a new live public surface; until then it is dead-public.
-- **Brief template files** are public-by-convention but not by any explicit contract; reorganizing the per-agent templates directory would break embedded-resource lookups.
-- **MCP server packaging** (architecture Appendix item 3) would create a new public surface; not implemented.
-- **No semantic versioning** - the only version exposed at runtime is `Assembly.GetExecutingAssembly().GetName().Version` which is whatever `dotnet publish` decides.
+- **Mostly no public-vs-internal distinction.** Most library types default to `public`; no NuGet packaging, no API analyzer. Exceptions: `Workers.Common` internals (shared via a now-longer `InternalsVisibleTo` list that includes `Phases` and `Verification` - the parser internals are creeping toward de-facto public) and `EventLog.EventLineDto`.
+- **`CliUsage.UsageText` vs `ChainExitCodeMapper`**: chain exit codes 10 (`GateEnvironmentFailure`) and 11 (`TicketingUnavailable`) are live but undocumented in the usage text.
+- **Help registry coverage**: `models` and `sweep` have no Tier 1 help entry.
+- **`CompletionClaim` hook fields** (`RedGreenKind`, `Tier`, `RoutingKey`) are dead-public by design - declared, serialized nowhere, ignored by all consumers.
+- **The `IModelClient` surface is still built but unwired** - dead-public until something constructs it.
+- **`src/ThroughlineBuild.Linear/`** is an empty directory (stale `bin`/`obj` only, no csproj, not in the solution) - either delete it or land the Linear backend it implies.
+- **Brief template files** remain public-by-convention; the `shared/` fragment set adds a second axis (per-agent template x shared fragment) that must stay composable by hand.
+- **No semantic versioning** - `BuildVersion.Current` is `0.1.0+<shortsha>`, generated at compile time; the `0.1.0` prefix is not bumped by anything.

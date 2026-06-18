@@ -13,7 +13,8 @@ plane_api_token = "REQUIRED_PLANE_API_TOKEN"  # REQUIRED: your Plane API token
 # default_model is no longer used for worker-model selection. Worker models come
 # from [workers.<agent>.sizes] below. It remains here only for the close/defer/
 # reopen reason translator; setting it does NOT change which model a worker runs.
-# default_model = "anthropic:claude-opus-4-8"           # Opus 4.8  - most capable
+# default_model = "anthropic:claude-fable-5"            # Fable 5   - most powerful
+# default_model = "anthropic:claude-opus-4-8"           # Opus 4.8  - most capable Opus
 # default_model = "anthropic:claude-sonnet-4-6"         # Sonnet 4.6 - balanced
 # default_model = "anthropic:claude-haiku-4-5-20251001" # Haiku 4.5 - fastest
 # anthropic_api_key = "your-anthropic-key-here"         # optional; plan phase uses Claude Code OAuth instead
@@ -26,11 +27,17 @@ timeout_minutes = 30
 
 [workers.claude-code]
 executable = "claude"
+transport = "interactive-hook"
+# interactive-hook is the default: interactive claude, no --print, via ConPTY/PTY; reads completion
+# from claude's persisted transcript. Needs Claude Code >= 2.1.177, which the setup preflight checks
+# (it fails clearly rather than falling back). Roll back to the legacy headless path (claude --print)
+# with: transport = "print".
 # max_output_tokens = 32000  # claude-code#24159 caps Opus 4.6 at 32000; do not raise above this
 
 # Claude tiers use stable aliases (haiku/sonnet/opus) that auto-track the current
 # model - never pin a Claude version here. The actually-resolved model still lands
-# in the event log.
+# in the event log. For a model outside the alias tiers (e.g. Fable), use its full
+# slug: large = { model = "claude-fable-5" }.
 [workers.claude-code.sizes]
 small  = { model = "haiku" }
 medium = { model = "sonnet" }
@@ -98,7 +105,13 @@ verifier_allowed_tools = ["Read", "Grep", "Glob"]
 # Each [[review.checks]] entry defines an automated check run before the verifier.
 # role = "gating"   -> non-zero exit hard-fails the gate; use for build, test, typecheck.
 # role = "advisory" -> failure recorded and shown to verifier, never hard-fails; use for lint, format.
+# role = "setup"    -> a prerequisite command (e.g. a codegen/install step) run ONCE before the checks,
+#                      not a pass/fail check; a non-zero exit hard-fails the gate. Rarely needed - only
+#                      when the build cannot run in a fresh worktree without it (e.g. `xcodegen generate`).
 # Absent role defaults to "gating". A check absent from config is not-configured, never a failure.
+# required_paths lists tracked files/directories that must exist before a base-ref control run is
+# meaningful; if they are absent on the base ref, gate attribution stays inconclusive instead of
+# treating a scaffold/greenfield base as an environmental failure.
 #
 # --- Example: .NET stack ---
 # [[review.checks]]
@@ -107,6 +120,7 @@ verifier_allowed_tools = ["Read", "Grep", "Glob"]
 # arguments = ["build", "--no-restore", "-c", "Release", "--nologo", "-v", "q"]
 # timeout_minutes = 5
 # role = "gating"
+# required_paths = ["*.sln", "src"]
 #
 # [[review.checks]]
 # name = "test"
@@ -114,6 +128,7 @@ verifier_allowed_tools = ["Read", "Grep", "Glob"]
 # arguments = ["test", "--no-build", "-c", "Release", "--nologo", "-v", "q", "--logger", "console;verbosity=minimal"]
 # timeout_minutes = 10
 # role = "gating"
+# required_paths = ["*.sln", "tests"]
 #
 # --- Example: Node / web stack ---
 # [[review.checks]]
@@ -122,6 +137,7 @@ verifier_allowed_tools = ["Read", "Grep", "Glob"]
 # arguments = ["run", "build"]
 # timeout_minutes = 5
 # role = "gating"
+# required_paths = ["package.json", "src"]
 #
 # [[review.checks]]
 # name = "test"
@@ -129,6 +145,7 @@ verifier_allowed_tools = ["Read", "Grep", "Glob"]
 # arguments = ["test"]
 # timeout_minutes = 10
 # role = "gating"
+# required_paths = ["package.json", "src"]
 #
 # --- Advisory example (lint/format): records result, never hard-fails ---
 # [[review.checks]]
@@ -156,6 +173,7 @@ delete_feature_branch = true
 # arguments = ["build", "--nologo", "--configuration", "Release", "-v", "q"]
 # timeout_minutes = 5
 # role = "gating"
+# required_paths = ["*.sln", "src"]
 #
 # [[ship.regression_checks]]
 # name = "test"
@@ -163,6 +181,7 @@ delete_feature_branch = true
 # arguments = ["test", "--nologo", "--configuration", "Release", "--no-build", "-v", "q", "--logger", "console;verbosity=minimal"]
 # timeout_minutes = 10
 # role = "gating"
+# required_paths = ["*.sln", "tests"]
 #
 # --- Example: Node / web stack ---
 # [[ship.regression_checks]]
@@ -171,6 +190,7 @@ delete_feature_branch = true
 # arguments = ["run", "build"]
 # timeout_minutes = 5
 # role = "gating"
+# required_paths = ["package.json", "src"]
 #
 # [[ship.regression_checks]]
 # name = "test"
@@ -178,6 +198,7 @@ delete_feature_branch = true
 # arguments = ["test"]
 # timeout_minutes = 10
 # role = "gating"
+# required_paths = ["package.json", "src"]
 
 # [project] is optional - omit entirely to skip project-aware brief enrichment.
 # The toolchain fields below are LEFT BLANK on purpose: they are derived from your op-doc
@@ -202,6 +223,18 @@ plane_project_url = "https://plane.example.com/workspace/browse/PROJ/"
 # Optional markdown file with extra project notes; path resolves relative to this config file.
 # Missing files emit a stderr warning but do not fail the run.
 # notes_file = ".build/project.md"
+# Derived at 'build scaffold': stable, project-wide convention files inlined into EVERY implement
+# brief so the worker does not re-read them - the test harness/setup file the runner auto-loads
+# (vitest/jest setupFiles, pytest conftest.py, an xUnit shared fixture), the build/test config, and
+# one canonical test example. Paths are relative to the project root; contents are read lazily per
+# brief from the worktree.
+# convention_files = ["src/setupTests.ts", "vite.config.ts", "src/data/__tests__/repository.test.ts"]
+# Pre-load named-input + convention file contents into the implement brief (default true).
+# Set false to ablate the lever and restore the pre-preload brief.
+# preload_context = true
+# Effort-gated planning hygiene for S-effort implement briefs only (default false; opt-in). When true,
+# S briefs get a lightweight-planning prompt line plus a restricted tool set; M and L briefs are untouched.
+# context_hygiene = false
 
 # [plan] mode controls the plan phase:
 # "investigate" - spawn a worker to investigate the ticket and write the plan.

@@ -13,7 +13,8 @@ public class BriefHtmlRendererTests
         IReadOnlyList<string>? outputs = null,
         IReadOnlyList<string>? acceptance = null,
         string? notes = null,
-        IReadOnlyList<string>? oos = null) =>
+        IReadOnlyList<string>? oos = null,
+        IReadOnlyList<string>? preload = null) =>
         new Brief(
             Slug: slug,
             Number: number,
@@ -24,7 +25,10 @@ public class BriefHtmlRendererTests
             AcceptanceCriteria: acceptance ?? new[] { "Criterion one" },
             Notes: notes,
             OutOfScope: oos ?? new[] { "No rollback", "No UI" },
-            DependsOn: null);
+            DependsOn: null)
+        {
+            PreloadFiles = preload ?? Array.Empty<string>()
+        };
 
     private static Plan MakePlan(
         string id = "A",
@@ -130,6 +134,55 @@ public class BriefHtmlRendererTests
         var html = BriefHtmlRenderer.RenderBrief(brief);
 
         Assert.Contains("<code>FooBar.Run()</code>", html);
+    }
+
+    // ---- Preload section (experiment 3) ----
+
+    [Fact]
+    public void RenderBrief_RendersPreloadSection_OneCodeWrappedPathPerBullet()
+    {
+        var brief = MakeBrief(preload: new[] { "src/data/aggregate.ts", "src/pages/admin/AdminResults.tsx" });
+        var html = BriefHtmlRenderer.RenderBrief(brief);
+
+        Assert.Contains("<h3>Preload</h3>", html);
+        Assert.Contains("<li><code>src/data/aggregate.ts</code></li>", html);
+        Assert.Contains("<li><code>src/pages/admin/AdminResults.tsx</code></li>", html);
+    }
+
+    [Fact]
+    public void RenderBrief_OmitsPreloadSection_WhenEmpty()
+    {
+        var brief = MakeBrief(preload: Array.Empty<string>());
+        var html = BriefHtmlRenderer.RenderBrief(brief);
+
+        Assert.DoesNotContain("<h3>Preload</h3>", html);
+    }
+
+    [Fact]
+    public void RenderBrief_PreloadPath_StripsSurroundingBackticks_AndEscapes()
+    {
+        // A bullet authored as `path` (or with HTML-special chars) still emits one clean <code> token.
+        var brief = MakeBrief(preload: new[] { "`src/a&b/types.ts`" });
+        var html = BriefHtmlRenderer.RenderBrief(brief);
+
+        Assert.Contains("<li><code>src/a&amp;b/types.ts</code></li>", html);
+        Assert.DoesNotContain("`src/a", html); // surrounding backticks stripped
+    }
+
+    [Fact]
+    public void RenderBrief_PreloadSection_FollowsInputs_PrecedesOutputs()
+    {
+        var brief = MakeBrief(
+            inputs: new[] { "From B02 `src/in.ts`" },
+            outputs: new[] { "src/out.ts" },
+            preload: new[] { "src/pre.ts" });
+        var html = BriefHtmlRenderer.RenderBrief(brief);
+
+        int inputs = html.IndexOf("<h3>Inputs</h3>");
+        int preload = html.IndexOf("<h3>Preload</h3>");
+        int outputs = html.IndexOf("<h3>Outputs</h3>");
+        Assert.True(inputs >= 0 && preload > inputs && outputs > preload,
+            $"order inputs={inputs} preload={preload} outputs={outputs}");
     }
 
     // ---- RenderPlan tests ----

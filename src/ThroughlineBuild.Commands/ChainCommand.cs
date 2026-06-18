@@ -219,6 +219,9 @@ public sealed class ChainCommand : ITicketCommand
             ChainOutcome.StoppedAtReview =>
                 $"[{ticketId}] chain stopped: review returned Fail",
 
+            ChainOutcome.ReviewUnavailable =>
+                $"[{ticketId}] chain stopped: review unavailable - verifier blocked by a provider quota/rate-limit/auth error ({result.FinalRationale})",
+
             ChainOutcome.ReworkCapExceeded =>
                 $"[{ticketId}] chain stopped: rework cap exceeded after {CountImplementRounds(result.Steps)} implement attempts",
 
@@ -241,6 +244,15 @@ public sealed class ChainCommand : ITicketCommand
 
             ChainOutcome.DryRunPreview =>
                 $"[{ticketId}] dry-run preview ({durationStr})",
+
+            ChainOutcome.GateVacuous =>
+                $"[{ticketId}] chain stopped: gate vacuous - a gating check could not be proven to fail on broken input{(result.FinalRationale is not null ? " - " + result.FinalRationale : "")}",
+
+            ChainOutcome.GateEnvironmentFailure =>
+                $"[{ticketId}] chain stopped: environment gate failure - the gating checks also fail on the untouched base ref; fix the environment, not the ticket",
+
+            ChainOutcome.TicketingUnavailable =>
+                $"[{ticketId}] chain stopped: ticketing backend unreachable - transport failure persisted through client retries; restore connectivity, not the ticket",
 
             _ => $"[{ticketId}] chain stopped: unknown outcome {result.Outcome}"
         };
@@ -340,11 +352,20 @@ public sealed class ChainCommand : ITicketCommand
             ChainOutcome.StoppedAtReview =>
                 GetStoppedAtReviewTriage(ticketId, result),
 
+            ChainOutcome.ReviewUnavailable =>
+                GetReviewUnavailableTriage(ticketId, result),
+
             ChainOutcome.ReworkCapExceeded =>
                 GetReworkCapExceededTriage(ticketId, result),
 
             ChainOutcome.StoppedAtShip =>
                 GetStoppedAtShipTriage(ticketId, result),
+
+            ChainOutcome.GateEnvironmentFailure =>
+                GetGateEnvironmentFailureTriage(ticketId, result),
+
+            ChainOutcome.TicketingUnavailable =>
+                GetTicketingUnavailableTriage(ticketId, result),
 
             ChainOutcome.ParentHasGrandchildren =>
                 GetParentHasGrandchildrenTriage(result),
@@ -360,11 +381,16 @@ public sealed class ChainCommand : ITicketCommand
 
         // Include final rationale if available (for review-based stops). Skip for
         // RefusedDirtyTree and ParentStoppedEarly: no reviewer ran, and the triage text
-        // restates the detail itself (the child list, for parent stops).
+        // restates the detail itself (the child list, for parent stops). Skip for
+        // GateEnvironmentFailure and TicketingUnavailable too: their rationale is gate
+        // evidence / a transport error, not reviewer output, and the triage prints it
+        // with the right framing.
         var output = new StringBuilder();
         if (!string.IsNullOrEmpty(result.FinalRationale)
             && result.Outcome != ChainOutcome.RefusedDirtyTree
-            && result.Outcome != ChainOutcome.ParentStoppedEarly)
+            && result.Outcome != ChainOutcome.ParentStoppedEarly
+            && result.Outcome != ChainOutcome.GateEnvironmentFailure
+            && result.Outcome != ChainOutcome.TicketingUnavailable)
         {
             output.AppendLine("Final reviewer rationale:");
             output.AppendLine();
@@ -422,9 +448,23 @@ public sealed class ChainCommand : ITicketCommand
                 .ToList();
             foreach (var c in failed)
             {
-                var detail = string.IsNullOrEmpty(c.FinalRationale) ? "" : $" - {c.FinalRationale}";
+                var detail = !string.IsNullOrEmpty(c.FinalRationale) ? $" - {c.FinalRationale}"
+                    : !string.IsNullOrEmpty(c.SkipReason) ? $" - {c.SkipReason}"
+                    : "";
                 output.AppendLine($"- {c.TicketId}: {c.Outcome}{detail}");
             }
+        }
+        if (result.ChildResults?.Any(c => c.ContainsEnvironmentFailure()) == true)
+        {
+            output.AppendLine("At least one child hit an ENVIRONMENT gate failure: the gate also fails on the untouched");
+            output.AppendLine("base ref, so reworking tickets cannot fix it. Fix the environment or .build/config.toml");
+            output.AppendLine("once, then re-run - the remaining children were skipped, not failed.");
+        }
+        if (result.ChildResults?.Any(c => c.ContainsTicketingUnavailable()) == true)
+        {
+            output.AppendLine("At least one child stopped because the TICKETING BACKEND was unreachable (DNS/connect/");
+            output.AppendLine("timeout persisted through client retries). The work is committed on its branch. Restore");
+            output.AppendLine("connectivity, then re-run - the remaining children were skipped, not failed.");
         }
         output.AppendLine("Completed children are already shipped and are skipped on a re-run.");
         output.Append($"Resume a stopped child directly ('build chain <child-id>'), or fix it ('build review'/'build ship <child-id>'), then re-run: build chain {ticketId}");
@@ -477,6 +517,20 @@ public sealed class ChainCommand : ITicketCommand
     private static string GetStoppedAtReviewTriage(string ticketId, ChainResult result)
     {
         return $"Operator triage: Review returned Fail (permanent rejection). Ticket left in InReview state. Options:\n- Inspect the reviewer's feedback above.\n- Transition ticket to Cancelled if work is no longer viable, or back to Backlog for replanning.\n- Consider starting fresh with a new ticket if the scope has fundamentally changed.";
+    }
+
+    private static string GetReviewUnavailableTriage(string ticketId, ChainResult result)
+    {
+        // result.FinalRationale already names the provider, the quota/auth cause, and the reset time
+        // (built by ReviewPhase.FormatProviderUnavailableReason). The verifier never ran, so no code
+        // changes were lost and the ticket is still InReview - the work resumes cleanly.
+        var detail = result.FinalRationale is not null ? $"\n- {result.FinalRationale}" : "";
+        return $"Operator triage: Review could not run - the verifier worker was blocked by a provider "
+             + $"quota/rate-limit/auth error, NOT a review rejection. No work was lost. Options:"
+             + detail
+             + $"\n- Re-run 'build review {ticketId}' once the quota resets (the ticket is still InReview)."
+             + $"\n- Or switch the verifier agent (e.g. --agent-review <name>) and re-run."
+             + $"\n- Check the account's plan/limits if this recurs immediately.";
     }
 
     private static string GetReworkCapExceededTriage(string ticketId, ChainResult result)
@@ -558,6 +612,46 @@ public sealed class ChainCommand : ITicketCommand
     private static string GetStoppedAtShipTriage(string ticketId, ChainResult result)
     {
         return $"Operator triage: Ship gate failed; ticket remains in InReview state. Options:\n- Review the gate failure (rebase conflict, regression checks, state consistency).\n- Resolve the failure manually if possible.\n- Retry ship via 'build ship {ticketId}' after resolving.\n- Transition ticket to Cancelled if unable to resolve.";
+    }
+
+    private static string GetGateEnvironmentFailureTriage(string ticketId, ChainResult result)
+    {
+        var output = new StringBuilder();
+        output.AppendLine("Operator triage: the deterministic gate failed on this ticket's worktree AND on the");
+        output.AppendLine("untouched base ref - an environment problem (toolchain update, missing SDK/simulator,");
+        output.AppendLine("stale check commands in .build/config.toml), NOT this ticket's code. No rework rounds");
+        output.AppendLine("were spent on it, and the ticket's commits are intact.");
+        if (!string.IsNullOrEmpty(result.FinalRationale))
+        {
+            output.AppendLine();
+            output.AppendLine(result.FinalRationale);
+        }
+        output.AppendLine();
+        output.AppendLine("Next steps:");
+        output.AppendLine("- Reproduce from the main checkout: run the [[review.checks]] commands from .build/config.toml by hand.");
+        output.AppendLine("- Fix the environment (toolchain/SDK), or update the check commands in .build/config.toml.");
+        output.Append($"- Then re-run: build chain {ticketId} - the ticket is still InReview and resumes cleanly; skipped siblings are picked up by the same re-run.");
+        return output.ToString();
+    }
+
+    private static string GetTicketingUnavailableTriage(string ticketId, ChainResult result)
+    {
+        var output = new StringBuilder();
+        output.AppendLine("Operator triage: the ticketing backend could not be reached at the transport level");
+        output.AppendLine("(DNS resolution, connect, TLS, or timeout) and the failure persisted through the");
+        output.AppendLine("client's retries - an environmental problem (network, DNS, VPN/tailnet, or a Plane");
+        output.AppendLine("outage), NOT this ticket's code. Any work the chain completed is committed on the");
+        output.AppendLine("ticket's branch; nothing was lost.");
+        if (!string.IsNullOrEmpty(result.FinalRationale))
+        {
+            output.AppendLine();
+            output.AppendLine(result.FinalRationale);
+        }
+        output.AppendLine();
+        output.AppendLine("Next steps:");
+        output.AppendLine("- Check connectivity to the ticketing host (e.g. ping/curl the plane_base_url from .build/config.toml).");
+        output.Append($"- Then re-run: build chain {ticketId} - the chain resumes from the ticket's current state; skipped siblings are picked up by the same re-run.");
+        return output.ToString();
     }
 
     private static PhaseWorktreeNames? GetWorktreeLayoutBestEffort(string ticketId)

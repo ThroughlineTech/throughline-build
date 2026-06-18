@@ -463,6 +463,75 @@ public class ReviewPhaseTests
     }
 
     [Fact]
+    public async Task RunAsync_AdvisoryFailure_VerifierVerdictEventReportsItUnderAdvisoryFailed()
+    {
+        // Role semantics are a cross-phase contract: an event-log consumer counting
+        // checks_failed must see only failures that may legitimately drive rework, so
+        // advisory failures are reported under their own key.
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        ticketing.SeedComment($"<p>[implemented_at: {ImplementedSha}]</p>");
+        var worker = new FakeWorkerAgent();
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, includeWorktreeMatching: true);
+        var verifier = new FakeVerifier(new Verdict(VerdictKind.Pass, "all good", Array.Empty<string>()));
+        var checks = new[]
+        {
+            new CheckResult("build", true, 0, "", "", TimeSpan.Zero, CheckRole.Gating),
+            new CheckResult("lint", false, 1, "style", "", TimeSpan.Zero, CheckRole.Advisory)
+        };
+        var phase = new ReviewPhase(ticketing, worker, events, MakeBuildOptions(), MakeReviewOptions(),
+            git, verifierOverride: verifier, checksRunner: new ThroughlineBuild.Verification.PreComputedChecksRunner(checks));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        var data = events.Events.Single(e => e.Kind == EventKind.VerifierVerdict).Data;
+        var advisoryFailed = data["advisory_failed"] as IReadOnlyList<string>;
+        Assert.NotNull(advisoryFailed);
+        Assert.Equal(new[] { "lint" }, advisoryFailed);
+        // The check results (with roles) flow back to the caller for rework-feedback embedding.
+        Assert.NotNull(result.CheckResults);
+        Assert.Equal(2, result.CheckResults!.Count);
+        // No cited failing checks -> no details key.
+        Assert.False(data.ContainsKey("checks_failed_details"));
+    }
+
+    [Fact]
+    public async Task RunAsync_ReworkVerdict_VerifierVerdictEventPersistsFailedCheckDetails()
+    {
+        // The standalone `build rework` path resumes from the event log via
+        // ReviewFeedbackRetriever, so the cited failing checks' raw evidence (command, exit
+        // code, output tails) must survive in the VerifierVerdict event - otherwise resumed
+        // rework briefs degrade to names plus the reviewer's prose theory of the tool.
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        ticketing.SeedComment($"<p>[implemented_at: {ImplementedSha}]</p>");
+        var worker = new FakeWorkerAgent();
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, includeWorktreeMatching: true);
+        var verifier = new FakeVerifier(new Verdict(VerdictKind.Rework, "lint fails", new[] { "lint" }));
+        var checks = new[]
+        {
+            new CheckResult("build", true, 0, "", "", TimeSpan.Zero, CheckRole.Gating),
+            new CheckResult("lint", false, 1, "file.swift:2:8 sorted_imports", "", TimeSpan.Zero,
+                CheckRole.Gating, CommandLine: "swiftlint --strict --no-cache")
+        };
+        var phase = new ReviewPhase(ticketing, worker, events, MakeBuildOptions(), MakeReviewOptions(),
+            git, verifierOverride: verifier, checksRunner: new ThroughlineBuild.Verification.PreComputedChecksRunner(checks));
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        var data = events.Events.Single(e => e.Kind == EventKind.VerifierVerdict).Data;
+        var details = Assert.IsType<List<Dictionary<string, object>>>(data["checks_failed_details"]);
+        var detail = Assert.Single(details);
+        Assert.Equal("lint", detail["name"]);
+        Assert.Equal(1, detail["exit_code"]);
+        Assert.Equal("swiftlint --strict --no-cache", detail["command"]);
+        Assert.Equal("file.swift:2:8 sorted_imports", detail["stdout_tail"]);
+        Assert.Equal("Gating", detail["role"]);
+    }
+
+    [Fact]
     public async Task RunAsync_PassVerdict_VerifierVerdictEventContainsRationaleAndEmptyChecksFailed()
     {
         var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
@@ -712,6 +781,18 @@ public class ReviewPhaseTests
         public Task FlushAsync(CancellationToken ct) => Task.CompletedTask;
     }
 
+    // Returns a caller-supplied WorkerResult verbatim, so a test can drive the real
+    // WorkerAgentReviewer down a failure path (e.g. a provider quota error). See TLB-527.
+    private sealed class StubResultWorkerAgent : IWorkerAgent
+    {
+        private readonly WorkerResult _result;
+        public string Name => "claude-code";
+        public IWorkerProgressDigester? Digester => null;
+        public StubResultWorkerAgent(WorkerResult result) => _result = result;
+        public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct) =>
+            Task.FromResult(_result);
+    }
+
     private sealed class FakeVerifier : IVerifier
     {
         private readonly Verdict _verdict;
@@ -766,6 +847,42 @@ public class ReviewPhaseTests
         Assert.NotNull(capturingWorker.LastWorkingDirectory);
         Assert.NotEqual(mainDir, capturingWorker.LastWorkingDirectory);
         Assert.Equal("/some/worktree/path", capturingWorker.LastWorkingDirectory);
+    }
+
+    [Fact]
+    public async Task RunAsync_VerifierHitsProviderQuota_NoComment_StaysInReview_ReturnsProviderUnavailable()
+    {
+        // TLB-527: a provider quota/rate-limit block means the verifier never produced a verdict.
+        // ReviewPhase must NOT post a "reviewed: fail" comment or transition the ticket - it returns
+        // a typed ProviderUnavailable result and leaves the ticket cleanly InReview (resumable).
+        var ticketing = new FakeTicketing(MakeTicket(TicketState.InReview));
+        ticketing.SeedComment($"<p>[implemented_at: {ImplementedSha}]</p>");
+        var events = new FakeEventSink();
+        var git = new FakeGitClient(MainSha, includeWorktreeMatching: true);
+        var quota = new WorkerResult(Status.Failed, "Process exited with non-zero code",
+            Array.Empty<string>(),
+            "Exit code 1. Codex error: You've hit your usage limit. Upgrade to Pro or try again at Jun 10th, 2026 5:27 PM.",
+            new Dictionary<string, object>());
+        var worker = new StubResultWorkerAgent(quota);
+        // No verifierOverride: ReviewPhase wraps the worker in a real WorkerAgentReviewer.
+        var phase = new ReviewPhase(ticketing, worker, events, MakeBuildOptions(), MakeReviewOptions(), git);
+
+        var result = await phase.RunAsync(TicketId, MakeWorkingDir(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Null(result.Verdict);
+        Assert.NotNull(result.ProviderUnavailable);
+        Assert.Equal(ProviderErrorKind.RateLimitOrQuota, result.ProviderUnavailable!.Kind);
+        Assert.Contains("build review", result.FailureReason);
+
+        // No misleading "reviewed: fail" comment, and the ticket was not transitioned out of InReview.
+        Assert.DoesNotContain(ticketing.Comments, c => c.html.Contains("reviewed:"));
+        Assert.Empty(ticketing.Transitions);
+
+        // A distinct provider-unavailable signal was emitted; no Fail VerifierVerdict was recorded.
+        Assert.Contains(events.Events, e => e.Kind == EventKind.GateFailure
+            && e.Data.TryGetValue("kind", out var k) && k.ToString() == "review_provider_unavailable");
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.VerifierVerdict);
     }
 
     private sealed class FakeGitClient : IGitClient

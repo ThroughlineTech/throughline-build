@@ -12,155 +12,62 @@ public class ClaudeCodeAgent : IWorkerAgent
 {
     private readonly ClaudeCodeOptions _options;
     private readonly ClaudeCodeProgressDigester _digester = new();
+    private readonly IClaudeCodeTransport _transport;
 
-    public ClaudeCodeAgent(ClaudeCodeOptions options) => _options = options;
+    public ClaudeCodeAgent(ClaudeCodeOptions options)
+    {
+        _options = options;
+        _transport = options.Transport == ClaudeCodeTransport.InteractiveHook
+            ? new ClaudeCodeInteractiveTransport(options)
+            : new ClaudeCodePrintTransport(options, _digester);
+    }
+
+    internal ClaudeCodeAgent(ClaudeCodeOptions options, IClaudeCodeTransport transport)
+    {
+        _options = options;
+        _transport = transport;
+    }
+
     public ClaudeCodeAgent() : this(new ClaudeCodeOptions()) { }
 
     public string Name => "claude-code";
     public IWorkerProgressDigester? Digester => _digester;
 
-    public async Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
+    public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct)
+        => _transport.ExecuteAsync(brief, workingDirectory, options, ct);
+
+    // Behavior-inert telemetry: after the worker exits, parse the already-captured NDJSON stream
+    // for per-turn context attribution and stash it on Metadata["context_turns"] as a flat dict of
+    // scalar + List<long> values (a flat shape so the event-log AOT context needs only List<long>).
+    // Best-effort: any parse failure leaves the result untouched. Attaches nothing when no turns parsed.
+    internal static WorkerResult AttachContextTurns(WorkerResult result, string stdout)
     {
-        // Write brief to .build/brief.md (persisted for diagnostics)
-        var buildDir = Path.Combine(workingDirectory, ".build");
-        Directory.CreateDirectory(buildDir);
-        var briefPath = Path.Combine(buildDir, "brief.md");
-        await File.WriteAllTextAsync(briefPath, brief.Instruction, ct);
-
-        // Build args - brief is delivered via stdin.
-        var args = BuildArgs(_options, options);
-        _options.Sizes.TryGetValue(options.Size, out var tier);
-
-        var stdoutBuilder = new StringBuilder();
-        var stderrBuilder = new StringBuilder();
-
-        var psi = new ProcessStartInfo(_options.ExecutablePath)
-        {
-            WorkingDirectory = workingDirectory,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        ProcessStreamEncoding.ApplyUtf8(psi);
-        foreach (var arg in args)
-            psi.ArgumentList.Add(arg);
-        ConfigureEnvironment(psi, options);
-
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(options.Timeout);
-
-        var stopwatch = Stopwatch.StartNew();
-
-        var process = new Process { StartInfo = psi };
-        _digester.ResetStart();
-        if (options.ProgressDigestSink is not null)
-        {
-            var startModel = NormalizeModel(tier?.Model);
-            var startPayload = string.IsNullOrEmpty(startModel) ? Name : $"{Name} model {startModel}";
-            options.ProgressDigestSink.WriteLine($"[0:00] {"agent".PadRight(10)} {startPayload}");
-        }
-        process.OutputDataReceived += (_, e) =>
-        {
-            if (e.Data != null)
-            {
-                stdoutBuilder.AppendLine(e.Data);
-                if (options.LiveStdoutSink is not null)
-                {
-                    // --debug path: raw firehose. Digest is suppressed (mutually exclusive).
-                    WriteWorkerLine(options.LiveStdoutSink, "", e.Data);
-                }
-                else if (options.ProgressDigestSink is not null)
-                {
-                    // Default path: per-event digest. Best-effort - a malformed line or
-                    // unexpected schema must not crash the worker dispatch.
-                    var dl = _digester.FormatLine(e.Data);
-                    if (dl != null) options.ProgressDigestSink.WriteLine(dl);
-                }
-            }
-        };
-        process.ErrorDataReceived += (_, e) =>
-        {
-            if (e.Data != null)
-            {
-                stderrBuilder.AppendLine(e.Data);
-                WriteWorkerLine(options.LiveStderrSink, "worker! ", e.Data);
-            }
-        };
-
         try
         {
-            process.Start();
-        }
-        catch (System.ComponentModel.Win32Exception ex)
-        {
-            var reason = $"Worker executable not found: '{_options.ExecutablePath}'. " +
-                         $"Verify it is on PATH or set workers.claude-code.executable in config.toml. Win32: {ex.Message}";
-            WorkerDiagnostics.Write($"[ClaudeCodeAgent] {reason}");
-            return new WorkerResult(Status.Failed, $"Worker executable not found: '{_options.ExecutablePath}'",
-                Array.Empty<string>(), reason, new Dictionary<string, object>());
-        }
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
-
-        // Send brief via stdin then close to signal EOF. If the subprocess exits before
-        // reading stdin - an immediate startup error, a rate-limit exit, or the nested-session
-        // guard rejecting `claude` inside another Claude Code session - the pipe closes
-        // mid-write and WriteAsync throws IOException. Swallow it: a broken stdin pipe must
-        // NOT abort the whole orchestrator. WaitForExit below still runs, and the captured
-        // stderr (surfaced by ParseStdoutEnvelope) carries the real cause as a clean
-        // WorkerResult.Failed. See TLB-472.
-        try
-        {
-            await process.StandardInput.WriteAsync(brief.Instruction);
-            process.StandardInput.Close();
-        }
-        catch (IOException ex)
-        {
-            stderrBuilder.AppendLine($"[worker stdin] subprocess closed stdin before the brief was sent: {ex.Message}");
-        }
-
-        try
-        {
-            await process.WaitForExitAsync(cts.Token);
-            stopwatch.Stop();
-        }
-        catch (OperationCanceledException)
-        {
-            try { process.Kill(entireProcessTree: true); } catch { }
-            stopwatch.Stop();
-
-            // Write partial output to debug capture directory (best-effort)
-            try
+            var series = ClaudeCodeTurnParser.Parse(stdout);
+            if (series.Turns == 0) return result;
+            var ctx = new Dictionary<string, object>
             {
-                WriteCancellationCapture(options.DebugCaptureDirectory, brief.Instruction,
-                    stdoutBuilder.ToString(), stderrBuilder.ToString());
-            }
-            catch
-            {
-                // Best-effort: failure to write debug artifacts never masks the cancellation.
-            }
-
-            return new WorkerResult(Status.Failed, "Process cancelled or timed out", Array.Empty<string>(),
-                "Execution cancelled or timed out", new Dictionary<string, object>());
+                ["cache_read_series"] = new List<long>(series.CacheReadSeries),
+                ["cache_creation_series"] = new List<long>(series.CacheCreationSeries),
+                ["output_series"] = new List<long>(series.OutputSeries),
+                ["turns"] = series.Turns,
+                ["total_cache_read"] = series.TotalCacheRead,
+                ["slope_ratio"] = series.SlopeRatio,
+                ["read_bytes"] = series.ReadBytes,
+                ["write_bytes"] = series.WriteBytes,
+                ["todo_bytes"] = series.TodoBytes,
+                ["task_bytes"] = series.TaskBytes,
+                ["bash_bytes"] = series.BashBytes,
+                ["other_bytes"] = series.OtherBytes,
+            };
+            var merged = new Dictionary<string, object>(result.Metadata) { ["context_turns"] = ctx };
+            return result with { Metadata = merged };
         }
-
-        var stdout = stdoutBuilder.ToString();
-        var stderr = stderrBuilder.ToString();
-
-        var fallbackModel = NormalizeModel(tier?.Model);
-        var result = ParseStdoutEnvelope(stdout, process.ExitCode, stderr, stopwatch.ElapsedMilliseconds, fallbackModel);
-
-        if (options.DebugCaptureDirectory is not null)
+        catch
         {
-            // Same envelope-parse fallback chain as ParseStdoutEnvelope: try single
-            // object first (legacy), fall back to last type=result NDJSON line.
-            ClaudeCodeJsonEnvelope? envelope = TryParseEnvelopeFromStdout(stdout, out _);
-            WriteDebugCapture(options.DebugCaptureDirectory, brief.Instruction, stdout, stderr, envelope, result);
+            return result;
         }
-
-        return result;
     }
 
     // Scans the NDJSON stream for the first "system" event and returns its
@@ -189,6 +96,61 @@ public class ClaudeCodeAgent : IWorkerAgent
             }
         }
         return null;
+    }
+
+    // Reconstructs the complete assistant-visible output of the session from the NDJSON
+    // stream: every `text` content block of every type=assistant event, concatenated in
+    // stream order. Each assistant NDJSON line carries the NEW content block(s) of its
+    // message (lines of one message share a message id; content is additive across lines,
+    // never cumulative - same shape ClaudeCodeTurnParser and WorkerTranscriptWriter rely on),
+    // so plain in-order concatenation is the faithful transcript. Thinking blocks and
+    // tool_use blocks are skipped: the WORKER_RESULT protocol lives in assistant text only.
+    // Returns null when the stream carries no assistant text at all (e.g. the legacy
+    // --output-format json single-blob shape), so callers can fall back to the envelope's
+    // own result field. AOT-safe: JsonDocument reads only, best-effort per line.
+    internal static string? TryExtractAssistantTranscript(string stdout)
+    {
+        if (string.IsNullOrEmpty(stdout)) return null;
+        var sb = new StringBuilder();
+        foreach (var rawLine in stdout.Split('\n'))
+        {
+            var trimmed = rawLine.Trim();
+            if (trimmed.Length == 0) continue;
+
+            JsonDocument doc;
+            try { doc = JsonDocument.Parse(trimmed); }
+            catch (JsonException) { continue; }
+
+            using (doc)
+            {
+                var root = doc.RootElement;
+                if (root.ValueKind != JsonValueKind.Object) continue;
+                if (!root.TryGetProperty("type", out var typeEl)
+                    || typeEl.ValueKind != JsonValueKind.String
+                    || typeEl.GetString() != "assistant")
+                    continue;
+                if (!root.TryGetProperty("message", out var msg) || msg.ValueKind != JsonValueKind.Object)
+                    continue;
+                if (!msg.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array)
+                    continue;
+
+                foreach (var block in content.EnumerateArray())
+                {
+                    if (block.ValueKind != JsonValueKind.Object) continue;
+                    if (!block.TryGetProperty("type", out var btEl)
+                        || btEl.ValueKind != JsonValueKind.String
+                        || btEl.GetString() != "text")
+                        continue;
+                    if (!block.TryGetProperty("text", out var textEl) || textEl.ValueKind != JsonValueKind.String)
+                        continue;
+                    var text = textEl.GetString();
+                    if (string.IsNullOrEmpty(text)) continue;
+                    if (sb.Length > 0) sb.Append('\n');
+                    sb.Append(text);
+                }
+            }
+        }
+        return sb.Length == 0 ? null : sb.ToString();
     }
 
     // Try to extract the terminal "result" envelope from stdout. Returns null when
@@ -300,6 +262,14 @@ public class ClaudeCodeAgent : IWorkerAgent
 
         if (envelope.IsError)
         {
+            // The CLI rejects an unresolvable --model value at session init with this phrasing
+            // ("There's an issue with the selected model (fable). It may not exist or you may
+            // not have access to it."). That is a config problem, not a transient provider
+            // error - name the model and the config key so the operator fixes it in one step.
+            if (TryDescribeInvalidModelError(envelope.Result, stderr) is string invalidModelReason)
+                return new WorkerResult(Status.Escalate, "Claude Code rejected the configured model", Array.Empty<string>(),
+                    invalidModelReason, new Dictionary<string, object>());
+
             // The human-readable failure (e.g. "Claude AI usage limit reached|<ts>") lives in the
             // envelope's result field; include it so the reason is not just a subtype + blank stderr. See TLB-490.
             var message = string.IsNullOrWhiteSpace(envelope.Result) ? "" : $" Message: {envelope.Result}.";
@@ -318,8 +288,21 @@ public class ClaudeCodeAgent : IWorkerAgent
         // Extract model from the NDJSON system event; fall back to the configured default.
         var model = TryExtractModelFromStream(stdout) ?? fallbackModel;
 
-        // Route the inner result text through the existing WORKER_RESULT marker parser.
-        var outcome = WorkerResultParser.TryParse(envelope.Result);
+        // Parse the FULL assistant transcript, not just the envelope's result field. Claude
+        // Code's `result` carries only the FINAL assistant message, so a worker that emits a
+        // fenced block in one message and the WORKER_RESULT envelope in a later message (or
+        // narrates in a fresh message after the envelope) loses content if `result` alone is
+        // parsed. Fable splits output across messages far more often than Opus/Sonnet, which
+        // surfaced this as a nondeterministic blocks-missing failure in scaffold profile
+        // derivation. The transcript is a superset of `result`; when the stream carries no
+        // assistant lines (legacy --output-format json single-blob), fall back to `result`.
+        // If the transcript parse fails outright, retry on `result` so behavior is never
+        // worse than the pre-transcript path (e.g. a malformed fence echoed early in the
+        // session must not poison an otherwise clean final message).
+        var transcript = TryExtractAssistantTranscript(stdout);
+        var outcome = WorkerResultParser.TryParse(transcript ?? envelope.Result);
+        if (transcript is not null && outcome.Result is null)
+            outcome = WorkerResultParser.TryParse(envelope.Result);
         if (outcome.Result != null)
         {
             // Merge llm_usage metadata on success path
@@ -413,6 +396,14 @@ public class ClaudeCodeAgent : IWorkerAgent
             args.Add("--dangerously-skip-permissions");
         if (workerOptions.AllowedTools is { Count: > 0 })
             args.AddRange(new[] { "--allowedTools", string.Join(",", workerOptions.AllowedTools) });
+        // Build workers are one-shot: they must emit WORKER_RESULT in their own turn, so they must
+        // never spawn a nested sub-agent and yield ("the agent is running, I'll report back"). Disallow
+        // the sub-agent tool unconditionally - Agent is the current claude tool name (2.1.177); Task is
+        // the pre-rename name, kept for back-compat. This adapter is the ONE place the claude-code
+        // tool-name literals live (mirrors the review phase's --allowedTools list); --disallowedTools
+        // removes the tools (--allowedTools only auto-approves, so disallow is the correct flag).
+        // Experiment 4 (L2b): lean planning additionally drops the planning tool (TodoWrite) for S-effort.
+        args.AddRange(new[] { "--disallowedTools", workerOptions.LeanPlanning ? "Agent,Task,TodoWrite" : "Agent,Task" });
         options.Sizes.TryGetValue(workerOptions.Size, out var tier);
         var modelArg = NormalizeModel(tier?.Model);
         if (modelArg is not null)
@@ -420,6 +411,35 @@ public class ClaudeCodeAgent : IWorkerAgent
         foreach (var extra in options.ExtraArgs)
             args.Add(extra);
         return args;
+    }
+
+    // Recognizes the CLI's invalid-model session-init error and rewrites it into an
+    // operator-actionable failure reason naming the configured model and the config key
+    // to fix. Returns null for every other is_error message so the generic envelope
+    // path (and ProviderErrorClassifier's signature matching) is untouched.
+    internal static string? TryDescribeInvalidModelError(string? envelopeResult, string stderr)
+    {
+        if (string.IsNullOrWhiteSpace(envelopeResult))
+            return null;
+        const string signature = "issue with the selected model";
+        var idx = envelopeResult.IndexOf(signature, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0)
+            return null;
+
+        // Best-effort extraction of the model name from "...selected model (fable)...".
+        var modelClause = "";
+        var open = envelopeResult.IndexOf('(', idx);
+        if (open >= 0)
+        {
+            var close = envelopeResult.IndexOf(')', open + 1);
+            if (close > open + 1)
+                modelClause = $" '{envelopeResult.Substring(open + 1, close - open - 1)}'";
+        }
+
+        return $"Claude Code rejected the configured model{modelClause} at session init - the CLI only accepts " +
+               "the tier aliases haiku/sonnet/opus or a full claude-* model id (e.g. \"claude-fable-5\"). " +
+               $"Fix the model value under [workers.claude-code.sizes] in .build/config.toml. " +
+               $"Original message: {envelopeResult.Trim()} Stderr: {stderr}";
     }
 
     // Strips the "anthropic:" provider prefix from a configured model id so the
@@ -438,13 +458,16 @@ public class ClaudeCodeAgent : IWorkerAgent
     }
 
     internal void ConfigureEnvironment(ProcessStartInfo psi, WorkerOptions options)
+        => ConfigureEnvironment(psi, _options, options);
+
+    internal static void ConfigureEnvironment(ProcessStartInfo psi, ClaudeCodeOptions claudeOptions, WorkerOptions options)
     {
         // Ensure Claude Code uses OAuth auth rather than API-key auth; worker LLM cost
         // flows to the user's subscription, not to per-token API billing.
         psi.Environment.Remove("ANTHROPIC_API_KEY");
         // Pin max output tokens if configured; do this before the user-supplied
         // EnvironmentVariables loop so an explicit user override still wins.
-        if (_options.MaxOutputTokens is int n)
+        if (claudeOptions.MaxOutputTokens is int n)
             psi.Environment["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = n.ToString(System.Globalization.CultureInfo.InvariantCulture);
         if (options.EnvironmentVariables != null)
             foreach (var (k, v) in options.EnvironmentVariables)

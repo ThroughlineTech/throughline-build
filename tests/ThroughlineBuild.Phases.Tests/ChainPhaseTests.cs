@@ -92,7 +92,13 @@ public class ChainPhaseTests
         FakeEventSinkChain? eventSink = null,
         IWorkerAgent? batchWorker = null,
         Func<BuildOptions, GatePhase>? gateFactory = null,
-        List<string?>? reviewTargetBranches = null)
+        List<string?>? reviewTargetBranches = null,
+        // When set, replaces the default verifier-queue review factory. Lets a test drive review
+        // through a real WorkerAgentReviewer (e.g. to exercise the provider-error path). See TLB-527.
+        Func<BuildOptions, GateOutcome?, ReviewPhase>? reviewFactoryOverride = null,
+        // Post-rework deterministic check re-run: both must be set for the recheck to engage.
+        IReadOnlyList<CheckSpec>? reworkRecheckSpecs = null,
+        AutomatedChecksRunner? reworkRecheckRunner = null)
     {
         _sessionCounter = 0;
         var events = eventSink ?? new FakeEventSinkChain();
@@ -106,7 +112,7 @@ public class ChainPhaseTests
         Func<BuildOptions, ImplementPhaseOptions, ImplementPhase> implFactory = (opts, phaseOpts) =>
             new ImplementPhase(ticketing, implWorker, events, opts, git, phaseOptions: phaseOpts);
 
-        Func<BuildOptions, GateOutcome?, ReviewPhase> reviewFactory = (opts, _) =>
+        Func<BuildOptions, GateOutcome?, ReviewPhase> reviewFactory = reviewFactoryOverride ?? ((opts, _) =>
         {
             // Record the TargetBranch the review phase is constructed with so a chain review's
             // diff base (which ReviewPhase resolves from TargetBranch) is assertable.
@@ -114,7 +120,7 @@ public class ChainPhaseTests
             var verifier = verifierQueue.Dequeue();
             return new ReviewPhase(ticketing, new FakeWorkerAgent(null), events, opts,
                 MakeReviewOptions(), git, verifierOverride: verifier);
-        };
+        });
 
         Func<BuildOptions, ShipPhase> shipFactory = opts =>
             new ShipPhase(ticketing, events, opts, MakeShipOptions(), git,
@@ -154,7 +160,9 @@ public class ChainPhaseTests
             batchWorker: batchWorker,
             landingRemote: "origin",
             landingPushEnabled: true,
-            gateFactory: gateFactory);
+            gateFactory: gateFactory,
+            reworkRecheckSpecs: reworkRecheckSpecs,
+            reworkRecheckRunner: reworkRecheckRunner);
     }
 
     [Fact]
@@ -179,6 +187,28 @@ public class ChainPhaseTests
         Assert.All(result.Steps, s => Assert.Equal(Status.Ok, s.Status));
         Assert.Equal(0, result.Steps[1].ReworkRoundNumber);
         Assert.Null(result.FinalRationale);
+    }
+
+    // TLB-545: when the ticketing backend is unreachable (the client layer already spent its
+    // transport retries), the chain must return a classified, resumable TicketingUnavailable
+    // result instead of letting the exception crash the whole process.
+    [Fact]
+    public async Task RunAsync_TicketingUnavailable_ReturnsClassifiedResumableOutcome_InsteadOfThrowing()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog))
+        {
+            FailGetWith = new TicketingUnavailableException(
+                "Plane API unreachable (GET .../issues/, attempt 4): nodename nor servname provided, or not known",
+                new HttpRequestException("dns failure"))
+        };
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, new Queue<IVerifier>());
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.TicketingUnavailable, result.Outcome);
+        Assert.Contains("unreachable", result.FinalRationale);
     }
 
     // AC: "The gate runs after implement and before review for each chain ticket"
@@ -219,6 +249,114 @@ public class ChainPhaseTests
         Assert.True(implIdx >= 0, "implement step must be present");
         Assert.True(gateIdx > implIdx, "gate must follow implement");
         Assert.True(reviewIdx > gateIdx, "review must follow gate");
+    }
+
+    // Routing: a vacuous gate hard-fails the chain WITHOUT rework and never reaches review/ship.
+    [Fact]
+    public async Task RunAsync_GateVacuous_HardFailsChain_NoRework_NoShip()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        // No verifier is dequeued: the vacuous gate returns before review runs.
+        var verifiers = new Queue<IVerifier>();
+
+        var git = new FakeGitClientChain();
+        var events = new FakeEventSinkChain();
+        Func<BuildOptions, GatePhase> gateFactory = opts =>
+            new GatePhase(
+                ticketing, events, opts,
+                new GateOptions(new[]
+                {
+                    new CheckSpec("build", "noop", Array.Empty<string>(), TimeSpan.FromMinutes(1),
+                        CheckRole.Gating, new[] { new CanaryFile("p", "c") })
+                }),
+                git,
+                new PreComputedChecksRunner(new[]
+                {
+                    new CheckResult("build", Passed: true, ExitCode: 0, StdoutTail: "", StderrTail: "",
+                        Elapsed: TimeSpan.Zero, Role: CheckRole.Gating)
+                }),
+                new FakeVacuityProverChain(GateVacuityOutcome.Vacuous));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            git: git, eventSink: events, gateFactory: gateFactory);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.GateVacuous, result.Outcome);
+        // The vacuity path does not rework.
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.ReworkRound);
+        // The chain did not reach ship and did not complete.
+        Assert.DoesNotContain(result.Steps, s => s.PhaseName == "ship");
+        Assert.NotEqual(ChainOutcome.Completed, result.Outcome);
+    }
+
+    // Deterministic fake prover for chain routing: returns a fixed verdict, no disk/git.
+    private sealed class FakeVacuityProverChain : GateVacuityProver
+    {
+        private readonly GateVacuityVerdict _verdict;
+        public FakeVacuityProverChain(GateVacuityOutcome outcome)
+            => _verdict = new GateVacuityVerdict(outcome, "build", "build is vacuous");
+        public override Task<GateVacuityVerdict> ProveAsync(CheckSpec spec, AutomatedChecksRunner runner, IGitClient git, string worktreePath, CancellationToken ct)
+            => Task.FromResult(_verdict);
+    }
+
+    // TLB-538: the gate's control run proved the failure reproduces on the untouched base ref ->
+    // the chain must stop with GateEnvironmentFailure, spend no rework round, and record the
+    // false fail in the cost ledger.
+    [Fact]
+    public async Task RunAsync_GateEnvironmentFailure_HardFailsChain_NoRework_FalseFailsInLedger()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        // No verifier is dequeued: the environment failure returns before review runs.
+        var verifiers = new Queue<IVerifier>();
+
+        var git = new FakeGitClientChain();
+        var events = new FakeEventSinkChain();
+        Func<BuildOptions, GatePhase> gateFactory = opts =>
+            new GatePhase(
+                ticketing, events, opts,
+                new GateOptions(new[]
+                {
+                    new CheckSpec("build", "noop", Array.Empty<string>(), TimeSpan.FromMinutes(1), CheckRole.Gating)
+                }),
+                git,
+                new PreComputedChecksRunner(new[]
+                {
+                    new CheckResult("build", Passed: false, ExitCode: 1, StdoutTail: "",
+                        StderrTail: "Unable to find a destination", Elapsed: TimeSpan.Zero, Role: CheckRole.Gating)
+                }),
+                vacuityProver: null,
+                controlProber: new FakeControlProberChain());
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            git: git, eventSink: events, gateFactory: gateFactory);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.GateEnvironmentFailure, result.Outcome);
+        Assert.NotNull(result.FinalRationale);
+        Assert.Contains("environment failure", result.FinalRationale);
+        // The environment path never reworks and never ships.
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.ReworkRound);
+        Assert.DoesNotContain(result.Steps, s => s.PhaseName == "ship");
+        // The cost ledger records the proven false fail.
+        Assert.Contains(events.Events, e => e.Kind == EventKind.CostLedger
+            && e.Data.TryGetValue("false_fails", out var ff) && (int)ff >= 1);
+    }
+
+    // Deterministic fake control prober for chain routing: base ref fails the same checks.
+    private sealed class FakeControlProberChain : GateControlProber
+    {
+        public override Task<GateControlVerdict> ProbeAsync(IReadOnlyList<CheckSpec> checks, string baseRef,
+            string mainWorktreePath, AutomatedChecksRunner runner, IGitClient git, CancellationToken ct)
+            => Task.FromResult(new GateControlVerdict(GateControlOutcome.BaseFails, "feedfeedfeedfeed",
+                new[]
+                {
+                    new CheckResult("build", Passed: false, ExitCode: 1, StdoutTail: "",
+                        StderrTail: "Unable to find a destination", Elapsed: TimeSpan.Zero, Role: CheckRole.Gating)
+                }));
     }
 
     [Fact]
@@ -357,6 +495,160 @@ public class ChainPhaseTests
         Assert.Empty(verifiers);
     }
 
+    // -------------------------------------------------------------------------
+    // Post-rework deterministic check re-run. When a rework round was triggered
+    // by named failing checks, the chain re-runs exactly those checks after the
+    // worker reports done: a still-failing gating check loops the raw output
+    // straight back to the worker (bounded, no rework round consumed, no
+    // verifier call); a passing recheck proceeds; advisory results never
+    // short-circuit (role semantics are a cross-phase contract).
+    // -------------------------------------------------------------------------
+
+    private sealed class ScriptedRecheckRunner : AutomatedChecksRunner
+    {
+        private readonly Queue<CheckResult> _results;
+        public List<string> SeenNames { get; } = new();
+        public ScriptedRecheckRunner(params CheckResult[] results) { _results = new Queue<CheckResult>(results); }
+        public override Task<CheckResult> RunNamedAsync(string checkName, IReadOnlyList<CheckSpec> specs, string workingDirectory, CancellationToken ct)
+        {
+            SeenNames.Add(checkName);
+            return Task.FromResult(_results.Dequeue());
+        }
+    }
+
+    private static IReadOnlyList<CheckSpec> LintRecheckSpecs() => new[]
+    {
+        new CheckSpec("lint", "swiftlint", new[] { "--strict" }, TimeSpan.FromMinutes(1))
+    };
+
+    private static CheckResult LintRecheckResult(bool passed, CheckRole role = CheckRole.Gating) =>
+        new CheckResult("lint", passed, passed ? 0 : 1,
+            passed ? "" : "file.swift:2:8 sorted_imports", "",
+            TimeSpan.FromSeconds(1), role, CommandLine: "swiftlint --strict");
+
+    [Fact]
+    public async Task RunAsync_CheckRework_RecheckPasses_ProceedsToReview()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Rework, "lint fails", new[] { "lint" })));
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        var recheck = new ScriptedRecheckRunner(LintRecheckResult(passed: true));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            reworkRecheckSpecs: LintRecheckSpecs(), reworkRecheckRunner: recheck);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+        // Exactly the cited check was re-run, once - after the rework implement.
+        Assert.Equal(new[] { "lint" }, recheck.SeenNames);
+        // Normal rework shape: plan, impl0, review(Rework), impl1, review(Pass), ship.
+        Assert.Equal(6, result.Steps.Count);
+        Assert.Empty(verifiers);
+    }
+
+    [Fact]
+    public async Task RunAsync_CheckRework_RecheckStillFails_LoopsBackToWorkerWithoutVerifier()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        // Only TWO verifiers: the retry between them must consume zero verifier calls.
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Rework, "lint fails", new[] { "lint" })));
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        var recheck = new ScriptedRecheckRunner(LintRecheckResult(passed: false), LintRecheckResult(passed: true));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            reworkRecheckSpecs: LintRecheckSpecs(), reworkRecheckRunner: recheck);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+        Assert.Equal(new[] { "lint", "lint" }, recheck.SeenNames);
+        // plan, impl0, review(Rework), impl(round1), impl(round1 retry), review(Pass), ship.
+        Assert.Equal(7, result.Steps.Count);
+        Assert.Equal("implement", result.Steps[3].PhaseName);
+        Assert.Equal("implement", result.Steps[4].PhaseName);
+        // The retry re-enters the SAME rework round; the cap was not consumed.
+        Assert.Equal(1, result.Steps[3].ReworkRoundNumber);
+        Assert.Equal(1, result.Steps[4].ReworkRoundNumber);
+        Assert.Empty(verifiers);
+    }
+
+    [Fact]
+    public async Task RunAsync_CheckRework_RecheckFailsBeyondRetryCap_AbortsWithRawCheckOutput()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        // ONE verifier: every recheck retry runs without a verifier, and the abort consumes none.
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Rework, "lint fails", new[] { "lint" })));
+        var recheck = new ScriptedRecheckRunner(
+            LintRecheckResult(passed: false),
+            LintRecheckResult(passed: false),
+            LintRecheckResult(passed: false));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            reworkRecheckSpecs: LintRecheckSpecs(), reworkRecheckRunner: recheck);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ReworkCapExceeded, result.Outcome);
+        // Rework implement + 2 bounded retries, each followed by a recheck.
+        Assert.Equal(3, recheck.SeenNames.Count);
+        // The triage rationale carries the check's verbatim output and command, not a theory.
+        Assert.Contains("STILL FAIL", result.FinalRationale);
+        Assert.Contains("sorted_imports", result.FinalRationale);
+        Assert.Contains("swiftlint --strict", result.FinalRationale);
+        Assert.Empty(verifiers);
+    }
+
+    [Fact]
+    public async Task RunAsync_CheckRework_AdvisoryStillFailing_NeverShortCircuits()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        // Defense-in-depth: even if an advisory name leaks into ChecksFailed (the reviewer-side
+        // filter should prevent it), a still-failing advisory recheck must not retry-loop the
+        // worker - that would reintroduce the advisory-driven rework the role exists to prevent.
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Rework, "style notes", new[] { "lint" })));
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        var recheck = new ScriptedRecheckRunner(LintRecheckResult(passed: false, role: CheckRole.Advisory));
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            reworkRecheckSpecs: LintRecheckSpecs(), reworkRecheckRunner: recheck);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+        Assert.Equal(new[] { "lint" }, recheck.SeenNames);
+        // No retry implement: one rework round, straight to review.
+        Assert.Equal(6, result.Steps.Count);
+        Assert.Empty(verifiers);
+    }
+
+    [Fact]
+    public async Task RunAsync_ProseOnlyRework_NoChecksCited_RecheckNeverRuns()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Rework, "missing edge case", Array.Empty<string>())));
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        var recheck = new ScriptedRecheckRunner();
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers,
+            reworkRecheckSpecs: LintRecheckSpecs(), reworkRecheckRunner: recheck);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+        Assert.Empty(recheck.SeenNames);
+    }
+
     [Fact]
     public async Task RunAsync_ReviewFailFirstCycle_StoppedAtReview_FinalRationalePopulated()
     {
@@ -394,6 +686,36 @@ public class ChainPhaseTests
     }
 
     [Fact]
+    public async Task RunAsync_ReviewProviderQuota_ReviewUnavailable_NotStoppedAtReview()
+    {
+        // TLB-527: a verifier blocked by a provider quota/rate-limit error must yield the distinct,
+        // resumable ReviewUnavailable outcome (exit 9), NOT StoppedAtReview (exit 5, a real review
+        // rejection). The diff is fine - the verifier never ran. Drive review through a real
+        // WorkerAgentReviewer wrapping a worker that returns the codex usage-limit message.
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var git = new FakeGitClientChain();
+        var events = new FakeEventSinkChain();
+        var quota = new WorkerResult(Status.Failed, "Process exited with non-zero code",
+            Array.Empty<string>(),
+            "Exit code 1. Codex error: You've hit your usage limit. Upgrade to Pro or try again at Jun 10th, 2026 5:27 PM.",
+            new Dictionary<string, object>());
+        Func<BuildOptions, GateOutcome?, ReviewPhase> reviewFactory = (opts, _) =>
+            new ReviewPhase(ticketing, new StubResultWorkerAgent(quota), events, opts, MakeReviewOptions(), git);
+        var verifiers = new Queue<IVerifier>(); // unused - review goes through the real reviewer
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, git: git, eventSink: events,
+            reviewFactoryOverride: reviewFactory);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ReviewUnavailable, result.Outcome);
+        Assert.NotEqual(ChainOutcome.StoppedAtReview, result.Outcome);
+        Assert.Contains("usage limit", result.FinalRationale ?? "", StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(result.Steps, s => s.PhaseName == "ship");
+    }
+
+    [Fact]
     public async Task RunAsync_ShipFails_AllPriorPhasesOk_StoppedAtShip()
     {
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
@@ -410,6 +732,176 @@ public class ChainPhaseTests
         Assert.Equal(4, result.Steps.Count);
         Assert.Equal("ship", result.Steps[3].PhaseName);
         Assert.Equal(Status.Failed, result.Steps[3].Status);
+    }
+
+    // -------------------------------------------------------------------------
+    // Worktree sweep on successful chain completion (Defect 2): after a SUCCESSFUL
+    // chain, this chain's ticket/ and chain/ worktrees are pruned so a later
+    // glob-based runner does not collect stale worktree copies. Failure PRESERVES
+    // worktrees for debugging/resume. Stack-agnostic: pure git + filesystem.
+    // -------------------------------------------------------------------------
+
+    // Minimal ChainPhase for direct unit tests of SweepChainWorktreesAsync. The plan/implement/
+    // review/ship factories are never invoked by the sweep, so they are inert throwing stubs.
+    private ChainPhase BuildChainForSweep(FakeGitClientChain git, FakeEventSinkChain events, string workingDirectory)
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        Func<BuildOptions, PlanPhase> planFactory = _ => throw new InvalidOperationException("not used by sweep");
+        Func<BuildOptions, ImplementPhaseOptions, ImplementPhase> implFactory = (_, _) => throw new InvalidOperationException("not used by sweep");
+        Func<BuildOptions, GateOutcome?, ReviewPhase> reviewFactory = (_, _) => throw new InvalidOperationException("not used by sweep");
+        Func<BuildOptions, ShipPhase> shipFactory = _ => throw new InvalidOperationException("not used by sweep");
+
+        return new ChainPhase(
+            ticketing, events, MakeBaseOptions(),
+            planFactory, implFactory, reviewFactory, shipFactory,
+            sessionIdGenerator: NextSessionId,
+            workingDirectory: workingDirectory,
+            gitClient: git);
+    }
+
+    [Fact]
+    public async Task SweepChainWorktrees_RemovesTicketAndChainWorktrees_NotUnrelatedOrMain()
+    {
+        var git = new FakeGitClientChain();
+        git.SetWorktrees(
+            ("/wt/main", "main"),
+            ("/wt/ticket-1", "ticket/tlb-1"),
+            ("/wt/chain-9", "chain/tlb-9"),
+            ("/wt/feature-x", "feature/x"));
+        var events = new FakeEventSinkChain();
+        var chain = BuildChainForSweep(git, events, WorkDir);
+
+        await chain.SweepChainWorktreesAsync("TLB-1", "sess", CancellationToken.None);
+
+        Assert.Contains("/wt/ticket-1", git.RemovedWorktrees);
+        Assert.Contains("/wt/chain-9", git.RemovedWorktrees);
+        Assert.DoesNotContain("/wt/feature-x", git.RemovedWorktrees);
+        Assert.DoesNotContain("/wt/main", git.RemovedWorktrees);
+    }
+
+    [Fact]
+    public async Task SweepChainWorktrees_EmitsAdvisoryEvent_WhenDecruftHalts_DoesNotThrow()
+    {
+        // Drive the real WorktreeDecrufter past git-remove (both fail) and Directory.Delete
+        // (path absent -> no-op) into git worktree prune, which exits non-zero in a non-repo
+        // working directory -> DecruftResult.HaltedAt = GitWorktreePrune (deterministic, != WorktreeNotFound).
+        var workDir = WorkDir; // fresh temp dir, NOT a git repo
+        var git = new FakeGitClientChain { RemoveWorktreeFails = true };
+        git.SetWorktrees(("/wt/ticket-halt", "ticket/tlb-1"));
+        var events = new FakeEventSinkChain();
+        var chain = BuildChainForSweep(git, events, workDir);
+
+        // Must not throw.
+        await chain.SweepChainWorktreesAsync("TLB-1", "sess", CancellationToken.None);
+
+        var sweepEvents = events.Events
+            .Where(e => e.Kind == EventKind.GateFailure
+                && e.Data.TryGetValue("kind", out var k)
+                && (k as string) == "worktree_sweep_incomplete")
+            .ToList();
+        Assert.Single(sweepEvents);
+        Assert.Equal(Phase.Chain, sweepEvents[0].Phase);
+        Assert.Equal("TLB-1", sweepEvents[0].TicketId);
+    }
+
+    [Fact]
+    public async Task SweepChainWorktrees_NoAdvisoryEvent_WhenAllRemovesSucceed()
+    {
+        var git = new FakeGitClientChain();
+        git.SetWorktrees(("/wt/ticket-1", "ticket/tlb-1"));
+        var events = new FakeEventSinkChain();
+        var chain = BuildChainForSweep(git, events, WorkDir);
+
+        await chain.SweepChainWorktreesAsync("TLB-1", "sess", CancellationToken.None);
+
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.GateFailure
+            && e.Data.TryGetValue("kind", out var k) && (k as string) == "worktree_sweep_incomplete");
+    }
+
+    [Fact]
+    public async Task SweepChainWorktrees_NeverThrows_WhenListWorktreesThrows()
+    {
+        var git = new FakeGitClientChain { ListWorktreesThrows = true };
+        var events = new FakeEventSinkChain();
+        var chain = BuildChainForSweep(git, events, WorkDir);
+
+        // The swallow-everything guard means this completes normally despite the throw.
+        var ex = await Record.ExceptionAsync(() =>
+            chain.SweepChainWorktreesAsync("TLB-1", "sess", CancellationToken.None));
+        Assert.Null(ex);
+        Assert.Empty(git.RemovedWorktrees);
+    }
+
+    [Fact]
+    public async Task RunAsync_OutermostSuccess_SweepsTicketWorktree_NotUnrelated()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        var git = new FakeGitClientChain();
+        // Seeded default is ("/fake/worktree", "ticket/tlb-1-test-ticket"); add an unrelated one.
+        git.AddWorktree("/fake/feature-x", "feature/x");
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, git: git);
+
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+        // The fake ship's no-op decrufter never removes; the chain-end sweep is the only remover.
+        Assert.Contains("/fake/worktree", git.RemovedWorktrees);
+        Assert.DoesNotContain("/fake/feature-x", git.RemovedWorktrees);
+    }
+
+    [Fact]
+    public async Task RunAsync_OutermostFailure_PreservesWorktrees_NoSweep()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        // shipFails -> StoppedAtShip (failure). The fake ship uses a no-op decrufter, so any
+        // RemoveWorktreeAsync would have to come from the sweep - which must not run on failure.
+        var git = new FakeGitClientChain(shipFails: true);
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, git: git);
+
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.StoppedAtShip, result.Outcome);
+        Assert.Empty(git.RemovedWorktrees);
+    }
+
+    [Fact]
+    public async Task RunAsync_LeafChild_Completed_DoesNotSweep()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+
+        // A leaf child ships into its parent's integration branch, checked out in the integration
+        // worktree (not the main worktree). Wire that worktree so the leaf ship preflight - which
+        // refuses unless the worktree it runs in is on the target branch - passes and the leaf
+        // reaches Completed. The fake resolves a worktree's branch by matching its path.
+        var integrationPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(integrationPath);
+        var git = new FakeGitClientChain();
+        git.AddWorktree(integrationPath, "chain/tlb-9-parent");
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, git: git);
+
+        // ChainTargetBranch non-null marks this as a leaf child of a parent chain; only the
+        // outermost invocation (ChainTargetBranch null) sweeps, so this must NOT sweep.
+        var options = new ChainPhaseOptions(TicketId, false,
+            ChainTargetBranch: "chain/tlb-9-parent",
+            ChainIntegrationWorktreePath: integrationPath);
+        var result = await chain.RunAsync(options, CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+        Assert.Empty(git.RemovedWorktrees);
     }
 
     [Fact]
@@ -658,6 +1150,10 @@ public class ChainPhaseTests
 
         public ChainFakeTicketing(Ticket ticket) { _ticket = ticket; }
 
+        // TLB-545: when set, GetAsync throws this - simulates the ticketing backend being
+        // unreachable after the client layer exhausted its transport retries.
+        public Exception? FailGetWith { get; set; }
+
         public void SeedComment(string html) =>
             _seededComments.Add(new TicketComment(Guid.NewGuid().ToString(), html, DateTimeOffset.UtcNow));
 
@@ -683,6 +1179,8 @@ public class ChainPhaseTests
 
         public Task<Ticket> GetAsync(string id, CancellationToken ct)
         {
+            if (FailGetWith is not null)
+                throw FailGetWith;
             if (_extraTickets.TryGetValue(id, out var extra))
                 return Task.FromResult(extra);
             return Task.FromResult(_ticket);
@@ -806,6 +1304,18 @@ public class ChainPhaseTests
         }
     }
 
+    // Returns a caller-supplied WorkerResult verbatim, to drive a real WorkerAgentReviewer down a
+    // provider-error path inside a chain review. See TLB-527.
+    private sealed class StubResultWorkerAgent : IWorkerAgent
+    {
+        private readonly WorkerResult _result;
+        public string Name => "claude-code";
+        public IWorkerProgressDigester? Digester => null;
+        public StubResultWorkerAgent(WorkerResult result) => _result = result;
+        public Task<WorkerResult> ExecuteAsync(Brief brief, string workingDirectory, WorkerOptions options, CancellationToken ct) =>
+            Task.FromResult(_result);
+    }
+
     /// <summary>Worker that fails on the first call and succeeds on all subsequent calls.</summary>
     private sealed class FailFirstWorkerAgent : IWorkerAgent
     {
@@ -902,7 +1412,10 @@ public class ChainPhaseTests
     private sealed class FakeDecrufterChain : WorktreeDecrufter
     {
         public FakeDecrufterChain(IGitClient git) : base(git) { }
-        public new Task<DecruftResult> DecruftAsync(string featureWorktreePath, string mainWorktreePath, CancellationToken ct) =>
+        // override (not new) so it is a true no-op when invoked through a WorktreeDecrufter
+        // reference (which is how ShipPhase holds it). This keeps the fake ship from decrufting
+        // the worktree, so the chain-end sweep is the only remover in sweep tests.
+        public override Task<DecruftResult> DecruftAsync(string featureWorktreePath, string mainWorktreePath, CancellationToken ct) =>
             Task.FromResult(new DecruftResult(null, new Dictionary<DecruftStep, DecruftStepOutcome>()));
     }
 
@@ -3153,6 +3666,29 @@ public class ChainPhaseTests
         // Used to simulate a dirty shared worktree after a batch session.
         public IReadOnlyList<string>? BatchWorktreeDirtyFiles { get; set; }
 
+        // When true, ListWorktreesAsync throws. Used to prove SweepChainWorktreesAsync swallows
+        // a git failure and never lets cleanup fail an otherwise-successful chain.
+        public bool ListWorktreesThrows { get; set; }
+
+        // When true, RemoveWorktreeAsync reports failure (for both force=false and force=true),
+        // driving the real WorktreeDecrufter past git-remove into the filesystem-delete/prune
+        // fallback. Used to exercise the advisory "worktree_sweep_incomplete" halt path.
+        public bool RemoveWorktreeFails { get; set; }
+
+        // Adds an extra worktree to the list ListWorktreesAsync reports. Additive on top of the
+        // seeded default; lets a test inject ticket/, chain/, and unrelated worktrees.
+        public void AddWorktree(string path, string branch) =>
+            _worktrees.Add(new WorktreeInfo(path, branch, CommitSha, false, false));
+
+        // Replaces the entire worktree list (clears the seeded default). Used by direct unit
+        // tests of SweepChainWorktreesAsync that need an exact mixed list.
+        public void SetWorktrees(params (string Path, string Branch)[] entries)
+        {
+            _worktrees.Clear();
+            foreach (var e in entries)
+                _worktrees.Add(new WorktreeInfo(e.Path, e.Branch, CommitSha, false, false));
+        }
+
         public FakeGitClientChain(
             bool shipFails = false,
             IReadOnlyList<string>? stashEntries = null,
@@ -3190,12 +3726,21 @@ public class ChainPhaseTests
             return Task.FromResult(MainSha);
         }
 
-        public Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<WorktreeInfo>>(_worktrees.AsReadOnly());
+        public Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct)
+        {
+            if (ListWorktreesThrows)
+                throw new InvalidOperationException("git worktree list failed for test");
+            // Return a snapshot, not a live view: production ListWorktreesAsync re-parses git
+            // output into a fresh list each call, so a caller enumerating one result while a
+            // later RemoveWorktreeAsync mutates state never sees a concurrent-modification throw.
+            return Task.FromResult<IReadOnlyList<WorktreeInfo>>(_worktrees.ToList());
+        }
 
         public Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct)
         {
             RemovedWorktrees.Add(path);
+            if (RemoveWorktreeFails)
+                return Task.FromResult(new WorktreeRemoveResult(false, "remove failed for test"));
             _worktrees.RemoveAll(w => string.Equals(w.Path, path, StringComparison.OrdinalIgnoreCase));
             return Task.FromResult(new WorktreeRemoveResult(true, null));
         }

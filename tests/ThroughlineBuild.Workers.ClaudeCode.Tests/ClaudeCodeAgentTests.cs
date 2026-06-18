@@ -406,6 +406,57 @@ public class ClaudeCodeAgentEnvelopeParserTests
     }
 
     [Fact]
+    public void EnvelopeParser_InvalidModelError_NamesModelAndConfigKey()
+    {
+        // The CLI rejects an unresolvable --model value (e.g. the "fable" alias trap) at
+        // session init with subtype "success" and is_error=true. That is a config problem;
+        // the failure reason must name the model and the config key, not just echo the
+        // opaque envelope fields.
+        var stdout = "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":true,"
+            + "\"result\":\"There's an issue with the selected model (fable). It may not exist or "
+            + "you may not have access to it. Run --model to pick a different model.\"}";
+
+        var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 1, stderr: "");
+
+        Assert.Equal(Status.Escalate, result.Status);
+        Assert.Equal("Claude Code rejected the configured model", result.Summary);
+        Assert.Contains("'fable'", result.FailureReason);
+        Assert.Contains("[workers.claude-code.sizes]", result.FailureReason);
+        Assert.Contains("claude-fable-5", result.FailureReason);
+        Assert.Contains("issue with the selected model", result.FailureReason);
+    }
+
+    [Fact]
+    public void EnvelopeParser_InvalidModelError_WithoutParenthesizedModel_StillClassified()
+    {
+        // Defensive: if the CLI message shape drops the "(model)" clause, classification
+        // must still fire on the stable signature and omit the model name gracefully.
+        var stdout = "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":true,"
+            + "\"result\":\"There's an issue with the selected model. Run --model to pick a different model.\"}";
+
+        var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 1, stderr: "");
+
+        Assert.Equal(Status.Escalate, result.Status);
+        Assert.Equal("Claude Code rejected the configured model", result.Summary);
+        Assert.Contains("[workers.claude-code.sizes]", result.FailureReason);
+    }
+
+    [Fact]
+    public void EnvelopeParser_OtherIsErrorMessages_KeepGenericEnvelopeShape()
+    {
+        // The invalid-model rewrite must not capture unrelated is_error envelopes - the
+        // usage-limit path (and ProviderErrorClassifier's signature match on it) depends
+        // on the generic "envelope has is_error=true" shape.
+        var stdout = "{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,"
+            + "\"result\":\"Claude AI usage limit reached|1717800000\"}";
+
+        var result = ClaudeCodeAgent.ParseStdoutEnvelope(stdout, exitCode: 1, stderr: "");
+
+        Assert.Equal("Claude Code reported is_error=true", result.Summary);
+        Assert.Contains("is_error=true", result.FailureReason);
+    }
+
+    [Fact]
     public void EnvelopeParser_ValidEnvelope_NoWorkerResultMarker_ReturnsFailed()
     {
         // Valid envelope but inner result has no WORKER_RESULT block
@@ -1046,6 +1097,72 @@ public class ClaudeCodeProgressDigesterTests
     }
 
     [Fact]
+    public void FormatLine_SystemUnknownSubtype_ReturnsNull()
+    {
+        // Non-init system subtypes (hooks, compact_boundary, future additions)
+        // must not render as a bogus init line.
+        var el = Parse("{\"type\":\"system\",\"subtype\":\"compact_boundary\",\"session_id\":\"abc12345-6789-aaaa-bbbb-ccccddddeeee\"}");
+
+        var line = new ClaudeCodeProgressDigester().FormatLine(el, TimeSpan.FromSeconds(3));
+
+        Assert.Null(line);
+    }
+
+    [Fact]
+    public void FormatLine_SystemMissingSubtype_ReturnsNull()
+    {
+        var el = Parse("{\"type\":\"system\",\"session_id\":\"abc12345-6789-aaaa-bbbb-ccccddddeeee\"}");
+
+        var line = new ClaudeCodeProgressDigester().FormatLine(el, TimeSpan.FromSeconds(3));
+
+        Assert.Null(line);
+    }
+
+    [Fact]
+    public void FormatLine_ThinkingTokensBelowStep_ReturnsNull()
+    {
+        // The CLI emits thinking_tokens every few seconds while the model thinks;
+        // below the first 5k boundary nothing is rendered.
+        var el = Parse("{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"session_id\":\"abc12345-6789-aaaa-bbbb-ccccddddeeee\",\"estimated_tokens\":1200,\"estimated_tokens_delta\":600}");
+
+        var line = new ClaudeCodeProgressDigester().FormatLine(el, TimeSpan.FromSeconds(9));
+
+        Assert.Null(line);
+    }
+
+    [Fact]
+    public void FormatLine_ThinkingTokens_EmitsThrottledTicker()
+    {
+        // One digester instance across the stream: a line at each 5k boundary
+        // crossing, silence in between.
+        var digester = new ClaudeCodeProgressDigester();
+        static string Ev(int tokens) =>
+            $"{{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"session_id\":\"abc12345-6789-aaaa-bbbb-ccccddddeeee\",\"estimated_tokens\":{tokens}}}";
+
+        var first = digester.FormatLine(Parse(Ev(5200)), TimeSpan.FromSeconds(10));
+        Assert.NotNull(first);
+        Assert.Contains("thinking", first);
+        Assert.Contains("~5.2k tokens", first);
+
+        // Grows, but not by another full step: stays quiet.
+        Assert.Null(digester.FormatLine(Parse(Ev(7300)), TimeSpan.FromSeconds(14)));
+
+        var second = digester.FormatLine(Parse(Ev(10400)), TimeSpan.FromSeconds(19));
+        Assert.NotNull(second);
+        Assert.Contains("~10.4k tokens", second);
+    }
+
+    [Fact]
+    public void FormatLine_ThinkingTokensMissingCount_ReturnsNull()
+    {
+        var el = Parse("{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"session_id\":\"abc12345-6789-aaaa-bbbb-ccccddddeeee\"}");
+
+        var line = new ClaudeCodeProgressDigester().FormatLine(el, TimeSpan.FromSeconds(2));
+
+        Assert.Null(line);
+    }
+
+    [Fact]
     public void FormatLine_AssistantToolUseRead_EmitsToolUseLineWithFilePath()
     {
         var el = Parse("{\"type\":\"assistant\",\"message\":{\"model\":\"x\",\"content\":[{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{\"file_path\":\"docs/foo.md\"}}]}}");
@@ -1488,6 +1605,21 @@ public class WriteCancellationCaptureTests
 public class ClaudeCodeAgentBypassPermissionsTests
 {
     [Fact]
+    public void BuildArgs_DefaultPrintTransport_PreservesExistingArgv()
+    {
+        var args = ClaudeCodeAgent.BuildArgs(
+            new ClaudeCodeOptions(),
+            new WorkerOptions(TimeSpan.FromSeconds(30)));
+
+        Assert.Equal(new[]
+        {
+            "--print", "--verbose", "--output-format", "stream-json",
+            "--dangerously-skip-permissions",
+            "--disallowedTools", "Agent,Task",
+        }, args);
+    }
+
+    [Fact]
     public void BuildArgs_BypassPermissionsTrue_IncludesDangerouslySkipPermissions()
     {
         var options = new ClaudeCodeOptions { BypassPermissions = true };
@@ -1507,5 +1639,75 @@ public class ClaudeCodeAgentBypassPermissionsTests
         var args = ClaudeCodeAgent.BuildArgs(options, workerOptions);
 
         Assert.DoesNotContain("--dangerously-skip-permissions", args);
+    }
+}
+
+public class ClaudeCodeAgentTransportTests
+{
+    [Fact]
+    public async Task ExecuteAsync_InteractiveHook_UsesSelectedTransport()
+    {
+        var transport = new RecordingTransport();
+        var agent = new ClaudeCodeAgent(
+            new ClaudeCodeOptions { Transport = ClaudeCodeTransport.InteractiveHook },
+            transport);
+
+        var result = await agent.ExecuteAsync(
+            new Brief("TLB-test", Phase.Implement, "test", Array.Empty<string>(),
+                Array.Empty<string>(), new Dictionary<string, string>()),
+            Path.GetTempPath(),
+            new WorkerOptions(TimeSpan.FromSeconds(30)),
+            CancellationToken.None);
+
+        Assert.Equal(Status.Ok, result.Status);
+        Assert.True(transport.Called);
+    }
+
+    private sealed class RecordingTransport : IClaudeCodeTransport
+    {
+        public bool Called { get; private set; }
+
+        public Task<WorkerResult> ExecuteAsync(
+            Brief brief,
+            string workingDirectory,
+            WorkerOptions options,
+            CancellationToken ct)
+        {
+            Called = true;
+            return Task.FromResult(new WorkerResult(Status.Ok, "interactive", [], null,
+                new Dictionary<string, object>()));
+        }
+    }
+}
+
+public class ClaudeCodeAgentLeanPlanningTests
+{
+    [Fact]
+    public void BuildArgs_LeanPlanningTrue_DisallowsSubagentAndPlanningTools()
+    {
+        var options = new ClaudeCodeOptions { BypassPermissions = true };
+        var workerOptions = new WorkerOptions(TimeSpan.FromSeconds(30), LeanPlanning: true);
+
+        var args = ClaudeCodeAgent.BuildArgs(options, workerOptions);
+
+        // assert the flag and its value are present as adjacent argv tokens
+        var i = args.IndexOf("--disallowedTools");
+        Assert.True(i >= 0, "expected --disallowedTools in argv");
+        Assert.Equal("Agent,Task,TodoWrite", args[i + 1]);
+    }
+
+    [Fact]
+    public void BuildArgs_LeanPlanningFalse_StillDisallowsSubagentToolsButKeepsPlanning()
+    {
+        var options = new ClaudeCodeOptions { BypassPermissions = true };
+        var workerOptions = new WorkerOptions(TimeSpan.FromSeconds(30));
+
+        var args = ClaudeCodeAgent.BuildArgs(options, workerOptions);
+
+        // The sub-agent disallow is unconditional (a one-shot worker must never spawn a nested
+        // agent and yield); only the planning-tool drop is gated on lean planning.
+        var i = args.IndexOf("--disallowedTools");
+        Assert.True(i >= 0, "expected --disallowedTools in argv even for non-lean tickets");
+        Assert.Equal("Agent,Task", args[i + 1]);
     }
 }

@@ -62,7 +62,7 @@ public class ScaffoldProfileDeriverTests
 
         var result = await deriver.DeriveAsync(
             "# Operation: demo\nBuild with npm run build / npm test.",
-            "/tmp", TimeSpan.FromMinutes(5), CancellationToken.None);
+            "/tmp", TimeSpan.FromMinutes(5), null, CancellationToken.None);
 
         Assert.True(result.Success, result.FailureReason);
         Assert.NotNull(result.Profile);
@@ -81,7 +81,7 @@ public class ScaffoldProfileDeriverTests
             new Dictionary<string, object>(), null);
         var deriver = new ScaffoldProfileDeriver(new FakeWorker(failed));
 
-        var result = await deriver.DeriveAsync("op", "/tmp", TimeSpan.FromMinutes(5), CancellationToken.None);
+        var result = await deriver.DeriveAsync("op", "/tmp", TimeSpan.FromMinutes(5), null, CancellationToken.None);
 
         Assert.False(result.Success);
         Assert.Contains("agent crashed", result.FailureReason);
@@ -92,7 +92,7 @@ public class ScaffoldProfileDeriverTests
     {
         var deriver = new ScaffoldProfileDeriver(new FakeWorker(OkWith(null)));
 
-        var result = await deriver.DeriveAsync("op", "/tmp", TimeSpan.FromMinutes(5), CancellationToken.None);
+        var result = await deriver.DeriveAsync("op", "/tmp", TimeSpan.FromMinutes(5), null, CancellationToken.None);
 
         Assert.False(result.Success);
         Assert.Contains("PROJECT_PROFILE", result.FailureReason);
@@ -103,9 +103,23 @@ public class ScaffoldProfileDeriverTests
     {
         var deriver = new ScaffoldProfileDeriver(new FakeWorker(OkWith("{ not valid }")));
 
-        var result = await deriver.DeriveAsync("op", "/tmp", TimeSpan.FromMinutes(5), CancellationToken.None);
+        var result = await deriver.DeriveAsync("op", "/tmp", TimeSpan.FromMinutes(5), null, CancellationToken.None);
 
         Assert.False(result.Success);
         Assert.Contains("invalid", result.FailureReason);
+    }
+
+    // Prompt-contract guard: the deriver's actual classification is the LLM's (faked above), but the
+    // prompt MUST instruct it to emit a gating/advisory role per check, and show the field in the
+    // example. A future edit that drops the role instruction (re-introducing lint/format hard-gating)
+    // fails here.
+    [Fact]
+    public void DeriveProfilePrompt_RequiresARolePerCheck_IncludingSetup()
+    {
+        var prompt = ProfilePromptLoader.Load();
+
+        Assert.Contains("\"role\" is \"gating\", \"advisory\", or \"setup\"", prompt);
+        Assert.Contains("REQUIRED on every check", prompt);
+        Assert.Contains("\"role\": \"advisory\"", prompt);
     }
 }

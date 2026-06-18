@@ -1,6 +1,8 @@
 # 10 - Lifecycle and Orchestration
 
-The Agile phase state machine implemented by `build` - what each phase does, how the chain orchestrator transitions between them, the multi-ticket and tree-aware dispatch paths, and the rework loop bounded by `MaxReworkRounds`.
+Last refreshed: 2026-06-11 (HEAD 3a73eb9)
+
+The Agile phase state machine implemented by `build` - what each phase does, how the chain orchestrator transitions between them, the gate, the integration-branch tree dispatch, and the rework loop bounded by `MaxReworkRounds`.
 
 For per-phase failure modes see [09-failure-modes.md](09-failure-modes.md). For inter-project types see [07-contracts.md](07-contracts.md).
 
@@ -17,19 +19,17 @@ For per-phase failure modes see [09-failure-modes.md](09-failure-modes.md). For 
              \            |             |              |             |              |             |
               plan -------+-> plan -----+              |             |              |             |
                                         v              |             |              |             |
-                                        +-> implement -+             |              |              |
-                                                       v             |              |              |
-                                                       +-> implement-+              |              |
-                                                                     v              |              |
-                                                          (chain) gate              |              |
-                                                                     v              |              |
-                                                                     +-> review ----+              |
-                                                                     ^              |              |
-                                                                     |              |              |
-                            Rework verdict / gate hard-fail ---------+              |              |
-                                                                                    v              |
-                                                                                    +-> ship ----->+
-                                                                                                   ^
+                                        +-> implement -+             |              |             |
+                                                       v             |              |             |
+                                                       +-> implement-+              |             |
+                                                                     v              |             |
+                                                                     +-> gate ------+             |
+                                                                     ^   +-> review-+             |
+                                                                     |              |             |
+                                       Gate fail / Rework verdict ---+              |             |
+                                                                                    v             |
+                                                                                    +-> ship ---->+
+                                                                                                  ^
                                                                               close / defer ------+
                                                                                                   |
                                                                               reopen <-----+ +----+
@@ -38,27 +38,26 @@ For per-phase failure modes see [09-failure-modes.md](09-failure-modes.md). For 
                                                                                   Backlog / Ready
 ```
 
-In a chain run, a deterministic `gate` step sits between `implement` and `review` (see "The verification gate"). It runs the configured checks once on the warm worktree; a Gating-role failure transitions `InReview -> InProgress` and re-enters the rework loop exactly like a `Rework` verdict. The standalone `implement`/`review` verbs have no gate. The `Gate` phase value (op-30) brings the `Phase` enum to 11.
-
 Backed by these transitions in code:
 
 | Phase | Source state | Target state(s) |
 |---|---|---|
-| `plan` | `Backlog` | `Planning` -> `Ready` ([src/ThroughlineBuild.Phases/PlanPhase.cs:98, 143-148](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L98)) |
-| `plan` (promote) | `Backlog` | `Planning` -> `Ready` with no worker/LLM ([src/ThroughlineBuild.Phases/PlanPhase.cs:203-230](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L203-L230)) |
-| `implement` (initial) | `Ready` | `InProgress` -> `InReview` ([src/ThroughlineBuild.Phases/ImplementPhase.cs:251-260](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L251-L260)) |
-| `implement` (rework) | `InProgress` | `InReview` (no `InProgress` re-entry) ([src/ThroughlineBuild.Phases/ImplementPhase.cs:252-260](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L252-L260)) |
-| `gate` (chain-only, hard-fail) | `InReview` | `InProgress` (re-enters the rework loop) ([src/ThroughlineBuild.Phases/GatePhase.cs:137-149](../../src/ThroughlineBuild.Phases/GatePhase.cs#L137-L149)) |
-| `gate` (chain-only, pass) | `InReview` | no change (review runs next) |
-| `review` (Pass / Fail) | `InReview` | no change ([src/ThroughlineBuild.Phases/ReviewPhase.cs:257-300](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L257-L300)) |
-| `review` (Rework) | `InReview` | `InProgress` ([src/ThroughlineBuild.Phases/ReviewPhase.cs:279-284](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L279-L284)) |
-| `ship` | `InReview` | `Done` ([src/ThroughlineBuild.Phases/ShipPhase.cs:696](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L696)) |
-| `decompose` | any | no transition; posts `[decomposed_at: <sha>]` + creates N>=2 child sub-issues ([src/ThroughlineBuild.Phases/DecomposePhase.cs:136-149](../../src/ThroughlineBuild.Phases/DecomposePhase.cs#L136-L149)) |
-| `close` | non-terminal | `Cancelled` (+ cascade to non-terminal children) ([src/ThroughlineBuild.Commands/CloseCommand.cs:48-76](../../src/ThroughlineBuild.Commands/CloseCommand.cs#L48-L76)) |
-| `defer` | non-terminal | `Cancelled` (+ cascade to non-terminal children) ([src/ThroughlineBuild.Commands/DeferCommand.cs:48-76](../../src/ThroughlineBuild.Commands/DeferCommand.cs#L48-L76)) |
-| `reopen` | `Done` / `Cancelled` | `Backlog` or `Ready` (decided by `DetermineTargetState`; children NOT reopened) ([src/ThroughlineBuild.Commands/ReopenCommand.cs:78-128](../../src/ThroughlineBuild.Commands/ReopenCommand.cs#L78-L128)) |
+| `plan` | `Backlog` | `Planning` -> `Ready` |
+| `plan` (promote) | `Backlog` | `Planning` -> `Ready` with no worker/LLM |
+| `implement` (initial) | `Ready` | `InProgress` -> `InReview` |
+| `implement` (rework) | `InProgress` | `InReview` (no `InProgress` re-entry) |
+| `gate` (gating-check fail / invalid claim) | `InReview` | `InProgress` (bounce into rework); no transition on pass, vacuity, or environment failure |
+| `review` (Pass / Fail / provider-unavailable) | `InReview` | no change |
+| `review` (Rework) | `InReview` | `InProgress` |
+| `ship` | `InReview` | `Done` |
+| `decompose` | any | no transition; posts `[decomposed_at: <sha>]` + creates N>=2 child sub-issues |
+| `close` | non-terminal | `Cancelled` (+ cascade to non-terminal children) |
+| `defer` | non-terminal | `Cancelled` (+ cascade to non-terminal children) |
+| `reopen` | `Done` / `Cancelled` | `Backlog` or `Ready` (decided by `DetermineTargetState`; children NOT reopened) |
 | `new` | n/a | new ticket in Plane default state (`Backlog`) |
-| `scaffold` | n/a | 1 operation-ticket + N plan-tickets + M brief-tickets in `Backlog` ([src/ThroughlineBuild.Scaffold/ScaffoldPhase.cs:116-289](../../src/ThroughlineBuild.Scaffold/ScaffoldPhase.cs#L116-L289)) |
+| `scaffold` | n/a | 1 operation-ticket + N plan-tickets + M brief-tickets in `Backlog` |
+
+Declaring sites: the plan transitions live in `PlanPhase.RunAsync` and `PlanPhase.RunPromoteAsync` ([src/ThroughlineBuild.Phases/PlanPhase.cs:124](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L124), [:224](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L224)); implement in `ImplementPhase.RunAsync` ([src/ThroughlineBuild.Phases/ImplementPhase.cs](../../src/ThroughlineBuild.Phases/ImplementPhase.cs)); the gate bounce inside `GatePhase.RunAsync` ([src/ThroughlineBuild.Phases/GatePhase.cs:74](../../src/ThroughlineBuild.Phases/GatePhase.cs#L74)); review in `ReviewPhase.RunAsync` ([src/ThroughlineBuild.Phases/ReviewPhase.cs:70](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L70)); ship, close, defer, reopen, and scaffold in their respective `ShipPhase` / `CloseCommand` / `DeferCommand` / `ReopenCommand` / `ScaffoldPhase` classes.
 
 `TicketState` enum: `Backlog, Planning, Ready, InProgress, InReview, Done, Cancelled` ([src/ThroughlineBuild.Contracts/Models/Ticket.cs](../../src/ThroughlineBuild.Contracts/Models/Ticket.cs)).
 
@@ -67,421 +66,328 @@ Plane mirror state names: `Backlog`, `Planning`, `Ready`, `In Progress`, `In Rev
 ### Loose ends
 
 - The diagram does not show the `decompose` fan-out (one ticket -> N children) or the tree-aware parent paths; those are below in "Tree-aware chain".
-- Architecture doc ([docs/throughline-build-architecture.md](../throughline-build-architecture.md)) Section 4 predates the `Decompose`, parent-chain, ratify, and divergence transitions; the code above is authoritative.
+- The gate runs only inside the chain loop; standalone `build implement` + `build review` skip it, so the manual path and the chain path enforce different bars.
+- Architecture doc ([docs/throughline-build-architecture.md](../throughline-build-architecture.md)) Section 4 predates the `Decompose`, `Gate`, parent-chain, ratify, and divergence transitions; the code above is authoritative.
 
 ---
 
 ## Phase implementations
 
 Every `*Phase` class in [src/ThroughlineBuild.Phases/](../../src/ThroughlineBuild.Phases/) (and `ScaffoldPhase` in `ThroughlineBuild.Scaffold`):
-`PlanPhase`, `ImplementPhase`, `ReviewPhase`, `ShipPhase`, `DecomposePhase`, `ChainPhase`, `ReworkPhase`, `NewPhase`, `DraftPhase`, `ScaffoldPhase`, plus the chain-only `GatePhase`. The `Phase` enum has 11 values: `Plan, Implement, Review, Ship, Chain, New, Command, Draft, Scaffold, Decompose, Gate` (`Gate` added by op-30; [src/ThroughlineBuild.Contracts/Models/Phase.cs:3](../../src/ThroughlineBuild.Contracts/Models/Phase.cs#L3)). `GatePhase` is not an `IWorkflowPhase` - it is invoked only inside the chain's implement-review loop and emits its events under `Phase.Gate`.
+`PlanPhase`, `ImplementPhase`, `GatePhase`, `ReviewPhase`, `ShipPhase`, `DecomposePhase`, `ChainPhase`, `ReworkPhase`, `NewPhase`, `DraftPhase`, `ScaffoldPhase`. The `Phase` enum has 11 values - `Plan, Implement, Review, Ship, Chain, New, Command, Draft, Scaffold, Decompose, Gate` ([src/ThroughlineBuild.Contracts/Models/Phase.cs:3](../../src/ThroughlineBuild.Contracts/Models/Phase.cs#L3)).
 
 ### `PlanPhase` ([src/ThroughlineBuild.Phases/PlanPhase.cs](../../src/ThroughlineBuild.Phases/PlanPhase.cs))
 
 Status: **Functional**.
 
-Step sequence ([src/ThroughlineBuild.Phases/PlanPhase.cs:58-151](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L58-L151)):
+Step sequence (all in `PlanPhase.RunAsync`):
 1. Fetch ticket.
-2. Parent guard: refuse if the ticket has children - parent containers do not get plans ([src/ThroughlineBuild.Phases/PlanPhase.cs:62-65](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L62-L65)).
+2. Parent guard: refuse if the ticket has children - parent containers do not get plans (the refusal message is built at [PlanPhase.cs:84](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L84)).
 3. State guard: `Backlog`.
 4. Resolve `main` SHA via `BaseRefResolver`.
-4b. **Promote branch:** if `BuildOptions.PromotePlan` is set, dispatch to `RunPromoteAsync` and return ([src/ThroughlineBuild.Phases/PlanPhase.cs:80-81](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L80-L81)) - see "Promote path" below. Otherwise the full worker-driven planning sequence runs:
+4b. **Promote branch (the default):** if `BuildOptions.PromotePlan` is set - and it is by default, since `[plan].mode` defaults to `"promote"` - dispatch to `RunPromoteAsync` ([PlanPhase.cs:100](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L100)) and return - see "Promote path" below. Only `[plan].mode = "investigate"` runs the worker-driven planning sequence:
 5. Build `RepoState` (top-level entries + main SHA).
-6. Build brief via `PlanBriefBuilder`.
+6. Build brief via `PlanBriefBuilder.Build` - the obsolete-detection instructions are a shared template block, `plan-obsolete-initial.md` under [src/ThroughlineBuild.Briefs/Templates/shared/](../../src/ThroughlineBuild.Briefs/Templates/shared/), extracted from the four per-agent plan templates and sanitized to stack-agnostic angle-bracket placeholders.
 7. Emit `WorkerSpawn` event.
 8. Run worker.
-9. Transition `Backlog -> Planning` *before* checking the worker status ([src/ThroughlineBuild.Phases/PlanPhase.cs:98](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L98)). A worker failure thus leaves the ticket parked in `Planning`, not `Backlog`.
+9. Transition `Backlog -> Planning` *before* checking the worker status ([PlanPhase.cs:124](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L124)). A worker failure thus leaves the ticket parked in `Planning`, not `Backlog` (the chain resume machine resets this - see `ResolveEntryAsync` below).
 10. Emit `VerifierVerdict` (status of the worker run).
-11. On worker `Status != Ok`: return; if the status is `Escalate`, the `WorkerResult` is carried back as `EscalationWorkerResult` for obsolete-claim ratification ([src/ThroughlineBuild.Phases/PlanPhase.cs:105-108](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L105-L108)).
+11. On worker `Status != Ok`: return; if the status is `Escalate`, the `WorkerResult` is carried back as `EscalationWorkerResult` for obsolete-claim ratification.
 12. Optionally emit `LlmCall` from worker metadata.
-13. Resolve the plan body: `FencedBlockResolver.TryResolveRef(blocks, metadata, "plan_body_ref")` -> `PLAN_BODY` block; render to HTML via `MarkdownRenderer.Render` ([src/ThroughlineBuild.Phases/PlanPhase.cs:120-125](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L120-L125)). Validate the scalar keys (`risk_label`, `size_label`, `planned_at_sha`).
+13. Resolve the plan body: `FencedBlockResolver.TryResolveRef(blocks, metadata, "plan_body_ref")` -> `PLAN_BODY` block; render to HTML via `MarkdownRenderer.Render`. Validate the scalar keys (`risk_label`, `size_label`, `planned_at_sha`).
 14. Append the rendered plan HTML to description.
 15. Apply merged risk + size labels.
 16. Post `[planned_at: <sha>]` comment.
 17. Transition `Planning -> Ready`.
 
-**Promote path (TLB-374).** `RunPromoteAsync` ([src/ThroughlineBuild.Phases/PlanPhase.cs:203-230](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L203-L230)) promotes an already-authored brief straight to `Ready` without spawning a worker or calling an LLM: transition `Backlog -> Planning`, apply merged risk/size labels from the ticket's existing fields, post `[planned_at: <mainSha>]`, transition `Planning -> Ready`. It is enabled by `BuildOptions.PromotePlan`, set from the CLI `--from-brief` flag OR `[plan].mode = "promote"` in config. The ticket must already carry a usable description (the human wrote the brief); promote does no planning work, it only flips state and stamps labels.
+**Promote path (TLB-374) - the default mode.** `RunPromoteAsync` ([PlanPhase.cs:224](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L224)) promotes an already-authored brief straight to `Ready` without spawning a worker or calling an LLM: transition `Backlog -> Planning`, apply merged risk/size labels from the ticket's existing fields, post `[planned_at: <mainSha>]`, transition `Planning -> Ready`. `BuildOptions.PromotePlan` comes from `[plan].mode`, whose default is `"promote"` (`PlanConfig.Default`, [src/ThroughlineBuild.Cli/Config.cs:52-56](../../src/ThroughlineBuild.Cli/Config.cs#L52-L56)) - so a plan run usually spawns no worker; `[plan].mode = "investigate"` opts into the worker-driven sequence above, and the CLI `--from-brief` flag forces promotion regardless of config.
 
 ### `ImplementPhase` ([src/ThroughlineBuild.Phases/ImplementPhase.cs](../../src/ThroughlineBuild.Phases/ImplementPhase.cs))
 
 Status: **Functional**.
 
-Step sequence ([src/ThroughlineBuild.Phases/ImplementPhase.cs:64-340](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L64-L340)):
+Step sequence (all in `ImplementPhase.RunAsync`):
 1. Fetch ticket. Detect rework round vs. initial by `ImplementPhaseOptions.ReviewFeedback` presence.
-2. Parent guard: refuse to implement a ticket that has children; writes `phase-status.json` via `EarlyExitManifest` ([src/ThroughlineBuild.Phases/ImplementPhase.cs:69-76](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L69-L76)).
+2. Parent guard: refuse to implement a ticket that has children; writes `phase-status.json` via `EarlyExitManifest`.
 3. State guard: `Ready` (initial) or `InProgress` (rework). On guard failure, write `phase-status.json`.
-3b. Hygiene gate: refuse on a conflicted or stash-polluted tree, `GateFailure` kind `hygiene_gate` ([src/ThroughlineBuild.Phases/ImplementPhase.cs:93-106](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L93-L106)).
-4. Resolve base ref + main SHA via `BaseRefResolver` (advances to the local target tip when it is ahead of origin - the accumulating state a local-shipping chain leaves behind, TLB-411) ([src/ThroughlineBuild.Phases/ImplementPhase.cs:108-123](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L108-L123)).
+3b. Hygiene gate: refuse on a conflicted or stash-polluted tree, `GateFailure` kind `hygiene_gate`.
+4. Resolve base ref + main SHA via `BaseRefResolver` (advances to the local target tip when it is ahead of origin, TLB-411).
 5. Compute deterministic worktree names via `PhaseWorktreeLayout`.
-6. Drift check: scan comments for the **freshest** `[planned_at: <sha>]` marker by creation time (`CommentMarkers.LatestValue`, not list order, TLB-412); emit `GateFailure` drift warning if it differs from current main SHA (does not block).
-7. Resolve the canonical worktree/branch. Three cases keyed on `SharedWorktreePath` and `isRework` ([src/ThroughlineBuild.Phases/ImplementPhase.cs:147-204](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L147-L204)).
-8. Build the brief via `ImplementBriefBuilder.Build`, passing the chain commit range (`effectiveChainRange`) only when `HandoffPointerEnabled` (compile const, default true) ([src/ThroughlineBuild.Phases/ImplementPhase.cs:206-211](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L206-L211)) - see "Chain commit-range handoff".
-9. Set up the working directory ([src/ThroughlineBuild.Phases/ImplementPhase.cs:213-249](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L213-L249)):
-   - **Shared worktree (initial):** the chain pre-created one worktree; create *this ticket's* `ticket/<id>` branch INSIDE it via `CreateBranchAsync` (no new worktree).
-   - **Standalone (initial):** `CreateWorktreeAsync` cuts a fresh per-ticket worktree + branch.
-   - **Rework:** reuse the existing worktree found in step 7; no git operation.
-10. Transition `Ready -> InProgress` only on initial round.
-11. Emit `WorkerSpawn`. Run worker inside the worktree.
-12. Emit `VerifierVerdict` (worker status). On non-Ok, return early; `Escalate` is carried as `EscalationWorkerResult` ([src/ThroughlineBuild.Phases/ImplementPhase.cs:296-299](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L296-L299)).
-13. Structured-failure salvage (Step 14, TLB-471/476): a clean-exit worker that returned no usable `WORKER_RESULT` is salvaged - not failed - when the worktree is clean and HEAD advanced past base, for `envelope_status=missing` (no marker) and `envelope_status=missing_status` (valid JSON, no `status` key). The commit SHA is reconstructed from git HEAD ([src/ThroughlineBuild.Phases/ImplementPhase.cs:327-346, 479-525](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L327-L346)).
-13b. Post-worker dirty-tree check (Step 14b) with one bounded retry: if the worker left uncommitted files, re-run with a "commit everything" note; still dirty -> `GateFailure` and fail ([src/ThroughlineBuild.Phases/ImplementPhase.cs:355-392](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L355-L392)).
-14. Validate `commit_sha` metadata. Compare against actual `git rev-parse HEAD` in worktree; actual wins on discrepancy (a discrepancy note is folded into the marker comment).
-14b. COMPLETION_CLAIM (Step 15c, TLB-505): if the worker opted in via the `completion_claim_ref` metadata key, resolve and parse the `COMPLETION_CLAIM` block (all four implement templates emit it; parsed by `CompletionClaimParser` in `Workers.Common`). A missing/unparseable block triggers ONE targeted re-ask (`GateFailure` `kind = claim_invalid_first_attempt`) before a hard failure - not a rework round. Workers that omit the key are treated as pre-claim format (null claim) ([src/ThroughlineBuild.Phases/ImplementPhase.cs:410-435](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L410-L435)). The parsed claim is carried on `ImplementResult.CompletionClaim` for the gate.
-15. Post `[implemented_at: <actualSha>]` comment naming the branch; if the worker supplied a `summary_ref` -> `IMPLEMENT_SUMMARY` fenced block, render it via `MarkdownRenderer` and append it.
-16. Transition `InProgress -> InReview`.
+6. Drift check: scan comments for the freshest `[planned_at: <sha>]` marker by creation time (`CommentMarkers.LatestValue`, TLB-412); emit `GateFailure` drift warning if it differs from current main SHA (does not block).
+7. Resolve the canonical worktree/branch. Three cases keyed on `SharedWorktreePath` and `isRework`: shared-worktree (build inside the supplied worktree), standalone (fresh per-ticket worktree), or rework (locate the existing worktree by `git worktree list`, falling back to disk, with a last-resort recovery checkout).
+8. Hold the chain commit range: `HandoffPointerEnabled` (compile const, [ImplementPhase.cs:44](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L44), default true) gates whether `_phaseOptions.ChainCommitRange` reaches the brief - see "Chain commit-range handoff".
+9. Set up the working directory: `CreateBranchAsync` inside a shared worktree, `CreateWorktreeAsync` for standalone, reuse for rework. Then transition `Ready -> InProgress` (initial round only).
+9b. **Preload (experiment-3 lineage):** after the worktree is materialized, `BuildAndReportPreloadAsync` ([ImplementPhase.cs:644](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L644)) calls `PreloadedContextBuilder.Build` ([src/ThroughlineBuild.Briefs/PreloadedContextBuilder.cs](../../src/ThroughlineBuild.Briefs/PreloadedContextBuilder.cs)) to inline file contents into the brief: paths declared in the ticket's `<h3>Preload</h3>` block plus the `[project].convention_files` bundle, read from the live worktree via a confined reader, head+tail-truncated per-file (16KB) and bounded in total (64KB). Telemetry is advisory and never blocks: a `CostLedger` event with kind `preload_summary` (files requested/loaded/truncated, bytes, not-found lists), plus `GateFailure` kinds `preload_file_not_found` (per declared path absent) and `preload_empty` (declared paths exist but none loaded). Gated off entirely by `[project].preload_context = false`. The section lands in the brief via the `preloaded_context_section` template placeholder filled by `ImplementBriefBuilder.Build`; an empty section leaves the brief byte-identical to the pre-preload baseline. The brief build itself is deferred to this step so the preload reader sees the materialized worktree.
+10. Emit `WorkerSpawn`. Run worker inside the worktree. The `WorkerOptions.LeanPlanning` flag is set when `[project].context_hygiene` is enabled and the ticket size is S (the effort-gated context-hygiene experiment; the claude-code agent maps it to `--disallowedTools TodoWrite,Task` and `ImplementBriefBuilder.BuildContextHygieneSection` adds a planning-hygiene constraint line).
+11. Emit `VerifierVerdict` (worker status). On non-Ok, return early; `Escalate` is carried as `EscalationWorkerResult`.
+12. Emit `LlmCall` if usage metadata is present; capture input/output token counts onto the phase result.
+13b. **Context attribution:** if the worker attached per-turn usage (`Metadata["context_turns"]`, produced by `ClaudeCodeTurnParser`), re-emit it as an advisory `CostLedger` event with kind `context_attribution` ([ImplementPhase.cs:388](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L388)): turn count, cache-read series, slope ratio, and per-tool-class byte splits.
+14. Envelope recovery: salvage a committed session whose `WORKER_RESULT` is missing or garbled (two recoverable cases; a re-ask sub-step).
+15. Post-worker dirty-tree check with one bounded retry: if the worker left uncommitted files, re-run with a "commit everything" note; still dirty -> `GateFailure` and fail.
+15b. Validate `commit_sha` metadata against actual `git rev-parse HEAD` in the worktree; actual wins on discrepancy.
+15c. **Completion claim (TLB-500/505):** if the worker opted in via a `completion_claim_ref` metadata key ([ImplementPhase.cs:487](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L487)), resolve the `COMPLETION_CLAIM` fenced block and parse it with `CompletionClaimParser`; on an invalid claim, one bounded re-ask asks the worker to emit only the claim block for its already-committed work. The parsed `CompletionClaim` rides the phase result into the gate.
+16. Post `[implemented_at: <actualSha>]` comment naming the branch; render `IMPLEMENT_SUMMARY` if supplied.
+17. Transition `InProgress -> InReview`.
 
 ### `GatePhase` ([src/ThroughlineBuild.Phases/GatePhase.cs](../../src/ThroughlineBuild.Phases/GatePhase.cs))
 
-Status: **Functional**. Added by op-30. Chain-only: the chain inserts it between `implement` and `review` (the standalone `implement`/`review` verbs never run it). The production CLI always wires `gatePhaseFactory`, so every chain runs the gate; `_gateFactory == null` (gate skipped) only happens in tests.
+Status: **Functional**. New since the last refresh (TLB-500/503/505/506/507/509/538 + the gate-vacuity work). A deterministic check gate that runs on the warm worktree after each successful implement round, before the verifier. It is chain-only: `ChainPhase` invokes it via an optional `_gateFactory` and there is no standalone `build gate` verb; when the factory is not wired the chain skips the gate entirely.
 
-`RunAsync(ticketId, worktreePath, branchName, baseRef, workingDirectory, claim, ct, accumulatedUpstreamProvides)` ([src/ThroughlineBuild.Phases/GatePhase.cs:48-135](../../src/ThroughlineBuild.Phases/GatePhase.cs#L48-L135)):
-1. **Claim schema validation** (only if the worker emitted a claim; a null claim is a legal pre-claim-format worker and proceeds). `ValidateClaim` requires non-null `provides`/`consumes`/`ac_bindings`/`tests_added`. A schema-invalid claim emits `GateFailure` `kind = claim_schema_invalid`, transitions `InReview -> InProgress`, and returns failed.
-2. **Run the `[[review.checks]]` capability map ONCE** on the warm worktree via `AutomatedChecksRunner` (or an injected runner), with check roles `Gating` (build/test/typecheck) and `Advisory` (lint/format).
-3. **Collect smoke signals** via `SmokeCollector.CollectDiffFacts` over the `baseRef..branch` diff - advisory; a diff failure degrades to an advisory `diff unavailable` signal.
-4. **Consumes/provides preflight** (only when `claim.Consumes` is non-empty): compares the claim's consumes against the `accumulatedUpstreamProvides` set; emits an advisory smoke signal and NEVER hard-fails.
-5. **Hard-fail only on failed Gating-role checks:** emits `GateFailure` `kind = gating_checks_failed` (+ `checks_failed`), transitions `InReview -> InProgress`, posts a `[gate: hard-fail]` Plane comment (best-effort), and returns failed. Advisory failures are recorded but never block.
-6. On pass, returns a `GateOutcome(Passed: true, CheckResults, SmokeSignals)` that the chain forwards to `ReviewPhase`.
+`GatePhase.RunAsync` ([GatePhase.cs:74](../../src/ThroughlineBuild.Phases/GatePhase.cs#L74)) sequence:
+1. **Claim schema validation:** if the implement round produced a `CompletionClaim` ([src/ThroughlineBuild.Contracts/Models/CompletionClaim.cs:18](../../src/ThroughlineBuild.Contracts/Models/CompletionClaim.cs#L18) - `Provides`, `Consumes`, `AcBindings`, `TestsAdded`, plus deferred unenforced hook fields), validate all four arrays are present; an invalid claim is a hard-fail (`GateFailure` kind `claim_schema_invalid`) that bounces `InReview -> InProgress` into rework.
+2. **Run configured checks** via `AutomatedChecksRunner.RunAsync` over `GateOptions.Checks` ([GatePhase.cs:9](../../src/ThroughlineBuild.Phases/GatePhase.cs#L9)) - the `[[review.checks]]` specs from `.build/config.toml`, each carrying a `CheckRole` (`Gating`, `Advisory`, `Setup`; [src/ThroughlineBuild.Contracts/Verifier/CheckResult.cs:8](../../src/ThroughlineBuild.Contracts/Verifier/CheckResult.cs#L8)) and an optional `CanaryFile` list.
+3. **Smoke signals (TLB-503):** `SmokeCollector` ([src/ThroughlineBuild.Verification/SmokeCollector.cs](../../src/ThroughlineBuild.Verification/SmokeCollector.cs)) collects advisory diff facts (files touched, test files present, grep present/absent probes); never blocks. The **consumes-provides preflight (TLB-507)** runs here: the claim's `Consumes` set is intersected with the chain's `AccumulatedUpstreamProvides` and reported as an advisory smoke signal.
+4. **Setup failures:** a failed `Setup`-role check (a prerequisite command such as code generation) hard-fails before the gating cascade (`GateFailure` kind `setup_failed`).
+5. **Failure attribution (TLB-538):** when gating checks fail and a `GateControlProber` ([src/ThroughlineBuild.Verification/GateControlProber.cs:32](../../src/ThroughlineBuild.Verification/GateControlProber.cs#L32)) is wired (it always is, from `Program.cs`), spawn a throwaway worktree on the base ref and re-run the failed checks there. Base also fails -> the failure is environmental: reload fresh config from disk and retry once; if still failing, return `EnvironmentFailure` (hard-fail WITHOUT rework, no state bounce; `GateFailure` kinds `gate_control_run`, `gate_config_reloaded`, `gate_environment_failure`). Base passes -> the failure is the ticket's code.
+6. **Gating hard-fail:** ordinary gating failures emit `GateFailure` kind `gating_checks_failed`, transition `InReview -> InProgress`, and return a failed `GateOutcome` whose `HardFailReason` becomes the rework feedback (TLB-509 structured-failure-to-rework).
+7. **Vacuity probe:** on green, `GateVacuityProver` ([src/ThroughlineBuild.Verification/GateVacuityProver.cs:31](../../src/ThroughlineBuild.Verification/GateVacuityProver.cs#L31), wired when `[review].verify_gate_vacuity` is set) proves each first-green gating check can actually fail: materialize its declared canary file, re-run only that check, and assert it now fails. A check that passes with the broken canary present is `Vacuous` - a config defect that hard-fails the chain without rework (`GateFailure` kinds `gate_vacuous`, `gate_canary_cleanup_failed`; checks with no canary get advisory `gate_unverified`). Proven checks are remembered per run.
 
-The gate's `CheckResults` are reused by `ReviewPhase` (check-reuse, TLB-502; see "ChainPhase" wiring) so the checks run once per ticket, not twice. On hard-fail the chain routes to a rework round carrying `GateFailedChecks` (see "The chain rework loop"). The comment-post and the `InReview -> InProgress` transition are both best-effort (swallowed on failure) so a Plane hiccup cannot block the rework loop.
+The gate's `CheckResults` are forwarded to `ReviewPhase` via `PreComputedChecksRunner` ([src/ThroughlineBuild.Verification/PreComputedChecksRunner.cs](../../src/ThroughlineBuild.Verification/PreComputedChecksRunner.cs)) so checks execute exactly once per ticket.
 
 ### `ReviewPhase` ([src/ThroughlineBuild.Phases/ReviewPhase.cs](../../src/ThroughlineBuild.Phases/ReviewPhase.cs))
 
 Status: **Functional**.
 
-Step sequence ([src/ThroughlineBuild.Phases/ReviewPhase.cs:60-260](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L60-L260)):
+Step sequence (all in `ReviewPhase.RunAsync`, [ReviewPhase.cs:70](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L70)):
 1. Fetch ticket. Parent-ticket aggregate-review branch if it has children (see "Tree-aware chain").
 2. State guard `InReview`.
 3. Locate the worktree by branch or path via `git worktree list`; if missing, reconstruct it from the ticket branch (TLB-407).
-4. Resolve base ref + main SHA.
-5. Reconstruct an implementer brief (so the verifier sees what the implementer was told) via `ImplementBriefBuilder.Build` without `ReviewFeedback`. This is reconstructed deterministically - not a fresh worker invocation.
-6. Determine the commit under review (TLB-412/414, [src/ThroughlineBuild.Phases/ReviewPhase.cs:152-181](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L152-L181)): extract the **freshest** `[implemented_at: <sha>]` marker by creation time (required); read the worktree branch HEAD as ground truth. If HEAD differs from the marker (an implementer amended/squashed after posting the marker), emit `GateFailure` kind `implemented_at_superseded` and attribute the review to HEAD - the diff and checks run against HEAD, never the orphaned marker commit.
-7. Compute the diff `baseRef..featureBranch` with patches; synthesize a `WorkerResult` from the resolved commit + diff to hand to the verifier (no re-execution of the implement worker).
-8. Run automated checks via `AutomatedChecksRunner.RunAsync(...)`.
-9. Construct the verifier - default `WorkerAgentReviewer`, which spawns the verifier worker against the review brief inside the feature worktree ([src/ThroughlineBuild.Phases/ReviewPhase.cs:204-205](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L204-L205)). An `IVerifier` override may be injected.
+4. Resolve base ref + main SHA. Inside a parent chain the diff base is the chain's integration branch, not the configured root (a fix from the batch-implement wiring pass).
+5. Reconstruct an implementer brief deterministically via `ImplementBriefBuilder.Build` without `ReviewFeedback` (no fresh worker invocation).
+6. Determine the commit under review (TLB-412/414): freshest `[implemented_at: <sha>]` marker, with worktree branch HEAD as ground truth; on mismatch emit `GateFailure` kind `implemented_at_superseded` and review HEAD.
+7. Compute the diff with patches; synthesize a `WorkerResult` for the verifier.
+8. Run automated checks - when the chain ran the gate, this is a `PreComputedChecksRunner` returning the gate's results without re-execution; standalone reviews run the checks live ([ReviewPhase.cs:206](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L206)).
+9. Construct the verifier - default `WorkerAgentReviewer`, spawning the verifier worker against the review brief inside the feature worktree ([ReviewPhase.cs:215](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L215)).
 10. Emit `WorkerSpawn` (role=verifier). Run verifier.
-10b. Post-verifier dirty-tree check: **hard-fail, no retry** - if the verifier left tracked files uncommitted, emit `GateFailure` kind `dirty_worktree_after_review` and fail ([src/ThroughlineBuild.Phases/ReviewPhase.cs:217-235](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L217-L235), TLB-400). The verifier templates ban `git stash`/`checkout`/`reset`/`rebase` because the stash stack leaks across worktrees.
-11. Emit `VerifierVerdict` (kind, rationale, checks_failed).
-12. Optionally emit `LlmCall` if the `WorkerAgentReviewer`'s last worker result carries usage.
-13. Apply verdict:
-    - `Pass` -> post `reviewed: pass` comment, no transition.
-    - `Rework` -> post `reviewed: rework` comment, transition `InReview -> InProgress`.
-    - `Fail` -> post `reviewed: fail` comment, no transition (operator decides).
+10b. **Provider-unavailable classification (TLB-527):** if `WorkerAgentReviewer.LastProviderError` is set (the verifier worker was blocked by a quota/rate-limit/auth error, classified by `ProviderErrorClassifier`), return a `ReviewResult` carrying `ProviderUnavailable` ([ReviewPhase.cs:243](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L243)) - NOT a `Fail` verdict; no comment is posted and the ticket stays cleanly `InReview`, resumable via `build review`.
+10c. Post-verifier dirty-tree check: hard-fail, no retry - `GateFailure` kind `dirty_worktree_after_review` ([ReviewPhase.cs:266](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L266), TLB-400).
+11. Emit `VerifierVerdict` (kind, rationale, checks_failed, plus `checks_failed_details` - the serialized `CheckResult` evidence persisted so a resumed rework brief carries the failing check's verbatim output, the oracle).
+12. Optionally emit `LlmCall` from the verifier's usage.
+13. Apply verdict: `Pass` -> `reviewed: pass` comment; `Rework` -> `reviewed: rework` comment + `InReview -> InProgress`; `Fail` -> `reviewed: fail` comment, no transition. Advisory-role check failures never produce a `Rework` verdict on their own - role semantics are a cross-phase contract.
 
 ### `ShipPhase` ([src/ThroughlineBuild.Phases/ShipPhase.cs](../../src/ThroughlineBuild.Phases/ShipPhase.cs))
 
 Status: **Functional**.
 
-Deterministic - no LLM, no worker. The merge **target** is `[work].target_branch` if set, else `[ship].base_branch` (resolved by `BuildConfig.ResolveTargetBranch()` and carried on `ShipOptions.TargetBranch`, [src/ThroughlineBuild.Phases/ShipPhase.cs:248](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L248)). Step sequence:
-1. Fetch ticket. Parent-ticket ship branch if it has children (see "Tree-aware chain").
+Deterministic - no LLM, no worker. The merge target is `[work].target_branch` if set, else `[ship].base_branch` (resolved by `BuildConfig.ResolveTargetBranch()` and carried on `ShipOptions.TargetBranch`); inside a parent chain the target is the chain integration branch (see "Tree-aware chain"). Step sequence:
+1. Fetch ticket. Parent-ticket ship branch if it has children.
 2. State guard `InReview`.
 3. Locate worktree (by `ticket/<id>` prefix; falls back to creating one from a matching local branch).
-4. Pre-flight: `build` binary not running from inside the worktree.
-5. Pre-flight hygiene + dirty check: both feature and main worktrees clean of tracked changes; `GateFailure` kind `pre_flight_hygiene` / `pre_flight_dirty` ([src/ThroughlineBuild.Phases/ShipPhase.cs:204-243](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L204-L243)).
-6. Pre-flight (unconditional, catches detached HEAD): the main worktree is checked out on the target branch, else `wrong_worktree_branch` `GateFailure` and fail at `PreFlight` ([src/ThroughlineBuild.Phases/ShipPhase.cs:256-277](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L256-L277), TLB-402/410).
+4. Pre-flight: `build` binary not running from inside the worktree (`GateFailure` kind `pre_flight_exe_in_worktree`).
+5. Pre-flight hygiene + dirty check: both feature and main worktrees clean of tracked changes; `GateFailure` kinds `pre_flight_hygiene` ([ShipPhase.cs:218](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L218)) / `pre_flight_dirty` ([:242](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L242)).
+6. Pre-flight (unconditional, catches detached HEAD): the worktree being merged into is on the target branch, else `wrong_worktree_branch` `GateFailure` ([ShipPhase.cs:272](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L272), TLB-402/410).
 7. Conditionally fetch from remote. If no remote, or `--no-push`: skip, rebase onto the local target branch.
-8. Determine rebase target via divergence handling (see "Divergence and merge orchestration"). Fetch and the auto-rebase of the local target branch are wrapped in `MainWorktreeLock`.
-9. Emit `base_ref_resolved` (a `TicketWrite` event, carries `target_branch` + `source`).
+8. Determine rebase target via divergence handling (see "Divergence and merge orchestration"), under `MainWorktreeLock`.
+9. Emit `base_ref_resolved` (a `TicketWrite` event).
 10. Rebase feature branch onto resolved target ref. On conflict: `git rebase --abort`, fail at `Rebase`.
 11. Conflict-marker scan of the rebased diff's files.
-12. Run `ship.regression_checks` (baseline-aware, TLB-401: only newly-failing checks block; pre-existing failures noted non-blocking).
-13. Fast-forward merge into the target branch, under `MainWorktreeLock`, with a post-merge HEAD re-assertion ([src/ThroughlineBuild.Phases/ShipPhase.cs:654-667](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L654-L667)).
-14. Push the target branch to remote when a remote exists and `--no-push` is not set; failure fails the ship at the `Push` stage.
-15. Read merged HEAD SHA.
-16. Post `[shipped_at: <mergedSha>]` comment ([src/ThroughlineBuild.Phases/ShipPhase.cs:686-689](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L686-L689)).
-17. Transition `InReview -> Done` ([src/ThroughlineBuild.Phases/ShipPhase.cs:696](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L696)).
-18. `WorktreeDecrufter.DecruftAsync` - **skipped when `SkipDecruft` is set** (the chain ship factory sets it so the integration worktree survives between children, [src/ThroughlineBuild.Phases/ShipPhase.cs:706-716](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L706-L716)); otherwise failure is non-fatal post-merge.
-19. Optionally `git branch -d ticket/<slug>` (failure non-fatal).
-
-`ShipPhase` emits phase-level progress lines ("[ship] fetching...", "[ship] merging into <target>...") to its progress writer, and under `--debug` (verbose) also streams raw git output.
+12. Run `ship.regression_checks` (baseline-aware, TLB-401). Two newer refinements: advisory-role checks never block the regression gate, and when a check regresses, the wired `GateControlProber` (`_baselineProber`, [ShipPhase.cs:58](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L58)) re-probes the baseline in a fresh worktree so a stale cached baseline entry cannot misclassify a pre-existing failure as a regression (or vice versa) - the contradictory baseline is corrected ([ShipPhase.cs:552-564](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L552-L564)).
+13. Fast-forward merge into the target branch, under `MainWorktreeLock`, with post-merge HEAD re-assertion.
+14. Push when a remote exists and `--no-push` is not set; failure fails the ship at `Push`.
+15. Read merged HEAD SHA; post `[shipped_at: <mergedSha>]` comment; transition `InReview -> Done`.
+16. `WorktreeDecrufter.DecruftAsync` - skipped when `SkipDecruft` is set ([ShipPhase.cs:16](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L16), set by the chain ship factory so chain worktrees survive until the end-of-chain sweep).
+17. Optionally `git branch -d ticket/<slug>` (failure non-fatal).
 
 ### `DecomposePhase` ([src/ThroughlineBuild.Phases/DecomposePhase.cs](../../src/ThroughlineBuild.Phases/DecomposePhase.cs))
 
-Status: **Functional**. Added by TLB-259/264/265. Fans one ticket out into independently shippable child sub-issues. No state transition on the parent.
-
-Step sequence ([src/ThroughlineBuild.Phases/DecomposePhase.cs:52-149](../../src/ThroughlineBuild.Phases/DecomposePhase.cs#L52-L149)):
-1. Fetch ticket; resolve main SHA via `BaseRefResolver`.
-2. Build `RepoState` + brief via `DecomposeBriefBuilder`.
-3. Emit `WorkerSpawn`. Run worker.
-4. Emit `VerifierVerdict` (worker status). On non-Ok, fail.
-5. Optionally emit `LlmCall`.
-6. Extract `child_specs` from worker metadata; require at least 2 ([src/ThroughlineBuild.Phases/DecomposePhase.cs:102-108](../../src/ThroughlineBuild.Phases/DecomposePhase.cs#L102-L108)).
-7. Rule-based `DecomposeVerdict.Check` quality gate over the specs ([src/ThroughlineBuild.Phases/DecomposeVerdict.cs:5-29](../../src/ThroughlineBuild.Phases/DecomposeVerdict.cs#L5-L29)):
-   - `coverage_check`: every child has a non-empty `scope_boundary`.
-   - `uniqueness_check`: no two children share a title (case-insensitive).
-   - `size_check`: every child size is one of S / M / L.
-   On any failure, emit a `VerifierVerdict` with `status=VerdictFailed` + `checks_failed`, and return failure (no tickets created).
-8. On pass: emit `VerifierVerdict` `status=VerdictPassed`.
-9. Map each `ChildSpec` to a `ChildTicketSpec` (description HTML + size label) and call `CreateChildTicketsAsync` to create sub-issues parented to this ticket. If all creations fail, return failure.
-10. Post `[decomposed_at: <mainSha>]` comment.
-
-The verdict is **rule-based**, not LLM-driven - the worker produces the specs, `DecomposeVerdict` validates them deterministically.
+Status: **Functional**. Fans one ticket out into independently shippable child sub-issues; no state transition on the parent. Sequence: fetch + resolve main SHA, build brief via `DecomposeBriefBuilder`, run worker, extract `child_specs` (require >= 2), run the rule-based `DecomposeVerdict.Check` quality gate ([src/ThroughlineBuild.Phases/DecomposeVerdict.cs](../../src/ThroughlineBuild.Phases/DecomposeVerdict.cs) - coverage, uniqueness, size checks; deterministic, not LLM-driven), create child sub-issues via `CreateChildTicketsAsync`, post `[decomposed_at: <mainSha>]`.
 
 ### `ChainPhase` ([src/ThroughlineBuild.Phases/ChainPhase.cs](../../src/ThroughlineBuild.Phases/ChainPhase.cs))
 
-Status: **Functional**. The orchestrator. Constructed in `Program.cs` via the `ChainPhaseComposition.BuildChainPhase` seam (extracted so no required dependency can be silently dropped - the original `--batch-implement` bug was exactly a dropped `batchWorker` ctor arg). The composition root wires per-phase factories closed over the shared `PlaneTicketingClient`, worker agents, and `IEventSink`, plus `ratifierFactory` (obsolete-claim handling), `chainShipFactory` (`SkipDecruft=true`, NoPush) for integration-branch ships, the `batchWorker` (the implement agent), root-landing remote/push, and `gateFactory` ([src/ThroughlineBuild.Cli/ChainPhaseComposition.cs:22-64](../../src/ThroughlineBuild.Cli/ChainPhaseComposition.cs#L22-L64), call site [src/ThroughlineBuild.Cli/Program.cs:1849-1864](../../src/ThroughlineBuild.Cli/Program.cs#L1849-L1864)). `MaxReworkRounds = 2` ([src/ThroughlineBuild.Phases/ChainPhase.cs:60](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L60)).
+Status: **Functional**. The orchestrator. Its construction is extracted from `Program.cs` into the testable `ChainPhaseComposition` ([src/ThroughlineBuild.Cli/ChainPhaseComposition.cs](../../src/ThroughlineBuild.Cli/ChainPhaseComposition.cs)), which wires per-phase factories, the optional `_gateFactory`, the batch worker, the rework-recheck specs/runner, the landing remote/push toggle, and the `_chainShipFactory` (`SkipDecruft=true`). Read-only accessors over the wired collaborators exist solely so a composition-root test can fail when a ctor argument is silently dropped - the original `--batch-implement` bug was exactly that ([ChainPhase.cs:145-148](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L145-L148)).
 
-`RunAsync` entry ([src/ThroughlineBuild.Phases/ChainPhase.cs:137-486](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L137-L486)):
+`ChainPhase.RunAsync` ([ChainPhase.cs:152](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L152)) wraps the core in a `TicketingUnavailableException` handler (TLB-545): a ticketing backend unreachable at the transport level after client-side retries is classified as `ChainOutcome.TicketingUnavailable` at the per-ticket boundary - environmental, resumable, never a crash. `RunChainCoreAsync` ([ChainPhase.cs:184](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L184)) then runs:
 
 1. Fetch the ticket.
-2. **Outermost-only preflight** (skipped on recursion, where `ChainTargetBranch` is set), in order ([src/ThroughlineBuild.Phases/ChainPhase.cs:151-246](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L151-L246)): a **wrong-branch gate** (main worktree must be on `_baseOptions.TargetBranch` or `GateFailure kind = chain_preflight_wrong_branch` -> `RefusedWrongBranch`); a **hygiene gate** (dangling stash/conflict -> `kind = hygiene_gate_preflight` -> `RefusedDirtyTree`); and a **tracked-dirty gate** (tracked changes in the main checkout -> `kind = chain_preflight_dirty` with `dirty_count`/`dirty_paths` -> `RefusedDirtyTree`). All three return before planning, transitions, or worker spawn.
-3. Cycle guard (`VisitedTicketUuids`) and `--dry-run` schedule (returns `DryRunPreview`).
-4. Query children; if any exist, delegate to `RunParentChainAsync` (the tree-aware path), unless the depth cap is hit (`ParentStoppedEarly`) ([src/ThroughlineBuild.Phases/ChainPhase.cs:282-296](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L282-L296)).
-5. Otherwise route on state via `ResolveEntryAsync` (the **resume state machine**, [src/ThroughlineBuild.Phases/ChainPhase.cs:2855-2877](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2855-L2877)):
-   - `Backlog` -> start at Plan
-   - `Ready` -> start at Implement
-   - `InReview` -> start at Review
-   - `Planning` -> a plan that never finished (the `Backlog -> Planning` transition precedes the worker, and no plan artifact is written until it succeeds): reset to `Backlog`, emit a `chain_resume` `StateTransition`, start at Plan
-   - `InProgress` -> `ResolveInProgressAsync` ([src/ThroughlineBuild.Phases/ChainPhase.cs:2888-2921](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2888-L2921)): count commits on `ticket/<id>` beyond base. **0 commits** (an interrupted *initial* implement transitions `Ready -> InProgress` before the worker commits) -> `PruneOrphanBranchAsync` removes the orphaned branch/worktree, reset to `Ready`, start a clean Implement - in a parent chain this lets the branch be recreated inside the shared worktree instead of an orphaned standalone one. **Has commits** (interrupted rework) -> `ResumeImplement` at round 1 reusing the worktree, recovering the last `Rework` feedback from the event log or synthesizing a neutral resume note.
-   - `Done` / `Cancelled` -> `Refused`: emit `ChainStart`, return `RefusedInitialState` (the only genuinely un-runnable states)
-   `ResolveEntryAsync` performs the reset/prune side effects and emits the `chain_resume` `StateTransition` events; resume transitions carry reason `chain_resume`.
-6. Emit `ChainStart`.
-7. If starting at Plan: emit a console-only START notice (see below), run `PlanPhase`. On failure, if `!NoAutoResolve` and the worker `Escalate`d with reason `obsolete`, run obsolete-claim ratification (see "Obsolete-claim handling"). Otherwise return `StoppedAtPlan`.
-8. If Plan succeeded, starting at Implement, or `ResumeImplement`: enter the **implement -> gate -> review loop** (`RunImplementReviewLoopAsync`). `ResumeImplement` re-enters the loop as a rework round (carries recovered/synthesized feedback at round >= 1) so `ImplementPhase` reuses the in-progress worktree.
-9. If starting at Review only (`InReview` resume): run one review with no gate (`RunReviewBranchAsync` - the gate runs only after a fresh implement; `ReviewPhase` runs its own checks here). Pass -> Ship; Rework -> implement-gate-review loop; Fail -> `StoppedAtReview`.
-10. Run `ShipPhase` (using `_chainShipFactory` into the integration worktree when inside a parent chain - see "Tree-aware chain"). Fail -> `StoppedAtShip`.
-11. Emit `ChainEnd`. Return `Completed` (carrying `ShippedProvides` from the implement claim).
+2. **Outermost-only preflight** (skipped on recursion, which sets `ChainTargetBranch`):
+   - **Wrong-branch guard:** the main worktree must be on the configured target branch (mirrors the ship preflight, but before any planning) - else `GateFailure` kind `chain_preflight_wrong_branch` and `RefusedWrongBranch` ([ChainPhase.cs:198-235](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L198-L235)).
+   - **Hygiene gate:** dangling stash or conflict -> `GateFailure` kind `hygiene_gate_preflight`, `RefusedDirtyTree`.
+   - **Tracked-dirty gate:** modified tracked files (sampled to 25 paths) -> `GateFailure` kind `chain_preflight_dirty`, `RefusedDirtyTree` ([ChainPhase.cs:260-292](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L260-L292)).
+3. **Cycle guard:** a ticket already in `VisitedTicketUuids` stops the recursion ([ChainPhase.cs:295](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L295)).
+4. **Dry-run:** `--dry-run` builds and prints the full dispatch plan (post-order tree walk, `BuildDryRunPlanAsync`) and returns `DryRunPreview` with per-ticket preview results - no phases execute ([ChainPhase.cs:306-326](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L306-L326)).
+5. **Parent path:** if the ticket has non-terminal children, recurse via `RunParentChainAsync` - but only below the depth cap (`ChainPhaseOptions.MaxDepth`, default 16; exceeding it returns `ParentStoppedEarly`) ([ChainPhase.cs:329-344](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L329-L344)).
+6. Otherwise route on state via `ResolveEntryAsync` (the **resume state machine**, [ChainPhase.cs:3315](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L3315)):
+   - `Backlog` -> start at Plan; `Ready` -> Implement; `InReview` -> Review.
+   - `Planning` -> a plan that never finished: reset to `Backlog`, emit a `chain_resume` `StateTransition`, start at Plan.
+   - `InProgress` -> `ResolveInProgressAsync` ([ChainPhase.cs:3348](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L3348)): count commits on `ticket/<id>` beyond base. 0 commits -> `PruneOrphanBranchAsync` removes the orphaned branch/worktree, reset to `Ready`, clean Implement. Has commits -> `ResumeImplement` at round 1 reusing the worktree, recovering the last `Rework` feedback (with its persisted `FailedCheckDetails` evidence) from the event log via `IReviewFeedbackRetriever.GetLatestRework`, or synthesizing a neutral resume note.
+   - `Done` / `Cancelled` -> `RefusedInitialState`.
+7. Emit `ChainStart`. If starting at Plan: run `PlanPhase`; on an `obsolete` escalation (and `!NoAutoResolve`) run ratification (see "Obsolete-claim handling"); otherwise failures return `StoppedAtPlan`.
+8. Enter the implement-gate-review loop (`RunImplementReviewLoopAsync` - see "The chain rework loop"). A chain starting at Review runs `RunReviewBranchAsync` first (no gate on the resume-into-review path; `ReviewPhase` runs the checks itself) and hands a `Rework` verdict into the loop.
+9. Run `ShipPhase`. Inside a parent chain (`ChainTargetBranch` set) the ship uses `_chainShipFactory` and runs in the parent's integration worktree, so the leaf ships into the integration branch, not the configured root ([ChainPhase.cs:487-506](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L487-L506)). Fail -> `StoppedAtShip`.
+10. On success at the outermost level, sweep this chain's worktrees (`SweepChainWorktreesAsync`, [ChainPhase.cs:533](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L533)); failures preserve worktrees for inspection. Emit `ChainEnd`, return `Completed` carrying `ShippedProvides` (the completion claim's `Provides`, accumulated for downstream siblings).
 
-**Per-phase START notice (TLB-415).** Before each phase the chain calls `EmitPhaseStart` ([src/ThroughlineBuild.Phases/ChainPhase.cs:491-503](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L491-L503)), which pushes a `ChainStep` through the `OnStep` stream so the operator sees a phase has begun, not just its completion line. These START steps are **console-only** - never added to the `steps` list, so the returned `ChainResult` and its `phases_run` count are unchanged. Called before plan ([:342](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L342)), ship ([:441](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L441)), implement ([:558](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L558)), gate ([:637](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L637)), review ([:854](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L854)), and ratify ([:1045](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1045)).
+**Per-phase START notice (TLB-415).** `EmitPhaseStart` ([ChainPhase.cs:541](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L541)) pushes a `ChainStep` with `IsStart: true` through `OnStep` before each phase (plan, implement, gate, review, ship, ratify, batch-implement). Console-only - never added to `steps` or `phases_run`.
 
-**Chain commit-range handoff (op-29 briefs 08-11).** A parent chain derives a git commit range (`ChainCommitRange` / `ChainCommitRangeHelper.ComputeAsync`, [src/ThroughlineBuild.Helpers/ChainCommitRange.cs:13-83](../../src/ThroughlineBuild.Helpers/ChainCommitRange.cs#L13-L83)) describing the commits already produced by shipped siblings, and threads it onto `ChainPhaseOptions.ChainCommitRange`. The implement loop passes it to `ImplementBriefBuilder` **only on the first implement round** (`feedback is null`); rework rounds suppress it because the worktree already holds the agent's prior edits ([src/ThroughlineBuild.Phases/ChainPhase.cs:553-557](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L553-L557)). The builder folds the range's touched files into `RelevantFiles` and adds a single bounded `chain_pointer` line to Context, but **only when the range is non-empty** - an empty/absent range leaves the brief byte-identical to the pre-handoff baseline ([src/ThroughlineBuild.Briefs/ImplementBriefBuilder.cs:50-90](../../src/ThroughlineBuild.Briefs/ImplementBriefBuilder.cs#L50-L90)). It is no-LLM and best-effort: any git failure yields `CommitCount=0`. Gated end-to-end by the `HandoffPointerEnabled` compile const ([src/ThroughlineBuild.Phases/ImplementPhase.cs:34](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L34)).
+**Chain commit-range handoff (op-29 briefs 08-11).** A parent chain derives `ChainCommitRange` (via `ChainCommitRangeHelper.ComputeAsync`, [src/ThroughlineBuild.Helpers/ChainCommitRange.cs](../../src/ThroughlineBuild.Helpers/ChainCommitRange.cs)) describing commits already produced by shipped siblings and threads it to `ImplementBriefBuilder` on the first implement round only ([ChainPhase.cs:661](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L661)); rework rounds suppress it. The builder folds touched files into `RelevantFiles` and adds one bounded `chain_pointer` Context line only when the range is non-empty ([src/ThroughlineBuild.Briefs/ImplementBriefBuilder.cs:65-102](../../src/ThroughlineBuild.Briefs/ImplementBriefBuilder.cs#L65-L102)). No-LLM, best-effort; gated by the `HandoffPointerEnabled` const.
 
-The chain invokes an `Action<string, ChainStep>` callback (`OnStep`) after each phase (and for START notices); `ChainCommand` uses it to stream one-line, per-ticket-prefixed summaries to stdout ([src/ThroughlineBuild.Commands/ChainCommand.cs](../../src/ThroughlineBuild.Commands/ChainCommand.cs)). Per-ticket output prefixing (`[<ticketId>] `) is done by `PrefixedTextWriter` in `BuildPhaseOptions` ([src/ThroughlineBuild.Phases/ChainPhase.cs:905-931](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L905-L931), TLB-403).
-
-Each phase runs under its own per-phase session id minted from `_sessionIdGenerator`; the chain itself has a single `chainSessionId` used on `ChainStart`/`ChainEnd` ([src/ThroughlineBuild.Phases/ChainPhase.cs:142, 316-327](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L142)).
+The chain invokes `OnStep` after each phase; `ChainCommand` streams one-line, per-ticket-prefixed summaries ([src/ThroughlineBuild.Commands/ChainCommand.cs](../../src/ThroughlineBuild.Commands/ChainCommand.cs)). Each phase gets its own session id from `_sessionIdGenerator`; `ChainStart`/`ChainEnd` carry a single chain session id.
 
 ### `ReworkPhase` ([src/ThroughlineBuild.Phases/ReworkPhase.cs](../../src/ThroughlineBuild.Phases/ReworkPhase.cs))
 
-Status: **Functional**. Thin wrapper.
+Status: **Functional**. Thin wrapper: state guard `InProgress`; resolve feedback (manual `--feedback` wins, else latest `Rework` verdict via `IReviewFeedbackRetriever` - which now also recovers the persisted failed-check evidence); build `ImplementPhaseOptions`; invoke `ImplementPhase` as a rework round.
 
-1. State guard: `InProgress` ([src/ThroughlineBuild.Phases/ReworkPhase.cs:62-70](../../src/ThroughlineBuild.Phases/ReworkPhase.cs#L62-L70)).
-2. Resolve feedback: manual `--feedback` text wins; otherwise read latest `Rework` verdict from the event log via an `IReviewFeedbackRetriever` ([src/ThroughlineBuild.Phases/ReworkPhase.cs:76-96](../../src/ThroughlineBuild.Phases/ReworkPhase.cs#L76-L96)). `ReworkRoundNumber` from options overrides the retrieved value.
-3. Build `ImplementPhaseOptions` carrying the feedback.
-4. Construct and invoke `ImplementPhase` (rework round) ([src/ThroughlineBuild.Phases/ReworkPhase.cs:102-103](../../src/ThroughlineBuild.Phases/ReworkPhase.cs#L102-L103)).
+### `NewPhase` / `DraftPhase` ([src/ThroughlineBuild.Phases/NewPhase.cs](../../src/ThroughlineBuild.Phases/NewPhase.cs), [DraftPhase.cs](../../src/ThroughlineBuild.Phases/DraftPhase.cs))
 
-### `NewPhase` ([src/ThroughlineBuild.Phases/NewPhase.cs](../../src/ThroughlineBuild.Phases/NewPhase.cs))
-
-Status: **Functional**. Deterministic creator.
-
-1. Read body file. Validate title; collect non-fatal warnings.
-2. Emit `WorkerSpawn` with role=creator (no actual worker; the event is for audit symmetry).
-3. `ITicketing.CreateTicketAsync`.
-4. Emit `TicketWrite` with `create_ticket` action. No `LlmCall` is emitted for this deterministic phase.
-
-### `DraftPhase` ([src/ThroughlineBuild.Phases/DraftPhase.cs](../../src/ThroughlineBuild.Phases/DraftPhase.cs))
-
-Status: **Functional**. Used by `build new` in draft mode and stdin draft mode.
-
-1. Validate non-empty operator text.
-2. Build `DraftBriefBuilder` brief.
-3. Run worker.
-4. Resolve `body_markdown_ref` -> `DRAFT_BODY` fenced block (falling back to a legacy direct `body_markdown` field) ([src/ThroughlineBuild.Phases/DraftPhase.cs:70-84](../../src/ThroughlineBuild.Phases/DraftPhase.cs#L70-L84)).
-5. Validate minimal sections (title + description).
-6. Return `DraftResult.Ok` with body markdown.
+Status: **Functional**. Unchanged in shape: `NewPhase` is the deterministic creator (audit-symmetry `WorkerSpawn` with role=creator, `TicketWrite` with `create_ticket`); `DraftPhase` runs a draft worker and resolves `body_markdown_ref` -> `DRAFT_BODY` fenced block.
 
 ### `ScaffoldPhase` ([src/ThroughlineBuild.Scaffold/ScaffoldPhase.cs](../../src/ThroughlineBuild.Scaffold/ScaffoldPhase.cs))
 
-Status: **Functional**. Multi-write batch.
+Status: **Functional**. Multi-write batch, now followed by a profile-derivation worker pass.
 
-1. Parse op-doc via `OpDocParser`.
+1. Parse op-doc via `OpDocParser` (which now also parses a positive-only `Preload` brief label, rendered as an `<h3>Preload</h3>` block in ticket HTML by `BriefHtmlRenderer` - the source of the implement-phase preload paths).
 2. Validate via `OpDocValidator`.
 3. Warning gate: abort if warnings and not `--accept-warnings`.
 4. Dry-run gate (counts only, no API calls).
-5. Create a single top-level **operation ticket** titled `Operation: <slug>` with the `plan-ticket` label (TLB-228) ([src/ThroughlineBuild.Scaffold/ScaffoldPhase.cs:124-152](../../src/ThroughlineBuild.Scaffold/ScaffoldPhase.cs#L124-L152)). Its UUID is the parent for all plan-tickets.
-6. For each plan in dispatch order:
-   1. Create plan-ticket with `plan-ticket` label; emit `TicketWrite role=plan`.
-   2. `SetParentAsync` plan -> operation ticket.
-   3. For each brief in the plan: create brief-ticket; emit `TicketWrite role=brief`; `SetParentAsync` brief -> plan.
-7. Failures collected in `ScaffoldFailure[]`; processing continues. Result carries `OpTicketId`.
+5. Plane connectivity test.
+6. Create a single operation ticket, then per plan: plan-ticket + `SetParentAsync`, then per brief: brief-ticket + `SetParentAsync`. Failures collected in `ScaffoldFailure[]`; processing continues.
+
+**Profile derivation.** After ticket creation, `ScaffoldProfileRunner` ([src/ThroughlineBuild.Cli/ScaffoldProfileRunner.cs](../../src/ThroughlineBuild.Cli/ScaffoldProfileRunner.cs)) runs `ScaffoldProfileDeriver.DeriveAsync` ([src/ThroughlineBuild.Scaffold/ScaffoldProfileDeriver.cs:23](../../src/ThroughlineBuild.Scaffold/ScaffoldProfileDeriver.cs#L23)) - a read-only worker (tools Read/Grep/Glob, size Small, debug-captured under `--debug`) that emits a `PROJECT_PROFILE` fenced block parsed into `ProjectProfile` ([src/ThroughlineBuild.Scaffold/ProjectProfile.cs](../../src/ThroughlineBuild.Scaffold/ProjectProfile.cs)). The deriver prompt (embedded `derive-profile-prompt.md` via `ProfilePromptLoader`) has accumulated several hardening rules: every check carries a role (lint/format default to `Advisory` by name fallback so they never hard-gate), `Setup`-role prerequisite steps run before gate checks, every gating check declares a per-check canary (the vacuity-prover input), the test command must be hermetic (works in a fresh worktree, user-global caches disabled), and a `convention_files` bundle names the stable convention/harness files to preload into every implement brief. `ConfigProfileWriter.Apply` writes the result back into `.build/config.toml` as `[[review.checks]]` / `[[ship.regression_checks]]` / `[project]` entries; an already-configured repo is skipped unless `--force-profile`.
 
 ### Loose ends
 
-- `ScaffoldPhase` is invoked from the CLI, not exposed as an `IWorkflowPhase`; it has its own `ScaffoldResult` shape.
-- `DecomposePhase` writes children but does not transition or label the parent beyond the `[decomposed_at]` marker; there is no "decomposed" terminal state.
-- The architecture doc still describes a 9-value `Phase` enum and `ClaudeCodeReviewer` as the default verifier; both are stale - the enum has 11 values (op-30 added `Gate`) and the verifier is `WorkerAgentReviewer`.
+- `ScaffoldPhase` is invoked from the CLI, not exposed as an `IWorkflowPhase`.
+- `GatePhase` has no standalone verb; operators cannot run the gate (or the vacuity prover) outside a chain.
+- `DecomposePhase` writes children but does not transition or label the parent beyond the `[decomposed_at]` marker.
+- The architecture doc still describes a 9-value `Phase` enum and `ClaudeCodeReviewer` as the default verifier; both are stale - the enum has 11 values and the verifier is `WorkerAgentReviewer`.
 
 ---
 
 ## The chain rework loop
 
-`RunImplementReviewLoopAsync` ([src/ThroughlineBuild.Phases/ChainPhase.cs:527-761](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L527-L761)):
+`RunImplementReviewLoopAsync` ([ChainPhase.cs:621](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L621)):
 
 ```
-              +-------------------+
-              | ImplementPhase    |
-              +---------+---------+
-                        |
-                        | InProgress -> InReview
-                        v
-              +---------+---------+
-              | GatePhase (chain) |  (when _gateFactory != null)
-              +---------+---------+
-                        |
-                  pass  |  gating_checks_failed / claim_schema_invalid
-                        |   (InReview -> InProgress, gate-attributable rework)
-                        v          \
-              +---------+---------+  \-> round++ (verdict_that_triggered=GateFailure)
-              | ReviewPhase       |       |
-              +---------+---------+       |
-                        |                 |
-            +-----------+-----------+     |
-            |           |           |     |
-          Pass       Rework        Fail   |
-            |           |           |     |
-            v           v           v     |
-        ShipPhase   round++     return    |
-                        |       StoppedAtReview
-                  round < 2 ?  <----------+
-                  +-----+-----+
-                  |           |
-                yes          no
-                  |           |
-        (back to top)   return ReworkCapExceeded
+        +-------------------+
+        | ImplementPhase    |<--------------------------------------+
+        +---------+---------+                                       |
+                  | InProgress -> InReview                          |
+                  v                                                 |
+        [check-recheck: if this round was rework citing named       |
+         checks, re-run exactly those checks (no LLM); still        |
+         failing -> raw output loops straight back, <= 2            |
+         retries per round, no rework round consumed]               |
+                  |                                                 |
+                  v                                                 |
+        +---------+---------+  gating fail, round < 2  (feedback)   |
+        | GatePhase         +----------------------------------------+
+        | (when wired)      +--> vacuous     -> GateVacuous (stop)
+        +---------+---------+--> environment -> GateEnvironmentFailure (stop)
+                  | pass (checks forwarded to review)
+                  v
+        +---------+---------+
+        | ReviewPhase       |
+        +---------+---------+
+            |       |        \
+          Pass    Rework      Fail / provider error
+            |       |               \
+            v       v                v
+        ShipPhase  round++,      StoppedAtReview /
+            |      loop if       ReviewUnavailable
+            |      round < 2
+            |      else ReworkCapExceeded
 ```
 
-`MaxReworkRounds = 2` ([src/ThroughlineBuild.Phases/ChainPhase.cs:60](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L60)) means at most 1 rework + 1 reattempt, i.e. up to 3 implement runs total. Both a review `Rework` verdict **and** a gate hard-fail consume a rework round and emit a `ReworkRound` event carrying `round`, `verdict_that_triggered` (`"Rework"` or `"GateFailure"`), `rationale_preview` ([src/ThroughlineBuild.Phases/ChainPhase.cs:684-703, 736-751](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L684-L703)). A gate-triggered rework builds a `ReviewFeedback` with `GateFailedChecks` populated (TLB-509) so the next implement brief renders a dedicated gate-failure section; gate-attributable rounds/tokens are tracked for the `CostLedger` event. Operators wanting more rounds invoke `build rework` manually after `ReworkCapExceeded`.
+`MaxReworkRounds = 2` ([ChainPhase.cs:61](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L61)) means at most 2 rework rounds, i.e. up to 3 implement runs total; both the gate bounce and the review `Rework` verdict consume rounds from the same budget. `MaxCheckRetriesPerReworkRound = 2` ([ChainPhase.cs:67](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L67)) bounds the separate deterministic check-recheck loop, which does NOT consume rework rounds or verifier calls: a check is an oracle, and a subprocess re-run proves in seconds what a verifier LLM call rediscovers in minutes. Advisory-role checks never trigger the recheck short-circuit and never drive rework.
 
-The gate runs only after a *fresh* implement round inside this loop (it reads `implResult.CompletionClaim` and the warm worktree). When the chain starts at Review (state `InReview`), the first review runs in `RunReviewBranchAsync` with **no gate** - `ReviewPhase` runs its own checks - and a `Rework` there hands off to the loop with `startRound = round + 1` and the recovered feedback ([src/ThroughlineBuild.Phases/ChainPhase.cs:763-801](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L763-L801)).
+Each `Rework` verdict emits a `ReworkRound` event (`round`, `verdict_that_triggered` = `Rework` or `GateFailure`, `rationale_preview`). The feedback record (`ReviewFeedback`, [src/ThroughlineBuild.Contracts/Models/ReviewFeedback.cs](../../src/ThroughlineBuild.Contracts/Models/ReviewFeedback.cs)) now carries `FailedCheckDetails` / `GateFailedChecks` - the verbatim `CheckResult` evidence (exit code, output tails) - persisted in the `VerifierVerdict` event's `checks_failed_details` and recovered on resume, so a resumed rework brief carries the oracle. Under `--debug`, each rework round also writes a `ReworkRoundManifest` side-channel record ([src/ThroughlineBuild.Phases/ReworkRoundManifest.cs](../../src/ThroughlineBuild.Phases/ReworkRoundManifest.cs)): round, trigger (gate vs review), rationale, failing checks, and commit SHAs before/after - the inputs for splitting design misses from hygiene slips.
 
-A single `CostLedger` event is emitted per gate-engaged ticket on loop exit (`EmitCostLedgerAsync`, [src/ThroughlineBuild.Phases/ChainPhase.cs:805-838](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L805-L838)): `gate_wall_ms`, `gate_attributable_rework_rounds`, and gate-attributable token fields when available. Nothing reads it yet (aspirational).
+**Gate cost ledger.** The loop accumulates gate wall time and gate-attributable rework token counts and emits one `CostLedger` event per ticket at every loop exit (`EmitCostLedgerAsync`, [ChainPhase.cs:1024](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1024)): `gate_wall_ms`, `gate_attributable_rework_rounds`, token splits when tracked, and `false_fails` (gate hard-fails proven environmental by the control run). This is the TLB-510 measurement substrate for whether the gate pays for itself.
 
 ### Loose ends
 
-- `MaxReworkRounds = 2` is hardcoded; not configurable per ticket or repo. It bounds both review-verdict and gate-hard-fail reworks (they share the same `round` counter).
-- A review-phase *infra* failure (worker crash) returns `StoppedAtReview` with the failure reason, distinct from a `Fail` verdict ([src/ThroughlineBuild.Phases/ChainPhase.cs:860-874](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L860-L874)).
-- The `CostLedger` event has no consumer; its `cascade_caught` / `false_fails` slots are always 0 (annotatable post-hoc).
+- `MaxReworkRounds` and `MaxCheckRetriesPerReworkRound` are hardcoded; not configurable per ticket or repo.
+- A review-phase infra failure (worker crash) returns `StoppedAtReview` with the failure reason, distinct from a `Fail` verdict; a classified provider quota/rate-limit error returns `ReviewUnavailable` instead (TLB-527).
+- The check-recheck loop requires the chain wiring (`_reworkRecheckSpecs` + `_reworkRecheckRunner`); when absent, rework rounds flow exactly as before.
 
 ---
 
 ## Obsolete-claim handling (ratification)
 
-Status: **Functional**. Added by TLB-282/283/285.
+Status: **Functional** (TLB-282/283/285).
 
-A worker (plan or implement) may return `Status.Escalate` with an `escalation.reason == "obsolete"` claim plus a `subsumed_by` block (commit, files, rationale). When the chain sees this and `--no-auto-resolve` was NOT supplied, it runs ratification ([src/ThroughlineBuild.Phases/ChainPhase.cs:359-402, 588-628](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L359-L402)):
-
-1. `IsObsoleteEscalation` confirms the escalation shape ([src/ThroughlineBuild.Phases/ChainPhase.cs:987-995](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L987-L995)).
-2. `RunRatificationAsync` invokes the `ObsoleteRatifier`, recording a `ratify` `ChainStep` ([src/ThroughlineBuild.Phases/ChainPhase.cs:1032-1062](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1032-L1062)).
-3. `ObsoleteRatifier.RatifyAsync` performs three checks ([src/ThroughlineBuild.Verification/ObsoleteRatifier.cs:32-79](../../src/ThroughlineBuild.Verification/ObsoleteRatifier.cs#L32-L79)): (a) cited commit exists (`git rev-parse <commit>^{commit}`), (b) cited files exist at HEAD, (c) a model-driven check that the prior work meets the ticket's acceptance criteria.
-4. On `Pass`: the chain transitions the ticket to `Done`, posts a "Subsumed by ..." comment, emits a `TicketSubsumed` event, and returns `RatifiedObsolete` (a success outcome). On reject, it falls through to `StoppedAtPlan` / `StoppedAtImplement`.
-
-`--no-auto-resolve` (CLI flag, parsed at [src/ThroughlineBuild.Cli/Program.cs:85](../../src/ThroughlineBuild.Cli/Program.cs#L85) and threaded as `ChainPhaseOptions.NoAutoResolve`, [src/ThroughlineBuild.Cli/Program.cs:1944](../../src/ThroughlineBuild.Cli/Program.cs#L1944)) disables this and forces the escalation to be treated as a plain stop.
+A worker (plan or implement) may return `Status.Escalate` with an `escalation.reason == "obsolete"` claim plus a `subsumed_by` block. When the chain sees this and `--no-auto-resolve` was NOT supplied, `IsObsoleteEscalation` confirms the shape and `RunRatificationAsync` invokes the `ObsoleteRatifier`, recording a `ratify` `ChainStep`. `ObsoleteRatifier.RatifyAsync` ([src/ThroughlineBuild.Verification/ObsoleteRatifier.cs](../../src/ThroughlineBuild.Verification/ObsoleteRatifier.cs)) performs three checks: cited commit exists, cited files exist, and a model-driven acceptance-criteria check. On `Pass`: ticket -> `Done`, "Subsumed by ..." comment, `TicketSubsumed` event, outcome `RatifiedObsolete` (success). On reject: fall through to `StoppedAtPlan` / `StoppedAtImplement`. Implement-side ratification resolves evidence against the ticket's worktree, where the cited commit actually lives ([ChainPhase.cs:704-712](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L704-L712)).
 
 ### Loose ends
 
-- Ratification only triggers from the chain, not from a standalone `build plan`/`build implement` (those just return the failure).
+- Ratification only triggers from the chain, not from standalone `build plan`/`build implement`.
 - `RatifiedObsolete` is treated as success by the dispatchers and the aggregate report.
 
 ---
 
 ## Tree-aware chain (parent tickets)
 
-Status: **Functional**. TLB-304/305/306/307; now **recursive** (TLB-492/494) - grandchildren are handled in the same run, not refused. See [docs/grandparent-chain.md](../grandparent-chain.md) for the worked example.
+Status: **Functional**. The model changed substantially since the last refresh: the old "one shared worktree, each child branches inside it, each child ships to main" layout was replaced by an **integration-branch accumulation model** (TLB-492/494/546), and the one-level-deep restriction was replaced by bounded recursion.
 
-When a chained ticket has children, `RunParentChainAsync` ([src/ThroughlineBuild.Phases/ChainPhase.cs:1903-2354](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1903-L2354)) runs instead of the per-phase chain:
+When a chained ticket has non-terminal children, `RunParentChainAsync` ([ChainPhase.cs:2172](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2172)) runs:
 
-1. Filter children to non-terminal (not `Done`/`Cancelled`) and never the parent itself; order by ascending ticket number ([src/ThroughlineBuild.Phases/ChainPhase.cs:1916-1921](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1916-L1921), TLB-397). `TopologicalSorter` preserves input order as its within-level tiebreaker, so feeding it lowest-number-first dispatches unordered siblings lowest-number-first.
-2. **Sibling dependency ordering:** build a `blocked_by` dependency graph over the eligible siblings (`BuildSiblingGraphAsync`, [:2819-2853](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2819-L2853)) and `TopologicalSorter.ComputeLevels` it into dependency-ordered levels ([:1925-1926](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1925-L1926)). `PrintDispatchOrder` prints the derived order before any phase runs so a wrong/missing edge is visible up front ([:1931](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1931)). Siblings within a level have no `blocked_by` edge and are ordered lowest-number-first; a blocked sibling waits for its blocker's level.
-3. **Cut ONE integration worktree for the parent** (`EnsureIntegrationWorktreeAsync`, [src/ThroughlineBuild.Phases/ChainPhase.cs:1947-1986](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1947-L1986)): a single worktree on `chain/<parent>` at the resolved base (`integrationBaseRef = ChainTargetBranch ?? TargetBranch`). Each leaf child creates its `ticket/<id>` branch INSIDE this worktree and ships into the integration branch (not the main worktree, which stays parked on the configured root). If the worktree cannot be created, the chain emits `GateFailure kind = integration_worktree_unavailable` and returns `ParentStoppedEarly` (no per-ticket fallback - the integration branch is load-bearing for accumulation).
-4. **(Optional) batch-implement** ([src/ThroughlineBuild.Phases/ChainPhase.cs:1991-2196](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1991-L2196)): when `--batch-implement` selected a group, the eligible leaf candidates are built in ONE warm worker session before the per-ticket level loop runs (see "Batch-implement orchestration"). Batched ticket ids are recorded so the level loop skips them.
-5. Recurse `RunAsync` on each remaining eligible child, level by level, **one at a time** ([src/ThroughlineBuild.Phases/ChainPhase.cs:2203-2314](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2203-L2314)). A child that is itself a parent recurses into its own `RunParentChainAsync` (`Depth + 1`, with `VisitedTicketUuids` extended for the cycle guard); a leaf runs plan/implement/gate/review/ship into the integration branch. The parent chain runs its own serial level loop and does NOT route through `ParallelDispatcher`. Children stack on the **accumulating integration branch, not a frozen origin** (TLB-411): before each child the chain re-resolves the current `integrationBranch` tip and recomputes the `ChainCommitRange` ([:2236-2247](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2236-L2247)); `chainStartSha` is captured once ([:1940-1945](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1940-L1945)). Each child's gate receives `AccumulatedUpstreamProvides` - the union of all previously shipped siblings' `provides` ([:2198-2201, 2281-2284](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2198-L2201)). A level stops the cascade if any child fails. Leaf ship uses `_chainShipFactory` (`SkipDecruft=true`, NoPush) so the integration worktree survives between children and the remote is touched only at root landing.
-6. **Accumulate a finished sub-chain** ([src/ThroughlineBuild.Phases/ChainPhase.cs:2286-2312](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2286-L2312)): when a child returns `ParentCompleted` (it was itself a parent), its integration branch is rebased-then-fast-forwarded onto this parent's integration branch (`RebaseThenFastForwardAsync`, reason `chain_accumulate`, TLB-494). A conflict leaves the work safe on the sub-chain branch and flips the result to `ParentStoppedEarly`.
-7. **Root landing** ([src/ThroughlineBuild.Phases/ChainPhase.cs:2318-2334](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2318-L2334)): the OUTERMOST chain (`ChainTargetBranch is null`) lands its accumulated integration branch onto the configured target in the main worktree - which the preflight pinned to that target - and pushes (when a remote and push are configured) via `LandRootIntegrationBranchAsync` (TLB-492). A nested parent has no landing; its `ParentCompleted` merge in step 6 carries the work up to its own parent. A landing failure leaves all work on the integration branch and returns `ParentStoppedEarly`.
-8. After all children: attempt `RollupParentAsync` (fail-soft). Outcome is `ParentCompleted` if every child succeeded, else `ParentStoppedEarly`. Child results are carried on `ChainResult.ChildResults`.
+1. **Eligibility + order:** filter to non-terminal children, never the parent itself; order by ascending ticket number (`TicketNumber` also parses bare numeric ids when no project identifier is configured - TLB-511 fixed the sort collapsing to lexicographic there).
+2. **Sibling dependency ordering:** `BuildSiblingGraphAsync` over `blocked_by` relations, `TopologicalSorter.ComputeLevels`, `PrintDispatchOrder` before any phase runs ([ChainPhase.cs:2194-2200](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2194-L2200)).
+3. **Integration branch + worktree:** `EnsureIntegrationWorktreeAsync` cuts one worktree checked out on the integration branch `chain/<slug>` (named by `ChainIntegrationBranch`) at the integration base - the configured target for the outermost chain, or the parent's own integration branch for a nested parent ([ChainPhase.cs:2202-2226](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2202-L2226)). If the worktree cannot be created the chain stops with `ParentStoppedEarly` and a loud `GateFailure` kind `integration_worktree_unavailable` - there is no silent fallback to per-ticket shipping.
+4. **Integration-branch refresh (TLB-546):** a retained `chain/<slug>` branch from a prior run stays frozen at the base tip it forked from. `RefreshIntegrationBranchAsync` ([ChainPhase.cs:3014](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L3014)) reconciles it with the CURRENT base before any child dispatches: base advanced -> rebase the chain branch onto the current tip; rebase conflict -> abort and stop the chain with the work left safe on the branch ([ChainPhase.cs:2232-2245](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2232-L2245)).
+5. **Optional batch-implement path** (see below) for an eligible group of leaf children.
+6. **Serial child dispatch:** recurse `RunAsync` per child, level by level, one at a time. Each child runs with `ChainTargetBranch` = the integration branch, `ChainIntegrationWorktreePath` = the integration worktree, `SharedWorktreePath` = null (children implement in their own standalone `ticket/<id>` worktrees now; the integration worktree is reserved for ships and batch sessions - the `ChainPhaseOptions` doc comment at [ChainPhase.cs:46-52](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L46-L52) is explicit that the two must not be conflated), `Depth+1`, the parent's UUID added to `VisitedTicketUuids`, and the recomputed `ChainCommitRange` + `AccumulatedUpstreamProvides` ([ChainPhase.cs:2543-2554](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2543-L2554)). A leaf child's ship fast-forwards the integration branch inside the integration worktree. A completed nested parent (`ParentCompleted`) is accumulated by `RebaseThenFastForwardAsync` of its own sub-chain branch onto this parent's integration branch (`chain_accumulate`) ([ChainPhase.cs:2585-2611](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2585-L2611)).
+7. **Environmental blast-radius marking (TLB-538/545):** if a child stops with `GateEnvironmentFailure` or `TicketingUnavailable`, the remaining undispatched children are marked `Skipped` with the reason instead of silently dropped ([ChainPhase.cs:2618-2628](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2618-L2628)).
+8. **Provides accumulation:** each successful child's `ShippedProvides` (from its completion claim) is unioned into the set the gate's consumes-provides preflight checks for later siblings ([ChainPhase.cs:2580-2583](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2580-L2583)).
+9. **Root landing (TLB-492):** the OUTERMOST chain (`ChainTargetBranch` is null) lands the accumulated integration branch onto the configured target branch in the main worktree via `LandRootIntegrationBranchAsync` ([ChainPhase.cs:2782](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2782)) - rebase-then-fast-forward, then push when a landing remote is configured and push is enabled. Without this every leaf's work would strand on a local `chain/<root>` branch.
+10. Parent rollup (fail-soft), then on success `SweepChainWorktreesAsync` removes this chain's `ticket/` and `chain/` worktrees and branches; any failure preserves them for inspection. Outcome `ParentCompleted` / `ParentStoppedEarly` with `ChildResults`.
 
-op-29 made dispatch serial; the recursive integration-branch model (TLB-492/494) replaced the prior one-level shared-worktree layout. Running one ticket at a time eliminates the cross-worker worktree races the old merge-contention machinery existed to handle (see "Multi-ticket dispatch"). The shared Plane `RequestThrottle` still paces API traffic.
+**Depth and cycles.** Trees deeper than one level now recurse (each level building its own integration branch that accumulates upward) up to `MaxDepth` (default 16), with UUID-based cycle detection. The old grandchild hard-stop is **Legacy**: `ChainOutcome.ParentHasGrandchildren` survives in the enum, the exit-code map, and `ChainCommand` triage text, but `ChainPhase` no longer produces it.
 
-Refusals enforcing the tree discipline:
-- **Plan/implement refuse parent tickets:** `PlanPhase` ([src/ThroughlineBuild.Phases/PlanPhase.cs:62-65](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L62-L65)) and `ImplementPhase` ([src/ThroughlineBuild.Phases/ImplementPhase.cs:69-76](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L69-L76)) refuse a ticket that has children.
-- **Aggregate parent review** (TLB-305): `ReviewPhase.RunParentReviewAsync` classifies children - any `InProgress`/`InReview` child -> `Rework` (parent back to `InProgress`); all `Done` -> `Pass`; otherwise `Fail` ([src/ThroughlineBuild.Phases/ReviewPhase.cs:371-408](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L371-L408)).
-- **All-children-Done gate for parent ship** (TLB-305): `ShipPhase.RunParentShipAsync` blocks unless every child is `Done`; if so it transitions the parent straight to `Done` (no merge) ([src/ThroughlineBuild.Phases/ShipPhase.cs:778-810](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L778-L810)).
-- **Cascade close/defer, parent-only reopen** (TLB-307): `close`/`defer` cascade the lifecycle transition to non-terminal children (unless `--no-cascade`) ([src/ThroughlineBuild.Commands/CloseCommand.cs:48-64](../../src/ThroughlineBuild.Commands/CloseCommand.cs#L48-L64)); `reopen` notes the parent but does NOT reopen children ([src/ThroughlineBuild.Commands/ReopenCommand.cs:38-43](../../src/ThroughlineBuild.Commands/ReopenCommand.cs#L38-L43)).
+**`build sweep` (recovery verb).** A failed chain preserves its worktrees; `build sweep [--force]` (wired in `Program.cs` at the `sweep` verb, [Program.cs:480](../../src/ThroughlineBuild.Cli/Program.cs#L480)) invokes `ChainWorktreeSweeper` ([src/ThroughlineBuild.Helpers/ChainWorktreeSweeper.cs:23](../../src/ThroughlineBuild.Helpers/ChainWorktreeSweeper.cs#L23)) to clean up afterwards: branch deletion is merged-gated so committed work is never lost; `--force` removes worktrees regardless.
+
+Refusals enforcing the tree discipline (unchanged): `PlanPhase` and `ImplementPhase` refuse parent tickets; `ReviewPhase.RunParentReviewAsync` classifies children (any `InProgress`/`InReview` -> `Rework`; all `Done` -> `Pass`; else `Fail`); `ShipPhase.RunParentShipAsync` requires every child `Done` and transitions the parent straight to `Done` (no merge); `close`/`defer` cascade to non-terminal children; `reopen` does not reopen children.
+
+### `--batch-implement` (warm batch sessions)
+
+Status: **Functional**. When `ChainPhaseOptions.BatchImplementGroup` is set ([ChainPhase.cs:19-31](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L19-L31) - `AllEligibleChildren` for the bare flag, `ExplicitList` for a comma-separated list) and a `_batchWorker` plus the integration worktree are available, the parent chain replaces the per-child implement+review+ship loop for the group with:
+
+1. **Candidate gating** ([ChainPhase.cs:2286-2354](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2286-L2354)): `Ready` or `Backlog` leaf children in dependency order; internal nodes (children with live children of their own) are excluded per-candidate - the internal-node mis-batching fix. `Backlog` candidates are planned per-ticket first (planning is never batched).
+2. **One worker session** (`RunBatchImplementSessionAsync`, [ChainPhase.cs:1326](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1326)): a single brief built by `BatchImplementBriefBuilder` ([src/ThroughlineBuild.Briefs/BatchImplementBriefBuilder.cs](../../src/ThroughlineBuild.Briefs/BatchImplementBriefBuilder.cs)) instructs the worker to stack one commit per ticket, in order, on the integration branch inside the integration worktree.
+3. **Commit verification:** `BatchCommitVerifier.VerifyAsync` ([src/ThroughlineBuild.Phases/BatchCommitVerifier.cs:37](../../src/ThroughlineBuild.Phases/BatchCommitVerifier.cs#L37)) confirms the worktree is clean and the self-reported SHAs exist on the branch in declared order; `ReconstructFromGitAsync` rebuilds the attribution from git (one commit per ticket) when the worker omits its self-report - git is the source of truth.
+4. **One combined review + rework loop** (`RunBatchReviewAndReworkAsync`, [ChainPhase.cs:1968](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1968)) over the full stack diff, briefed by `BatchReviewBriefBuilder`.
+5. **Stack ship** (`ShipBatchStackAsync`, [ChainPhase.cs:2711](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2711)): advance the integration branch to the batch tip and mark every member `Done` with outcome `BatchImplemented`.
+
+If batching was requested but the batch worker or integration worktree is unavailable, the chain emits a console warning plus a `GateFailure` kind `batch_implement_unavailable` before falling back to the per-ticket loop - the silent-downgrade fix ([ChainPhase.cs:2463](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2463)).
 
 ### Loose ends
 
-- The parent chain now recurses to arbitrary depth (bounded by `--max-depth`, default 16, and the `VisitedTicketUuids` cycle guard); the old one-level rule and the `ParentHasGrandchildren` refusal are gone (the enum value remains but is unreachable from traversal).
+- The batch path bypasses the per-ticket gate: batch members get the combined review but no `GatePhase` run, so completion claims and vacuity proving do not apply to batched tickets.
+- `ParentHasGrandchildren` is dead code in `ChainPhase` but still reachable-looking from the docs/help text; the enum value should eventually be retired or re-documented as Legacy.
 - Child cascade close/defer failures are logged to stderr and do not abort the parent transition.
-- A child left `Planning`/`InProgress` by an interrupted run is **resumed** by `ResolveEntryAsync`, not refused - so a single stuck sibling no longer flips the whole parent to `ParentStoppedEarly`. An interrupted-initial `InProgress` child's orphaned branch/worktree are pruned and the branch is recreated inside the integration worktree.
-- The integration worktree on `chain/<parent>` is torn down nowhere explicitly in `RunParentChainAsync`; a leftover placeholder branch from a prior interrupted run is self-healed by `EnsureIntegrationWorktreeAsync` on the next run.
-
----
-
-## Batch-implement orchestration (op-32)
-
-Status: **Functional**. TLB-444..454/473/494. `build chain <id> --batch-implement [list]` runs ONLY inside the parent-chain path (`RunParentChainAsync`). A "batch session" is ONE warm worker session (`_batchWorker` - the same agent as per-ticket implement) that implements N children in one shot inside the shared integration worktree; all batch commits stack on `ticket/<firstId>`. The brief is `BatchImplementBriefBuilder`; the worker size is the max across the batch tickets; tickets are transitioned `Ready -> InProgress` before dispatch ([src/ThroughlineBuild.Phases/ChainPhase.cs:1079-1383](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1079-L1383)).
-
-**Candidate selection** ([src/ThroughlineBuild.Phases/ChainPhase.cs:1991-2090](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1991-L2090)): `AllEligibleChildren` (bare `--batch-implement`) or `ExplicitList`. Only `Ready` or `Backlog` candidates are batched; `Backlog` candidates are PLANNED per-ticket first (planning stays per-ticket via `PlanForBatchAsync` - a plan failure stops the chain with `StoppedAtPlan`). Internal nodes (candidates with their own live children) are EXCLUDED from the batch (`GateFailure kind = batch_skip_internal_node`) and chained as parents in the level loop.
-
-**Size caps** (`CheckBatchSizeCaps`, [src/ThroughlineBuild.Phases/ChainPhase.cs:1646-1672](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1646-L1672)) from `[batch]` config (`BuildOptions` fields): `max_tickets=8`, `max_size_score=16` (S=1/M=2/L=4), `max_description_bytes=200000`. A violation emits `GateFailure kind = batch_size_cap_exceeded` + a console line and the batch **falls back to the per-ticket chain** (the now-Ready planned tickets resume at implement, no re-plan). When the batch path is requested but cannot run at all (no batch worker, no eligible children), a loud `GateFailure kind = batch_implement_unavailable` + console line precedes the per-ticket fallback ([:2169-2196](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2169-L2196)).
-
-**Commit-attribution verification** (`BatchCommitVerifier.VerifyAsync`, [src/ThroughlineBuild.Phases/BatchCommitVerifier.cs:37-116](../../src/ThroughlineBuild.Phases/BatchCommitVerifier.cs#L37-L116)): re-derives the actual commits via `git log baseRef..HEAD`, requires the worktree clean, and maps reported `stack_position` to log index monotonically. **Fails closed** on any mismatch, *before* any marker is posted. Returns the confirmed ticket list. Confirmed tickets get an `[implemented_at]` marker (carrying `(batch: stack_position=N)`) and transition `InProgress -> InReview`, so downstream review/ship read the batch stack through the same markers/states as a single-ticket run.
-
-**Partial failure** (worker `Failed` but `Tickets > 0`, [src/ThroughlineBuild.Phases/ChainPhase.cs:1181-1294](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1181-L1294)): the reported subset is verified; confirmed tickets advance (`BatchImplemented`), the first incomplete ticket gets the failure reason posted and is left `InProgress` as a recoverable boundary, and the rest become `StoppedAtImplement`.
-
-**Combined-stack review** (`RunCombinedBatchReviewAsync`, [src/ThroughlineBuild.Phases/ChainPhase.cs:1404-1473](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1404-L1473)): one review over the full `baseRef..batchBranch` diff via `BatchReviewBriefBuilder`. A second pass runs when pass 1 returned `Rework` OR `batchTickets.Count > BatchReviewSizeThreshold` (a `BuildOptions` default of 5, NOT wired to config - it stays 5 in the production CLI). Each pass posts a `[batch_review: <verdict>]` comment.
-
-**Rework routing** (`ClassifyBatchRework`, [src/ThroughlineBuild.Phases/ChainPhase.cs:1674-1752](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1674-L1752)): if the rationale names exactly one batch ticket -> `Localized` (standard per-ticket `ImplementPhase` rework on the batch branch); zero or 2+ -> `CrossTicket` (re-run the batch worker with the feedback, then re-verify). Bounded by `MaxReworkRounds = 2`.
-
-**Batch ship** (`ShipBatchStackAsync`, [src/ThroughlineBuild.Phases/ChainPhase.cs:2390-2456](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2390-L2456)): switches the integration worktree onto `chain/<parent>` and fast-forwards it onto the reviewed batch tip, then posts `[shipped_at]` and transitions each batch ticket `InReview -> Done` (reason `batch_ship`). The outermost chain's root landing then carries the integration branch to the configured target exactly like a leaf ship.
-
-### Loose ends
-
-- A `BatchImplemented` outcome has no explicit `ChainExitCodeMapper` case (-> default exit 1); in practice batch results are aggregated under the parent's `ParentCompleted`/`ParentStoppedEarly`, so this does not surface as a chain exit code.
-- `BatchReviewSizeThreshold` is a `BuildOptions` field with default 5 but is not read from `[batch]` config (only `max_tickets`/`max_size_score`/`max_description_bytes` are wired), so the second-review trigger is effectively a constant.
 
 ---
 
 ## Multi-ticket dispatch
 
-Status: **Functional**, but **serial** - the "parallel" name is now historical (see below).
+Status: **Functional**, serial (the "parallel" name is historical).
 
-`build chain TLB-A TLB-B TLB-C ...` collects positional ids beyond the first. When extra ids are present, the CLI takes the dispatcher path:
+`build chain TLB-A TLB-B ...` with multiple ids takes the dispatcher path: fetch all tickets, build a `ThroughlineBuild.Phases.TicketGraph` from `blocked_by` relations within the dispatched set, hand it to `ParallelDispatcher`.
 
-1. `GetBatchAsync` fetches all tickets.
-2. Build a `ThroughlineBuild.Phases.TicketGraph` (a node+edge graph): add a node per ticket, then for each `blocked_by` relation whose target is in the dispatched set, add an edge `blocker -> blocked`.
-3. Hand the graph to `ParallelDispatcher` with `config.workers.max_concurrency` - but the dispatcher **ignores it** (see below).
+`ParallelDispatcher.RunAsync` ([src/ThroughlineBuild.Phases/ParallelDispatcher.cs](../../src/ThroughlineBuild.Phases/ParallelDispatcher.cs)): `TopologicalSorter.ComputeLevels` (Kahn's BFS, input order preserved within a level, throws on a cycle), `PrintDispatchOrder`, emit `DispatchStart`, run each level under a per-level semaphore whose width is **hard-pinned to 1** (the constructor keeps the `maxConcurrency` parameter for API stability and discards it - the comment at [ParallelDispatcher.cs:31-35](../../src/ThroughlineBuild.Phases/ParallelDispatcher.cs#L31-L35) records the rationale: the topological order is load-bearing, concurrency is disposable), stop further levels on any non-success outcome, emit `DispatchEnd`.
 
-`ParallelDispatcher.RunAsync` ([src/ThroughlineBuild.Phases/ParallelDispatcher.cs:39-164](../../src/ThroughlineBuild.Phases/ParallelDispatcher.cs#L39-L164)):
-- `TopologicalSorter.ComputeLevels` runs Kahn's BFS to produce dependency-ordered levels, preserving input order within a level; throws `InvalidOperationException` on a cycle ([src/ThroughlineBuild.Phases/TicketGraph.cs:15-94](../../src/ThroughlineBuild.Phases/TicketGraph.cs#L15-L94)).
-- `PrintDispatchOrder` prints the derived order before any phase runs ([src/ThroughlineBuild.Phases/ParallelDispatcher.cs:61](../../src/ThroughlineBuild.Phases/ParallelDispatcher.cs#L61)).
-- Emit `DispatchStart` (ticket_count, level_count, max_concurrency=1).
-- Process each level: dispatch its tickets under a per-level `SemaphoreSlim(_maxConcurrency, _maxConcurrency)` where `_maxConcurrency` is **hard-pinned to 1** ([src/ThroughlineBuild.Phases/ParallelDispatcher.cs:31-35, 98](../../src/ThroughlineBuild.Phases/ParallelDispatcher.cs#L31-L35)), each running the full `ChainPhase`. Width 1 means tickets within a level run **one at a time**; dependency levels still gate cross-level ordering.
-- After each level, any non-success outcome (`Completed`/`RatifiedObsolete`/`ParentCompleted` are the success set) stops further levels.
-- Emit `DispatchEnd` (`outcome` = `ok`|`partial`|`RefusedDirtyTree`, total_duration_ms). A uniform dirty-tree preflight refusal is preserved instead of being collapsed to `partial`.
-- Returns `ParallelDispatchResult(Success, Results, FailureReason, PreservedOutcome)`.
-
-**Why width 1.** op-29 (brief 04) pinned concurrency to 1 unconditionally. The constructor retains the `maxConcurrency` parameter for API stability but discards it. The reasoning recorded in code: the topological order is the load-bearing part; concurrency is disposable, and running width-1 removes the cross-worker worktree races that the merge-contention machinery (`MainWorktreeLock`, divergence auto-rebase) existed to handle. The former `--max-parallel` flag / `ChainPhaseOptions.ForceParallel` surface was **removed**.
-
-**Ancestor-skip** (TLB-313): `AncestorSkipFilter.ShouldSkip` walks a ticket's ancestors (via blocker edges); if any failed and `continuePastFailure` is false, it synthesizes a `ChainResult` with outcome `Skipped` and a `SkipReason` ([src/ThroughlineBuild.Phases/AncestorSkipFilter.cs:28-88](../../src/ThroughlineBuild.Phases/AncestorSkipFilter.cs#L28-L88)). The `--continue-past-failure` flag disables it.
-
-`SequentialChainDispatcher` (the original fallback) runs ids one at a time, building implicit linear edges (each predecessor is an ancestor of all followers) and applying `AncestorSkipFilter` ([src/ThroughlineBuild.Commands/SequentialChainDispatcher.cs:31-66](../../src/ThroughlineBuild.Commands/SequentialChainDispatcher.cs#L31-L66)), with `ChainCommand.PrintAggregateReport` for the summary.
+**Ancestor-skip** (TLB-313): `AncestorSkipFilter.ShouldSkip` synthesizes `Skipped` results for tickets whose ancestors failed; `--continue-past-failure` disables it. `SequentialChainDispatcher` remains as the legacy linear-edge fallback.
 
 ### Loose ends
 
-- **`TicketDependencyGraph` was removed** (op-29 brief 05). Only one `TicketGraph` survives: `ThroughlineBuild.Phases.TicketGraph` (the mutable node/edge class consumed by `ParallelDispatcher`/`TopologicalSorter`, [src/ThroughlineBuild.Phases/TicketGraph.cs:4](../../src/ThroughlineBuild.Phases/TicketGraph.cs#L4)). The former two-overlapping-`TicketGraph`-types seam is resolved.
-- **The dispatcher name is now a misnomer.** `ParallelDispatcher` runs strictly serially (width 1). Both the multi-ticket path and the parent-chain level loop are serial; the difference is the parent chain runs its own plain serial level loop (recursing into sub-parents) rather than routing through `ParallelDispatcher`.
-- A dispatcher failure stops *subsequent levels*; within the now width-1 levels there is at most one in-flight ticket anyway.
+- The dispatcher name is a misnomer: both the multi-ticket path and the parent-chain level loop are strictly serial.
+- `workers.max_concurrency` is read from config but ignored by the dispatcher.
 
 ---
 
 ## Divergence and merge orchestration
 
-Status: **Functional**. TLB-290/291/293/296/297/298.
+Status: **Functional** (TLB-290/291/293/296/297/298).
 
-`ShipPhase` resolves the rebase target (the configured target branch) by ancestry, and when the local target and `<remote>/<target>` have diverged it probes for conflicts ([src/ThroughlineBuild.Phases/ShipPhase.cs:330-410](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L330-L410)):
+`ShipPhase` resolves the rebase target by ancestry; when local target and `<remote>/<target>` have diverged it probes with `IGitClient.ProbeDivergenceAsync` (`git merge-tree --write-tree`, returning a `DivergenceState` of `Clean, LocalAhead, RemoteAhead, DivergedNoConflict, DivergedWithConflict` - [src/ThroughlineBuild.Contracts/IGitClient.cs](../../src/ThroughlineBuild.Contracts/IGitClient.cs)):
 
-- `localIsAncestorOfRemote && !remoteIsAncestorOfLocal` -> `<remote>/<target>` (reason `origin_target_ahead`).
-- `remoteIsAncestorOfLocal && !localIsAncestorOfRemote` -> local `<target>` (reason `local_target_ahead`).
-- both -> same commit (reason `same_commit`).
-- neither (diverged) -> `IGitClient.ProbeDivergenceAsync` (TLB-296), which uses `git merge-tree --write-tree` to classify without mutating, returning a `DivergenceState`: `Clean, LocalAhead, RemoteAhead, DivergedNoConflict, DivergedWithConflict` ([src/ThroughlineBuild.Contracts/IGitClient.cs:22-29](../../src/ThroughlineBuild.Contracts/IGitClient.cs#L22-L29), [src/ThroughlineBuild.Git/ProcessGitClient.cs:962](../../src/ThroughlineBuild.Git/ProcessGitClient.cs#L962)).
-  - `DivergedNoConflict` and NOT `--no-auto-merge` (TLB-297/298): auto-rebase the local target onto `<remote>/<target>` under `MainWorktreeLock`. On success emit `TargetAutoRebased` (`outcome=clean`) and rebase the feature onto the local target. On a race-to-conflict, abort the rebase, emit `TargetAutoRebased` (`outcome=raced_to_conflict`) + a `GateFailure`, and fail at the `Fetch` stage ([src/ThroughlineBuild.Phases/ShipPhase.cs:356-411](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L356-L411)).
-  - Otherwise (conflict, or `--no-auto-merge`): post `ship_blocked` comment, emit `GateFailure`, fail at `Fetch`.
+- `DivergedNoConflict` and NOT `--no-auto-merge`: auto-rebase the local target onto `<remote>/<target>` under `MainWorktreeLock`; emit `TargetAutoRebased` (`outcome=clean`), or on a race-to-conflict abort, emit `TargetAutoRebased` (`outcome=raced_to_conflict`) + `GateFailure` and fail at `Fetch`.
+- Conflict, or `--no-auto-merge`: post `ship_blocked` comment, `GateFailure`, fail at `Fetch`.
 
-`MainWorktreeLock` (TLB-290/291) is a per-path in-process `SemaphoreSlim` keyed on the normalized main-worktree path; it serializes the fetch, the target-branch auto-rebase, and the fast-forward merge on the shared main worktree ([src/ThroughlineBuild.Helpers/MainWorktreeLock.cs:6-29](../../src/ThroughlineBuild.Helpers/MainWorktreeLock.cs#L6-L29)). With dispatch now width-1 serial (op-29), it is largely defensive - it remains correct if concurrency were ever reintroduced.
-
-After a successful FF merge, when a remote exists and `--no-push` is not set the phase pushes the target branch to the remote (TLB-293); a push failure fails the ship at the `Push` stage. The step-6 preflight guarantees the main worktree is on the target branch before the FF merge advances it.
+`MainWorktreeLock` ([src/ThroughlineBuild.Helpers/MainWorktreeLock.cs](../../src/ThroughlineBuild.Helpers/MainWorktreeLock.cs)) is a per-path in-process `SemaphoreSlim` serializing fetch, target auto-rebase, and FF merge on the shared main worktree. With dispatch width-1 serial it is largely defensive.
 
 ### Loose ends
 
-- `MainWorktreeLock` is in-process only - it does not coordinate across separate `build` processes; two concurrent invocations on the same repo can still race.
+- `MainWorktreeLock` is in-process only; two concurrent `build` processes on the same repo can still race.
 - `--no-auto-merge` forces the diverged case to a hard stop even when `merge-tree` says it is conflict-free.
 
 ---
@@ -494,114 +400,115 @@ How phases communicate without a persistent process:
 |---|---|
 | **Plane state field** | The authoritative "what phase comes next?" - each phase checks state on entry. |
 | **Plane comment markers** | The SHA stamps (`[planned_at]`, `[implemented_at]`, `[shipped_at]`, `[decomposed_at]`) parsed by `MarkerParser`. |
-| **Plane comment marker prefixes** | `<strong>wontfix:</strong>`, `<strong>deferred:</strong>`, `<strong>reopened:</strong>`, `<strong>reviewed:</strong>` for state context. |
-| **Ticket description** | Plan HTML appended once; review writes nothing to description; reopen must not touch description/labels. |
+| **Plane comment marker prefixes** | `wontfix:`, `deferred:`, `reopened:`, `reviewed:` for state context. |
+| **Ticket description** | Plan HTML appended once; the scaffold's `<h3>Preload</h3>` block names the files the implement phase inlines. |
 | **Ticket labels** | `risk:*`, `size:*` from plan; `plan-ticket` from scaffold; `size:*` on decompose children. |
 | **Parent relations** | The parent/child edges that drive the tree-aware chain, scaffold tree, and decompose fan-out. |
-| **`blocked_by` relations** | The dependency edges that drive multi-ticket and sibling dispatch ordering (serial, width 1; levels gate ordering only). |
-| **`.build/events/<stem>.jsonl`** | Replayable audit log. The rework feedback retriever reads it to recover the most recent `Rework` verdict. |
+| **`blocked_by` relations** | The dependency edges that drive multi-ticket and sibling dispatch ordering (serial, width 1). |
+| **`.build/events/<stem>.jsonl`** | Replayable audit log. The rework feedback retriever reads it to recover the most recent `Rework` verdict including `checks_failed_details` evidence. |
+| **`COMPLETION_CLAIM` block / `ShippedProvides`** | The implement worker's claim feeds the gate; shipped provides accumulate in-process across siblings for the consumes-provides preflight. |
+| **`chain/<slug>` integration branch + worktree** | The parent chain's accumulation point: leaves ship into it, nested sub-chains fast-forward into it, the root lands it on the target. |
 | **`.worktrees/ticket-<slug>/`** | The implementer's checkout. Reviewer reads its diff; shipper rebases + merges from it. |
 | **Local git branch `ticket/<slug>`** | The carrier of the actual commits. |
-| **`MainWorktreeLock`** | In-process serialization of main-worktree git ops across concurrent chains. |
+| **Debug capture directory** | Per-run side channels: `ReworkRoundManifest` records, worker stdin/stdout/stderr, and the structured worker transcript (see [11-llm-architecture.md](11-llm-architecture.md)). |
+| **`MainWorktreeLock`** | In-process serialization of main-worktree git ops. |
 
 There is no message bus and no persistent in-process state between separate `build` invocations. Every restart re-reads from Plane + git + events.
 
 ### Loose ends
 
-- Within a single `build chain` of multiple tickets / a parent chain, in-process state (semaphores, the lock) *does* persist for the run; the "no shared state" principle holds only across separate process invocations.
+- Within a single `build chain` run, in-process state (the accumulated-provides set, semaphores, the lock) does persist; the "no shared state" principle holds only across separate process invocations.
 
 ---
 
 ## Sessions
 
-Every `build <verb>` invocation mints session ids via `_sessionIdGenerator` (default `Guid.NewGuid().ToString("N")`). In a chain, each phase (including the gate) gets its own per-phase session id, recorded on `ChainStep.PhaseSessionId`, while the chain lifecycle events (`ChainStart`/`ChainEnd`/`CostLedger`) carry a single `chainSessionId` ([src/ThroughlineBuild.Phases/ChainPhase.cs:142, 316-327](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L142)). The dispatcher mints its own `dispatchSessionId` for `DispatchStart`/`DispatchEnd` ([src/ThroughlineBuild.Phases/ParallelDispatcher.cs:45](../../src/ThroughlineBuild.Phases/ParallelDispatcher.cs#L45)).
+Every `build <verb>` invocation mints session ids via `_sessionIdGenerator` (default `Guid.NewGuid().ToString("N")`). In a chain, each phase gets its own per-phase session id, recorded on `ChainStep.PhaseSessionId`, while `ChainStart`/`ChainEnd` carry a single chain session id. The dispatcher mints its own dispatch session id for `DispatchStart`/`DispatchEnd`.
 
 Session ids flow into `WorkflowEvent.SessionId`, the JSONL file naming (via `SessionFileNameBuilder`), and the debug capture directory.
 
 ### Loose ends
 
-- Per-phase session ids are now always distinct within a chain (the doc's earlier claim that they were "populated only when phases use distinct session contexts" is stale - the chain always mints a fresh id per phase).
+- Per-phase session ids are always distinct within a chain; the chain mints a fresh id per phase.
 
 ---
 
 ## Event kinds emitted
 
-`EventKind` enum has 14 values ([src/ThroughlineBuild.Contracts/Models/WorkflowEvent.cs:11-14](../../src/ThroughlineBuild.Contracts/Models/WorkflowEvent.cs#L11-L14)):
+The `EventKind` enum has 14 values ([src/ThroughlineBuild.Contracts/Models/WorkflowEvent.cs:14](../../src/ThroughlineBuild.Contracts/Models/WorkflowEvent.cs#L14)); the enum declaration is the authoritative registry and carries an integer-value comment for the JSONL wire format. The kinds:
 
-| Kind | Int | Emitted by | Meaning |
-|---|---|---|---|
-| `StateTransition` | 0 | every phase/command that transitions | from / to state |
-| `LlmCall` | 1 | phases that surface worker LLM usage | tokens / model / wall time |
-| `WorkerSpawn` | 2 | phases that spawn a worker (and `NewPhase` for audit symmetry; batch review role `batch_verifier`) | worker name + role |
-| `VerifierVerdict` | 3 | every worker phase post-run; review post-verifier; decompose verdict gate; batch review pass | status / verdict |
-| `GateFailure` | 4 | the workhorse: claim/gate failures, drift warning, hygiene gates, ship pre-flight/diverged/rebase/conflict-marker/regression failures, post-phase dirty-worktree, batch/integration downgrades | `kind` discriminator + reason |
-| `TicketWrite` | 5 | every Plane write (description / labels / comments / create / set-parent / rollup / fetch_skipped / base_ref_resolved / decruft / delete_branch) | action + payload summary |
-| `ChainStart` | 6 | `ChainPhase` | starting_at_phase, initial_state, chain_session_id |
-| `ChainEnd` | 7 | `ChainPhase` | outcome, phases_run, rework_rounds, total_duration_ms |
-| `ReworkRound` | 8 | `ChainPhase` (review `Rework` AND gate hard-fail) | round, verdict_that_triggered (`Rework` / `GateFailure`), rationale_preview |
-| `TicketSubsumed` | 9 | `ChainPhase` (obsolete ratification Pass) | ticket_id, subsumed_by_commit, files, rationale |
-| `TargetAutoRebased` | 10 | `ShipPhase` (DivergedNoConflict auto-rebase; renamed from `MainAutoRebased`) | from_sha, onto_sha, local_commits_replayed, outcome (clean / raced_to_conflict) |
-| `DispatchStart` | 11 | `ParallelDispatcher` | ticket_count, level_count, max_concurrency |
-| `DispatchEnd` | 12 | `ParallelDispatcher` | outcome (ok / partial / RefusedDirtyTree), total_duration_ms |
-| `CostLedger` | 13 | `ChainPhase` (once per gate-engaged ticket, op-30) | gate_wall_ms, gate_attributable_rework_rounds, cascade_caught, false_fails, gate-attributable token fields |
+| Kind | Emitted by | Meaning |
+|---|---|---|
+| `StateTransition` | every phase/command that transitions | from / to state (resume transitions carry reason `chain_resume`) |
+| `LlmCall` | phases that surface worker LLM usage | tokens / model / wall time |
+| `WorkerSpawn` | phases that spawn a worker (and `NewPhase` for audit symmetry) | worker name + role |
+| `VerifierVerdict` | every worker phase post-run; review post-verifier; decompose verdict gate | status / verdict / checks_failed / checks_failed_details |
+| `GateFailure` | the workhorse: every refused gate across all phases | `kind` discriminator + reason |
+| `TicketWrite` | every Plane write | action + payload summary |
+| `ChainStart` / `ChainEnd` | `ChainPhase` | start state / outcome, phases_run, rework_rounds, duration |
+| `ReworkRound` | `ChainPhase` | round, verdict_that_triggered (`Rework` or `GateFailure`), rationale_preview |
+| `TicketSubsumed` | `ChainPhase` (obsolete ratification Pass) | ticket_id, subsumed_by_commit, files, rationale |
+| `TargetAutoRebased` | `ShipPhase` | from_sha, onto_sha, outcome (clean / raced_to_conflict) |
+| `DispatchStart` / `DispatchEnd` | `ParallelDispatcher` | ticket_count, level_count / outcome, duration |
+| `CostLedger` | `ChainPhase` (gate economics), `ImplementPhase` (preload + context attribution) | `kind`-discriminated telemetry record |
+
+`CostLedger` (new since the last refresh, TLB-510) is `kind`-discriminated like `GateFailure`: `gate` (gate wall ms, gate-attributable rework rounds/tokens, `false_fails`) from `ChainPhase.EmitCostLedgerAsync`; `preload_summary` and `context_attribution` from `ImplementPhase`.
+
+`GateFailure` `kind` discriminators are defined at their emit sites, not centrally. Representative values by area: implement (`hygiene_gate`, `drift_warning`, `dirty_worktree_first_attempt`/`dirty_worktree_retry_failed`, `preload_file_not_found`, `preload_empty`), gate (`claim_schema_invalid`, `setup_failed`, `gating_checks_failed`, `gate_control_run`, `gate_config_reloaded`, `gate_environment_failure`, `gate_vacuous`, `gate_unverified`, `gate_canary_cleanup_failed`), review (`dirty_worktree_after_review`, `implemented_at_superseded`), ship (`pre_flight_*`, `wrong_worktree_branch`), chain (`chain_preflight_wrong_branch`, `chain_preflight_dirty`, `hygiene_gate_preflight`, `rework_recheck_failed`, `integration_worktree_unavailable`, `batch_implement_unavailable`, `chain_refresh_rebase_conflicts`).
 
 Full event-line schema in [docs/event-log-format.md](../event-log-format.md).
 
 ### Loose ends
 
-- `event-log-format.md` does not enumerate the per-`Data` shape of every kind; the authoritative `Data` keys are in the emitting code cited above.
-- `DispatchStart`/`DispatchEnd` carry an empty `TicketId` (they are batch-scoped, not ticket-scoped); `max_concurrency` is always 1.
-- `CostLedger` has no consumer yet (aspirational); `cascade_caught` / `false_fails` are always emitted as 0 for later annotation, and the gate-attributable token fields are present only when the worker reported usage during a gate-attributable rework round.
-- `GateFailure` carries a `kind` discriminator string identifying which gate fired. The current set spans implement (`hygiene_gate`, `drift_warning`, `dirty_worktree_first_attempt`/`dirty_worktree_retry_failed`, `claim_invalid_first_attempt`), gate (`claim_schema_invalid`, `gating_checks_failed`), review (`implemented_at_superseded`, `dirty_worktree_after_review`), ship (`pre_flight_hygiene`, `pre_flight_dirty`, `wrong_worktree_branch`, `parent_children_not_done`, regression/divergence kinds), chain preflight (`chain_preflight_wrong_branch`, `hygiene_gate_preflight`, `chain_preflight_dirty`), parent (`integration_worktree_unavailable`), and batch (`batch_skip_internal_node`, `batch_size_cap_exceeded`, `batch_implement_unavailable`, `batch_review_diff_failed`, `batch_ship_switch_failed`, `batch_ship_merge_failed`).
+- `event-log-format.md` does not enumerate the per-`Data` shape of every kind; the authoritative `Data` keys are in the emitting code.
+- `DispatchStart`/`DispatchEnd` carry an empty `TicketId`; `max_concurrency` is always 1.
+- The `GateFailure` discriminator namespace is conventions-only; nothing prevents a collision between emit sites.
 
 ---
 
 ## Chain outcomes and exit codes
 
-`ChainOutcome` enum ([src/ThroughlineBuild.Contracts/Models/ChainOutcome.cs:3-21](../../src/ThroughlineBuild.Contracts/Models/ChainOutcome.cs#L3-L21)) is mapped to single-ticket exit codes by `ChainExitCodeMapper.GetExitCode` (extracted from the former inline `Program.cs` switch, [src/ThroughlineBuild.Cli/ChainExitCodeMapper.cs:13-31](../../src/ThroughlineBuild.Cli/ChainExitCodeMapper.cs#L13-L31)):
+The `ChainOutcome` enum has 20 values ([src/ThroughlineBuild.Contracts/Models/ChainOutcome.cs:3](../../src/ThroughlineBuild.Contracts/Models/ChainOutcome.cs#L3)); the exit-code mapping lives in `ChainExitCodeMapper.GetExitCode` ([src/ThroughlineBuild.Cli/ChainExitCodeMapper.cs](../../src/ThroughlineBuild.Cli/ChainExitCodeMapper.cs)), used on the single-ticket path and (via a `ParallelDispatchResult` overload: success -> 0, else the preserved outcome's code, else 1) on the dispatcher path.
 
-| Outcome | Exit | Meaning |
+| Exit | Outcomes | Meaning |
 |---|---|---|
-| `Completed` | 0 | shipped |
-| `RatifiedObsolete` | 0 | obsolete claim ratified; ticket -> Done |
-| `ParentCompleted` | 0 | all eligible children completed |
-| `DryRunPreview` | 0 | `--dry-run` schedule printed; no phases executed |
-| `RefusedInitialState` | 2 | terminal state (`Done`/`Cancelled`); `Planning`/`InProgress` are now resumed, not refused |
-| `RefusedDirtyTree` | 2 | preflight gate: conflict, unrelated stash, or tracked main-worktree changes at chain start, refused before planning |
-| `RefusedWrongBranch` | 2 | main worktree not on the ship target branch at chain start, refused before planning |
-| `ParentHasGrandchildren` | 2 | legacy "tree deeper than one level"; no longer produced (recursive parent path) |
-| `StoppedAtPlan` | 3 | planning failed |
-| `ParentStoppedEarly` | 3 | a child did not complete (or sub-chain accumulate / root landing failed) |
-| `Skipped` | 3 | skipped because an ancestor failed |
-| `StoppedAtImplement` | 4 | implementation failed |
-| `StoppedAtReview` | 5 | review returned `Fail` (or review infra failure) |
-| `ReworkCapExceeded` | 6 | more than `MaxReworkRounds` rounds (review `Rework` or gate hard-fail) |
-| `StoppedAtShip` | 7 | ship gate failed |
-| `BatchImplemented` | 1 (default) | no explicit case -> falls through to `default => 1`; aggregated under the parent in practice |
+| 0 | `Completed`, `RatifiedObsolete`, `ParentCompleted`, `DryRunPreview` | success / preview |
+| 2 | `RefusedInitialState`, `RefusedDirtyTree`, `RefusedWrongBranch`, `ParentHasGrandchildren` | refused before any phase ran |
+| 3 | `StoppedAtPlan`, `ParentStoppedEarly`, `Skipped` | stopped at/before planning, or a child/ancestor stopped |
+| 4 | `StoppedAtImplement` | implementation failed |
+| 5 | `StoppedAtReview` | review returned `Fail` (or review infra failure) |
+| 6 | `ReworkCapExceeded` | rework budget (or check-recheck retries) exhausted |
+| 7 | `StoppedAtShip` | ship gate failed |
+| 8 | `GateVacuous` | a gating check is vacuous or its canary leaked - config defect, no rework |
+| 9 | `ReviewUnavailable` | verifier blocked by a transient provider error; ticket resumable `InReview` (TLB-527) |
+| 10 | `GateEnvironmentFailure` | gate fails on the untouched base ref too - environment broken; siblings skipped (TLB-538) |
+| 11 | `TicketingUnavailable` | ticketing backend unreachable at transport level after retries; resumable (TLB-545) |
 
-Success set the parent chain uses (`IsChainSuccess`, [src/ThroughlineBuild.Phases/ChainPhase.cs:2844-2848](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2844-L2848)): `Completed`, `RatifiedObsolete`, `ParentCompleted`, `BatchImplemented`. The multi-ticket dispatcher's success set is `Completed`/`RatifiedObsolete`/`ParentCompleted` (`Skipped` is treated as non-failure for the overall exit-0 decision in the sequential path) ([src/ThroughlineBuild.Phases/ParallelDispatcher.cs:127-136](../../src/ThroughlineBuild.Phases/ParallelDispatcher.cs#L127-L136)).
+`BatchImplemented` is a per-member outcome inside a parent chain, not a process exit. Success set used by dispatchers and the aggregate report: `Completed`, `RatifiedObsolete`, `ParentCompleted`, plus `DryRunPreview`/`BatchImplemented` where applicable (`IsChainSuccess` in `ChainPhase` is the authority).
 
 ### Loose ends
 
-- The multi-ticket dispatcher path returns a flat `0`/`1` from `dispatchResult.Success`, not the per-outcome exit codes above; the granular mapping is only used on the single-ticket path. `ChainExitCodeMapper.GetExitCode(ParallelDispatchResult)` maps a failed dispatch through its `PreservedOutcome` when present, else 1 ([src/ThroughlineBuild.Cli/ChainExitCodeMapper.cs:7-11](../../src/ThroughlineBuild.Cli/ChainExitCodeMapper.cs#L7-L11)).
-- `BatchImplemented` has no explicit mapper case; a single-ticket `BatchImplemented` would map to 1, but batch results are always aggregated under a parent outcome in practice.
+- `Skipped` maps to exit 3 even though it is treated as a non-failure for the overall exit-0 decision in the sequential aggregate path.
+- `ParentHasGrandchildren` is mapped but no longer produced (Legacy).
 
 ---
 
 ## Where the chain stops cleanly vs. requires manual triage
 
-- **Clean stop / success:** `Completed`, `RatifiedObsolete`, `ParentCompleted`, `BatchImplemented`, `DryRunPreview`, `Skipped`, `RefusedInitialState`, `ReworkCapExceeded` (operator picks up with `build rework`/`build review`; a gate-capped `ReworkCapExceeded` leaves the ticket `InProgress`).
-- **Requires triage:** `StoppedAtPlan`, `StoppedAtImplement`, `StoppedAtReview`, `StoppedAtShip`, `ParentStoppedEarly` (incl. sub-chain accumulate / root landing conflict), `RefusedDirtyTree` (clean the tree - resolve conflicts, drop the stray stash, or commit/stash/revert tracked main-worktree changes), `RefusedWrongBranch` (`git switch <target>`), then re-chain. Each leaves the ticket(s) in whatever state the failing phase left them.
+- **Clean stop / success:** `Completed`, `RatifiedObsolete`, `ParentCompleted`, `BatchImplemented`, `DryRunPreview`, `Skipped`, `RefusedInitialState`, `ReworkCapExceeded` (operator picks up with `build rework`/`build review`).
+- **Resumable after an external fix:** `ReviewUnavailable` (wait out the provider quota, re-run `build review`/chain), `GateEnvironmentFailure` (fix the environment/config once, re-run - skipped siblings are picked up), `TicketingUnavailable` (restore connectivity, re-run), `RefusedWrongBranch`/`RefusedDirtyTree` (fix the main worktree, re-run).
+- **Requires triage:** `StoppedAtPlan`, `StoppedAtImplement`, `StoppedAtReview`, `StoppedAtShip`, `ParentStoppedEarly`, `GateVacuous` (fix the check or its canary in config). Each leaves the ticket(s) in whatever state the failing phase left them; failed chains preserve their worktrees (`build sweep` cleans up after recovery).
 
-`ChainCommand` surfaces a one-line final summary per outcome on stdout ([src/ThroughlineBuild.Commands/ChainCommand.cs:143-187](../../src/ThroughlineBuild.Commands/ChainCommand.cs#L143-L187)).
+`ChainCommand` surfaces a one-line final summary per outcome on stdout, with per-outcome triage text ([src/ThroughlineBuild.Commands/ChainCommand.cs](../../src/ThroughlineBuild.Commands/ChainCommand.cs)).
 
 ---
 
 ## Loose ends (cross-cutting)
 
-- **`MaxReworkRounds = 2` is hardcoded; all dispatch is serial.** Both the parent chain (a plain serial level loop, one child at a time, recursing into sub-parents) and the multi-ticket `ParallelDispatcher` (concurrency hard-pinned to 1) run one ticket at a time. `workers.max_concurrency` is read but ignored by the dispatcher; no concurrency knob remains. The same `MaxReworkRounds` bounds review-verdict reworks, gate hard-fail reworks, and batch reworks.
-- **No cross-phase live channel.** ReviewPhase reconstructs the implementer brief deterministically. Architecture's "no shared in-memory context with the implementer" principle (Section 5.8) still holds for the worker hand-off, but the chain itself now holds in-process orchestration state for a run.
-- **Chain `WorkflowEvent.Data`** carries per-step/per-dispatch fields whose schema lives in code, not exhaustively in [docs/event-log-format.md](../event-log-format.md).
+- **`MaxReworkRounds = 2` is hardcoded; all dispatch is serial since op-29.** Both the parent chain level loop and `ParallelDispatcher` (width pinned to 1) run one ticket at a time; no concurrency knob remains.
+- **The gate is chain-only.** Standalone phase verbs (`build implement`, `build review`) bypass `GatePhase`, completion claims, the consumes-provides preflight, and vacuity proving.
+- **No cross-phase live channel.** ReviewPhase reconstructs the implementer brief deterministically; the chain holds in-process orchestration state (accumulated provides, gate cost accumulators) only for the duration of a run.
+- **Chain `WorkflowEvent.Data`** schema lives in code, not exhaustively in [docs/event-log-format.md](../event-log-format.md).
 - **No replay verb** (`build replay <session-id>`). Architecture Appendix item 4 notes this as a future.
-- **Phase ordering documented in `ChainPhase`** - operators running phases manually out of order hit each phase's state guard.
-- **`SequentialChainDispatcher`** remains as a legacy fallback alongside the now-serial `ParallelDispatcher`; the prior two-`TicketGraph`-types seam was resolved by op-29 removing `TicketDependencyGraph` (detailed in "Multi-ticket dispatch").
+- **`SequentialChainDispatcher`** remains as a legacy fallback alongside the now-serial `ParallelDispatcher`.
+- **Two cleanup paths:** end-of-chain `SweepChainWorktreesAsync` (success only) and the `build sweep` verb (recovery) overlap; their merged-gating rules live in `ChainWorktreeSweeper` and should stay aligned.

@@ -258,11 +258,26 @@ public sealed class ScaffoldPhase
                 try
                 {
                     string briefHtml = BriefHtmlRenderer.RenderBrief(brief);
+                    // TLB-515: a brief ticket inherits its plan's dispatch Effort as a size: label so
+                    // dispatch can route S/M/L -> haiku/sonnet/opus. Without the label the backend reads
+                    // back the Size.M default and every brief silently runs the medium-tier model.
+                    string sizeLabel = EffortToSizeLabel(entry.Effort, out bool effortDefaulted);
+                    if (effortDefaulted)
+                    {
+                        await EmitAsync(new Dictionary<string, object>
+                        {
+                            ["action"] = "size_label_defaulted",
+                            ["plan"] = plan.Id,
+                            ["brief"] = brief.Number,
+                            ["effort"] = entry.Effort ?? string.Empty,
+                            ["applied"] = sizeLabel
+                        }, ct).ConfigureAwait(false);
+                    }
                     var briefResult = await _ticketing.CreateTicketAsync(
                         briefTitle,
                         null,
                         briefHtml,
-                        null,
+                        new[] { sizeLabel },
                         ct).ConfigureAwait(false);
 
                     briefTicketId = briefResult.Id;
@@ -422,6 +437,24 @@ public sealed class ScaffoldPhase
             OpTicketId: !string.IsNullOrEmpty(opTicketId) ? opTicketId : null,
             DependencyEdges: dependencyEdges,
             CreatedEntities: createdEntities);
+    }
+
+    // Maps an op-doc dispatch Effort token (S/M/L, case-insensitive) to the workspace size label the
+    // ticketing backend reads back at dispatch time to pick the worker model. Unknown or empty effort
+    // defaults to size:m - the same Size.M the backend already assumes when no label is present - and
+    // sets `defaulted` so the caller can log that fallback. TLB-515.
+    private static string EffortToSizeLabel(string? effort, out bool defaulted)
+    {
+        defaulted = false;
+        switch (effort?.Trim().ToLowerInvariant())
+        {
+            case "s": return "size:s";
+            case "m": return "size:m";
+            case "l": return "size:l";
+            default:
+                defaulted = true;
+                return "size:m";
+        }
     }
 
     private Task EmitAsync(IReadOnlyDictionary<string, object> data, CancellationToken ct)

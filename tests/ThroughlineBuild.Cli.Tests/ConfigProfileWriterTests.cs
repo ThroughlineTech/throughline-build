@@ -1,5 +1,8 @@
 using ThroughlineBuild.Cli;
+using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Scaffold;
+using Tomlyn;
+using Tomlyn.Model;
 using Xunit;
 
 namespace ThroughlineBuild.Cli.Tests;
@@ -209,4 +212,267 @@ public class ConfigProfileWriterTests
 
     private static int HeaderLines(string text, string header) =>
         text.Split('\n').Count(l => l.Trim() == header);
+
+    // A fully-loadable config (required [ticketing]) seeded with a dotnet review check so
+    // Apply overwrites it. The canary round-trip test renders into this, then loads it back
+    // through the real Config loader.
+    private const string LoadableDotnetConfig = """
+    [ticketing]
+    backend = "plane"
+    plane_base_url = "https://api.plane.so"
+    plane_workspace_slug = "ws"
+    plane_project_id = "abc-123"
+    plane_api_token = "tok"
+
+    [workers]
+    default_agent = "claude-code"
+    timeout_minutes = 30
+
+    [workers.claude-code]
+    executable = "claude"
+
+    [workers.claude-code.sizes]
+    small  = { model = "haiku" }
+    medium = { model = "sonnet" }
+    large  = { model = "opus" }
+
+    [events]
+    log_directory = ".build/events"
+
+    [review]
+    verifier_timeout_minutes = 15
+
+    [[review.checks]]
+    name = "build"
+    executable = "dotnet"
+    arguments = ["build"]
+    timeout_minutes = 5
+
+    [[ship.regression_checks]]
+    name = "build"
+    executable = "dotnet"
+    arguments = ["build"]
+    timeout_minutes = 5
+
+    [project]
+    language = "csharp"
+    framework = "dotnet"
+    package_manager = "dotnet"
+    build_command = "dotnet build"
+    test_command = "dotnet test"
+    install_command = "dotnet restore"
+    dev_command = "dotnet run"
+    """;
+
+    // The load-bearing escaping test: a canary whose content contains BOTH a double-quote
+    // and a newline must survive ConfigProfileWriter render -> real Config loader parse
+    // byte-for-byte. This is the case that breaks if TOML control-char escaping is wrong.
+    [Fact]
+    public void Canary_SurvivesRenderThenConfigLoad()
+    {
+        const string canaryPath = "src/probe/__tlb_probe.ts";
+        const string canaryContent = "export const x: number = \"s\";\nlet y;";
+
+        var canary = new[] { new CanaryFile(canaryPath, canaryContent) };
+        var requiredPaths = new[] { "package.json", "src" };
+        var checks = new[]
+        {
+            new ProfileCheck("typecheck", "npm", new[] { "run", "typecheck" }, 5,
+                Canary: canary, RequiredPaths: requiredPaths),
+        };
+        var profile = new ProjectProfile(
+            "typescript", "react-vite", "npm",
+            "npm install", "npm run build", "npm test", "npm run dev",
+            checks, checks);
+
+        var outcome = ConfigProfileWriter.Apply(LoadableDotnetConfig, profile, force: false);
+        Assert.True(outcome.Changed, outcome.SkipReason);
+        var rendered = outcome.NewText!;
+
+        // Sanity: the rendered TOML re-parses cleanly via Tomlyn (no raw control chars).
+        var model = Toml.ToModel(rendered);
+        Assert.NotNull(model);
+        Assert.Contains("required_paths = [\"package.json\", \"src\"]", rendered);
+
+        var tmpDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tmpDir);
+        var path = Path.Combine(tmpDir, "config.toml");
+        try
+        {
+            File.WriteAllText(path, rendered);
+            var config = BuildConfigLoader.Load(path, warnSink: _ => { });
+
+            var check = Assert.Single(config.Review.Checks);
+            Assert.Equal("typecheck", check.Name);
+            Assert.NotNull(check.Canary);
+            var file = Assert.Single(check.Canary!);
+            Assert.Equal(canaryPath, file.Path);
+            Assert.Equal(canaryContent, file.Content);
+            Assert.Equal(requiredPaths, check.RequiredPaths);
+
+            // The ship regression check carried the same canary; it must round-trip too.
+            var shipCheck = Assert.Single(config.Ship.RegressionChecks);
+            Assert.NotNull(shipCheck.Canary);
+            Assert.Equal(canaryContent, Assert.Single(shipCheck.Canary!).Content);
+            Assert.Equal(requiredPaths, shipCheck.RequiredPaths);
+        }
+        finally
+        {
+            File.Delete(path);
+            Directory.Delete(tmpDir, recursive: true);
+        }
+    }
+
+    // convention_files renders into [project] as a string array and survives the real Config loader
+    // back into ProjectContext.ConventionFiles. A path carrying a double-quote exercises the escaping.
+    [Fact]
+    public void ConventionFiles_SurviveRenderThenConfigLoad()
+    {
+        var conventionFiles = new[] { "src/setupTests.ts", "vite.config.ts", "src/weird\"name.ts" };
+        var checks = new[] { new ProfileCheck("build", "npm", new[] { "run", "build" }, 5) };
+        var profile = new ProjectProfile(
+            "typescript", "react-vite", "npm",
+            "npm install", "npm run build", "npm test", "npm run dev",
+            checks, checks)
+        {
+            ConventionFiles = conventionFiles,
+        };
+
+        var outcome = ConfigProfileWriter.Apply(LoadableDotnetConfig, profile, force: false);
+        Assert.True(outcome.Changed, outcome.SkipReason);
+        var rendered = outcome.NewText!;
+        Assert.Contains("convention_files = [", rendered);
+
+        // Sanity: the rendered TOML re-parses cleanly via Tomlyn (escaping is valid).
+        Assert.NotNull(Toml.ToModel(rendered));
+
+        var tmpDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tmpDir);
+        var path = Path.Combine(tmpDir, "config.toml");
+        try
+        {
+            File.WriteAllText(path, rendered);
+            var config = BuildConfigLoader.Load(path, warnSink: _ => { });
+            Assert.Equal(conventionFiles, config.Project.ConventionFiles);
+        }
+        finally
+        {
+            File.Delete(path);
+            Directory.Delete(tmpDir, recursive: true);
+        }
+    }
+
+    // Apply into a config WITHOUT a [project] section appends one carrying the bundle.
+    [Fact]
+    public void ConventionFiles_AppendedWhenNoProjectSection()
+    {
+        var noProject = LoadableDotnetConfig[..LoadableDotnetConfig.IndexOf("[project]")].TrimEnd();
+        var checks = new[] { new ProfileCheck("build", "npm", new[] { "run", "build" }, 5) };
+        var profile = new ProjectProfile(
+            "typescript", "react-vite", "npm",
+            "npm install", "npm run build", "npm test", "npm run dev",
+            checks, checks)
+        {
+            ConventionFiles = new[] { "conftest.py" },
+        };
+
+        var rendered = ConfigProfileWriter.Apply(noProject, profile, force: false).NewText!;
+        Assert.Contains("[project]", rendered);
+        Assert.Contains("convention_files = [\"conftest.py\"]", rendered);
+        Assert.NotNull(Toml.ToModel(rendered));
+    }
+
+    // Empty bundle writes no convention_files line (no `convention_files = []` noise).
+    [Fact]
+    public void ConventionFiles_EmptyBundle_WritesNoLine()
+    {
+        var rendered = ConfigProfileWriter.Apply(LoadableDotnetConfig, NpmProfile(), force: false).NewText!;
+        Assert.DoesNotContain("convention_files", rendered);
+    }
+
+    // A derived advisory check (lint/format) renders role = "advisory" and round-trips through the
+    // real Config loader to CheckRole.Advisory, so the gate never hard-fails on it; a gating check
+    // renders role = "gating" explicitly. This is the produce-side fix for op-30 (lint/format are
+    // never hard gates) - the gate already honors Role, but the role was being dropped before config.
+    [Fact]
+    public void CheckRole_RendersAndRoundTripsThroughConfigLoad()
+    {
+        var checks = new[]
+        {
+            new ProfileCheck("build", "npm", new[] { "run", "build" }, 5),
+            new ProfileCheck("lint", "npm", new[] { "run", "lint" }, 5, Role: CheckRole.Advisory),
+        };
+        var profile = new ProjectProfile(
+            "typescript", "react-vite", "npm",
+            "npm install", "npm run build", "npm test", "npm run dev",
+            checks, checks);
+
+        var outcome = ConfigProfileWriter.Apply(LoadableDotnetConfig, profile, force: false);
+        Assert.True(outcome.Changed, outcome.SkipReason);
+        var rendered = outcome.NewText!;
+
+        Assert.Contains("role = \"gating\"", rendered);
+        Assert.Contains("role = \"advisory\"", rendered);
+        Assert.NotNull(Toml.ToModel(rendered));
+
+        var tmpDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tmpDir);
+        var path = Path.Combine(tmpDir, "config.toml");
+        try
+        {
+            File.WriteAllText(path, rendered);
+            var config = BuildConfigLoader.Load(path, warnSink: _ => { });
+
+            Assert.Equal(2, config.Review.Checks.Count);
+            var build = config.Review.Checks.Single(c => c.Name == "build");
+            var lint = config.Review.Checks.Single(c => c.Name == "lint");
+            Assert.Equal(CheckRole.Gating, build.Role);
+            Assert.Equal(CheckRole.Advisory, lint.Role);
+
+            // The same advisory check rode into the ship regression set and must survive there too.
+            Assert.Equal(CheckRole.Advisory, config.Ship.RegressionChecks.Single(c => c.Name == "lint").Role);
+        }
+        finally
+        {
+            File.Delete(path);
+            Directory.Delete(tmpDir, recursive: true);
+        }
+    }
+
+    // TLB-523: a derived setup step renders role = "setup" and round-trips through the real Config
+    // loader to CheckRole.Setup (a prerequisite codegen/install step run before the gating checks).
+    [Fact]
+    public void CheckRole_Setup_RendersAndRoundTripsThroughConfigLoad()
+    {
+        var checks = new[]
+        {
+            new ProfileCheck("xcodegen", "xcodegen", new[] { "generate" }, 2, Role: CheckRole.Setup),
+            new ProfileCheck("build", "xcodebuild", Array.Empty<string>(), 5),
+        };
+        var profile = new ProjectProfile(
+            "swift", "ios", "xcodegen",
+            "brew install xcodegen", "xcodebuild build", "xcodebuild test", "",
+            checks, checks);
+
+        var outcome = ConfigProfileWriter.Apply(LoadableDotnetConfig, profile, force: false);
+        Assert.True(outcome.Changed, outcome.SkipReason);
+        var rendered = outcome.NewText!;
+        Assert.Contains("role = \"setup\"", rendered);
+        Assert.NotNull(Toml.ToModel(rendered));
+
+        var tmpDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tmpDir);
+        var path = Path.Combine(tmpDir, "config.toml");
+        try
+        {
+            File.WriteAllText(path, rendered);
+            var config = BuildConfigLoader.Load(path, warnSink: _ => { });
+            Assert.Equal(CheckRole.Setup, config.Review.Checks.Single(c => c.Name == "xcodegen").Role);
+        }
+        finally
+        {
+            File.Delete(path);
+            Directory.Delete(tmpDir, recursive: true);
+        }
+    }
 }

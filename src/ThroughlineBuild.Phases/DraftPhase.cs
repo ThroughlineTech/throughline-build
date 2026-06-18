@@ -58,7 +58,9 @@ public class DraftPhase : IWorkflowPhase
             DebugCaptureDirectory: debugDir,
             LiveStdoutSink: _options.LiveStdoutSink,
             LiveStderrSink: _options.LiveStderrSink,
-            ProgressDigestSink: _options.ProgressDigestSink);
+            ProgressDigestSink: _options.ProgressDigestSink,
+            DebugTranscript: new DebugTranscriptContext(
+                BuildVersion: _options.BuildVersion, SessionId: _options.SessionId));
 
         var workerResult = await _worker.ExecuteAsync(brief, workingDirectory, workerOptions, ct).ConfigureAwait(false);
 

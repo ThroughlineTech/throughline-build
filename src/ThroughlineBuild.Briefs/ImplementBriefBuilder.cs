@@ -1,4 +1,5 @@
 using System.Text;
+using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Helpers;
 
@@ -21,7 +22,8 @@ public static class ImplementBriefBuilder
         ProjectContext? project = null,
         ReviewFeedback? reviewFeedback = null,
         ChainCommitRange? chainCommitRange = null,
-        ReworkBriefContext? reworkContext = null)
+        ReworkBriefContext? reworkContext = null,
+        string preloadedContextSection = "")
     {
         var proj = project ?? ProjectContext.Empty;
 
@@ -45,7 +47,17 @@ public static class ImplementBriefBuilder
             ["branch"] = branchName,
             ["main_sha"] = repo.MainSha,
             ["review_feedback_section"] = reviewFeedbackSection,
-            ["obsolete_detection_section"] = obsoleteDetectionSection
+            ["obsolete_detection_section"] = obsoleteDetectionSection,
+            // Experiment 2: the pre-loaded-context block (named inputs + convention bundle), built by
+            // the phase from the live worktree. Empty "" => the placeholder substitutes inert, leaving
+            // the brief byte-identical to the pre-preload baseline (the ablation / review-reconstruct
+            // case). The leading newline lives inside the section string (see PreloadedContextBuilder).
+            ["preloaded_context_section"] = preloadedContextSection,
+            // Experiment 4 (L2a): an effort-gated planning-hygiene bullet appended to Constraints, only
+            // when [project].context_hygiene is on AND the brief is S-effort. Empty "" otherwise, which
+            // the placeholder renders inert (off and M/L stay on the blessed empty-token baseline). The
+            // leading newline lives inside the section string (same convention as preloaded_context_section).
+            ["context_hygiene_section"] = BuildContextHygieneSection(proj, ticket)
         };
 
         var instruction = TemplateLoader.Load(agentName, "implement.md").Substitute(vars);
@@ -112,23 +124,45 @@ public static class ImplementBriefBuilder
             ? string.Join("\n", reviewFeedback.ChecksFailed.Select(c => $"- {c}"))
             : "(none)";
 
-        return $"\n## Rework round {reviewFeedback.ReworkRoundNumber} - reviewer feedback\n\n{reviewFeedback.Rationale}\n\nChecks failed:\n{checksList}{priorContextSection}";
+        var checkDetails = "";
+        if (reviewFeedback.FailedCheckDetails is { Count: > 0 })
+        {
+            var sb = new StringBuilder();
+            AppendFailedCheckDetails(sb, reviewFeedback.FailedCheckDetails);
+            checkDetails = sb.ToString();
+        }
+
+        return $"\n## Rework round {reviewFeedback.ReworkRoundNumber} - reviewer feedback\n\n{reviewFeedback.Rationale}\n\nChecks failed:\n{checksList}{checkDetails}{priorContextSection}";
     }
 
     private static string BuildGateFailureFeedbackSection(ReviewFeedback reviewFeedback, string priorContextSection)
     {
         var sb = new StringBuilder();
         sb.Append($"\n## Rework round {reviewFeedback.ReworkRoundNumber} - gate failure\n\n{reviewFeedback.Rationale}");
-        foreach (var check in reviewFeedback.GateFailedChecks!)
+        AppendFailedCheckDetails(sb, reviewFeedback.GateFailedChecks!);
+        sb.Append(priorContextSection);
+        return sb.ToString();
+    }
+
+    // The failing check's own output is the oracle for the fix. A reviewer's prose about WHY a
+    // check fails can confidently describe rules the tool does not have (and prescribe a "fix"
+    // that also fails), so the brief carries the verbatim command, exit code, and output, and
+    // tells the worker to validate against the command - not against anyone's theory of it.
+    private static void AppendFailedCheckDetails(StringBuilder sb, IReadOnlyList<CheckResult> checks)
+    {
+        foreach (var check in checks)
         {
             sb.Append($"\n\n### Failed check: {check.Name} (exit {check.ExitCode})");
+            if (!string.IsNullOrWhiteSpace(check.CommandLine))
+                sb.Append($"\n\nCommand: `{check.CommandLine}`");
             if (!string.IsNullOrWhiteSpace(check.StdoutTail))
                 sb.Append($"\n\nstdout:\n```\n{check.StdoutTail.TrimEnd()}\n```");
             if (!string.IsNullOrWhiteSpace(check.StderrTail))
                 sb.Append($"\n\nstderr:\n```\n{check.StderrTail.TrimEnd()}\n```");
         }
-        sb.Append(priorContextSection);
-        return sb.ToString();
+        sb.Append("\n\nThe check output above is authoritative. Before committing, re-run each failed check's");
+        sb.Append(" exact command in your worktree and confirm it exits 0. If any prose in this brief about");
+        sb.Append(" how the check's rules work contradicts the check's own output, trust the output.");
     }
 
     private static string BuildPriorImplementContextSection(ReworkBriefContext? reworkContext)
@@ -182,5 +216,20 @@ public static class ImplementBriefBuilder
         return reviewFeedback is not null
             ? TemplateLoader.LoadShared("implement-obsolete-rework.md")
             : TemplateLoader.LoadShared("implement-obsolete-initial.md");
+    }
+
+    // Experiment 4 (L2a): the planning-hygiene Constraints bullet, rendered only for S-effort briefs
+    // when [project].context_hygiene is enabled. Stack-agnostic prose: no language, extension, or tool
+    // name. The leading newline makes the section own its placement after the prior Constraints bullet;
+    // empty string leaves the brief byte-identical to the flag-off baseline. Never rendered for M or L.
+    private static string BuildContextHygieneSection(ProjectContext proj, Ticket ticket)
+    {
+        var lean = proj.ContextHygiene && ticket.Size == Size.S;
+        if (!lean)
+            return "";
+        return "\n- Planning hygiene (this is a small, single-area brief): keep planning lightweight. Do not maintain an"
+             + "\n  elaborate, continuously-rewritten task list for a change this focused. Do not re-read files whose contents"
+             + "\n  are already provided to you above. Prefer targeted reads of the specific symbols you need over reading whole"
+             + "\n  large files.";
     }
 }

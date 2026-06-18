@@ -37,6 +37,7 @@ The ticket description (raw HTML) contains the planning output from the prior ph
 - Do NOT write outside the worktree
 - Do NOT use git stash or the shared stash stack; the stash stack is repo-global and leaks across worktrees, which can corrupt a later ticket's working tree. If you need a clean state to build, build in place rather than stashing.
 
+
 ## Golden and snapshot tests
 
 For golden/snapshot tests, use record-then-justify. Write the production code first, then run the code or test harness and capture its actual output as the golden fixture. If the project has a record/update flag or fixture-regeneration command, use that convention; if it does not, capture the real output verbatim and write that captured output to the fixture. Do NOT hand-author the expected string and iterate until it matches.
@@ -72,7 +73,7 @@ Then emit a completion claim that describes what this implementation delivers:
 - `ac_bindings`: array of {"ac_ref":"<label>","kind":"<kind>"} objects binding AC items to verifier kinds; allowed kinds: Test, GrepPresent, GrepAbsent, File, Exit, Golden, Smoke (may be empty)
 - `tests_added`: test names or test file paths added in this implementation (may be empty)
 
-Then emit the WORKER_RESULT envelope:
+Then emit the WORKER_RESULT envelope. Emit the fenced blocks and the envelope together in your final message - do not split them across separate messages, and write nothing after the envelope JSON:
 
 WORKER_RESULT
 {"status":"Ok","summary":"Implemented TLB-SNAP","files_changed":["path/to/changed/file"],"failure_reason":null,"metadata":{"commit_sha":"<HEAD SHA of feature branch after all commits>","files_changed":["path/to/changed/file"],"summary_ref":"IMPLEMENT_SUMMARY","completion_claim_ref":"COMPLETION_CLAIM"}}

@@ -41,6 +41,7 @@ public static class WorkerAgentBuilder
             MaxOutputTokens = cfg.MaxOutputTokens,
             Sizes = cfg.Sizes,
             BypassPermissions = cfg.BypassPermissions,
+            Transport = cfg.Transport,
         }),
     };
 }

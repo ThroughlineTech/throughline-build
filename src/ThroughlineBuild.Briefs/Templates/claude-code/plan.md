@@ -175,31 +175,7 @@ Count Relevant files and Steps. Apply:
 
 The "Agent size:" line in the Implementation Plan must match this inference.
 
-## Obsolete detection
-
-Before starting investigation proper, check whether the work is already done. If the acceptance criteria's artifacts already exist AND their content meets the acceptance criteria, the ticket is obsolete.
-
-**Detection bar:** "the file exists AND its content meets the acceptance criteria" qualifies. "a file with the same name exists" does not.
-
-Emit `Status=Escalate` with a populated `metadata.escalation` block. Do not append a plan.
-
-WORKER_RESULT
-{
-  "status": "Escalate",
-  "summary": "Ticket obsolete: decompose.md already delivered in commit 80ccafa",
-  "files_changed": [],
-  "failure_reason": null,
-  "metadata": {
-    "escalation": {
-      "reason": "obsolete",
-      "subsumed_by": {
-        "commit": "80ccafa",
-        "files": ["src/ThroughlineBuild.Briefs/Templates/claude-code/decompose.md"],
-        "rationale": "decompose.md delivered in commit 80ccafa; file meets this brief's acceptance criteria"
-      }
-    }
-  }
-}
+{{obsolete_detection_section}}
 
 ## Invalid-ticket discovery
 
@@ -207,7 +183,7 @@ If investigation reveals the ticket is invalid or already fixed (not obsolete): 
 
 ## WORKER_RESULT envelope
 
-When investigation, discipline passes, and size inference are complete, emit the PLAN_BODY fenced block followed by the WORKER_RESULT envelope as the LAST output. A bare `WORKER_RESULT` marker on its own line, followed by JSON:
+When investigation, discipline passes, and size inference are complete, emit the PLAN_BODY fenced block followed by the WORKER_RESULT envelope as the LAST output. Emit the fenced block and the envelope together in your final message - do not split them across separate messages, and write nothing after the envelope JSON. A bare `WORKER_RESULT` marker on its own line, followed by JSON:
 
 WORKER_RESULT
 {

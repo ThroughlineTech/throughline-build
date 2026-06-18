@@ -174,31 +174,7 @@ Count Relevant files and Steps. Apply:
 
 The "Agent size:" line in the Implementation Plan must match this inference.
 
-## Obsolete detection
-
-Before starting investigation proper, check whether the work is already done. If the acceptance criteria's artifacts already exist AND their content meets the acceptance criteria, the ticket is obsolete.
-
-**Detection bar:** "the file exists AND its content meets the acceptance criteria" qualifies. "a file with the same name exists" does not.
-
-Emit `Status=Escalate` with a populated `metadata.escalation` block. Do not append a plan.
-
-WORKER_RESULT
-{
-  "status": "Escalate",
-  "summary": "Ticket obsolete: decompose.md already delivered in commit 80ccafa",
-  "files_changed": [],
-  "failure_reason": null,
-  "metadata": {
-    "escalation": {
-      "reason": "obsolete",
-      "subsumed_by": {
-        "commit": "80ccafa",
-        "files": ["src/ThroughlineBuild.Briefs/Templates/claude-code/decompose.md"],
-        "rationale": "decompose.md delivered in commit 80ccafa; file meets this brief's acceptance criteria"
-      }
-    }
-  }
-}
+{{obsolete_detection_section}}
 
 ## Invalid-ticket discovery
 

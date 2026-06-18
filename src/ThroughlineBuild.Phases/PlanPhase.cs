@@ -32,7 +32,11 @@ public record BuildOptions(
     int BatchMaxSizeScore = 16,
     // max_description_bytes: maximum total bytes of ticket description HTML.
     // Proxy for estimated worker context required to hold all plans simultaneously.
-    int BatchMaxDescriptionBytes = 200_000);
+    int BatchMaxDescriptionBytes = 200_000,
+    // Engine build version/sha (e.g. "0.1.0+d0ee732"), surfaced by `build --version`. Carried
+    // here so phases can stamp it onto the --debug worker transcript as a keying field, holding
+    // the build constant across A/B runs. Pure metadata; never enters a worker's prompt.
+    string? BuildVersion = null);
 
 public record PlanResult(
     bool Success,
@@ -112,7 +116,9 @@ public class PlanPhase : IWorkflowPhase
             LiveStdoutSink: _options.LiveStdoutSink,
             LiveStderrSink: _options.LiveStderrSink,
             ProgressDigestSink: _options.ProgressDigestSink,
-            Size: WorkerSizeMapper.FromTicketSize(ticket.Size));
+            Size: WorkerSizeMapper.FromTicketSize(ticket.Size),
+            DebugTranscript: new DebugTranscriptContext(
+                BuildVersion: _options.BuildVersion, SessionId: _options.SessionId));
         var workerResult = await _worker.ExecuteAsync(brief, workingDirectory, workerOptions, ct).ConfigureAwait(false);
 
         await _ticketing.TransitionAsync(ticketId, TicketState.Planning, ct).ConfigureAwait(false);
