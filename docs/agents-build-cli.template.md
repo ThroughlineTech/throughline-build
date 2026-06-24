@@ -69,11 +69,18 @@ they do different things - choosing the wrong one is the most common mistake:
 
 ### State - `build transition <ID> <state>`
 
-Moves the ticket between workflow states. Valid states: `Backlog`, `Planning`, `Ready`,
-`InProgress`, `InReview`, `Done`, `Cancelled`. Matching is space/hyphen tolerant, so
+Moves the ticket between workflow states. Matching is space/hyphen tolerant, so
 `InReview`, `"In Review"`, and `in-review` are all accepted.
 
+Don't memorize the state names - run `build transition` with **no ticket-id** to print the
+valid states. It exits non-zero (it's a usage hint, written to stderr) but the list is
+authoritative:
+
 ```sh
+build transition
+# Error: ticket-id is required
+# Usage: build transition <ticket-id> <state> [--json]   (states: Backlog, Planning, Ready, InProgress, InReview, Done, Cancelled)
+
 build transition <ID> InReview
 ```
 
