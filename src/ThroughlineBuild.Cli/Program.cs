@@ -669,6 +669,15 @@ static async Task<int> RunAsync(string[] args)
                 if (ticket.ParentId is not null) Console.WriteLine($"  parent: {ticket.ParentId}");
                 if (ticket.Labels.Count > 0) Console.WriteLine($"  labels: {string.Join(", ", ticket.Labels)}");
                 foreach (var rel in ticket.Relations) Console.WriteLine($"  rel:    {rel.Kind} -> {rel.TargetId}");
+
+                // Render the body too, reusing the same HTML->text renderer the --json
+                // path uses (CliEnvelopeWriter.ToView), so text and JSON stay in sync.
+                var bodyText = HtmlToText.Render(ticket.DescriptionHtml);
+                if (!string.IsNullOrWhiteSpace(bodyText))
+                {
+                    Console.WriteLine();
+                    Console.WriteLine(bodyText);
+                }
             }
             return 0;
         }
