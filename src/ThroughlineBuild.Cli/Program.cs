@@ -285,8 +285,16 @@ static async Task<int> RunAsync(string[] args)
                 noInteractive: noInteractive,
                 ct: initCts.Token);
         }
+        catch (InitAbortedException)
+        {
+            // Operator typed 'q'/'quit' at a prompt. Distinct from Ctrl-C: clean bail-out, exit 5.
+            // (This catch must precede the OperationCanceledException one - it is more derived.)
+            Console.Error.WriteLine("Aborted.");
+            return 5;
+        }
         catch (OperationCanceledException)
         {
+            // Ctrl-C: CancelKeyPress cancelled initCts, which unblocked the prompt read.
             Console.Error.WriteLine("Cancelled.");
             return 1;
         }

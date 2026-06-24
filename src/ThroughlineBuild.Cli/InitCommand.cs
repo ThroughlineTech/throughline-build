@@ -117,7 +117,7 @@ public static class InitCommand
         // "Plane project ID" GUID prompt is gone - the project id comes from create-or-pick.
         bool canPrompt = !console.IsInputRedirected && fromFile is null && !noInteractive;
         if (canPrompt)
-            PromptForConnectionValues(console, ref planeUrl, ref workspace, ref token);
+            PromptForConnectionValues(console, ref planeUrl, ref workspace, ref token, ct);
 
         var content = ApplyFlags(template, planeUrl, workspace, projectId, token, tokenEnv);
 
@@ -494,8 +494,8 @@ public static class InitCommand
     {
         while (true)
         {
-            console.Write("Create a new project or use an existing one? [c/e] (blank to skip and write offline template): ");
-            var choice = console.ReadLine()?.Trim().ToLowerInvariant();
+            console.Write("Create a new project or use an existing one? [c/e] (blank to skip and write offline template, q to quit): ");
+            var choice = ReadPrompt(console, ct)?.Trim().ToLowerInvariant();
 
             if (string.IsNullOrEmpty(choice))
                 return null; // decline -> offline template
@@ -512,7 +512,7 @@ public static class InitCommand
             if (choice is "c" or "n" or "new" or "create")
                 return await CreateNewProjectAsync(discovery, console, ct).ConfigureAwait(false);
 
-            console.WriteLine("Please enter 'c' (create) or 'e' (existing).");
+            console.WriteLine("Please enter 'c' (create), 'e' (existing), or 'q' (quit).");
         }
     }
 
@@ -544,11 +544,11 @@ public static class InitCommand
 
         while (true)
         {
-            console.Write("Enter number (or 'n' to create new): ");
-            var input = console.ReadLine()?.Trim();
+            console.Write("Enter number (or 'n' to create new, 'q' to quit): ");
+            var input = ReadPrompt(console, ct)?.Trim();
             if (string.IsNullOrEmpty(input))
             {
-                console.WriteLine("Please enter a number or 'n'.");
+                console.WriteLine("Please enter a number, 'n', or 'q'.");
                 continue;
             }
             if (input.Equals("n", StringComparison.OrdinalIgnoreCase) || input.Equals("new", StringComparison.OrdinalIgnoreCase))
@@ -558,7 +558,7 @@ public static class InitCommand
                 var chosen = projects[n - 1];
                 return (chosen.Id, chosen.Name);
             }
-            console.WriteLine($"Please enter a number between 1 and {projects.Count}, or 'n'.");
+            console.WriteLine($"Please enter a number between 1 and {projects.Count}, 'n', or 'q'.");
         }
     }
 
@@ -572,8 +572,8 @@ public static class InitCommand
         string name;
         while (true)
         {
-            console.Write("Project name: ");
-            var n = console.ReadLine()?.Trim();
+            console.Write("Project name (q to quit): ");
+            var n = ReadPrompt(console, ct)?.Trim();
             if (!string.IsNullOrEmpty(n)) { name = n; break; }
             console.WriteLine("A project name is required.");
         }
@@ -582,8 +582,8 @@ public static class InitCommand
         string identifier;
         while (true)
         {
-            console.Write($"Project identifier [{defaultId}]: ");
-            var raw = console.ReadLine()?.Trim();
+            console.Write($"Project identifier [{defaultId}] (q to quit): ");
+            var raw = ReadPrompt(console, ct)?.Trim();
             if (string.IsNullOrEmpty(raw)) { identifier = defaultId; break; }
             var normalized = raw.ToUpperInvariant();
             if (IsValidIdentifier(normalized)) { identifier = normalized; break; }
@@ -641,28 +641,66 @@ public static class InitCommand
         IConsole console,
         ref string? planeUrl,
         ref string? workspace,
-        ref string? token)
+        ref string? token,
+        CancellationToken ct)
     {
         if (planeUrl is null)
         {
-            console.Write("Plane base URL: ");
-            var response = console.ReadLine()?.Trim();
+            console.Write("Plane base URL (q to quit): ");
+            var response = ReadPrompt(console, ct)?.Trim();
             if (!string.IsNullOrEmpty(response)) planeUrl = response;
         }
 
         if (workspace is null)
         {
-            console.Write("Plane workspace slug: ");
-            var response = console.ReadLine()?.Trim();
+            console.Write("Plane workspace slug (q to quit): ");
+            var response = ReadPrompt(console, ct)?.Trim();
             if (!string.IsNullOrEmpty(response)) workspace = response;
         }
 
         if (token is null)
         {
-            console.Write("Plane API token (leave blank to fill in later): ");
-            var response = console.ReadLine()?.Trim();
+            console.Write("Plane API token (leave blank to fill in later, q to quit): ");
+            var response = ReadPrompt(console, ct)?.Trim();
             if (!string.IsNullOrEmpty(response)) token = response;
         }
+    }
+
+    /// <summary>
+    /// Reads one line from an interactive prompt with two operator bail-outs wired in:
+    ///
+    /// - Ctrl-C: the init verb registers a CancelKeyPress handler that cancels <paramref name="ct"/>.
+    ///   A blocking Console.ReadLine() ignores cancellation tokens, so at a real TTY we run the read
+    ///   on a background task and race it against the token; Ctrl-C then unblocks the prompt and
+    ///   surfaces as a plain OperationCanceledException -> "Cancelled." (exit 1). The orphaned
+    ///   read-thread is harmless: it dies when the process exits on the bail-out. This is a one-shot
+    ///   abort path, not a reusable cancellable reader.
+    /// - 'q' / 'quit' (any case): throws InitAbortedException -> "Aborted." (exit 5). Blank and every
+    ///   other value pass through unchanged, so each prompt keeps its own meaning for empty input.
+    ///
+    /// Redirected stdin (automation) reads synchronously: it never blocks indefinitely and returns
+    /// null at EOF, so the background-task race is skipped there.
+    /// </summary>
+    private static string? ReadPrompt(IConsole console, CancellationToken ct)
+    {
+        string? line;
+        if (console.IsInputRedirected)
+        {
+            line = console.ReadLine();
+        }
+        else
+        {
+            var task = Task.Run(console.ReadLine);
+            task.Wait(ct); // throws OperationCanceledException when Ctrl-C fires ct while we block on input
+            line = task.GetAwaiter().GetResult();
+        }
+
+        var trimmed = line?.Trim();
+        if (string.Equals(trimmed, "q", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(trimmed, "quit", StringComparison.OrdinalIgnoreCase))
+            throw new InitAbortedException();
+
+        return line;
     }
 
     /// <summary>

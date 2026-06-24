@@ -15,6 +15,7 @@ public static class HelpRegistryFactory
     private static readonly ExitCodeEntry s_exit2  = new(2, "Config error or bad arguments");
     private static readonly ExitCodeEntry s_exit3  = new(3, "Missing secret (env var not set)");
     private static readonly ExitCodeEntry s_exit4  = new(4, "Phase infrastructure failure");
+    private static readonly ExitCodeEntry s_exit5  = new(5, "Operator aborted (typed 'q' at a prompt)");
 
     // ------------------------------------------------------------------
     // Public factory entry point.
@@ -430,11 +431,11 @@ public static class HelpRegistryFactory
             new("--token TOKEN",      "Set the Plane API token value directly",                          false),
             new("--token-env VAR",    "Set the env-var name that holds the Plane API token",             false),
         ],
-        ExitCodes: [s_exit0, s_exit1, s_exit2],
+        ExitCodes: [s_exit0, s_exit1, s_exit2, s_exit5],
         Examples:
         [
             new("init",
-                "At a TTY: prompts for base URL, workspace, and token, then offers to create a new project or pick an existing one from a most-recently-used menu (you never paste a UUID), then provisions and commits."),
+                "At a TTY: prompts for base URL, workspace, and token, then offers to create a new project or pick an existing one from a most-recently-used menu (you never paste a UUID), then provisions and commits. Press Ctrl-C to cancel (exit 1) or type 'q' at any prompt to abort (exit 5)."),
             new("init --project-name \"Survey Smoketest\" --plane-url URL --workspace SLUG --token TOKEN",
                 "Non-interactive one-shot: resolve or create the project by name, provision, and verify."),
             new("init --no-interactive --plane-url URL --workspace SLUG --token TOKEN",

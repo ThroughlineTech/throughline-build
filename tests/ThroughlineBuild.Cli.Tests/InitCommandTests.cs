@@ -1958,6 +1958,109 @@ public class InitCommandTests
         }
     }
 
+    // ------------------------------------------------------------------
+    // Operator bail-out: typing 'q' / 'quit' aborts with InitAbortedException
+    // (Program.cs maps it to "Aborted." / exit 5; Ctrl-C stays "Cancelled." / exit 1).
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public async Task Interactive_QuitAtCreateOrPick_Aborts_WritesNoConfig()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var discovery = new StubProjectDiscovery { Projects = [new ProjectInfo("x", "X", "XX")] };
+            var console = new FakeInteractiveConsole();
+            console.Responses.Enqueue("q"); // bail out at the create-or-pick prompt
+
+            await Assert.ThrowsAsync<InitAbortedException>(() =>
+                InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
+                    planeUrl: "https://api.plane.so", workspace: "acme", token: "tok",
+                    discoveryOverride: discovery,
+                    setupFactory: _ => (new FakeProvisioner(), new FakeConnectivity()),
+                    localRepoOverride: new EmptyLocalRepo()));
+
+            Assert.False(File.Exists(Path.Combine(dir, ".build", "config.toml")));
+            Assert.Equal(0, discovery.CreateCalls);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Interactive_QuitWord_AtCreateOrPick_Aborts()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new FakeInteractiveConsole();
+            console.Responses.Enqueue("QUIT"); // full word, any case
+
+            await Assert.ThrowsAsync<InitAbortedException>(() =>
+                InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
+                    planeUrl: "https://api.plane.so", workspace: "acme", token: "tok",
+                    discoveryOverride: new StubProjectDiscovery()));
+
+            Assert.False(File.Exists(Path.Combine(dir, ".build", "config.toml")));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Interactive_QuitAtProjectMenu_Aborts_WritesNoConfig()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var discovery = new StubProjectDiscovery { Projects = [new ProjectInfo("x", "X", "XX")] };
+            var console = new FakeInteractiveConsole();
+            console.Responses.Enqueue("e"); // use existing -> opens the menu
+            console.Responses.Enqueue("q"); // bail out at the menu
+
+            await Assert.ThrowsAsync<InitAbortedException>(() =>
+                InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
+                    planeUrl: "https://api.plane.so", workspace: "acme", token: "tok",
+                    discoveryOverride: discovery,
+                    setupFactory: _ => (new FakeProvisioner(), new FakeConnectivity()),
+                    localRepoOverride: new EmptyLocalRepo()));
+
+            Assert.False(File.Exists(Path.Combine(dir, ".build", "config.toml")));
+            Assert.Equal(0, discovery.CreateCalls);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Interactive_QuitAtConnectionPrompt_Aborts_WritesNoConfig()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new FakeInteractiveConsole();
+            console.Responses.Enqueue("q"); // bail out at the prompted token value
+
+            // url + workspace supplied as flags so only the token is prompted; 'q' there aborts
+            // before any connection or write happens.
+            await Assert.ThrowsAsync<InitAbortedException>(() =>
+                InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
+                    planeUrl: "https://api.plane.so", workspace: "acme"));
+
+            Assert.False(File.Exists(Path.Combine(dir, ".build", "config.toml")));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task NoInteractiveFlag_AtTty_NeverPrompts_WritesOfflineTemplate()
     {
