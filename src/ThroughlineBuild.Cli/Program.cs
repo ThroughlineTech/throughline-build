@@ -849,7 +849,7 @@ static async Task<int> RunAsync(string[] args)
         if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]) || args[1].StartsWith("--"))
         {
             if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "ticket-id is required");
-            else { Console.Error.WriteLine("Error: ticket-id is required"); Console.Error.WriteLine("Usage: build transition <ticket-id> <state> [--json]"); }
+            else { Console.Error.WriteLine("Error: ticket-id is required"); Console.Error.WriteLine($"Usage: build transition <ticket-id> <state> [--json]   (states: {string.Join(", ", Enum.GetNames<TicketState>())})"); }
             return 2;
         }
         if (args.Length < 3 || string.IsNullOrWhiteSpace(args[2]) || args[2].StartsWith("--"))
