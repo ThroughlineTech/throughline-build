@@ -592,8 +592,7 @@ static async Task<int> RunAsync(string[] args)
             }
             catch (PlaneApiException ex)
             {
-                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
-                return 1;
+                return PlaneCliError.Report("list", ex, jsonOutput);
             }
             catch (OperationCanceledException)
             {
@@ -694,19 +693,11 @@ static async Task<int> RunAsync(string[] args)
             else Console.Error.WriteLine($"Command 'get' failed: {ex.Message}");
             return 1;
         }
-        catch (PlaneApiException ex) when (ex.Status == 404)
-        {
-            var msg = PlaneTicketingClient.BuildProjectNotFoundMessage(
-                config2.Ticketing.PlaneWorkspaceSlug, config2.Ticketing.PlaneProjectId, ex);
-            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.ConfigError, msg);
-            else Console.Error.WriteLine("Command 'get' failed: " + msg);
-            return 1;
-        }
         catch (PlaneApiException ex)
         {
-            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
-            else Console.Error.WriteLine($"Command 'get' failed: Plane API {ex.Status}: {ex.Body}");
-            return 1;
+            // A 404 here (e.g. wrong/unset project) arrives with the actionable message already set
+            // by PlaneTicketingClient; PlaneCliError preserves it instead of re-deriving from ex.Body.
+            return PlaneCliError.Report("get", ex, jsonOutput);
         }
         catch (OperationCanceledException)
         {
@@ -772,9 +763,7 @@ static async Task<int> RunAsync(string[] args)
         }
         catch (PlaneApiException ex)
         {
-            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
-            else Console.Error.WriteLine($"Command 'comments' failed: Plane API {ex.Status}: {ex.Body}");
-            return 1;
+            return PlaneCliError.Report("comments", ex, jsonOutput);
         }
         catch (OperationCanceledException)
         {
@@ -844,9 +833,7 @@ static async Task<int> RunAsync(string[] args)
         }
         catch (PlaneApiException ex)
         {
-            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
-            else Console.Error.WriteLine($"Command 'comment' failed: Plane API {ex.Status}: {ex.Body}");
-            return 1;
+            return PlaneCliError.Report("comment", ex, jsonOutput);
         }
         catch (OperationCanceledException)
         {
@@ -913,9 +900,7 @@ static async Task<int> RunAsync(string[] args)
         }
         catch (PlaneApiException ex)
         {
-            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
-            else Console.Error.WriteLine($"Command 'transition' failed: Plane API {ex.Status}: {ex.Body}");
-            return 1;
+            return PlaneCliError.Report("transition", ex, jsonOutput);
         }
         catch (OperationCanceledException)
         {
@@ -1088,9 +1073,7 @@ static async Task<int> RunAsync(string[] args)
         }
         catch (PlaneApiException ex)
         {
-            if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
-            else Console.Error.WriteLine($"Command '{verb}' failed: Plane API {ex.Status}: {ex.Body}");
-            return 1;
+            return PlaneCliError.Report(verb, ex, jsonOutput);
         }
         catch (OperationCanceledException)
         {
@@ -1217,8 +1200,7 @@ static async Task<int> RunAsync(string[] args)
             }
             catch (PlaneApiException ex)
             {
-                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, $"Plane API {ex.Status}: {ex.Body}");
-                return 1;
+                return PlaneCliError.Report("new", ex, jsonOutput);
             }
             catch (InvalidOperationException ex)
             {

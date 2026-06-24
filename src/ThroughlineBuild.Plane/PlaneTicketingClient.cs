@@ -425,7 +425,23 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
         try
         {
             if (_issueTypesByName is not null) return _issueTypesByName;
-            var list = await GetJsonAsync<PlaneIssueTypeList>(IssueTypesBase, PlaneJsonContext.Default, ct).ConfigureAwait(false);
+            PlaneIssueTypeList list;
+            try
+            {
+                list = await GetJsonAsync<PlaneIssueTypeList>(IssueTypesBase, PlaneJsonContext.Default, ct).ConfigureAwait(false);
+            }
+            catch (PlaneApiException ex) when (ex.Status == 404)
+            {
+                // The issue-types endpoint is a Plane feature that is not enabled on every deployment
+                // (it returns 404 when off). Without this, `build list --type <name>` surfaces a bare
+                // "Page not found." that looks like a bad type name; name the real cause instead.
+                throw new PlaneApiException(
+                    ex.Status, ex.Body,
+                    $"Filtering by --type needs Plane's issue-types feature, which is not enabled for project " +
+                    $"'{_options.ProjectId}' in workspace '{_options.WorkspaceSlug}' (the issue-types endpoint " +
+                    $"returned 404). Drop --type, or enable issue types for this project in Plane. ({ex.Message})",
+                    ex.RetryAfter);
+            }
             _issueTypesByName = (list.Results ?? []).ToDictionary(t => t.Name, t => t.Id, StringComparer.OrdinalIgnoreCase);
             return _issueTypesByName;
         }
@@ -579,7 +595,22 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
         try
         {
             if (_snapshotLoaded) return;
-            var all = await FetchAllIssuesAsync($"{IssuesBase}?per_page=100", ct).ConfigureAwait(false);
+            List<PlaneIssue> all;
+            try
+            {
+                all = await FetchAllIssuesAsync($"{IssuesBase}?per_page=100", ct).ConfigureAwait(false);
+            }
+            catch (PlaneApiException ex) when (ex.Status == 404)
+            {
+                // The project's own issues route 404'd: the configured workspace/project does not
+                // resolve (wrong or unset id). This is the first call every read/write verb makes via
+                // the snapshot, so translating it here gives ALL of them the actionable message instead
+                // of a raw "Page not found." - preserve Status/Body, replace only the message.
+                throw new PlaneApiException(
+                    ex.Status, ex.Body,
+                    BuildProjectNotFoundMessage(_options.WorkspaceSlug, _options.ProjectId, ex),
+                    ex.RetryAfter);
+            }
             foreach (var issue in all)
                 IndexIssue(issue);
             _snapshotLoaded = true;

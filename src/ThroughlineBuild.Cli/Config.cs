@@ -147,6 +147,7 @@ public static class BuildConfigLoader
         }
 
         var ticketing = ReadTicketingSection(root);
+        ValidateTicketingFilled(ticketing, path);
         var llm = ReadLlmSection(root);
         var workers = ReadWorkersSection(root);
         var events = ReadEventsSection(root);
@@ -192,6 +193,10 @@ public static class BuildConfigLoader
         if (string.IsNullOrEmpty(planeToken))
             throw new ConfigException(
                 $"plane_api_token not set in config and required environment variable '{config.Ticketing.PlaneApiTokenEnv}' is not set");
+        if (planeToken.StartsWith("REQUIRED_", StringComparison.Ordinal))
+            throw new ConfigException(
+                $"plane_api_token still holds the scaffold placeholder \"{planeToken}\"; replace it with your " +
+                $"Plane API token, or set the '{config.Ticketing.PlaneApiTokenEnv}' environment variable.");
 
         var anthropicKey = config.Llm.AnthropicApiKey;
         if (string.IsNullOrEmpty(anthropicKey))
@@ -554,6 +559,31 @@ public static class BuildConfigLoader
                 result.Add(s);
         }
         return result.AsReadOnly();
+    }
+
+    // 'build init' scaffolds the required Plane fields as REQUIRED_<NAME> placeholders the operator
+    // must replace. RequireString only enforces non-empty, so an unreplaced placeholder loads cleanly
+    // and then fails on the first API call as an opaque Plane 404 ("Page not found.") - which reads
+    // like an outage or a wrong endpoint, not an unset config, and sends the operator down the wrong
+    // path. Reject it here, before any HTTP, as an actionable Config error (exit 2) that names the
+    // field and the file. Keyed on the documented REQUIRED_ convention so it never false-positives on
+    // a real (or test) id like "abc-123"; a wrong-but-plausible id is left for the runtime 404, which
+    // BuildProjectNotFoundMessage now explains.
+    private static void ValidateTicketingFilled(TicketingConfig t, string configPath)
+    {
+        foreach (var (field, value) in new[]
+        {
+            ("plane_base_url", t.PlaneBaseUrl),
+            ("plane_workspace_slug", t.PlaneWorkspaceSlug),
+            ("plane_project_id", t.PlaneProjectId),
+        })
+        {
+            if (value.StartsWith("REQUIRED_", StringComparison.Ordinal))
+                throw new ConfigException(
+                    $"{field} is not set in {configPath} - it still holds the scaffold placeholder " +
+                    $"\"{value}\". Replace every REQUIRED_ placeholder with a real value: run `build init`, " +
+                    $"or set {field} by hand (the project UUID is in Plane under Project Settings > General).");
+        }
     }
 
     private static TicketingConfig ReadTicketingSection(TomlTable root)

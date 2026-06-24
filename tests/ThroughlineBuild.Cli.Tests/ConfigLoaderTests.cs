@@ -111,6 +111,67 @@ log_directory = ".build/events"
     }
 
     [Fact]
+    public void Load_UnreplacedRequiredPlaceholder_ThrowsConfigException()
+    {
+        // A 'build init' scaffold whose plane_project_id placeholder was never replaced. It is a
+        // non-empty string, so RequireString passes it; without the placeholder guard it loads
+        // cleanly and only fails later as an opaque Plane 404. Reject it at load as a Config error.
+        var toml = """
+[ticketing]
+backend = "plane"
+plane_base_url = "https://api.plane.so"
+plane_workspace_slug = "my-workspace"
+plane_project_id = "REQUIRED_PLANE_PROJECT_ID"
+plane_api_token_env = "PLANE_TOKEN"
+
+[workers]
+default_agent = "claude-code"
+
+[workers.claude-code]
+executable = "claude"
+
+[workers.claude-code.sizes]
+small  = { model = "claude-haiku-4-5-20251001" }
+medium = { model = "claude-sonnet-4-6" }
+large  = { model = "claude-opus-4-7" }
+
+[events]
+log_directory = ".build/events"
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var ex = Assert.Throws<ConfigException>(() => BuildConfigLoader.Load(path));
+            Assert.Contains("plane_project_id", ex.Message);
+            Assert.Contains("placeholder", ex.Message);
+            // The message points the operator at the offending file, not a network endpoint.
+            Assert.Contains(path, ex.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_FilledNonUuidProjectId_LoadsCleanly()
+    {
+        // Guard against the placeholder check over-reaching: a real-but-non-UUID id like "abc-123"
+        // must still load. The check keys on the documented REQUIRED_ scaffold prefix, not id shape,
+        // precisely so it never false-positives on a valid id.
+        var path = WriteToml(ValidToml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Equal("abc-123", config.Ticketing.PlaneProjectId);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void FindConfigFile_WalksUpToConfigDir_ReturnsPath()
     {
         var root = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());

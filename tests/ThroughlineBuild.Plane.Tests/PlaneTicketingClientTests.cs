@@ -298,6 +298,46 @@ public class GetAsyncTests
     }
 
     [Fact]
+    public async Task Snapshot404_TranslatesToActionableProjectNotFoundMessage()
+    {
+        // The project's issues route 404s (wrong/unset project). Every read/write verb hits this via
+        // the snapshot, so the client rewrites the message to name the workspace/project and the fix,
+        // while preserving the raw status/body for programmatic callers.
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.ErrorJson(404, "Page not found."));
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        var ex = await Assert.ThrowsAsync<PlaneApiException>(() => client.GetAsync("TLB-99", CancellationToken.None));
+
+        Assert.Equal(404, ex.Status);                              // raw status preserved
+        Assert.Equal("Page not found.", ex.Body);                  // raw body preserved
+        Assert.Contains("does not resolve to a project", ex.Message);
+        Assert.Contains("my-project", ex.Message);                 // names the configured project
+        Assert.Contains("my-workspace", ex.Message);               // and workspace
+    }
+
+    [Fact]
+    public async Task QueryByType_WhenIssueTypesFeatureDisabled_TranslatesTo404FeatureMessage()
+    {
+        // --type resolves the type name via the issue-types endpoint, a Plane feature that is not
+        // enabled on every deployment (it 404s when off). The snapshot loads fine first, so the 404
+        // here must read as "feature not enabled", not a wrong project id or a bad type name.
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(req => req.RequestUri!.AbsoluteUri.Contains("/issues/"),
+            FakeMessageHandler.OkJson("""{"results":[]}"""));
+        handler.Enqueue(req => req.RequestUri!.AbsoluteUri.Contains("issue-types"),
+            FakeMessageHandler.ErrorJson(404, "Page not found."));
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        var ex = await Assert.ThrowsAsync<PlaneApiException>(
+            () => client.QueryAsync(new TicketQuery(Type: "Feature"), CancellationToken.None));
+
+        Assert.Equal(404, ex.Status);
+        Assert.Contains("issue-types feature", ex.Message);
+        Assert.Contains("--type", ex.Message);
+    }
+
+    [Fact]
     public async Task GetAsync_SetsXApiKeyHeader()
     {
         var handler = new FakeMessageHandler();
