@@ -3,6 +3,7 @@ using Tomlyn.Model;
 using ThroughlineBuild.Briefs;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Plane;
 using ThroughlineBuild.Workers.ClaudeCode;
 
 namespace ThroughlineBuild.Cli;
@@ -15,7 +16,8 @@ public record TicketingConfig(
     string PlaneApiTokenEnv,
     string PlaneProjectIdentifier = "",
     string PlaneProjectName = "",
-    string? PlaneApiToken = null);
+    string? PlaneApiToken = null,
+    int PlaneRequestsPerMinute = PlaneClientOptions.DefaultRequestsPerMinute);
 
 public record LlmConfig(
     string DefaultModel,
@@ -213,7 +215,8 @@ public static class BuildConfigLoader
     private static readonly HashSet<string> KnownTicketingKeys = new(StringComparer.Ordinal)
     {
         "backend", "plane_base_url", "plane_workspace_slug", "plane_project_id",
-        "plane_api_token_env", "plane_project_identifier", "plane_project_name", "plane_api_token"
+        "plane_api_token_env", "plane_project_identifier", "plane_project_name", "plane_api_token",
+        "plane_requests_per_minute"
     };
 
     private static readonly HashSet<string> KnownLlmKeys = new(StringComparer.Ordinal)
@@ -589,6 +592,17 @@ public static class BuildConfigLoader
     private static TicketingConfig ReadTicketingSection(TomlTable root)
     {
         var t = RequireSection(root, "ticketing");
+
+        // A non-positive budget would surface as an ArgumentOutOfRangeException out of
+        // RequestThrottle's constructor - an unhandled crash with no mention of config.
+        // Reject it here as an actionable Config error instead.
+        var rpm = OptionalInt(t, "plane_requests_per_minute", PlaneClientOptions.DefaultRequestsPerMinute);
+        if (rpm <= 0)
+            throw new ConfigException(
+                $"plane_requests_per_minute must be a positive integer, got {rpm}. It is the per-process " +
+                "cap on Plane API calls per minute; omit it to use the default of " +
+                $"{PlaneClientOptions.DefaultRequestsPerMinute} (sized for Plane Cloud's 60/min limit).");
+
         return new TicketingConfig(
             BackendName: RequireString(t, "ticketing", "backend"),
             PlaneBaseUrl: RequireString(t, "ticketing", "plane_base_url"),
@@ -597,7 +611,8 @@ public static class BuildConfigLoader
             PlaneApiTokenEnv: OptionalString(t, "plane_api_token_env", "PLANE_API_TOKEN"),
             PlaneProjectIdentifier: OptionalString(t, "plane_project_identifier", string.Empty),
             PlaneProjectName: OptionalString(t, "plane_project_name", string.Empty),
-            PlaneApiToken: OptionalString(t, "plane_api_token", string.Empty) is var tok && tok.Length > 0 ? tok : null);
+            PlaneApiToken: OptionalString(t, "plane_api_token", string.Empty) is var tok && tok.Length > 0 ? tok : null,
+            PlaneRequestsPerMinute: rpm);
     }
 
     private static LlmConfig ReadLlmSection(TomlTable root)

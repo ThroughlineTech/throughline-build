@@ -9,15 +9,26 @@ public class PlaneClientOptions
     public string ProjectIdentifier { get; init; } = string.Empty;
 
     /// <summary>
+    /// Default per-minute request budget: sized for Plane Cloud, whose real limit
+    /// is 60/min server-side and global per API token. We sit at 40 (not 60) to
+    /// leave headroom for a second instance sharing the same token.
+    /// </summary>
+    public const int DefaultRequestsPerMinute = 40;
+
+    /// <summary>
     /// Per-process ceiling on Plane HTTP requests per minute. Every call routes
     /// through a <see cref="RequestThrottle"/> that blocks once this budget is
-    /// spent. Plane enforces its real limit (60/min) server-side and globally per
-    /// API token, so this throttle is per-process and cannot coordinate across
-    /// concurrent <c>build</c> instances. We default to 40 (not 60) to leave
-    /// headroom for a second instance sharing the same token, and rely on the
-    /// resilience pipeline to back off gracefully when Plane still returns 429.
+    /// spent. The throttle is per-process and cannot coordinate across concurrent
+    /// <c>build</c> instances, so the resilience pipeline still has to back off
+    /// gracefully when Plane returns 429 anyway.
+    ///
+    /// The default is calibrated to Plane Cloud. A self-hosted Plane sets its own
+    /// limit (or none), so operators of a self-hosted instance can raise this via
+    /// <c>plane_requests_per_minute</c> in the <c>[ticketing]</c> block of
+    /// <c>.build/config.toml</c> (TLB-565). Nothing here queries the server for its
+    /// real limit; this is a self-imposed budget only.
     /// </summary>
-    public int RequestsPerMinute { get; init; } = 40;
+    public int RequestsPerMinute { get; init; } = DefaultRequestsPerMinute;
 
     /// <summary>
     /// Maximum retry attempts for transient Plane failures (429 / 5xx) before the

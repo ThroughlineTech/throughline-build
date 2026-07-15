@@ -1,5 +1,6 @@
 using ThroughlineBuild.Cli;
 using ThroughlineBuild.Contracts;
+using ThroughlineBuild.Plane;
 using Xunit;
 
 namespace ThroughlineBuild.Cli.Tests;
@@ -2075,6 +2076,80 @@ verify_gate_vacuity = false
             var captured = new List<string>();
             BuildConfigLoader.Load(path, w => captured.Add(w));
             Assert.DoesNotContain(captured, w => w.Contains("context_hygiene"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    // plane_requests_per_minute (TLB-565): the throttle budget is a self-imposed per-process
+    // cap sized for Plane Cloud's 60/min. A self-hosted Plane sets its own limit, so operators
+    // need to raise it; before this key the only way was to edit and rebuild the binary.
+    private static string TomlWithTicketingKey(string line) =>
+        ValidToml.Replace(
+            "plane_api_token_env = \"PLANE_TOKEN\"",
+            "plane_api_token_env = \"PLANE_TOKEN\"\n" + line);
+
+    [Fact]
+    public void Load_PlaneRequestsPerMinute_Omitted_DefaultsToCloudSizedBudget()
+    {
+        var path = WriteToml(ValidToml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Equal(40, config.Ticketing.PlaneRequestsPerMinute);
+            Assert.Equal(PlaneClientOptions.DefaultRequestsPerMinute, config.Ticketing.PlaneRequestsPerMinute);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_PlaneRequestsPerMinute_Set_OverridesDefault()
+    {
+        var path = WriteToml(TomlWithTicketingKey("plane_requests_per_minute = 300"));
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Equal(300, config.Ticketing.PlaneRequestsPerMinute);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_PlaneRequestsPerMinute_IsAKnownKey_DoesNotWarnAsUnknown()
+    {
+        var path = WriteToml(TomlWithTicketingKey("plane_requests_per_minute = 300"));
+        try
+        {
+            var captured = new List<string>();
+            BuildConfigLoader.Load(path, w => captured.Add(w));
+            Assert.DoesNotContain(captured, w => w.Contains("plane_requests_per_minute"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Load_PlaneRequestsPerMinute_NonPositive_ThrowsConfigException(int value)
+    {
+        // RequestThrottle's ctor throws ArgumentOutOfRangeException on a non-positive budget,
+        // which would surface as an unhandled crash naming neither the key nor the file.
+        var path = WriteToml(TomlWithTicketingKey($"plane_requests_per_minute = {value}"));
+        try
+        {
+            var ex = Assert.Throws<ConfigException>(() => BuildConfigLoader.Load(path));
+            Assert.Contains("plane_requests_per_minute", ex.Message);
         }
         finally
         {

@@ -40,6 +40,7 @@ Read by `ReadTicketingSection` into `TicketingConfig` ([src/ThroughlineBuild.Cli
 | `plane_project_identifier` | no | `""` | e.g. `"TLB"`. Filename component and Plane client option. |
 | `plane_project_name` | no | `""` | e.g. `"throughline-build"`. Filename component / `SessionContext.ProjectName`. |
 | `plane_api_token` | no | `null` | Inline token; takes precedence over env. |
+| `plane_requests_per_minute` | no | `40` | Per-process cap on Plane API calls/min, enforced client-side by `RequestThrottle`. The default is sized for Plane Cloud's 60/min, leaving headroom for a second concurrent `build`. Raise it for a self-hosted Plane with a higher limit (or none). Non-positive values are rejected at load (TLB-565). |
 
 A missing or empty required key throws `ConfigException`; CLI exits 2 with `Config error: ...`.
 

@@ -547,14 +547,7 @@ static async Task<int> RunAsync(string[] args)
     if (verb == "list")
     {
         var http2 = new HttpClient();
-        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
-        {
-            BaseUrl = config2.Ticketing.PlaneBaseUrl,
-            ApiToken = secrets2.PlaneApiToken,
-            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
-            ProjectId = config2.Ticketing.PlaneProjectId,
-            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
-        });
+        var ticketing2 = new PlaneTicketingClient(http2, PlaneOptionsFactory.From(config2, secrets2));
 
         var cmd = new ListCommand(ticketing2, Console.Out);
         var extraArgs = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -640,14 +633,7 @@ static async Task<int> RunAsync(string[] args)
 
         var getTicketId = args[1];
         var http2 = new HttpClient();
-        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
-        {
-            BaseUrl = config2.Ticketing.PlaneBaseUrl,
-            ApiToken = secrets2.PlaneApiToken,
-            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
-            ProjectId = config2.Ticketing.PlaneProjectId,
-            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
-        });
+        var ticketing2 = new PlaneTicketingClient(http2, PlaneOptionsFactory.From(config2, secrets2));
 
         try
         {
@@ -717,14 +703,7 @@ static async Task<int> RunAsync(string[] args)
         }
         var commentsId = args[1];
         var http2 = new HttpClient();
-        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
-        {
-            BaseUrl = config2.Ticketing.PlaneBaseUrl,
-            ApiToken = secrets2.PlaneApiToken,
-            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
-            ProjectId = config2.Ticketing.PlaneProjectId,
-            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
-        });
+        var ticketing2 = new PlaneTicketingClient(http2, PlaneOptionsFactory.From(config2, secrets2));
         try
         {
             using var verbCts = new CancellationTokenSource();
@@ -802,14 +781,7 @@ static async Task<int> RunAsync(string[] args)
         }
         var commentHtml = MarkdownHtml.Render(commentBody);
         var http2 = new HttpClient();
-        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
-        {
-            BaseUrl = config2.Ticketing.PlaneBaseUrl,
-            ApiToken = secrets2.PlaneApiToken,
-            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
-            ProjectId = config2.Ticketing.PlaneProjectId,
-            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
-        });
+        var ticketing2 = new PlaneTicketingClient(http2, PlaneOptionsFactory.From(config2, secrets2));
         try
         {
             using var verbCts = new CancellationTokenSource();
@@ -869,14 +841,7 @@ static async Task<int> RunAsync(string[] args)
             return 2;
         }
         var http2 = new HttpClient();
-        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
-        {
-            BaseUrl = config2.Ticketing.PlaneBaseUrl,
-            ApiToken = secrets2.PlaneApiToken,
-            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
-            ProjectId = config2.Ticketing.PlaneProjectId,
-            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
-        });
+        var ticketing2 = new PlaneTicketingClient(http2, PlaneOptionsFactory.From(config2, secrets2));
         try
         {
             using var verbCts = new CancellationTokenSource();
@@ -915,14 +880,7 @@ static async Task<int> RunAsync(string[] args)
     {
         var checkOnly = filteredArgs.Contains("--check");
         var http2 = new HttpClient();
-        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
-        {
-            BaseUrl = config2.Ticketing.PlaneBaseUrl,
-            ApiToken = secrets2.PlaneApiToken,
-            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
-            ProjectId = config2.Ticketing.PlaneProjectId,
-            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
-        });
+        var ticketing2 = new PlaneTicketingClient(http2, PlaneOptionsFactory.From(config2, secrets2));
         var setupCmd = new SetupCommand(ticketing2, new FileSystemLocalRepoOps(cwd2));
         try
         {
@@ -967,14 +925,7 @@ static async Task<int> RunAsync(string[] args)
             extraSlug: null,
             timestamp: DateTimeOffset.Now);
         var http2 = new HttpClient();
-        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
-        {
-            BaseUrl = config2.Ticketing.PlaneBaseUrl,
-            ApiToken = secrets2.PlaneApiToken,
-            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
-            ProjectId = config2.Ticketing.PlaneProjectId,
-            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
-        });
+        var ticketing2 = new PlaneTicketingClient(http2, PlaneOptionsFactory.From(config2, secrets2));
         await using var jsonlEventSink2 = new JsonlEventSink(new EventLogOptions
         {
             BaseDirectory = ResolveLogDir(config2.Events.LogDirectory),
@@ -1093,14 +1044,7 @@ static async Task<int> RunAsync(string[] args)
             extraSlug: null,
             timestamp: DateTimeOffset.Now);
         var http2 = new HttpClient();
-        var ticketing2 = new PlaneTicketingClient(http2, new PlaneClientOptions
-        {
-            BaseUrl = config2.Ticketing.PlaneBaseUrl,
-            ApiToken = secrets2.PlaneApiToken,
-            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
-            ProjectId = config2.Ticketing.PlaneProjectId,
-            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
-        });
+        var ticketing2 = new PlaneTicketingClient(http2, PlaneOptionsFactory.From(config2, secrets2));
         await using var jsonlEventSink2 = new JsonlEventSink(new EventLogOptions
         {
             BaseDirectory = ResolveLogDir(config2.Events.LogDirectory),
@@ -1450,14 +1394,7 @@ static async Task<int> RunAsync(string[] args)
             extraSlug: opDocStem,
             timestamp: DateTimeOffset.Now);
         var scaffoldHttp = new HttpClient();
-        var scaffoldTicketing = new PlaneTicketingClient(scaffoldHttp, new PlaneClientOptions
-        {
-            BaseUrl = config2.Ticketing.PlaneBaseUrl,
-            ApiToken = secrets2.PlaneApiToken,
-            WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
-            ProjectId = config2.Ticketing.PlaneProjectId,
-            ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
-        });
+        var scaffoldTicketing = new PlaneTicketingClient(scaffoldHttp, PlaneOptionsFactory.From(config2, secrets2));
         await using var scaffoldJsonlSink = new JsonlEventSink(new EventLogOptions
         {
             BaseDirectory = ResolveLogDir(config2.Events.LogDirectory),
@@ -1573,14 +1510,7 @@ static async Task<int> RunAsync(string[] args)
     var cwd = resolvedCwd;
 
     var http = new HttpClient();
-    var ticketing = new PlaneTicketingClient(http, new PlaneClientOptions
-    {
-        BaseUrl = config2.Ticketing.PlaneBaseUrl,
-        ApiToken = secrets2.PlaneApiToken,
-        WorkspaceSlug = config2.Ticketing.PlaneWorkspaceSlug,
-        ProjectId = config2.Ticketing.PlaneProjectId,
-        ProjectIdentifier = config2.Ticketing.PlaneProjectIdentifier
-    });
+    var ticketing = new PlaneTicketingClient(http, PlaneOptionsFactory.From(config2, secrets2));
     if (!config2.Workers.Agents.TryGetValue(config2.Workers.DefaultAgent, out var agentCfg))
         throw new ConfigException($"missing [workers.{config2.Workers.DefaultAgent}] sub-table in config");
 
