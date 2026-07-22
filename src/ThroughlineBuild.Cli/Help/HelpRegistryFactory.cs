@@ -355,9 +355,15 @@ public static class HelpRegistryFactory
         Name:    "amend",
         Group:   CommandGroup.WorkItems,
         Summary: "Amend an existing ticket",
-        Usage:   "amend <ticket-id> (--size S|M|L | --note \"...\" | --description <path|-> | --ac <path|->) [--json]",
+        Usage:   "amend <ticket-id> <option> [<option> ...] [--json]",
         Options:
         [
+            new("--title \"...\"",      "Replace the ticket title",                              false),
+            new("--priority <value>",    "Set urgent, high, medium, low, or none",                 false),
+            new("--type <name>",         "Set the Plane issue type by name",                       false),
+            new("--label-add <name>",    "Add a label; repeat the option to add multiple labels",  false),
+            new("--label-remove <name>", "Remove a label; repeat the option to remove multiple",   false),
+            new("--parent <ticket-id>",  "Set the parent after resolving both ticket UUIDs",       false),
             new("--size S|M|L",         "Update the size label",                               false),
             new("--note \"...\"",       "Append a context note to the description",            false),
             new("--description <path>", "Replace the description from a file or stdin (-)",    false),
@@ -365,7 +371,12 @@ public static class HelpRegistryFactory
             new("--json",               "Emit the result as a JSON envelope instead of text",  false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2],
-        Examples:  []
+        Examples:
+        [
+            new("amend TLB-563 --title \"Complete ticket amendment\" --priority high", "Update scalar metadata"),
+            new("amend TLB-563 --label-add bug --label-add cli --label-remove stale", "Edit labels without replacing unrelated labels"),
+            new("amend TLB-563 --parent TLB-500 --json", "Set a parent, machine-readable"),
+        ]
     );
 
     private static CommandHelp Close() => new(

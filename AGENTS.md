@@ -25,7 +25,7 @@ diagnostics go to stderr. Exit codes: 0 ok, 1 failure, 2 usage/config, 3 missing
 | comment / write findings back | `build comment TLB-N "<markdown>" [--json]` (or `-` for stdin) |
 | move state | `build transition TLB-N InProgress [--json]` |
 | close / defer / reopen | `build close\|defer\|reopen TLB-N "reason" [--json]` |
-| amend | `build amend TLB-N (--size S\|M\|L \| --note "..." \| --description <path\|-> \| --ac <path\|->) [--json]` |
+| amend | `build amend TLB-N <option> [<option> ...] [--json]` (`--title`, `--priority`, `--type`, repeatable `--label-add`/`--label-remove`, `--parent`, `--size`, `--note`, `--description`, `--ac`) |
 
 Composite intents:
 - **investigate ticket N**: `build get TLB-N`, investigate with your own tools, then write

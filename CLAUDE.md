@@ -21,7 +21,7 @@ Natural language -> command:
 | comment / write findings back | `build comment TLB-N "<markdown>" [--json]` (or `-` to read the body from stdin) |
 | move state | `build transition TLB-N InProgress [--json]` |
 | close / defer / reopen | `build close\|defer\|reopen TLB-N "reason" [--json]` |
-| amend (size / note / description / ac) | `build amend TLB-N --note "..." [--json]` |
+| amend (title / priority / type / labels / parent / size / content) | `build amend TLB-N --title "..." --priority high [--json]` |
 
 Composite intents:
 - **investigate ticket N** = `build get TLB-N`, investigate with your own tools, then

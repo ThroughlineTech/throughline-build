@@ -700,8 +700,127 @@ public class ApplyLabelsAsyncTests
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson())); // label cache
 
         var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        await Assert.ThrowsAsync<ArgumentException>(
             () => client.ApplyLabelsAsync("TLB-24", ["Unknown Label"], CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ValidateLabelsAsync_unknown_label_fails_without_issue_lookup_or_patch()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(
+            () => client.ValidateLabelsAsync(["Unknown Label"], CancellationToken.None));
+
+        Assert.Contains("Label 'Unknown Label' not found", exception.Message);
+        Assert.Single(handler.Requests);
+        Assert.DoesNotContain(handler.Requests, request => request.Method == HttpMethod.Patch);
+    }
+}
+
+public class AmendMetadataAsyncTests
+{
+    [Fact]
+    public async Task UpdateTitleAsync_sends_exact_patch_and_writes_through_cache()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.PatchOkJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        await client.UpdateTitleAsync("TLB-24", "New title", CancellationToken.None);
+        var after = await client.GetAsync("TLB-24", CancellationToken.None);
+
+        Assert.Equal("{\"name\":\"New title\"}", handler.Requests[1].Body);
+        Assert.Equal(HttpMethod.Patch, handler.Requests[1].Method);
+        Assert.Equal("New title", after.Title);
+        Assert.Single(handler.Requests.Where(r => r.Method == HttpMethod.Get
+            && r.RequestUri!.ToString().Contains("per_page=100")));
+    }
+
+    [Fact]
+    public async Task UpdatePriorityAsync_sends_exact_normalized_priority_patch()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.PatchOkJson()));
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        await client.UpdatePriorityAsync("TLB-24", "high", CancellationToken.None);
+
+        Assert.Equal("{\"priority\":\"high\"}", handler.Requests[1].Body);
+        Assert.Equal(HttpMethod.Patch, handler.Requests[1].Method);
+    }
+
+    [Fact]
+    public async Task UpdateTypeAsync_resolves_name_sends_exact_uuid_patch_and_writes_through_cache()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueTypeListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.PatchOkJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        await client.UpdateTypeAsync("TLB-24", "task", CancellationToken.None);
+        var after = await client.GetAsync("TLB-24", CancellationToken.None);
+
+        Assert.Equal($"{{\"type\":\"{TestData.IssueTypeUuid}\"}}", handler.Requests[2].Body);
+        Assert.Equal(TestData.IssueTypeUuid, after.Type);
+    }
+
+    [Fact]
+    public async Task UpdateTypeAsync_rejects_unknown_type_without_patch()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueTypeListJson()));
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(
+            () => client.UpdateTypeAsync("TLB-24", "Unknown", CancellationToken.None));
+
+        Assert.Contains("Issue type 'Unknown' not found", exception.Message);
+        Assert.DoesNotContain(handler.Requests, request => request.Method == HttpMethod.Patch);
+    }
+
+    [Fact]
+    public async Task ValidateTypeAsync_unknown_type_fails_without_issue_lookup_or_patch()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueTypeListJson()));
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(
+            () => client.ValidateTypeAsync("Unknown", CancellationToken.None));
+
+        Assert.Contains("Issue type 'Unknown' not found", exception.Message);
+        Assert.Single(handler.Requests);
+        Assert.DoesNotContain(handler.Requests, request => request.Method == HttpMethod.Patch);
+    }
+
+    [Fact]
+    public async Task SetParentAsync_sends_exact_uuid_patch_and_writes_through_cache()
+    {
+        const string parentUuid = "ffffffff-0000-0000-0000-000000000009";
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.PatchOkJson()));
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        await client.GetAsync("TLB-24", CancellationToken.None);
+        await client.SetParentAsync(TestData.IssueUuid, parentUuid, CancellationToken.None);
+        var children = await client.QueryAsync(new TicketQuery(ParentId: parentUuid), CancellationToken.None);
+
+        Assert.Equal($"{{\"parent\":\"{parentUuid}\"}}", handler.Requests[3].Body);
+        Assert.Equal("TLB-24", Assert.Single(children).Id);
     }
 }
 

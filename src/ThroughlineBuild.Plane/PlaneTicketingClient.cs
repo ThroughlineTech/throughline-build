@@ -451,6 +451,25 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
         }
     }
 
+    private async Task<List<string>> ResolveLabelIdsAsync(IEnumerable<string> labels, CancellationToken ct)
+    {
+        var labelsByName = await GetLabelsByNameAsync(ct).ConfigureAwait(false);
+        return labels.Select(name =>
+        {
+            if (!labelsByName.TryGetValue(name, out var labelId))
+                throw new ArgumentException($"Label '{name}' not found in Plane project");
+            return labelId;
+        }).ToList();
+    }
+
+    private async Task<string> ResolveIssueTypeIdAsync(string type, CancellationToken ct)
+    {
+        var issueTypesByName = await GetIssueTypesByNameAsync(ct).ConfigureAwait(false);
+        if (!issueTypesByName.TryGetValue(type, out var typeId))
+            throw new ArgumentException($"Issue type '{type}' not found in Plane project");
+        return typeId;
+    }
+
     // State-name -> TicketState, derived from the canonical WorkspaceSchema so the runtime
     // translation and the `build setup` provisioner can never disagree about the state set.
     private static readonly Dictionary<string, TicketState> _stateNameMap =
@@ -840,14 +859,7 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
             var seq = ParseSequenceId(id);
             var issue = await FindIssueAsync(seq, token).ConfigureAwait(false);
 
-            // Resolve label names to UUIDs
-            var labelsByName = await GetLabelsByNameAsync(token).ConfigureAwait(false);
-            var labelIds = labels.Select(name =>
-            {
-                if (!labelsByName.TryGetValue(name, out var labelId))
-                    throw new InvalidOperationException($"Label '{name}' not found in Plane project");
-                return labelId;
-            }).ToList();
+            var labelIds = await ResolveLabelIdsAsync(labels, token).ConfigureAwait(false);
 
             await PatchJsonAsync(
                 $"{IssuesBase}{issue.Id}/",
@@ -858,6 +870,70 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
             UpdateCachedIssue(issue.Id, i => i with { LabelIds = labelIds });
         }, ct).ConfigureAwait(false);
     }
+
+    public async Task ValidateLabelsAsync(IEnumerable<string> labels, CancellationToken ct) =>
+        await _pipeline.ExecuteAsync(async token =>
+        {
+            _ = await ResolveLabelIdsAsync(labels, token).ConfigureAwait(false);
+        }, ct).ConfigureAwait(false);
+
+    public async Task UpdateTitleAsync(string id, string title, CancellationToken ct)
+    {
+        await _pipeline.ExecuteAsync(async token =>
+        {
+            var seq = ParseSequenceId(id);
+            var issue = await FindIssueAsync(seq, token).ConfigureAwait(false);
+
+            await PatchJsonAsync(
+                $"{IssuesBase}{issue.Id}/",
+                new UpdateTitleRequest(title),
+                PlaneJsonContext.Default,
+                token).ConfigureAwait(false);
+
+            UpdateCachedIssue(issue.Id, i => i with { Name = title });
+        }, ct).ConfigureAwait(false);
+    }
+
+    public async Task UpdatePriorityAsync(string id, string priority, CancellationToken ct)
+    {
+        await _pipeline.ExecuteAsync(async token =>
+        {
+            var seq = ParseSequenceId(id);
+            var issue = await FindIssueAsync(seq, token).ConfigureAwait(false);
+
+            await PatchJsonAsync(
+                $"{IssuesBase}{issue.Id}/",
+                new UpdatePriorityRequest(priority),
+                PlaneJsonContext.Default,
+                token).ConfigureAwait(false);
+
+            UpdateCachedIssue(issue.Id, i => i with { Priority = priority });
+        }, ct).ConfigureAwait(false);
+    }
+
+    public async Task UpdateTypeAsync(string id, string type, CancellationToken ct)
+    {
+        await _pipeline.ExecuteAsync(async token =>
+        {
+            var seq = ParseSequenceId(id);
+            var issue = await FindIssueAsync(seq, token).ConfigureAwait(false);
+            var typeId = await ResolveIssueTypeIdAsync(type, token).ConfigureAwait(false);
+
+            await PatchJsonAsync(
+                $"{IssuesBase}{issue.Id}/",
+                new UpdateTypeRequest(typeId),
+                PlaneJsonContext.Default,
+                token).ConfigureAwait(false);
+
+            UpdateCachedIssue(issue.Id, i => i with { Type = typeId });
+        }, ct).ConfigureAwait(false);
+    }
+
+    public async Task ValidateTypeAsync(string type, CancellationToken ct) =>
+        await _pipeline.ExecuteAsync(async token =>
+        {
+            _ = await ResolveIssueTypeIdAsync(type, token).ConfigureAwait(false);
+        }, ct).ConfigureAwait(false);
 
     public async Task<IReadOnlyList<Relation>> GetRelationsAsync(string id, CancellationToken ct)
     {

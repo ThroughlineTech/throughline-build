@@ -43,6 +43,24 @@ public interface ITicketing
     /// </summary>
     Task ApplyLabelsAsync(string id, IEnumerable<string> labels, CancellationToken ct);
 
+    /// <summary>Validate that all supplied human-readable label names can be resolved.</summary>
+    Task ValidateLabelsAsync(IEnumerable<string> labels, CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>Replace a ticket's title.</summary>
+    Task UpdateTitleAsync(string id, string title, CancellationToken ct) =>
+        throw new NotSupportedException("This ticketing backend does not support title updates.");
+
+    /// <summary>Replace a ticket's priority with a backend-native normalized priority.</summary>
+    Task UpdatePriorityAsync(string id, string priority, CancellationToken ct) =>
+        throw new NotSupportedException("This ticketing backend does not support priority updates.");
+
+    /// <summary>Replace a ticket's issue type, resolving the supplied human-readable type name.</summary>
+    Task UpdateTypeAsync(string id, string type, CancellationToken ct) =>
+        throw new NotSupportedException("This ticketing backend does not support issue-type updates.");
+
+    /// <summary>Validate that a human-readable issue-type name can be resolved.</summary>
+    Task ValidateTypeAsync(string type, CancellationToken ct) => Task.CompletedTask;
+
     /// <summary>
     /// Fetch all relations for a ticket.
     /// </summary>

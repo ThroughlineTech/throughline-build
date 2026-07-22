@@ -12,7 +12,8 @@ public record PlaneIssue(
     [property: JsonPropertyName("state")] string StateId,
     [property: JsonPropertyName("labels")] List<string>? LabelIds,
     [property: JsonPropertyName("parent")] string? ParentId,
-    [property: JsonPropertyName("type")] string? Type
+    [property: JsonPropertyName("type")] string? Type,
+    [property: JsonPropertyName("priority")] string? Priority = null
 );
 
 public record PlaneState(
@@ -123,6 +124,18 @@ public record ApplyLabelsRequest(
     [property: JsonPropertyName("labels")] List<string> LabelIds
 );
 
+public record UpdateTitleRequest(
+    [property: JsonPropertyName("name")] string Name
+);
+
+public record UpdatePriorityRequest(
+    [property: JsonPropertyName("priority")] string Priority
+);
+
+public record UpdateTypeRequest(
+    [property: JsonPropertyName("type")] string Type
+);
+
 public record CreateIssueRequest(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("description_html")] string DescriptionHtml,
@@ -218,6 +231,9 @@ public record PlaneCreateProjectResponse(
 [JsonSerializable(typeof(AppendDescriptionRequest))]
 [JsonSerializable(typeof(CreateCommentRequest))]
 [JsonSerializable(typeof(ApplyLabelsRequest))]
+[JsonSerializable(typeof(UpdateTitleRequest))]
+[JsonSerializable(typeof(UpdatePriorityRequest))]
+[JsonSerializable(typeof(UpdateTypeRequest))]
 [JsonSerializable(typeof(CreateIssueRequest))]
 [JsonSerializable(typeof(PlaneCreateIssueResponse))]
 [JsonSerializable(typeof(SetParentRequest))]

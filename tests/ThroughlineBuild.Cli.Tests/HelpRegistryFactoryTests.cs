@@ -268,6 +268,21 @@ public class HelpRegistryFactoryTests
         Assert.Contains("--type <name>", output);
     }
 
+    [Fact]
+    public void Amend_HelpDocumentsEveryMetadataOptionAndRepeatability()
+    {
+        var output = Tier1Renderer.Render(Registry.TryGet("amend")!);
+
+        Assert.Contains("--title", output);
+        Assert.Contains("--priority", output);
+        Assert.Contains("urgent, high, medium, low, or none", output);
+        Assert.Contains("--type", output);
+        Assert.Contains("--label-add", output);
+        Assert.Contains("repeat the option", output);
+        Assert.Contains("--label-remove", output);
+        Assert.Contains("--parent", output);
+    }
+
     [Theory]
     [InlineData("amend", "amend <ticket-id>")]
     [InlineData("close", "close <ticket-id> <reason>")]

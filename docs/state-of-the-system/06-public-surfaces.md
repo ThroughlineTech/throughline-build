@@ -37,7 +37,9 @@ build <verb> [args] [--debug | --quiet] [--summary-json] [--error-location]
   settarget [<branch> | --unset]
   sweep [--target <branch>] [--force]
   list [--state <name>] [--parent <id>] [--type <name>]
-  amend <id> [--size S|M|L] [--note "..."] [--description <path|->] [--ac <path|->]
+  amend <id> [--title "..."] [--priority urgent|high|medium|low|none] [--type <name>]
+             [--label-add <name>]... [--label-remove <name>]... [--parent <id>]
+             [--size S|M|L] [--note "..."] [--description <path|->] [--ac <path|->]
   close <id> <reason>
   defer <id> <reason>
   reopen <id> [reason]

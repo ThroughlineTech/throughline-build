@@ -963,29 +963,43 @@ static async Task<int> RunAsync(string[] args)
             extraArgs["reason"] = args[2];
             parseStart = 3;
         }
-        // Single-pass: bare bool flags consume 1 slot; key=value pairs consume 2.
-        for (int i = parseStart; i < args.Length; )
+        TicketCommandContext ctx;
+        if (verb == "amend")
         {
-            if (args[i] == "--no-cascade")
+            if (!AmendArgumentParser.TryParse(verbTicketId, args, parseStart, out var amendContext, out var parseError))
             {
-                extraArgs["no-cascade"] = "true";
-                i += 1;
+                if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, parseError!);
+                else Console.Error.WriteLine($"Error: {parseError}");
+                return 2;
             }
-            else if (i + 1 < args.Length)
-            {
-                var key = args[i];
-                if (key.StartsWith("--"))
-                    key = key.Substring(2);
-                extraArgs[key] = args[i + 1];
-                i += 2;
-            }
-            else
-            {
-                // Lone flag with no value - skip to avoid out-of-bounds.
-                i += 1;
-            }
+            ctx = amendContext!;
         }
-        var ctx = new TicketCommandContext(verbTicketId, extraArgs);
+        else
+        {
+            // Single-pass: bare bool flags consume 1 slot; key=value pairs consume 2.
+            for (int i = parseStart; i < args.Length; )
+            {
+                if (args[i] == "--no-cascade")
+                {
+                    extraArgs["no-cascade"] = "true";
+                    i += 1;
+                }
+                else if (i + 1 < args.Length)
+                {
+                    var key = args[i];
+                    if (key.StartsWith("--"))
+                        key = key.Substring(2);
+                    extraArgs[key] = args[i + 1];
+                    i += 2;
+                }
+                else
+                {
+                    // Lone flag with no value - skip to avoid out-of-bounds.
+                    i += 1;
+                }
+            }
+            ctx = new TicketCommandContext(verbTicketId, extraArgs);
+        }
 
         if (!registry.TryGet(verb, out var cmd) || cmd is null)
         {
@@ -998,15 +1012,14 @@ static async Task<int> RunAsync(string[] args)
             using var verbCts = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
             var verbResult = await cmd.ExecuteAsync(ctx, verbCts.Token);
+            if (jsonOutput)
+                TicketCommandEnvelopeWriter.Write(Console.Out, verbTicketId, verb, verbResult);
             if (!verbResult.Success)
             {
-                if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, verbResult.Message ?? "command failed");
-                else Console.Error.WriteLine($"Command '{verb}' failed: {verbResult.Message}");
+                if (!jsonOutput) Console.Error.WriteLine($"Command '{verb}' failed: {verbResult.Message}");
                 return 1;
             }
-            if (jsonOutput)
-                CliEnvelopeWriter.WriteAck(Console.Out, verbTicketId, verb);
-            else if (!string.IsNullOrEmpty(verbResult.Message))
+            if (!jsonOutput && !string.IsNullOrEmpty(verbResult.Message))
                 Console.WriteLine(verbResult.Message);
             return 0;
         }

@@ -94,7 +94,7 @@ Dispatched at [Program.cs:480-517](../../src/ThroughlineBuild.Cli/Program.cs#L48
 ### `build list [--state <name>] [--parent <id>] [--type <name>]` - Functional
 Dispatched at [Program.cs:519-559](../../src/ThroughlineBuild.Cli/Program.cs#L519-L559), implemented in `ListCommand` ([ListCommand.cs](../../src/ThroughlineBuild.Commands/ListCommand.cs)). Queries tickets with optional filters and renders a fixed-width table. No event log. The `--all`/`--feature` flags of the old slash command remain unsupported.
 
-### `build amend <ticket-id> [--size S|M|L] [--note "..."] [--description <path|->] [--ac <path|->]` - Functional
+### `build amend <ticket-id> [--title "..."] [--priority urgent|high|medium|low|none] [--type <name>] [--label-add <name>]... [--label-remove <name>]... [--parent <id>] [--size S|M|L] [--note "..."] [--description <path|->] [--ac <path|->]` - Functional
 Registered in the shared lifecycle-verb branch ([Program.cs:602-703](../../src/ThroughlineBuild.Cli/Program.cs#L602-L703)), implemented in `AmendCommand` ([AmendCommand.cs:25](../../src/ThroughlineBuild.Commands/AmendCommand.cs#L25) requires at least one flag). `--size` replaces the `size:*` label; `--note` appends a dated context-note block via `AppendDescriptionAsync`; `--description` and `--ac` each call `UpdateDescriptionAsync`. Refuses on terminal tickets.
 
 ### `build close <ticket-id> <reason>` - Functional

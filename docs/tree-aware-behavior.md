@@ -35,7 +35,7 @@ The method calls `QueryAsync(new TicketQuery(ParentId: ticketUuid), ct)` and ret
 | `defer`     | **Cascade.** Defer all non-terminal children, then defer the parent. |
 | `reopen`    | **Parent only.** Reopen the parent ticket; leave children in their current states. Children may have individual plans and branches; reopening them automatically could cause confusion. The operator reopens children individually if needed. |
 | `rework`    | **Not applicable.** A parent ticket cannot reach InProgress in normal flow; it has no work artifact to rework. If this state is somehow reached, refuse with a diagnostic message. |
-| `amend`     | **Not applicable.** Amend edits metadata labels only; no behavior gate is needed for parents. |
+| `amend`     | **Direct ticket only.** Amend edits the named ticket's metadata/content; `--parent` explicitly reparents that ticket. |
 
 ## Out-of-Scope Commands
 
