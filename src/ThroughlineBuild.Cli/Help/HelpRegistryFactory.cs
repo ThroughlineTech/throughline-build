@@ -70,7 +70,7 @@ public static class HelpRegistryFactory
         Options:
         [
             new("--agent <name>", "Worker agent override (must match a [workers.<name>] key in config)", false),
-            new("--from-brief",   "Promote the ticket in place; equivalent to [plan] mode = \"promote\" in config.toml", false),
+            new("--from-brief",   "Explicitly promote the ticket in place instead of running the planning worker", false),
             new("--debug",        "Stream worker output and capture session artifacts", false),
             new("--quiet",        "Suppress the progress digest", false),
             new("--summary-json", "Emit phase completion summary as JSON", false),

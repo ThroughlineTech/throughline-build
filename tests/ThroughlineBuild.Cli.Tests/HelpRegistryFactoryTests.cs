@@ -129,7 +129,7 @@ public class HelpRegistryFactoryTests
     {
         var help = Registry.TryGet("plan")!;
         var option = Assert.Single(help.Options, o => o.Flag == "--from-brief" && !o.IsGlobal);
-        Assert.Contains("[plan] mode = \"promote\"", option.Description);
+        Assert.Contains("Explicitly promote", option.Description);
     }
 
     [Fact]

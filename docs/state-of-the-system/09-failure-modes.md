@@ -38,7 +38,7 @@ The headline change since the last refresh is **failure classification**: the sy
 - **Parent ticket:** "is a parent ticket with N children: ... plan each child individually" ([src/ThroughlineBuild.Phases/PlanPhase.cs:81-84](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L81-L84)).
 - **Wrong state:** "ticket not in Backlog state" (:86-87).
 - **Base-ref resolution failure:** "git rev-parse failed: ..." (:88-97); resolution now goes through `BaseRefResolver` with the configured target, not a literal `main`.
-- **Promote mode (default, TLB-495):** `_options.PromotePlan` short-circuits to `RunPromoteAsync` (:99-100, :224-250) - no worker at all; labels + `[planned_at: <base-sha>]` + `Backlog -> Planning -> Ready`. Failure modes reduce to ticketing-write failures. `[plan] mode` accepts only `"promote"` or `"investigate"` ([src/ThroughlineBuild.Cli/Config.cs:828-840](../../src/ThroughlineBuild.Cli/Config.cs#L828-L840)).
+- **Promote mode (the default inside chain, TLB-495):** `_options.PromotePlan` short-circuits to `RunPromoteAsync` (:99-100, :224-250) - no worker at all; labels + `[planned_at: <base-sha>]` + `Backlog -> Planning -> Ready`. Failure modes reduce to ticketing-write failures. `[plan] mode` accepts only `"promote"` or `"investigate"` ([src/ThroughlineBuild.Cli/Config.cs:828-840](../../src/ThroughlineBuild.Cli/Config.cs#L828-L840)). Standalone `build plan` investigates regardless of that setting unless `--from-brief` is passed.
 - **Worker failure (investigate mode):** non-Ok returns the envelope reason after the `Planning` transition (:131-134); `Escalate` is carried back as `EscalationWorkerResult` for chain ratification.
 - **Unresolvable plan body / missing metadata:** `plan_body_ref` -> `PLAN_BODY` fenced block (:145-148); scalar keys `risk_label` / `size_label` / `planned_at_sha` still required (:152-155).
 
@@ -197,7 +197,7 @@ Unchanged: in-process lock only (two `build` processes can still race); every ve
 
 `build`'s rerun safety is **state-driven**: each phase enforces a ticket-state precondition, and SHA markers act as forward-progress guards rather than de-dup keys.
 
-- A phase that already transitioned fails its state guard on rerun. Investigate-mode `plan` still parks failed runs in `Planning`; promote-mode `plan` (the default) has almost no window to fail mid-flight.
+- A phase that already transitioned fails its state guard on rerun. Worker-backed `plan` still parks failed runs in `Planning`; promotion (the chain default, or explicit via `--from-brief`) has almost no window to fail mid-flight.
 - **Chain / multi-ticket / parent chain are safe to re-run** and now stronger than before: stuck states are reconciled (`Planning` reset, `InProgress` resumed with persisted check evidence), a reused integration branch is refreshed against its moved base (TLB-546) so resumed children never implement against a stale snapshot, and environmental stops (`GateEnvironmentFailure`, `TicketingUnavailable`, `ReviewUnavailable`) leave tickets cleanly resumable with no rework round burned.
 - **Cleanup is idempotent:** the chain success sweep and `build sweep` are merged-gated - re-running them can only remove already-merged artifacts; `--force` widens worktree removal but never branch deletion.
 - **Marker staleness** remains solved by freshest-marker selection (TLB-412) and HEAD attribution (TLB-414).

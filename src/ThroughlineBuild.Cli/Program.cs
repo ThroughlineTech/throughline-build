@@ -1833,8 +1833,9 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
         && (!Console.IsErrorRedirected || Environment.GetEnvironmentVariable("BUILD_PROGRESS") == "1");
 
     var eventSink = new RecordingEventSink(jsonlEventSink);
-    // --from-brief flag overrides config; config [plan].mode = "promote" also enables promotion.
-    bool effectivePromotePlan = fromBrief || config2.Plan.IsPromote;
+    // The config mode controls planning inside chain. A direct `build plan` always investigates
+    // unless the operator explicitly supplies --from-brief for deterministic promotion.
+    bool effectivePromotePlan = PlanDispatchPolicy.ShouldPromote(verb, fromBrief, config2.Plan.IsPromote);
     var buildOptions = new BuildOptions(
         SessionId: sessionId,
         WorkerName: config2.Workers.DefaultAgent,

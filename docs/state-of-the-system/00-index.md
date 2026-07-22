@@ -84,7 +84,7 @@ Coordination between phases happens through three persistent channels:
 LLM contact splits into three tiers (architecture Section 3), but at two different maturity levels - see [11-llm-architecture.md](11-llm-architecture.md):
 - **Deterministic** code paths - state machines, gates, scans (e.g. `Ship`, `GatePhase` with its vacuity and control provers).
 - **Judgment slots** - scoped Anthropic API calls. Today the only live consumer is the `ReasonTranslator` for close/defer/reopen, through `ILlmClient`/`AnthropicClient` (anthropic-only, non-streaming), degrading to `EchoLlmClient` (verbatim reason) when no API key is configured. A newer `IModelClient`/`AnthropicModelClient` with working SSE streaming exists and is tested but is not wired onto any production path.
-- **Agentic work** - a worker CLI dispatched in a worktree for plan / implement / review / draft / decompose / scaffold profile derivation. This layer is genuinely multi-vendor and wired: `WorkerAgentFactory` selects one of four `IWorkerAgent` implementations from config or `--agent`. Note that plan's default mode is now `promote` ([plan].mode), which spawns no worker.
+- **Agentic work** - a worker CLI dispatched in a worktree for plan / implement / review / draft / decompose / scaffold profile derivation. This layer is genuinely multi-vendor and wired: `WorkerAgentFactory` selects one of four `IWorkerAgent` implementations from config or `--agent`. `[plan].mode` controls planning inside `build chain`; standalone `build plan` always spawns a worker unless `--from-brief` explicitly requests promotion.
 
 ---
 

@@ -63,9 +63,9 @@ Flags:
                    to re-run the drafter (optionally with extra context), or [q]uit to abort (exit 0).
   --from-brief     (plan and chain only) Skip the worker investigation and promote the Backlog ticket
                    to Ready in place, using the description already present on the ticket as the plan.
-                   Equivalent to setting [plan] mode = "promote" in config.toml. When both the flag
-                   and the config key are set, the flag wins. Use for op-doc-scaffolded tickets whose
-                   plan is already authored in the ticket description.
+                   For chain this is equivalent to [plan] mode = "promote". A direct build plan
+                   otherwise always runs the investigation worker, regardless of [plan].mode.
+                   Use for op-doc-scaffolded tickets whose plan is already authored in the description.
   --batch-implement [<ticket-id,...>]
                    (chain only) Batch the implement phase for direct children. With a comma-separated
                    list: passes exactly that group in the listed order (explicit form). With no list
@@ -81,10 +81,9 @@ Flags:
 
 Config keys (in .build/config.toml):
   [plan]
-  mode = "promote"      (default) Bypass the worker and promote the Backlog ticket to Ready in place.
-                                  Equivalent to passing --from-brief on the command line. The CLI
-                                  flag overrides this key when both are present.
-  mode = "investigate"            Spawn a worker to produce the plan from the ticket description.
+  mode = "promote"      (default) In build chain, bypass the worker and promote the Backlog ticket.
+  mode = "investigate"            In build chain, spawn a worker to produce the plan.
+                                  Direct build plan always investigates unless --from-brief is passed.
 
 Exit codes:
   0  Success

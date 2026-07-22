@@ -239,7 +239,8 @@ plane_project_url = "https://plane.example.com/workspace/browse/PROJ/"
 # S briefs get a lightweight-planning prompt line plus a restricted tool set; M and L briefs are untouched.
 # context_hygiene = false
 
-# [plan] mode controls the plan phase:
+# [plan] mode controls the plan phase within build chain. A direct build plan investigates
+# regardless of this setting unless --from-brief explicitly requests promotion.
 # "investigate" - spawn a worker to investigate the ticket and write the plan.
 # "promote"     - bypass the investigation worker and promote the ticket plan in place.
 [plan]

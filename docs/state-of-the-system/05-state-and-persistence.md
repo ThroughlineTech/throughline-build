@@ -111,7 +111,7 @@ Status: Functional. Every phase that writes to Plane does so via [src/Throughlin
 
 | Phase | Writes |
 |---|---|
-| `plan` (promote mode, **now the default** - `PlanConfig.Default` is `"promote"`, [src/ThroughlineBuild.Cli/Config.cs:53-56](../../src/ThroughlineBuild.Cli/Config.cs#L53-L56)) | no worker: labels (risk + size), one `[planned_at: <base-sha>]` comment, state `Backlog -> Planning -> Ready` (`RunPromoteAsync`, [src/ThroughlineBuild.Phases/PlanPhase.cs:224-250](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L224-L250)) |
+| `plan` (promote mode, the `build chain` default via `PlanConfig.Default = "promote"`, or explicit `--from-brief`) | no worker: labels (risk + size), one `[planned_at: <base-sha>]` comment, state `Backlog -> Planning -> Ready` (`RunPromoteAsync`, [src/ThroughlineBuild.Phases/PlanPhase.cs:224-250](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L224-L250)) |
 | `plan` (`mode = "investigate"`) | description append (plan HTML), labels, `[planned_at: <sha>]` comment, transitions; the `Planning` transition now lands *after* the worker runs ([src/ThroughlineBuild.Phases/PlanPhase.cs:124](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L124)) |
 | `implement` | one `[implemented_at: <sha>] (branch ...)` comment ([src/ThroughlineBuild.Phases/ImplementPhase.cs:535](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L535)), state `Ready -> InProgress` (initial, :312-315) and `InProgress -> InReview` (:542-543) |
 | `gate` (NEW, chain-only) | no comment; on a gating hard-fail that feeds rework, state `InReview -> InProgress`; environment-failure and vacuity hard-fails leave the state untouched (see 09) |

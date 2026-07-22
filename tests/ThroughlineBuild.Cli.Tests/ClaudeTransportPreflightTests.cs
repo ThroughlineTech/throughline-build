@@ -83,26 +83,32 @@ public class ClaudeTransportPreflightTests
     }
 
     [Fact]
-    public void PhasesToGateForVerb_Chain_GatesImplementAndReview()
+    public void PhasesToGateForVerb_ChainPromote_GatesImplementAndReview()
     {
         Assert.Equal(new[] { "implement", "review" },
             ClaudeTransportPreflight.PhasesToGateForVerb("chain", planIsPromote: true, fromBrief: false));
     }
 
     [Fact]
-    public void PhasesToGateForVerb_Plan_InvestigateMode_GatesPlan()
+    public void PhasesToGateForVerb_ChainInvestigate_GatesPlanImplementAndReview()
     {
-        Assert.Equal(new[] { "plan" },
-            ClaudeTransportPreflight.PhasesToGateForVerb("plan", planIsPromote: false, fromBrief: false));
+        Assert.Equal(new[] { "plan", "implement", "review" },
+            ClaudeTransportPreflight.PhasesToGateForVerb("chain", planIsPromote: false, fromBrief: false));
     }
 
     [Theory]
-    [InlineData(true, false)]  // promote mode -> no worker
-    [InlineData(false, true)]  // --from-brief -> no worker
-    [InlineData(true, true)]
-    public void PhasesToGateForVerb_Plan_PromoteOrFromBrief_GatesNothing(bool planIsPromote, bool fromBrief)
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PhasesToGateForVerb_Plan_WithoutFromBrief_AlwaysGatesPlan(bool planIsPromote)
     {
-        Assert.Empty(ClaudeTransportPreflight.PhasesToGateForVerb("plan", planIsPromote, fromBrief));
+        Assert.Equal(new[] { "plan" },
+            ClaudeTransportPreflight.PhasesToGateForVerb("plan", planIsPromote, fromBrief: false));
+    }
+
+    [Fact]
+    public void PhasesToGateForVerb_Plan_FromBrief_GatesNothing()
+    {
+        Assert.Empty(ClaudeTransportPreflight.PhasesToGateForVerb("plan", planIsPromote: false, fromBrief: true));
     }
 
     [Theory]

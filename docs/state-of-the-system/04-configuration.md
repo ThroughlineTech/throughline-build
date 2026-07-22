@@ -199,7 +199,7 @@ Read by `ReadPlanSection` into `PlanConfig(string Mode)`; missing section return
 |---|---|---|
 | `mode` | `"promote"` | Must be `"investigate"` or `"promote"` (case-insensitive); any other value throws `key 'mode' in [plan] must be either "investigate" or "promote", got "<v>"`, exit 2. |
 
-`investigate` spawns a worker to investigate the ticket and write the plan; `promote` bypasses the worker and promotes the ticket plan in place (no LLM/worker). The effective promote decision is `fromBrief || config.Plan.IsPromote`, so either the `--from-brief` CLI flag or `mode = "promote"` enables it ([src/ThroughlineBuild.Cli/Program.cs:1419-1420](../../src/ThroughlineBuild.Cli/Program.cs#L1419-L1420)). The live config sets `mode = "promote"` ([.build/config.toml:140](../../.build/config.toml#L140)).
+Within `build chain`, `investigate` spawns a worker to investigate the ticket and write the plan, while `promote` bypasses the worker and promotes the ticket plan in place (no LLM/worker). Standalone `build plan` deliberately ignores this config setting and investigates; `build plan --from-brief` remains the explicit deterministic-promotion path. The live config sets `mode = "promote"` ([.build/config.toml:140](../../.build/config.toml#L140)).
 
 ### `[batch]` (optional section) - Functional, NEW
 
@@ -344,7 +344,7 @@ For agent / model selection per phase:
 
 (`EffectiveAgentFor`, [src/ThroughlineBuild.Cli/Program.cs:1149-1153](../../src/ThroughlineBuild.Cli/Program.cs#L1149-L1153)). The model tier within an agent is then chosen by ticket size from that agent's `[workers.<name>.sizes]` map - there is no model-level CLI override.
 
-For the `ship` push / plan-mode toggles, the CLI flag and the config key OR together: `--no-push || !Ship.Push` disables the push, and `--from-brief || Plan.IsPromote` selects promote mode.
+For the `ship` push toggle, `--no-push || !Ship.Push` disables the push. Plan promotion is verb-aware: `--from-brief` explicitly promotes for `plan` or `chain`, while `Plan.IsPromote` applies only to `chain`.
 
 For scaffold-derived config: `build scaffold` derivation defers to existing customized checks unless `--force-profile`; `--no-profile` skips derivation entirely ([src/ThroughlineBuild.Cli/ScaffoldProfileRunner.cs:47-56](../../src/ThroughlineBuild.Cli/ScaffoldProfileRunner.cs#L47-L56)).
 

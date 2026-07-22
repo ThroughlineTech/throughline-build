@@ -44,7 +44,9 @@ public class HelpTopicTests
         Assert.Contains("[plan] schema:", output);
         Assert.Contains("mode = \"promote\"", output);
         Assert.Contains("investigate", output);
-        Assert.Contains("build plan --from-brief and build chain --from-brief override [plan].mode", output);
+        Assert.Contains("[plan].mode controls only the plan phase within build chain", output);
+        Assert.Contains("Direct build plan always investigates", output);
+        Assert.Contains("build plan --from-brief and build chain --from-brief explicitly promote", output);
         Assert.Contains("Any value other than \"investigate\" or \"promote\" is a config error and exits 2.", output);
     }
 

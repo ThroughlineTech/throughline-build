@@ -55,13 +55,13 @@ Keys:
   mode  Optional string. Defaults to "promote" when [plan] or mode is absent.
 
 Allowed mode values:
-  promote      Bypass worker investigation and promote the existing ticket description as the plan.
-  investigate  Spawn the plan worker to investigate the ticket and produce the plan.
+  promote      In build chain, bypass worker investigation and promote the existing description.
+  investigate  In build chain, spawn the plan worker to investigate and produce the plan.
 
 Precedence:
-  build plan --from-brief and build chain --from-brief override [plan].mode for that invocation.
-  Without --from-brief, [plan].mode controls plan behavior.
-  If neither --from-brief nor [plan].mode is set, the default is "promote".
+  [plan].mode controls only the plan phase within build chain.
+  Direct build plan always investigates, regardless of [plan].mode.
+  build plan --from-brief and build chain --from-brief explicitly promote for that invocation.
 
 Validation:
   mode is case-insensitive.

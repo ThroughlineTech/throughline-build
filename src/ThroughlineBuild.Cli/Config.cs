@@ -55,8 +55,8 @@ public record ShipConfig(
 
 public record WorkConfig(string? TargetBranch);
 
-// [plan] section: controls whether PlanPhase runs a worker investigation or promotes in place.
-// mode = "promote" (default) - bypass worker and promote plan in place; mode = "investigate" - spawn worker.
+// [plan] section: controls whether chain planning runs a worker investigation or promotes in place.
+// Standalone `build plan` ignores this setting unless --from-brief explicitly requests promotion.
 public record PlanConfig(string Mode)
 {
     public bool IsPromote => string.Equals(Mode, "promote", StringComparison.OrdinalIgnoreCase);

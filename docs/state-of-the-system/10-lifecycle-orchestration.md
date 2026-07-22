@@ -85,7 +85,7 @@ Step sequence (all in `PlanPhase.RunAsync`):
 2. Parent guard: refuse if the ticket has children - parent containers do not get plans (the refusal message is built at [PlanPhase.cs:84](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L84)).
 3. State guard: `Backlog`.
 4. Resolve `main` SHA via `BaseRefResolver`.
-4b. **Promote branch (the default):** if `BuildOptions.PromotePlan` is set - and it is by default, since `[plan].mode` defaults to `"promote"` - dispatch to `RunPromoteAsync` ([PlanPhase.cs:100](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L100)) and return - see "Promote path" below. Only `[plan].mode = "investigate"` runs the worker-driven planning sequence:
+4b. **Promote branch (the default within chain):** if `BuildOptions.PromotePlan` is set - as it is for `build chain` when `[plan].mode` uses its `"promote"` default, or for either verb with `--from-brief` - dispatch to `RunPromoteAsync` ([PlanPhase.cs:100](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L100)) and return - see "Promote path" below. Standalone `build plan` otherwise runs the worker-driven planning sequence regardless of `[plan].mode`:
 5. Build `RepoState` (top-level entries + main SHA).
 6. Build brief via `PlanBriefBuilder.Build` - the obsolete-detection instructions are a shared template block, `plan-obsolete-initial.md` under [src/ThroughlineBuild.Briefs/Templates/shared/](../../src/ThroughlineBuild.Briefs/Templates/shared/), extracted from the four per-agent plan templates and sanitized to stack-agnostic angle-bracket placeholders.
 7. Emit `WorkerSpawn` event.
@@ -100,7 +100,7 @@ Step sequence (all in `PlanPhase.RunAsync`):
 16. Post `[planned_at: <sha>]` comment.
 17. Transition `Planning -> Ready`.
 
-**Promote path (TLB-374) - the default mode.** `RunPromoteAsync` ([PlanPhase.cs:224](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L224)) promotes an already-authored brief straight to `Ready` without spawning a worker or calling an LLM: transition `Backlog -> Planning`, apply merged risk/size labels from the ticket's existing fields, post `[planned_at: <mainSha>]`, transition `Planning -> Ready`. `BuildOptions.PromotePlan` comes from `[plan].mode`, whose default is `"promote"` (`PlanConfig.Default`, [src/ThroughlineBuild.Cli/Config.cs:52-56](../../src/ThroughlineBuild.Cli/Config.cs#L52-L56)) - so a plan run usually spawns no worker; `[plan].mode = "investigate"` opts into the worker-driven sequence above, and the CLI `--from-brief` flag forces promotion regardless of config.
+**Promote path (TLB-374) - the default inside chain.** `RunPromoteAsync` ([PlanPhase.cs:224](../../src/ThroughlineBuild.Phases/PlanPhase.cs#L224)) promotes an already-authored brief straight to `Ready` without spawning a worker or calling an LLM: transition `Backlog -> Planning`, apply merged risk/size labels from the ticket's existing fields, post `[planned_at: <mainSha>]`, transition `Planning -> Ready`. For `build chain`, `BuildOptions.PromotePlan` comes from `[plan].mode`, whose default is `"promote"` (`PlanConfig.Default`, [src/ThroughlineBuild.Cli/Config.cs:52-56](../../src/ThroughlineBuild.Cli/Config.cs#L52-L56)). For standalone `build plan`, only `--from-brief` enables promotion; otherwise it investigates regardless of config.
 
 ### `ImplementPhase` ([src/ThroughlineBuild.Phases/ImplementPhase.cs](../../src/ThroughlineBuild.Phases/ImplementPhase.cs))
 
