@@ -67,8 +67,8 @@ public class QueryAsyncTests
         var twoIssues = $$"""
         {
           "results": [
-            { "id": "aaaaaaaa-0000-0000-0000-000000000001", "sequence_id": 24, "name": "backlog-one",     "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "label_ids": [], "parent": null, "type": null },
-            { "id": "aaaaaaaa-0000-0000-0000-000000000002", "sequence_id": 25, "name": "in-progress-one", "description_html": "<p>d</p>", "state": "bbbbbbbb-0000-0000-0000-000000000002", "label_ids": [], "parent": null, "type": null }
+            { "id": "aaaaaaaa-0000-0000-0000-000000000001", "sequence_id": 24, "name": "backlog-one",     "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "labels": [], "parent": null, "type": null },
+            { "id": "aaaaaaaa-0000-0000-0000-000000000002", "sequence_id": 25, "name": "in-progress-one", "description_html": "<p>d</p>", "state": "bbbbbbbb-0000-0000-0000-000000000002", "labels": [], "parent": null, "type": null }
           ]
         }
         """;
@@ -116,9 +116,9 @@ public class QueryAsyncTests
         $$"""
         {
           "results": [
-            { "id": "child-1", "sequence_id": 320, "name": "real child",   "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "label_ids": [], "parent": "{{targetParent}}", "type": null },
-            { "id": "other-1", "sequence_id": 317, "name": "other parent",  "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "label_ids": [], "parent": "zzzzzzzz-0000-0000-0000-000000000001", "type": null },
-            { "id": "root-1",  "sequence_id": 318, "name": "no parent",     "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "label_ids": [], "parent": null, "type": null }
+            { "id": "child-1", "sequence_id": 320, "name": "real child",   "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "labels": [], "parent": "{{targetParent}}", "type": null },
+            { "id": "other-1", "sequence_id": 317, "name": "other parent",  "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "labels": [], "parent": "zzzzzzzz-0000-0000-0000-000000000001", "type": null },
+            { "id": "root-1",  "sequence_id": 318, "name": "no parent",     "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "labels": [], "parent": null, "type": null }
           ]
         }
         """;
@@ -180,8 +180,8 @@ public class QueryAsyncTests
         var typedIssues = $$"""
         {
           "results": [
-            { "id": "aaaaaaaa-0000-0000-0000-000000000001", "sequence_id": 24, "name": "task-one", "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "label_ids": [], "parent": null, "type": "{{TestData.IssueTypeUuid}}" },
-            { "id": "aaaaaaaa-0000-0000-0000-000000000002", "sequence_id": 25, "name": "bug-one",  "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "label_ids": [], "parent": null, "type": "{{bugTypeUuid}}" }
+            { "id": "aaaaaaaa-0000-0000-0000-000000000001", "sequence_id": 24, "name": "task-one", "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "labels": [], "parent": null, "type": "{{TestData.IssueTypeUuid}}" },
+            { "id": "aaaaaaaa-0000-0000-0000-000000000002", "sequence_id": 25, "name": "bug-one",  "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "labels": [], "parent": null, "type": "{{bugTypeUuid}}" }
           ]
         }
         """;

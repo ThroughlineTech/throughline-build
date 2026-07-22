@@ -10,7 +10,7 @@ public record PlaneIssue(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("description_html")] string? DescriptionHtml,
     [property: JsonPropertyName("state")] string StateId,
-    [property: JsonPropertyName("label_ids")] List<string>? LabelIds,
+    [property: JsonPropertyName("labels")] List<string>? LabelIds,
     [property: JsonPropertyName("parent")] string? ParentId,
     [property: JsonPropertyName("type")] string? Type
 );
@@ -120,14 +120,14 @@ public record CreateCommentRequest(
 );
 
 public record ApplyLabelsRequest(
-    [property: JsonPropertyName("label_ids")] List<string> LabelIds
+    [property: JsonPropertyName("labels")] List<string> LabelIds
 );
 
 public record CreateIssueRequest(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("description_html")] string DescriptionHtml,
     [property: JsonPropertyName("type"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Type,
-    [property: JsonPropertyName("label_ids")] List<string> LabelIds
+    [property: JsonPropertyName("labels")] List<string> LabelIds
 )
 {
     [JsonPropertyName("parent")]

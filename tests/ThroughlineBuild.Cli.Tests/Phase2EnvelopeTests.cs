@@ -13,8 +13,8 @@ public class Phase2EnvelopeTests
 {
     private static Ticket Row(string id, string title, TicketState state, string? parent) => new(
         Id: id, Uuid: "u-" + id, Title: title, Type: "feature", State: state,
-        Size: Size.M, Risk: Risk.Low, DescriptionHtml: "", Relations: Array.Empty<Relation>(),
-        Labels: Array.Empty<string>(), ParentId: parent);
+        Size: Size.L, Risk: Risk.High, DescriptionHtml: "", Relations: Array.Empty<Relation>(),
+        Labels: new[] { "size:l", "risk:high", "team:core" }, ParentId: parent);
 
     [Fact]
     public void WriteList_EmitsRowArray()
@@ -34,6 +34,11 @@ public class Phase2EnvelopeTests
         Assert.Equal(2, rows.Count);
         Assert.Equal("first", rows[0].GetProperty("title").GetString());
         Assert.Equal("Backlog", rows[0].GetProperty("state").GetString());
+        Assert.Equal("L", rows[0].GetProperty("size").GetString());
+        Assert.Equal("High", rows[0].GetProperty("risk").GetString());
+        Assert.Equal(
+            new[] { "size:l", "risk:high", "team:core" },
+            rows[0].GetProperty("labels").EnumerateArray().Select(e => e.GetString()).ToArray());
         Assert.Equal("InReview", rows[1].GetProperty("state").GetString());
         Assert.Equal("TLB-1", rows[1].GetProperty("parentId").GetString());
         // Lean projection: no description on list rows.

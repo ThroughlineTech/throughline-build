@@ -93,6 +93,9 @@ public sealed record ListTicketView(
     string Title,
     TicketState State,
     string Type,
+    Size Size,
+    Risk Risk,
+    IReadOnlyList<string> Labels,
     string? ParentId);
 
 /// <summary>Success envelope for <c>build list --json</c>: an array of ticket rows.</summary>

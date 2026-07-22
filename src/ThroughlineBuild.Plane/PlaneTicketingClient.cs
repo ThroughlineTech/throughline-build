@@ -175,7 +175,7 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
         // Plane should run authorization before request validation: 400/422 means the
         // token got as far as create validation, while 401/403 means it cannot create.
         const string probeJson = """
-        {"name":{"throughline_build_probe":true},"description_html":"<p>Throughline Build create-permission probe.</p>","label_ids":[]}
+        {"name":{"throughline_build_probe":true},"description_html":"<p>Throughline Build create-permission probe.</p>","labels":[]}
         """;
 
         var (response, responseBody) = await SendWithTransportRetryAsync(HttpMethod.Post, IssuesBase, probeJson, ct).ConfigureAwait(false);
@@ -700,6 +700,15 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
             _ => Size.M
         };
 
+        var riskLabel = resolvedLabels.FirstOrDefault(
+            l => l.StartsWith("risk:", StringComparison.OrdinalIgnoreCase));
+        var ticketRisk = riskLabel?.ToLowerInvariant() switch
+        {
+            "risk:low" => Risk.Low,
+            "risk:high" => Risk.High,
+            _ => Risk.Medium
+        };
+
         return new Ticket(
             Id: FormatTicketId(issue.SequenceId),
             Uuid: issue.Id,
@@ -707,7 +716,7 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
             Type: issue.Type ?? string.Empty,
             State: ticketState,
             Size: ticketSize,
-            Risk: Risk.Medium,
+            Risk: ticketRisk,
             DescriptionHtml: issue.DescriptionHtml ?? string.Empty,
             Relations: [],
             Labels: resolvedLabels.AsReadOnly(),

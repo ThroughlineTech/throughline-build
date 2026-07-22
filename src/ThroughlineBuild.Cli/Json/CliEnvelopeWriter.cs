@@ -39,7 +39,8 @@ public static class CliEnvelopeWriter
     public static void WriteList(TextWriter output, IReadOnlyList<Ticket> tickets)
     {
         var rows = tickets
-            .Select(t => new ListTicketView(t.Id, t.Title, t.State, t.Type, t.ParentId))
+            .Select(t => new ListTicketView(
+                t.Id, t.Title, t.State, t.Type, t.Size, t.Risk, t.Labels, t.ParentId))
             .ToList();
         var envelope = new ListEnvelope(SchemaVersion, Ok: true, rows);
         output.WriteLine(JsonSerializer.Serialize(envelope, CliJsonContext.Default.ListEnvelope));

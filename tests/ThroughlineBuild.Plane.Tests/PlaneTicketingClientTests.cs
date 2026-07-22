@@ -117,7 +117,7 @@ internal static class TestData
               "name": "plane-client",
               "description_html": "{{descHtml}}",
               "state": "{{stateId}}",
-              "label_ids": {{labelIdsJson}},
+              "labels": {{labelIdsJson}},
               "parent": null,
               "type": null
             }
@@ -170,7 +170,7 @@ internal static class TestData
         $$"""{"id":"{{CommentUuid}}","comment_html":"<p>hello</p>"}""";
 
     public static string PatchOkJson() =>
-        $$"""{"id":"{{IssueUuid}}","sequence_id":24,"name":"plane-client","description_html":"<p>desc</p><p>appended</p>","state":"{{StateUuid}}","label_ids":[],"parent":null,"type":null}""";
+        $$"""{"id":"{{IssueUuid}}","sequence_id":24,"name":"plane-client","description_html":"<p>desc</p><p>appended</p>","state":"{{StateUuid}}","labels":[],"parent":null,"type":null}""";
 
     public static PlaneClientOptions Options() => new()
     {
@@ -535,7 +535,7 @@ public class AppendDescriptionAsyncTests
         // response returned (so a later read / further append builds on the canonical value),
         // not the value we optimistically sent.
         var serverNormalized =
-            $$"""{"id":"{{TestData.IssueUuid}}","sequence_id":24,"name":"plane-client","description_html":"<p>A</p><p>B-normalized</p>","state":"{{TestData.StateUuid}}","label_ids":[],"parent":null,"type":null}""";
+            $$"""{"id":"{{TestData.IssueUuid}}","sequence_id":24,"name":"plane-client","description_html":"<p>A</p><p>B-normalized</p>","state":"{{TestData.StateUuid}}","labels":[],"parent":null,"type":null}""";
 
         var handler = new FakeMessageHandler();
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson(descHtml: "<p>A</p>"))); // snapshot
@@ -660,8 +660,36 @@ public class ApplyLabelsAsyncTests
         await client.ApplyLabelsAsync("TLB-24", ["Size: S"], CancellationToken.None);
 
         var patchReq = handler.Requests[2];
+        Assert.Contains("\"labels\"", patchReq.Body);
         Assert.Contains(TestData.LabelUuid, patchReq.Body);
         Assert.DoesNotContain(priorLabelUuid, patchReq.Body);
+    }
+
+    [Fact]
+    public async Task ApplyLabelsAsync_ThenGetAsync_RoundTripsSizeRiskAndLabels()
+    {
+        const string sizeLUuid = "cccccccc-0000-0000-0000-000000000010";
+        const string riskLowUuid = "cccccccc-0000-0000-0000-000000000020";
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson($$"""
+            {
+              "results": [
+                { "id": "{{sizeLUuid}}", "name": "size:l" },
+                { "id": "{{riskLowUuid}}", "name": "risk:low" }
+              ]
+            }
+            """));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.PatchOkJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        await client.ApplyLabelsAsync("TLB-24", ["size:l", "risk:low"], CancellationToken.None);
+        var ticket = await client.GetAsync("TLB-24", CancellationToken.None);
+
+        Assert.Equal(Size.L, ticket.Size);
+        Assert.Equal(Risk.Low, ticket.Risk);
+        Assert.Equal(new[] { "size:l", "risk:low" }, ticket.Labels);
     }
 
     [Fact]
@@ -800,6 +828,46 @@ public class TicketSizeResolutionTests
     }
 }
 
+public class TicketRiskResolutionTests
+{
+    private const string RiskLabelUuid = "cccccccc-0000-0000-0000-000000000030";
+
+    [Theory]
+    [InlineData("risk:low", Risk.Low)]
+    [InlineData("RISK:HIGH", Risk.High)]
+    [InlineData("risk:medium", Risk.Medium)]
+    public async Task GetAsync_RiskLabel_ReturnsMatchingTicketRisk(string labelName, Risk expected)
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(
+            TestData.IssueListJson(labelIdsJson: $"[\"{RiskLabelUuid}\"]")));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson($$"""
+            { "results": [{ "id": "{{RiskLabelUuid}}", "name": "{{labelName}}" }] }
+            """));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var ticket = await client.GetAsync("TLB-24", CancellationToken.None);
+
+        Assert.Equal(expected, ticket.Risk);
+        Assert.Equal(labelName, Assert.Single(ticket.Labels));
+    }
+
+    [Fact]
+    public async Task GetAsync_NoRiskLabel_FallsBackToRiskMedium()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var ticket = await client.GetAsync("TLB-24", CancellationToken.None);
+
+        Assert.Equal(Risk.Medium, ticket.Risk);
+    }
+}
+
 public class PlaneApiExceptionTests
 {
     [Fact]
@@ -844,7 +912,7 @@ internal static class RollupTestData
               "name": "child-ticket",
               "description_html": "<p>desc</p>",
               "state": "{{InProgressStateUuid}}",
-              "label_ids": [],
+              "labels": [],
               "parent": "{{ParentUuid}}",
               "type": null
             }
@@ -862,7 +930,7 @@ internal static class RollupTestData
               "name": "child-ticket",
               "description_html": "<p>desc</p>",
               "state": "{{childStateUuid}}",
-              "label_ids": [],
+              "labels": [],
               "parent": "{{ParentUuid}}",
               "type": null
             },
@@ -872,7 +940,7 @@ internal static class RollupTestData
               "name": "parent-ticket",
               "description_html": "<p>desc</p>",
               "state": "{{TestData.StateUuid}}",
-              "label_ids": [],
+              "labels": [],
               "parent": {{(parentOfParentUuid is null ? "null" : $"\"{parentOfParentUuid}\"")}},
               "type": null
             }
@@ -890,7 +958,7 @@ internal static class RollupTestData
               "name": "child-ticket",
               "description_html": "<p>desc</p>",
               "state": "{{DoneStateUuid}}",
-              "label_ids": [],
+              "labels": [],
               "parent": "{{ParentUuid}}",
               "type": null
             },
@@ -900,7 +968,7 @@ internal static class RollupTestData
               "name": "parent-ticket",
               "description_html": "<p>desc</p>",
               "state": "{{TestData.StateUuid}}",
-              "label_ids": [],
+              "labels": [],
               "parent": "{{GrandparentUuid}}",
               "type": null
             },
@@ -910,7 +978,7 @@ internal static class RollupTestData
               "name": "grandparent-ticket",
               "description_html": "<p>desc</p>",
               "state": "{{TestData.StateUuid}}",
-              "label_ids": [],
+              "labels": [],
               "parent": null,
               "type": null
             }
@@ -1017,7 +1085,7 @@ internal static class RollupTestData
         """;
 
     public static string PatchParentOkJson() =>
-        $$"""{"id":"{{ParentUuid}}","sequence_id":10,"name":"parent-ticket","description_html":"<p>desc</p>","state":"{{InProgressStateUuid}}","label_ids":[],"parent":null,"type":null}""";
+        $$"""{"id":"{{ParentUuid}}","sequence_id":10,"name":"parent-ticket","description_html":"<p>desc</p>","state":"{{InProgressStateUuid}}","labels":[],"parent":null,"type":null}""";
 
     public static string CommentOkJson() =>
         """{"id":"dddddddd-0000-0000-0000-000000000002","comment_html":"<p>[rollup]</p>"}""";
@@ -1459,7 +1527,7 @@ public class IssueCacheTests
 public class SnapshotLoadTests
 {
     private static string IssueJson(int seq, string uuid) =>
-        $$"""{ "id": "{{uuid}}", "sequence_id": {{seq}}, "name": "t{{seq}}", "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "label_ids": [], "parent": null, "type": null }""";
+        $$"""{ "id": "{{uuid}}", "sequence_id": {{seq}}, "name": "t{{seq}}", "description_html": "<p>d</p>", "state": "{{TestData.StateUuid}}", "labels": [], "parent": null, "type": null }""";
 
     private static PlaneClientOptions FastOptions() => new()
     {

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using ThroughlineBuild.Contracts;
+using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Plane;
 using Xunit;
 
@@ -69,12 +70,57 @@ public class CreateTicketAsyncTests
 
         var postReq = handler.Requests[1];
         Assert.Equal(HttpMethod.Post, postReq.Method);
+        Assert.Contains("\"labels\"", postReq.Body);
         Assert.Contains(TestData.LabelUuid, postReq.Body);
     }
 
-    // Fact (c): null initial labels -> no extra list-labels GET, label_ids empty in request
     [Fact]
-    public async Task CreateTicketAsync_NullInitialLabels_NoLabelLookupAndEmptyLabelIds()
+    public async Task CreateTicketAsync_WithInitialLabels_ThenGetAsync_ReadsLabelsBack()
+    {
+        const string sizeLUuid = "cccccccc-0000-0000-0000-000000000010";
+        const string teamLabelUuid = "cccccccc-0000-0000-0000-000000000011";
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson($$"""
+            {
+              "results": [
+                { "id": "{{sizeLUuid}}", "name": "size:l" },
+                { "id": "{{teamLabelUuid}}", "name": "team:core" }
+              ]
+            }
+            """));
+        handler.Enqueue(FakeMessageHandler.OkJson(CreateIssueResponseJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson($$"""
+            {
+              "results": [{
+                "id": "{{NewIssueUuid}}",
+                "sequence_id": {{NewSequenceId}},
+                "name": "Labeled ticket",
+                "description_html": "<p>desc</p>",
+                "state": "{{TestData.StateUuid}}",
+                "labels": ["{{sizeLUuid}}", "{{teamLabelUuid}}"],
+                "parent": null,
+                "type": null
+              }]
+            }
+            """));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var created = await client.CreateTicketAsync(
+            title: "Labeled ticket",
+            type: "",
+            descriptionHtml: "<p>desc</p>",
+            initialLabelNames: ["size:l", "team:core"],
+            ct: CancellationToken.None);
+        var ticket = await client.GetAsync(created.Id, CancellationToken.None);
+
+        Assert.Equal(Size.L, ticket.Size);
+        Assert.Equal(new[] { "size:l", "team:core" }, ticket.Labels);
+    }
+
+    // Fact (c): null initial labels -> no extra list-labels GET, labels empty in request
+    [Fact]
+    public async Task CreateTicketAsync_NullInitialLabels_NoLabelLookupAndEmptyLabels()
     {
         var handler = new FakeMessageHandler();
         handler.Enqueue(FakeMessageHandler.OkJson(CreateIssueResponseJson()));
@@ -90,9 +136,9 @@ public class CreateTicketAsyncTests
         // Only one HTTP request: the POST (no label-list GET)
         Assert.Single(handler.Requests);
         Assert.Equal(HttpMethod.Post, handler.Requests[0].Method);
-        // label_ids must be present but empty in the JSON body
+        // labels must be present but empty in the JSON body
         var body = handler.Requests[0].Body;
-        Assert.Contains("label_ids", body);
+        Assert.Contains("\"labels\"", body);
         Assert.Contains("[]", body);
     }
 
