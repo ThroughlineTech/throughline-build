@@ -874,6 +874,26 @@ static async Task<int> RunAsync(string[] args)
         }
     }
 
+    // Explicit relation management. GetRelationsAsync intentionally treats a 404 as an empty
+    // optional chain dependency lookup; this verb uses the strict management methods instead.
+    if (verb == "relate")
+    {
+        var http2 = new HttpClient();
+        var ticketing2 = new PlaneTicketingClient(http2, PlaneOptionsFactory.From(config2, secrets2));
+        try
+        {
+            using var verbCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+            return await RelateCommand.ExecuteAsync(
+                args, jsonOutput, ticketing2, Console.Out, Console.Error, verbCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled.");
+            return 1;
+        }
+    }
+
     // 'build setup' provisions the Plane project (states + labels) to meet workflow criteria.
     // No worker, no event log - a thin read/diff/create against the Plane API.
     if (verb == "setup")
@@ -1122,11 +1142,23 @@ static async Task<int> RunAsync(string[] args)
                 CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "ticket draft requires a non-empty title");
                 return 2;
             }
-            if (draft.Relations is { Count: > 0 })
+            var draftRelations = new List<Relation>();
+            foreach (var relation in draft.Relations ?? Array.Empty<TicketDraftRelation>())
             {
-                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage,
-                    "relations are not yet supported by 'build new --json'; file the ticket, then add relations once the relate verb lands");
-                return 2;
+                if (relation is null || string.IsNullOrWhiteSpace(relation.Kind)
+                    || string.IsNullOrWhiteSpace(relation.TargetId))
+                {
+                    CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage,
+                        "each relation requires non-empty 'kind' and 'targetId' fields");
+                    return 2;
+                }
+                if (!RelationKinds.TryNormalize(relation.Kind, out var normalizedRelationKind))
+                {
+                    CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage,
+                        $"invalid relation type '{relation.Kind}'; valid types: {string.Join(", ", RelationKinds.Allowed)}");
+                    return 2;
+                }
+                draftRelations.Add(new Relation(normalizedRelationKind, relation.TargetId));
             }
 
             using var jsonNewCts = new CancellationTokenSource();
@@ -1135,13 +1167,13 @@ static async Task<int> RunAsync(string[] args)
             {
                 var created = await newPhase2.RunFromStructuredAsync(
                     draft.Title, draft.Type, draft.Description, draft.AcceptanceCriteria,
-                    draft.Labels, draft.Parent, jsonNewCts.Token);
+                    draft.Labels, draft.Parent, draftRelations, jsonNewCts.Token);
                 CliEnvelopeWriter.WriteNewTicket(Console.Out, new NewTicketView(
                     created.Id,
                     created.Uuid,
                     draft.Labels ?? Array.Empty<string>(),
                     draft.Parent,
-                    Array.Empty<RelationView>()));
+                    draftRelations.Select(r => new RelationView(r.Kind, r.TargetId)).ToList()));
                 return 0;
             }
             catch (NewPhaseValidationException ex)
@@ -1158,6 +1190,16 @@ static async Task<int> RunAsync(string[] args)
             catch (PlaneApiException ex)
             {
                 return PlaneCliError.Report("new", ex, jsonOutput);
+            }
+            catch (RelationEndpointUnavailableException ex)
+            {
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.ConfigError, ex.Message);
+                return 2;
+            }
+            catch (RelationConfigurationException ex)
+            {
+                CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.ConfigError, ex.Message);
+                return 2;
             }
             catch (InvalidOperationException ex)
             {

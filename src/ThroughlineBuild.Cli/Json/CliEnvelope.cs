@@ -123,6 +123,25 @@ public sealed record TransitionView(string Id, TicketState State);
 /// <summary>Success envelope for <c>build transition --json</c>.</summary>
 public sealed record TransitionEnvelope(int SchemaVersion, bool Ok, TransitionView Data);
 
+// ---- build relate --json -----------------------------------------------------------
+
+/// <summary>A relation row with the stable backend identity required for exact removal.</summary>
+public sealed record ManagedRelationView(string Id, string Kind, string TargetId);
+
+/// <summary>Success envelope for <c>build relate ID --list --json</c>.</summary>
+public sealed record RelationsEnvelope(int SchemaVersion, bool Ok, IReadOnlyList<ManagedRelationView> Data);
+
+/// <summary>Acknowledgement for relation create/remove.</summary>
+public sealed record RelateView(
+    string Id,
+    string Action,
+    string? Kind = null,
+    string? TargetId = null,
+    string? RelationId = null);
+
+/// <summary>Success envelope for a relation mutation.</summary>
+public sealed record RelateEnvelope(int SchemaVersion, bool Ok, RelateView Data);
+
 // ---- build close / defer / reopen / amend --json -----------------------------------
 
 /// <summary>Acknowledgement payload for a lifecycle verb: the ticket id and which action ran.</summary>
@@ -147,5 +166,7 @@ public sealed record AckEnvelope(int SchemaVersion, bool Ok, AckView Data);
 [JsonSerializable(typeof(CommentsEnvelope))]
 [JsonSerializable(typeof(CommentCreatedEnvelope))]
 [JsonSerializable(typeof(TransitionEnvelope))]
+[JsonSerializable(typeof(RelationsEnvelope))]
+[JsonSerializable(typeof(RelateEnvelope))]
 [JsonSerializable(typeof(AckEnvelope))]
 internal partial class CliJsonContext : JsonSerializerContext { }

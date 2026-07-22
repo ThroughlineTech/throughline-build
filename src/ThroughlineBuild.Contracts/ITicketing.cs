@@ -67,6 +67,32 @@ public interface ITicketing
     Task<IReadOnlyList<Relation>> GetRelationsAsync(string id, CancellationToken ct);
 
     /// <summary>
+    /// Fetch relations for an explicit management operation. Unlike <see cref="GetRelationsAsync"/>,
+    /// an implementation must not hide a missing relation endpoint as an empty result. Each item
+    /// carries the stable backend edge id needed by <see cref="RemoveRelationAsync"/>.
+    /// </summary>
+    Task<IReadOnlyList<Relation>> ListRelationsAsync(string id, CancellationToken ct) =>
+        GetRelationsAsync(id, ct);
+
+    /// <summary>
+    /// Resolve a ticket identifier for relation management. Backends whose display identifiers
+    /// carry a project prefix can reject cross-project aliases before any relation or create write.
+    /// </summary>
+    Task<Ticket> GetRelationTicketAsync(string id, CancellationToken ct) => GetAsync(id, ct);
+
+    /// <summary>Create one canonical relation edge from <paramref name="sourceId"/> to the target.</summary>
+    Task CreateRelationAsync(string sourceId, string relationKind, string targetId, CancellationToken ct)
+    {
+        if (RelationKinds.TryNormalize(relationKind, out var normalized) && normalized == "blocked_by")
+            return AddRelationAsync(sourceId, targetId, ct);
+        throw new NotSupportedException("This ticketing backend does not support typed relation creation.");
+    }
+
+    /// <summary>Remove one exact relation edge by the stable id returned from <see cref="ListRelationsAsync"/>.</summary>
+    Task RemoveRelationAsync(string sourceId, string relationId, CancellationToken ct) =>
+        throw new NotSupportedException("This ticketing backend does not support relation removal.");
+
+    /// <summary>
     /// Create a blocked_by relation: <paramref name="blockedId"/> is blocked by <paramref name="blockerId"/>.
     /// </summary>
     Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct);

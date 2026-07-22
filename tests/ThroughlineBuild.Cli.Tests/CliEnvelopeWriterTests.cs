@@ -94,4 +94,19 @@ public class CliEnvelopeWriterTests
         Assert.Equal("blocked_by", rel.Kind);
         Assert.Equal("TLB-540", rel.TargetId);
     }
+
+    [Fact]
+    public void WriteRelations_UsesSourceGeneratedEnvelope_AndIncludesStableId()
+    {
+        var sw = new StringWriter();
+
+        CliEnvelopeWriter.WriteRelations(sw,
+            new[] { new Relation("blocking", "TLB-9", "edge-123") });
+
+        using var doc = JsonDocument.Parse(sw.ToString());
+        var relation = doc.RootElement.GetProperty("data").EnumerateArray().Single();
+        Assert.Equal("edge-123", relation.GetProperty("id").GetString());
+        Assert.Equal("blocking", relation.GetProperty("kind").GetString());
+        Assert.Equal("TLB-9", relation.GetProperty("targetId").GetString());
+    }
 }

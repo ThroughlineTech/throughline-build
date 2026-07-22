@@ -16,10 +16,11 @@ Natural language -> command:
 |---|---|
 | show the backlog / list tickets | `build list [--state Backlog] [--json]` |
 | read / show ticket N | `build get TLB-N [--json]` |
-| make a ticket "X" | assemble a JSON draft, then `build new - --json` (fields: `title`, `type`, `description`, `acceptanceCriteria`, `labels`, `parent`; markdown is rendered to HTML) |
+| make a ticket "X" | assemble a JSON draft, then `build new - --json` (fields: `title`, `type`, `description`, `acceptanceCriteria`, `labels`, `parent`, `relations` as `[{"kind":"blocked_by","targetId":"TLB-N"}]`; markdown is rendered to HTML) |
 | read a ticket's comments | `build comments TLB-N [--json]` |
 | comment / write findings back | `build comment TLB-N "<markdown>" [--json]` (or `-` to read the body from stdin) |
 | move state | `build transition TLB-N InProgress [--json]` |
+| create / list / remove relations | `build relate TLB-N blocked_by TLB-M [--json]`; `build relate TLB-N --list`; `build relate TLB-N --remove RELATION-ID` |
 | close / defer / reopen | `build close\|defer\|reopen TLB-N "reason" [--json]` |
 | amend (title / priority / type / labels / parent / size / content) | `build amend TLB-N --title "..." --priority high [--json]` |
 

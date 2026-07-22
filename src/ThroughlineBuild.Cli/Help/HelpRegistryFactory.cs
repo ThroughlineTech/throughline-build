@@ -42,6 +42,7 @@ public static class HelpRegistryFactory
         r.Register(Comments());
         r.Register(Comment());
         r.Register(Transition());
+        r.Register(Relate());
         r.Register(Amend());
         r.Register(Close());
         r.Register(Defer());
@@ -250,7 +251,7 @@ public static class HelpRegistryFactory
             new("--type \"...\"",   "Set the work item type",                                                 false),
             new("--label \"...\"",  "Add a label (may be repeated)",                                          false),
             new("--review",         "Draft mode only: open an interactive review loop before filing",         false),
-            new("--json",           "Read a strict JSON draft (title,type,description,acceptanceCriteria,labels,parent) from stdin and emit a JSON envelope; no drafting worker", false),
+            new("--json",           "Read a strict JSON draft (title,type,description,acceptanceCriteria,labels,parent,relations[{kind,targetId}]) from stdin and emit a JSON envelope; targets resolve before create", false),
             new("--debug",          "Draft/file mode: stream worker output when drafting and capture artifacts", false),
             new("--quiet",          "Draft mode only: suppress the worker progress digest",                   false),
             new("--print-template", "Print the body template to stdout; ignores other input forms",           false),
@@ -376,6 +377,30 @@ public static class HelpRegistryFactory
             new("amend TLB-563 --title \"Complete ticket amendment\" --priority high", "Update scalar metadata"),
             new("amend TLB-563 --label-add bug --label-add cli --label-remove stale", "Edit labels without replacing unrelated labels"),
             new("amend TLB-563 --parent TLB-500 --json", "Set a parent, machine-readable"),
+        ]
+    );
+
+    private static CommandHelp Relate() => new(
+        Name:    "relate",
+        Group:   CommandGroup.WorkItems,
+        Summary: "Create, list, or remove ticket relations",
+        Usage:
+            "relate <ticket-id> <relation-type> <target-id> [--json]\n" +
+            "relate <ticket-id> --list [--json]\n" +
+            "relate <ticket-id> --remove <relation-id> [--json]",
+        Options:
+        [
+            new("<relation-type>", "relates_to, duplicate, blocked_by, blocking, start_before, start_after, finish_before, finish_after, implemented_by, or implements; space/hyphen tolerant", false),
+            new("--list", "List relations with stable relation ids used by --remove", false),
+            new("--remove <relation-id>", "Remove the exact edge returned by --list", false),
+            new("--json", "Emit a versioned JSON envelope", false),
+        ],
+        ExitCodes: [s_exit0, s_exit1, s_exit2],
+        Examples:
+        [
+            new("relate TLB-10 blocked_by TLB-9 --json", "Create one canonical dependency edge"),
+            new("relate TLB-10 --list --json", "Get stable relation ids"),
+            new("relate TLB-10 --remove RELATION-UUID --json", "Remove one exact edge"),
         ]
     );
 

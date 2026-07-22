@@ -73,6 +73,22 @@ public static class CliEnvelopeWriter
         output.WriteLine(JsonSerializer.Serialize(envelope, CliJsonContext.Default.TransitionEnvelope));
     }
 
+    /// <summary>Write an explicit relation list, including stable backend edge ids.</summary>
+    public static void WriteRelations(TextWriter output, IReadOnlyList<Relation> relations)
+    {
+        var rows = relations.Select(r => new ManagedRelationView(
+            r.Id ?? string.Empty, r.Kind, r.TargetId)).ToList();
+        var envelope = new RelationsEnvelope(SchemaVersion, Ok: true, rows);
+        output.WriteLine(JsonSerializer.Serialize(envelope, CliJsonContext.Default.RelationsEnvelope));
+    }
+
+    /// <summary>Write a relation create/remove acknowledgement.</summary>
+    public static void WriteRelate(TextWriter output, RelateView result)
+    {
+        var envelope = new RelateEnvelope(SchemaVersion, Ok: true, result);
+        output.WriteLine(JsonSerializer.Serialize(envelope, CliJsonContext.Default.RelateEnvelope));
+    }
+
     /// <summary>Write a success acknowledgement for a lifecycle verb (close, defer, reopen, amend).</summary>
     public static void WriteAck(TextWriter output, string ticketId, string action)
     {

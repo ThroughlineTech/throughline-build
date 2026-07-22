@@ -1,3 +1,3 @@
 namespace ThroughlineBuild.Contracts.Models;
 
-public record Relation(string Kind, string TargetId);
+public record Relation(string Kind, string TargetId, string? Id = null);

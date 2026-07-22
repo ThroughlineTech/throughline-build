@@ -19,7 +19,8 @@ public class TicketDraftParserTests
           "description": "the body",
           "acceptanceCriteria": "- it works",
           "labels": ["build", "tooling"],
-          "parent": "TLB-541"
+          "parent": "TLB-541",
+          "relations": [{"kind":"blocked_by","targetId":"TLB-540"}]
         }
         """;
 
@@ -34,7 +35,9 @@ public class TicketDraftParserTests
         Assert.Equal("- it works", draft.AcceptanceCriteria);
         Assert.Equal(new[] { "build", "tooling" }, draft.Labels);
         Assert.Equal("TLB-541", draft.Parent);
-        Assert.Null(draft.Relations);
+        var relation = Assert.Single(draft.Relations!);
+        Assert.Equal("blocked_by", relation.Kind);
+        Assert.Equal("TLB-540", relation.TargetId);
     }
 
     [Fact]

@@ -1774,6 +1774,248 @@ public class AddRelationAsyncTests
     }
 }
 
+public class RelationManagementTests
+{
+    private static PlaneClientOptions LegacyOptionsWithoutIdentifier() => new()
+    {
+        BaseUrl = "https://plane.example.com",
+        ApiToken = "test-token",
+        WorkspaceSlug = "my-workspace",
+        ProjectId = "my-project",
+        ProjectIdentifier = ""
+    };
+
+    private const string ProjectListWithTlb =
+        """{"results":[{"id":"my-project","name":"Project","identifier":"TLB"}]}""";
+
+    [Fact]
+    public async Task LegacyConfig_MatchingPrefix_DiscoversIdentifierThenLists()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(ProjectListWithTlb));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.RelationListJson()));
+        var client = new PlaneTicketingClient(new HttpClient(handler), LegacyOptionsWithoutIdentifier());
+
+        var relation = Assert.Single(await client.ListRelationsAsync("tlb-24", CancellationToken.None));
+
+        Assert.Equal("TLB-999", relation.TargetId);
+        Assert.Contains(handler.Requests, r => r.RequestUri!.AbsolutePath.EndsWith("/projects/"));
+        Assert.Contains(handler.Requests, r => r.RequestUri!.AbsolutePath.Contains("/issues/"));
+    }
+
+    [Fact]
+    public async Task LegacyConfig_MismatchedPrefix_StopsAfterProjectDiscovery()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(ProjectListWithTlb));
+        var client = new PlaneTicketingClient(new HttpClient(handler), LegacyOptionsWithoutIdentifier());
+
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            client.ListRelationsAsync("OTHER-24", CancellationToken.None));
+
+        var request = Assert.Single(handler.Requests);
+        Assert.EndsWith("/projects/", request.RequestUri!.AbsolutePath);
+        Assert.DoesNotContain(handler.Requests, r => r.RequestUri!.AbsolutePath.Contains("/issues/"));
+    }
+
+    [Fact]
+    public async Task LegacyConfig_CreateTargetMismatch_DiscoversOnceWithoutIssueOrRelationWrite()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(ProjectListWithTlb));
+        var client = new PlaneTicketingClient(new HttpClient(handler), LegacyOptionsWithoutIdentifier());
+
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            client.CreateRelationAsync("TLB-24", "blocking", "OTHER-25", CancellationToken.None));
+
+        Assert.Single(handler.Requests);
+        Assert.DoesNotContain(handler.Requests, r => r.Method == HttpMethod.Post);
+        Assert.DoesNotContain(handler.Requests, r => r.RequestUri!.AbsolutePath.Contains("/issues/"));
+    }
+
+    [Fact]
+    public async Task LegacyConfig_ProjectIdentifierDiscovery_IsCachedOnce()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(ProjectListWithTlb));
+        var client = new PlaneTicketingClient(new HttpClient(handler), LegacyOptionsWithoutIdentifier());
+
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            client.ListRelationsAsync("OTHER-24", CancellationToken.None));
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            client.ListRelationsAsync("OTHER-25", CancellationToken.None));
+
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task LegacyConfig_BareNumericId_SkipsProjectDiscovery()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.RelationListJson()));
+        var client = new PlaneTicketingClient(new HttpClient(handler), LegacyOptionsWithoutIdentifier());
+
+        _ = await client.ListRelationsAsync("24", CancellationToken.None);
+
+        Assert.DoesNotContain(handler.Requests, r => r.RequestUri!.AbsolutePath.EndsWith("/projects/"));
+    }
+
+    [Fact]
+    public async Task LegacyConfig_UnresolvableProjectIdentifier_IsClearConfigurationError()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(
+            """{"results":[{"id":"different-project","name":"Other","identifier":"OTHER"}]}"""));
+        var client = new PlaneTicketingClient(new HttpClient(handler), LegacyOptionsWithoutIdentifier());
+
+        var error = await Assert.ThrowsAsync<RelationConfigurationException>(() =>
+            client.ListRelationsAsync("TLB-24", CancellationToken.None));
+
+        Assert.Contains("Cannot resolve the identifier", error.Message);
+        Assert.Contains("plane_project_identifier", error.Message);
+        Assert.Single(handler.Requests);
+    }
+
+    [Theory]
+    [InlineData("tlb-24", "24")]
+    [InlineData("24", "TLB-24")]
+    public async Task CreateRelationAsync_AcceptsMatchingPrefixCaseInsensitively_AndBareIds(
+        string sourceId, string targetId)
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson("{}"));
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        await client.CreateRelationAsync(sourceId, "blocking", targetId, CancellationToken.None);
+
+        Assert.Contains(handler.Requests, r => r.Method == HttpMethod.Post);
+    }
+
+    [Theory]
+    [InlineData("OTHER-24", "TLB-24")]
+    [InlineData("TLB-24", "OTHER-24")]
+    public async Task CreateRelationAsync_MismatchedPrefix_IsNotFoundBeforeAnyHttp(
+        string sourceId, string targetId)
+    {
+        var handler = new FakeMessageHandler();
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        var error = await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            client.CreateRelationAsync(sourceId, "blocking", targetId, CancellationToken.None));
+
+        Assert.Contains("outside configured project", error.Message);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Theory]
+    [InlineData("list")]
+    [InlineData("remove")]
+    public async Task ReadOrRemove_MismatchedSourcePrefix_IsNotFoundBeforeAnyHttp(string operation)
+    {
+        var handler = new FakeMessageHandler();
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        if (operation == "list")
+            await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+                client.ListRelationsAsync("OTHER-24", CancellationToken.None));
+        else
+            await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+                client.RemoveRelationAsync("OTHER-24", "edge-1", CancellationToken.None));
+
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task CreateRelationAsync_NormalizesType_AndPostsOneCanonicalEdge()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson("{}"));
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        await client.CreateRelationAsync("TLB-24", "finish-before", "TLB-24", CancellationToken.None);
+
+        var request = handler.Requests[^1];
+        Assert.Equal(HttpMethod.Post, request.Method);
+        Assert.Contains("\"relation_type\":\"finish_before\"", request.Body);
+        Assert.Single(handler.Requests.Where(r => r.Method == HttpMethod.Post));
+    }
+
+    [Fact]
+    public async Task ListRelationsAsync_ReturnsStableEdgeIdentity()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.RelationListJson()));
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        var relation = Assert.Single(await client.ListRelationsAsync("TLB-24", CancellationToken.None));
+
+        Assert.Equal("eeeeeeee-0000-0000-0000-000000000001", relation.Id);
+        Assert.Equal("TLB-999", relation.TargetId);
+    }
+
+    [Fact]
+    public async Task RemoveRelationAsync_ListsThenDeletesExactEdge()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.RelationListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(""));
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        await client.RemoveRelationAsync(
+            "TLB-24", "eeeeeeee-0000-0000-0000-000000000001", CancellationToken.None);
+
+        var request = handler.Requests[^1];
+        Assert.Equal(HttpMethod.Delete, request.Method);
+        Assert.EndsWith("/issue-relation/eeeeeeee-0000-0000-0000-000000000001/", request.RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task RemoveRelationAsync_UnknownEdge_IsNotFoundWithoutDelete()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.RelationListJson()));
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            client.RemoveRelationAsync("TLB-24", "missing", CancellationToken.None));
+
+        Assert.DoesNotContain(handler.Requests, r => r.Method == HttpMethod.Delete);
+    }
+
+    [Fact]
+    public async Task StrictList_Endpoint404_IsClearConfigurationFailure()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(FakeMessageHandler.ErrorJson(404, "not found"));
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        var error = await Assert.ThrowsAsync<RelationEndpointUnavailableException>(() =>
+            client.ListRelationsAsync("TLB-24", CancellationToken.None));
+
+        Assert.Contains("relation endpoint is unavailable", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Create_Endpoint404_IsClearConfigurationFailure()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(FakeMessageHandler.ErrorJson(404, "not found"));
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        await Assert.ThrowsAsync<RelationEndpointUnavailableException>(() =>
+            client.CreateRelationAsync("TLB-24", "blocking", "TLB-24", CancellationToken.None));
+    }
+}
+
 // WI-06: ListProjectsAsync must walk every cursor page so find-or-create sees the whole
 // workspace and never creates a duplicate of a project living beyond the first page.
 public class ProjectDiscoveryPaginationTests

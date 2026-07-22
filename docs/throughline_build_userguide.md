@@ -124,6 +124,24 @@ build new "fix the README typo"
 You should see a ticket ID printed to stdout (e.g. `TLB-1`). Open Plane and confirm the ticket
 appears in your project with state Backlog and the title you supplied.
 
+For machine-created tickets, `build new - --json` accepts a strict JSON draft. Relations use
+`{"kind":"blocked_by","targetId":"TLB-1"}` objects. Every relation type and target is validated
+before the ticket is created, so an unknown target leaves no new ticket. Plane cannot atomically
+create a ticket and its relation edges: if a later relation POST fails, the error names the created
+ticket and earlier edges may exist. Inspect them with `build relate TLB-N --list`.
+
+Manage existing relations explicitly:
+
+```
+build relate TLB-2 blocked_by TLB-1 --json
+build relate TLB-2 --list --json
+build relate TLB-2 --remove RELATION-ID --json
+```
+
+The list includes the stable relation ID required for exact removal. Allowed types are `relates_to`,
+`duplicate`, `blocked_by`, `blocking`, `start_before`, `start_after`, `finish_before`, `finish_after`,
+`implemented_by`, and `implements`; spaces and hyphens are accepted in place of underscores.
+
 ### 4. Plan the ticket
 
 ```

@@ -82,12 +82,82 @@ public class NewPhaseStructuredTests
             phase.RunFromStructuredAsync("  ", null, "body", null, null, null, CancellationToken.None));
     }
 
+    [Fact]
+    public async Task Relations_AllTargetsResolveBeforeCreate_ThenEdgesAreCreated()
+    {
+        var ticketing = new RecordingTicketing();
+        ticketing.Seed("TLB-8", "uuid-8");
+        ticketing.Seed("TLB-9", "uuid-9");
+        var phase = new NewPhase(ticketing, new NullEventSink(), MakeOptions());
+
+        await phase.RunFromStructuredAsync("child", null, "body", null, null, null,
+            new[] { new Relation("blocked-by", "TLB-8"), new Relation("implements", "TLB-9") },
+            CancellationToken.None);
+
+        Assert.Equal(new[]
+        {
+            "get:TLB-8", "get:TLB-9", "create",
+            "relate:TLB-100:blocked_by:TLB-8", "relate:TLB-100:implements:TLB-9"
+        }, ticketing.Calls);
+    }
+
+    [Fact]
+    public async Task UnknownRelationTarget_FailsBeforeTicketCreation()
+    {
+        var ticketing = new RecordingTicketing();
+        var phase = new NewPhase(ticketing, new NullEventSink(), MakeOptions());
+
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => phase.RunFromStructuredAsync(
+            "child", null, "body", null, null, null,
+            new[] { new Relation("relates_to", "TLB-999") }, CancellationToken.None));
+
+        Assert.Empty(ticketing.Created);
+        Assert.Equal(new[] { "get:TLB-999" }, ticketing.Calls);
+    }
+
+    [Fact]
+    public async Task CrossProjectRelationTarget_FailsScopedResolutionBeforeTicketCreation()
+    {
+        var ticketing = new RecordingTicketing();
+        ticketing.Seed("OTHER-8", "uuid-other-8"); // Ordinary GetAsync would resolve this alias.
+        var phase = new NewPhase(ticketing, new NullEventSink(), MakeOptions());
+
+        var error = await Assert.ThrowsAsync<KeyNotFoundException>(() => phase.RunFromStructuredAsync(
+            "child", null, "body", null, null, null,
+            new[] { new Relation("relates_to", "OTHER-8") }, CancellationToken.None));
+
+        Assert.Contains("outside configured project", error.Message);
+        Assert.Empty(ticketing.Created);
+        Assert.Equal(new[] { "get-relation:OTHER-8" }, ticketing.Calls);
+    }
+
+    [Fact]
+    public async Task LaterRelationFailure_NamesCreatedTicketAndPossibleEarlierEdges()
+    {
+        var ticketing = new RecordingTicketing { RelationErrorTarget = "TLB-9" };
+        ticketing.Seed("TLB-8", "uuid-8");
+        ticketing.Seed("TLB-9", "uuid-9");
+        var phase = new NewPhase(ticketing, new NullEventSink(), MakeOptions());
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            phase.RunFromStructuredAsync("child", null, "body", null, null, null,
+                new[] { new Relation("blocking", "TLB-8"), new Relation("implements", "TLB-9") },
+                CancellationToken.None));
+
+        Assert.Contains("Ticket TLB-100 was created", error.Message);
+        Assert.Contains("Earlier relation edges may already exist", error.Message);
+        Assert.Contains("build relate TLB-100 --list", error.Message);
+        Assert.Single(ticketing.Created);
+        Assert.Contains("relate:TLB-100:blocking:TLB-8", ticketing.Calls);
+    }
+
     private sealed record CreatedTicket(string Title, string? Type, string Html, IReadOnlyList<string>? Labels);
 
     private sealed class RecordingTicketing : ITicketing
     {
         public List<string> Calls { get; } = new();
         public List<CreatedTicket> Created { get; } = new();
+        public string? RelationErrorTarget { get; init; }
         private readonly Dictionary<string, string> _uuidById = new(StringComparer.Ordinal);
 
         public void Seed(string id, string uuid) => _uuidById[id] = uuid;
@@ -103,6 +173,16 @@ public class NewPhaseStructuredTests
                 Size.M, Risk.Low, "", Array.Empty<Relation>(), Array.Empty<string>(), null));
         }
 
+        public Task<Ticket> GetRelationTicketAsync(string id, CancellationToken ct)
+        {
+            if (id.StartsWith("OTHER-", StringComparison.OrdinalIgnoreCase))
+            {
+                Calls.Add($"get-relation:{id}");
+                throw new KeyNotFoundException($"Ticket '{id}' is outside configured project 'TLB'");
+            }
+            return GetAsync(id, ct);
+        }
+
         public Task<NewTicketResult> CreateTicketAsync(string title, string? type, string descriptionHtml,
             IReadOnlyList<string>? initialLabelNames, CancellationToken ct)
         {
@@ -114,6 +194,14 @@ public class NewPhaseStructuredTests
         public Task SetParentAsync(string childUuid, string parentUuid, CancellationToken ct)
         {
             Calls.Add($"setparent:{childUuid}->{parentUuid}");
+            return Task.CompletedTask;
+        }
+
+        public Task CreateRelationAsync(string sourceId, string relationKind, string targetId, CancellationToken ct)
+        {
+            Calls.Add($"relate:{sourceId}:{relationKind}:{targetId}");
+            if (targetId == RelationErrorTarget)
+                throw new InvalidOperationException("backend rejected relation");
             return Task.CompletedTask;
         }
 

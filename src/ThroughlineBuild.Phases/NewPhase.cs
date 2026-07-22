@@ -153,10 +153,22 @@ public class NewPhase : IWorkflowPhase
     /// <summary>
     /// Deterministic create from an already-structured draft (build new - --json): no worker,
     /// no markdown title-parsing. Renders description + acceptance criteria markdown to HTML,
-    /// creates the ticket, and - when a parent id is given - resolves its UUID and reparents.
+    /// resolves parent and relation targets before creation, creates the ticket, then applies
+    /// parent and relation writes.
     /// Throws NewPhaseValidationException on a missing title and KeyNotFoundException when the
     /// parent id does not resolve.
     /// </summary>
+    public Task<NewResult> RunFromStructuredAsync(
+        string? title,
+        string? type,
+        string? descriptionMarkdown,
+        string? acceptanceCriteriaMarkdown,
+        IReadOnlyList<string>? labels,
+        string? parentId,
+        CancellationToken ct) =>
+        RunFromStructuredAsync(title, type, descriptionMarkdown, acceptanceCriteriaMarkdown,
+            labels, parentId, null, ct);
+
     public async Task<NewResult> RunFromStructuredAsync(
         string? title,
         string? type,
@@ -164,6 +176,7 @@ public class NewPhase : IWorkflowPhase
         string? acceptanceCriteriaMarkdown,
         IReadOnlyList<string>? labels,
         string? parentId,
+        IReadOnlyList<Relation>? relations,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(title))
@@ -187,6 +200,21 @@ public class NewPhase : IWorkflowPhase
         {
             var parent = await _ticketing.GetAsync(parentId!, ct).ConfigureAwait(false);
             parentUuid = parent.Uuid;
+        }
+
+        // Resolve and validate every relation target before creating the ticket. An unknown target
+        // therefore cannot leave a newly-created orphan. The subsequent POSTs cannot be atomic with
+        // ticket creation; a later backend failure is reported with the created ticket id below.
+        var resolvedRelations = new List<Relation>();
+        foreach (var relation in relations ?? Array.Empty<Relation>())
+        {
+            if (!RelationKinds.TryNormalize(relation.Kind, out var normalizedKind))
+                throw new NewPhaseValidationException(new[]
+                {
+                    $"invalid relation type '{relation.Kind}'; valid types: {string.Join(", ", RelationKinds.Allowed)}"
+                });
+            _ = await _ticketing.GetRelationTicketAsync(relation.TargetId, ct).ConfigureAwait(false);
+            resolvedRelations.Add(new Relation(normalizedKind, relation.TargetId));
         }
 
         await EmitAsync(EventKind.WorkerSpawn, new Dictionary<string, object>
@@ -214,6 +242,35 @@ public class NewPhase : IWorkflowPhase
                 ["id"] = ticketResult.Id,
                 ["parent"] = parentId!
             }, ct).ConfigureAwait(false);
+        }
+
+
+        foreach (var relation in resolvedRelations)
+        {
+            try
+            {
+                await _ticketing.CreateRelationAsync(
+                    ticketResult.Id, relation.Kind, relation.TargetId, ct).ConfigureAwait(false);
+                await EmitAsync(EventKind.TicketWrite, new Dictionary<string, object>
+                {
+                    ["action"] = "create_relation",
+                    ["id"] = ticketResult.Id,
+                    ["kind"] = relation.Kind,
+                    ["target"] = relation.TargetId
+                }, ct).ConfigureAwait(false);
+            }
+            catch (RelationEndpointUnavailableException ex)
+            {
+                throw new RelationEndpointUnavailableException(
+                    $"Ticket {ticketResult.Id} was created, but relation '{relation.Kind}' to {relation.TargetId} failed. " +
+                    $"Earlier relation edges may already exist; inspect 'build relate {ticketResult.Id} --list'. {ex.Message}", ex);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new InvalidOperationException(
+                    $"Ticket {ticketResult.Id} was created, but relation '{relation.Kind}' to {relation.TargetId} failed. " +
+                    $"Earlier relation edges may already exist; inspect 'build relate {ticketResult.Id} --list'. {ex.Message}", ex);
+            }
         }
 
         return new NewResult(ticketResult.Id, ticketResult.Uuid, Array.Empty<string>());

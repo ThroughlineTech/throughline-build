@@ -61,6 +61,10 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
     // multiple times within one chain run. Relations are effectively stable for the run, so cache
     // them by Plane issue UUID after the first GET and reuse them thereafter.
     private readonly ConcurrentDictionary<string, IReadOnlyList<Relation>> _relationsByIssueUuid = new();
+    // Legacy configs may omit ProjectIdentifier. Prefixed relation ids then require one read-only
+    // workspace project discovery, cached for the client lifetime, before prefix validation.
+    private string? _resolvedProjectIdentifier;
+    private readonly SemaphoreSlim _projectIdentifierLock = new(1, 1);
     private volatile bool _snapshotLoaded;
     private readonly SemaphoreSlim _snapshotLock = new(1, 1);
 
@@ -216,12 +220,85 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
         return seq;
     }
 
+    private async Task ValidateRelationTicketIdAsync(string id, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            throw new ArgumentException("relation ticket id is required", nameof(id));
+
+        var dash = id.LastIndexOf('-');
+        if (dash < 0)
+            return; // Bare numeric identifiers remain supported; ParseSequenceId validates them.
+
+        var prefix = id[..dash];
+        var suffix = id[(dash + 1)..];
+        if (prefix.Length == 0 || !int.TryParse(suffix, out _))
+            throw new ArgumentException($"Cannot parse sequence id from '{id}'", nameof(id));
+
+        var projectIdentifier = _options.ProjectIdentifier;
+        if (string.IsNullOrEmpty(projectIdentifier))
+            projectIdentifier = await ResolveConfiguredProjectIdentifierAsync(ct).ConfigureAwait(false);
+
+        if (!string.Equals(prefix, projectIdentifier, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new KeyNotFoundException(
+                $"Ticket '{id}' is outside configured project '{projectIdentifier}'");
+        }
+    }
+
+    private async Task<string> ResolveConfiguredProjectIdentifierAsync(CancellationToken ct)
+    {
+        if (_resolvedProjectIdentifier is not null)
+            return _resolvedProjectIdentifier;
+
+        await _projectIdentifierLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_resolvedProjectIdentifier is not null)
+                return _resolvedProjectIdentifier;
+
+            IReadOnlyList<ProjectInfo> projects;
+            try
+            {
+                projects = await ListProjectsAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                throw new RelationConfigurationException(
+                    $"Cannot resolve the identifier for configured Plane project '{_options.ProjectId}'. " +
+                    "Set plane_project_identifier or verify workspace/project access.", ex);
+            }
+
+            var project = projects.FirstOrDefault(p =>
+                string.Equals(p.Id, _options.ProjectId, StringComparison.OrdinalIgnoreCase));
+            if (string.IsNullOrWhiteSpace(project.Id) || string.IsNullOrWhiteSpace(project.Identifier))
+            {
+                throw new RelationConfigurationException(
+                    $"Cannot resolve the identifier for configured Plane project '{_options.ProjectId}'. " +
+                    "Set plane_project_identifier or verify that the project belongs to the configured workspace.");
+            }
+
+            _resolvedProjectIdentifier = project.Identifier;
+            return _resolvedProjectIdentifier;
+        }
+        finally
+        {
+            _projectIdentifierLock.Release();
+        }
+    }
+
+    public async Task<Ticket> GetRelationTicketAsync(string id, CancellationToken ct)
+    {
+        await ValidateRelationTicketIdAsync(id, ct).ConfigureAwait(false);
+        return await GetAsync(id, ct).ConfigureAwait(false);
+    }
+
     // When ProjectIdentifier is empty (not configured) the naive format string would produce
     // "-{seq}", creating a leading dash that diverges from the slug used for branch names.
     private string FormatTicketId(int sequenceId) =>
-        string.IsNullOrEmpty(_options.ProjectIdentifier)
+        string.IsNullOrEmpty(_options.ProjectIdentifier) && string.IsNullOrEmpty(_resolvedProjectIdentifier)
             ? sequenceId.ToString(System.Globalization.CultureInfo.InvariantCulture)
-            : $"{_options.ProjectIdentifier}-{sequenceId}";
+            : $"{(_options.ProjectIdentifier.Length > 0 ? _options.ProjectIdentifier : _resolvedProjectIdentifier)}-{sequenceId}";
 
     /// <summary>
     /// Extracts the <c>Retry-After</c> back-off hint from a response, supporting both
@@ -363,6 +440,13 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
         if (!response.IsSuccessStatusCode)
             throw new PlaneApiException((int)response.StatusCode, responseBody, ParseRetryAfter(response));
         return responseBody;
+    }
+
+    private async Task DeleteAsync(string url, CancellationToken ct)
+    {
+        var (response, responseBody) = await SendWithTransportRetryAsync(HttpMethod.Delete, url, null, ct).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+            throw new PlaneApiException((int)response.StatusCode, responseBody, ParseRetryAfter(response));
     }
 
     // Resolves the source-generated JsonTypeInfo for a write body, with the relaxed encoder
@@ -952,7 +1036,7 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
 
                 var relations = (relationList.Results ?? [])
                     .Where(r => r.RelatedIssue is not null)
-                    .Select(r => new Relation(r.RelationType, FormatTicketId(r.RelatedIssue!.SequenceId)))
+                    .Select(r => new Relation(r.RelationType, FormatTicketId(r.RelatedIssue!.SequenceId), r.Id))
                     .ToList()
                     .AsReadOnly();
                 return _relationsByIssueUuid.GetOrAdd(issue.Id, relations);
@@ -1432,21 +1516,105 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
 
     public async Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct)
     {
-        await _pipeline.ExecuteAsync(async token =>
+        await CreateRelationAsync(blockedId, "blocked_by", blockerId, ct).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<Relation>> ListRelationsAsync(string id, CancellationToken ct)
+    {
+        await ValidateRelationTicketIdAsync(id, ct).ConfigureAwait(false);
+        return await _pipeline.ExecuteAsync(async token =>
         {
-            var blockedSeq = ParseSequenceId(blockedId);
-            var blockedIssue = await FindIssueAsync(blockedSeq, token).ConfigureAwait(false);
-
-            var blockerSeq = ParseSequenceId(blockerId);
-            var blockerIssue = await FindIssueAsync(blockerSeq, token).ConfigureAwait(false);
-
-            await PostJsonAsync(
-                $"{IssuesBase}{blockedIssue.Id}/issue-relation/",
-                new CreateRelationRequest("blocked_by", new List<string> { blockerIssue.Id }),
-                PlaneJsonContext.Default,
-                token).ConfigureAwait(false);
+            var issue = await FindIssueAsync(ParseSequenceId(id), token).ConfigureAwait(false);
+            try
+            {
+                var relationList = await GetJsonAsync<PlaneRelationList>(
+                    $"{IssuesBase}{issue.Id}/issue-relation/", PlaneJsonContext.Default, token).ConfigureAwait(false);
+                return (IReadOnlyList<Relation>)(relationList.Results ?? [])
+                    .Where(r => r.RelatedIssue is not null)
+                    .Select(r => new Relation(r.RelationType, FormatTicketId(r.RelatedIssue!.SequenceId), r.Id))
+                    .ToList()
+                    .AsReadOnly();
+            }
+            catch (PlaneApiException ex) when (ex.Status == 404)
+            {
+                throw RelationEndpointUnavailable(ex);
+            }
         }, ct).ConfigureAwait(false);
     }
+
+    public async Task CreateRelationAsync(string sourceId, string relationKind, string targetId, CancellationToken ct)
+    {
+        await ValidateRelationTicketIdAsync(sourceId, ct).ConfigureAwait(false);
+        await ValidateRelationTicketIdAsync(targetId, ct).ConfigureAwait(false);
+        await _pipeline.ExecuteAsync(async token =>
+        {
+            if (!RelationKinds.TryNormalize(relationKind, out var normalizedKind))
+                throw new ArgumentException(
+                    $"invalid relation type '{relationKind}'; valid types: {string.Join(", ", RelationKinds.Allowed)}",
+                    nameof(relationKind));
+
+            var sourceIssue = await FindIssueAsync(ParseSequenceId(sourceId), token).ConfigureAwait(false);
+            var targetIssue = await FindIssueAsync(ParseSequenceId(targetId), token).ConfigureAwait(false);
+
+            try
+            {
+                await PostJsonAsync(
+                    $"{IssuesBase}{sourceIssue.Id}/issue-relation/",
+                    new CreateRelationRequest(normalizedKind, new List<string> { targetIssue.Id }),
+                    PlaneJsonContext.Default,
+                    token).ConfigureAwait(false);
+                _relationsByIssueUuid.TryRemove(sourceIssue.Id, out _);
+                _relationsByIssueUuid.TryRemove(targetIssue.Id, out _);
+            }
+            catch (PlaneApiException ex) when (ex.Status == 404)
+            {
+                throw RelationEndpointUnavailable(ex);
+            }
+        }, ct).ConfigureAwait(false);
+    }
+
+    public async Task RemoveRelationAsync(string sourceId, string relationId, CancellationToken ct)
+    {
+        await ValidateRelationTicketIdAsync(sourceId, ct).ConfigureAwait(false);
+        await _pipeline.ExecuteAsync(async token =>
+        {
+            if (string.IsNullOrWhiteSpace(relationId))
+                throw new ArgumentException("relation id is required", nameof(relationId));
+
+            var sourceIssue = await FindIssueAsync(ParseSequenceId(sourceId), token).ConfigureAwait(false);
+            PlaneRelationList relationList;
+            try
+            {
+                relationList = await GetJsonAsync<PlaneRelationList>(
+                    $"{IssuesBase}{sourceIssue.Id}/issue-relation/", PlaneJsonContext.Default, token).ConfigureAwait(false);
+            }
+            catch (PlaneApiException ex) when (ex.Status == 404)
+            {
+                throw RelationEndpointUnavailable(ex);
+            }
+
+            var edge = (relationList.Results ?? []).FirstOrDefault(r =>
+                string.Equals(r.Id, relationId, StringComparison.OrdinalIgnoreCase));
+            if (edge is null)
+                throw new KeyNotFoundException($"relation '{relationId}' was not found on {sourceId}");
+
+            try
+            {
+                await DeleteAsync($"{IssuesBase}{sourceIssue.Id}/issue-relation/{edge.Id}/", token).ConfigureAwait(false);
+                _relationsByIssueUuid.TryRemove(sourceIssue.Id, out _);
+                if (edge.RelatedIssue is not null)
+                    _relationsByIssueUuid.TryRemove(edge.RelatedIssue.Id, out _);
+            }
+            catch (PlaneApiException ex) when (ex.Status == 404)
+            {
+                throw RelationEndpointUnavailable(ex);
+            }
+        }, ct).ConfigureAwait(false);
+    }
+
+    private static RelationEndpointUnavailableException RelationEndpointUnavailable(PlaneApiException ex) => new(
+        "Plane relation endpoint is unavailable. Upgrade or enable a Plane deployment that supports issue-relation create/list/remove.",
+        ex);
 
     // ------------------------------------------------------------------ rollup helpers
 
