@@ -161,11 +161,14 @@ public class PlanPhase : IWorkflowPhase
         }, ct).ConfigureAwait(false);
 
         var mergedLabels = MergeRiskSizeLabels(ticket.Labels, riskLabel, sizeLabel);
-        await _ticketing.ApplyLabelsAsync(ticketId, mergedLabels, ct).ConfigureAwait(false);
-        await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
+        if (await BestEffortWriteAsync(ticketId, "apply_plan_labels",
+                () => _ticketing.ApplyLabelsAsync(ticketId, mergedLabels, ct), ct).ConfigureAwait(false))
         {
-            ["action"] = "apply_labels"
-        }, ct).ConfigureAwait(false);
+            await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
+            {
+                ["action"] = "apply_labels"
+            }, ct).ConfigureAwait(false);
+        }
 
         await _ticketing.CreateCommentAsync(ticketId, $"<p>[planned_at: {plannedAtSha}]</p>", ct).ConfigureAwait(false);
         await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
@@ -208,6 +211,11 @@ public class PlanPhase : IWorkflowPhase
             data), ct).ConfigureAwait(false);
     }
 
+    private Task<bool> BestEffortWriteAsync(
+        string ticketId, string operation, Func<Task> write, CancellationToken ct) =>
+        TicketingWritePolicy.BestEffortAsync(
+            _events, _options.SessionId, ticketId, Phase.Plan, operation, write, ct);
+
 
     private static IReadOnlyList<string> MergeRiskSizeLabels(
         IReadOnlyList<string> existing, string riskLabel, string sizeLabel)
@@ -228,11 +236,14 @@ public class PlanPhase : IWorkflowPhase
         var riskLabel = ticket.Risk.ToString().ToLowerInvariant();
         var sizeLabel = ticket.Size.ToString();
         var mergedLabels = MergeRiskSizeLabels(ticket.Labels, riskLabel, sizeLabel);
-        await _ticketing.ApplyLabelsAsync(ticketId, mergedLabels, ct).ConfigureAwait(false);
-        await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
+        if (await BestEffortWriteAsync(ticketId, "apply_plan_labels",
+                () => _ticketing.ApplyLabelsAsync(ticketId, mergedLabels, ct), ct).ConfigureAwait(false))
         {
-            ["action"] = "apply_labels"
-        }, ct).ConfigureAwait(false);
+            await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
+            {
+                ["action"] = "apply_labels"
+            }, ct).ConfigureAwait(false);
+        }
 
         await _ticketing.CreateCommentAsync(ticketId, $"<p>[planned_at: {mainSha}]</p>", ct).ConfigureAwait(false);
         await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>

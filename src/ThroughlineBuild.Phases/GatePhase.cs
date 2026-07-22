@@ -152,13 +152,10 @@ public class GatePhase
                 ["checks_failed"] = failedSetupNames
             }, ct).ConfigureAwait(false);
             await TransitionInReviewToInProgressAsync(ticketId, ct).ConfigureAwait(false);
-            try
-            {
-                var escapedNames = WebUtility.HtmlEncode(string.Join(", ", failedSetupNames));
-                var commentHtml = $"<p>[gate: hard-fail] setup step(s) failed before checks could run: {escapedNames}</p>";
-                await _ticketing.CreateCommentAsync(ticketId, commentHtml, ct).ConfigureAwait(false);
-            }
-            catch { /* non-fatal: comment failure must not block the rework loop */ }
+            var escapedSetupNames = WebUtility.HtmlEncode(string.Join(", ", failedSetupNames));
+            var setupCommentHtml = $"<p>[gate: hard-fail] setup step(s) failed before checks could run: {escapedSetupNames}</p>";
+            await PostInformationalCommentAsync(
+                ticketId, "gate_setup_failure_comment", setupCommentHtml, ct).ConfigureAwait(false);
             return new GateOutcome(false, checkResults, smokeSignals.AsReadOnly(),
                 $"gate: setup step(s) failed: {string.Join(", ", failedSetupNames)}");
         }
@@ -237,15 +234,12 @@ public class GatePhase
                         ["base_sha"] = control.BaseSha ?? "",
                         ["evidence"] = evidence
                     }, ct).ConfigureAwait(false);
-                    try
-                    {
-                        var escapedNames = WebUtility.HtmlEncode(string.Join(", ", envFailedNames));
-                        var commentHtml = "<p>[gate: environment failure] gating checks failed on the ticket " +
-                            $"worktree AND on the untouched base ref: {escapedNames}. Chain stopped without " +
-                            "spending rework rounds; fix the environment or the check config and re-run.</p>";
-                        await _ticketing.CreateCommentAsync(ticketId, commentHtml, ct).ConfigureAwait(false);
-                    }
-                    catch { /* non-fatal: comment failure must not block the stop */ }
+                    var escapedNames = WebUtility.HtmlEncode(string.Join(", ", envFailedNames));
+                    var commentHtml = "<p>[gate: environment failure] gating checks failed on the ticket " +
+                        $"worktree AND on the untouched base ref: {escapedNames}. Chain stopped without " +
+                        "spending rework rounds; fix the environment or the check config and re-run.</p>";
+                    await PostInformationalCommentAsync(
+                        ticketId, "gate_environment_failure_comment", commentHtml, ct).ConfigureAwait(false);
 
                     // Environment defect: hard-fail WITHOUT rework and leave the ticket InReview
                     // (no InProgress transition) so a re-run after the fix resumes cleanly.
@@ -264,13 +258,10 @@ public class GatePhase
                 ["checks_failed"] = failedNames
             }, ct).ConfigureAwait(false);
             await TransitionInReviewToInProgressAsync(ticketId, ct).ConfigureAwait(false);
-            try
-            {
-                var escapedNames = WebUtility.HtmlEncode(string.Join(", ", failedNames));
-                var commentHtml = $"<p>[gate: hard-fail] gating checks failed: {escapedNames}</p>";
-                await _ticketing.CreateCommentAsync(ticketId, commentHtml, ct).ConfigureAwait(false);
-            }
-            catch { /* non-fatal: comment failure must not block the rework loop */ }
+            var escapedNames = WebUtility.HtmlEncode(string.Join(", ", failedNames));
+            var commentHtml = $"<p>[gate: hard-fail] gating checks failed: {escapedNames}</p>";
+            await PostInformationalCommentAsync(
+                ticketId, "gate_failure_comment", commentHtml, ct).ConfigureAwait(false);
             return new GateOutcome(false, checkResults, smokeSignals.AsReadOnly(),
                 $"gate: {string.Join(", ", failedNames)} failed");
         }
@@ -392,4 +383,10 @@ public class GatePhase
             Phase.Gate,
             data), ct).ConfigureAwait(false);
     }
+
+    private Task<bool> PostInformationalCommentAsync(
+        string ticketId, string operation, string html, CancellationToken ct) =>
+        TicketingWritePolicy.BestEffortAsync(
+            _events, _options.SessionId, ticketId, Phase.Gate, operation,
+            () => _ticketing.CreateCommentAsync(ticketId, html, ct), ct);
 }

@@ -587,35 +587,8 @@ public class ChainPhase
     private async Task BestEffortTicketWriteAsync(
         string sessionId, string ticketId, string operation, Func<Task> write, CancellationToken ct)
     {
-        try
-        {
-            await write().ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine(
-                $"[{ticketId}] warning: ticketing write '{operation}' failed ({ex.Message}); continuing");
-            try
-            {
-                await _events.EmitAsync(new WorkflowEvent(
-                    SessionId: sessionId,
-                    Timestamp: DateTimeOffset.UtcNow,
-                    Kind: EventKind.TicketWrite,
-                    TicketId: ticketId,
-                    Phase: Phase.Chain,
-                    Data: new Dictionary<string, object>
-                    {
-                        ["action"] = "ticketing_write_failed",
-                        ["operation"] = operation,
-                        ["error"] = ex.Message
-                    }), ct).ConfigureAwait(false);
-            }
-            catch { /* the event log must never abort the run either */ }
-        }
+        await TicketingWritePolicy.BestEffortAsync(
+            _events, sessionId, ticketId, Phase.Chain, operation, write, ct).ConfigureAwait(false);
     }
 
     private async Task<(ChainResult? abort, IReadOnlyList<string>? successProvides)> RunImplementReviewLoopAsync(
@@ -1317,6 +1290,25 @@ public class ChainPhase
         string BranchName,
         string BaseRef);
 
+    private sealed class BatchTicketingUnavailableException(
+        string ticketId, TicketingUnavailableException innerException) : Exception(innerException.Message, innerException)
+    {
+        public string TicketId { get; } = ticketId;
+        public TicketingUnavailableException TicketingException { get; } = innerException;
+    }
+
+    private static async Task RunBatchStateWriteAsync(string ticketId, Func<Task> write)
+    {
+        try
+        {
+            await write().ConfigureAwait(false);
+        }
+        catch (TicketingUnavailableException ex)
+        {
+            throw new BatchTicketingUnavailableException(ticketId, ex);
+        }
+    }
+
     /// <summary>
     /// Runs a single implement session for all tickets in the batch group, then returns one
     /// <see cref="ChainResult"/> per ticket with outcome <see cref="ChainOutcome.BatchImplemented"/>.
@@ -1329,6 +1321,43 @@ public class ChainPhase
         string sharedWorktreePath,
         string baseRef,
         string? chainStartSha,
+        CancellationToken ct)
+    {
+        var activeTicketId = batchTickets[0].Id;
+        var classifySw = Stopwatch.StartNew();
+        try
+        {
+            return await RunBatchImplementSessionCoreAsync(
+                options, batchTickets, sharedWorktreePath, baseRef, chainStartSha,
+                id => activeTicketId = id, ct).ConfigureAwait(false);
+        }
+        catch (BatchTicketingUnavailableException ex)
+        {
+            classifySw.Stop();
+            activeTicketId = ex.TicketId;
+            var results = new List<ChainResult>(batchTickets.Count)
+            {
+                new(activeTicketId, Array.Empty<ChainStep>(), ChainOutcome.TicketingUnavailable,
+                    classifySw.Elapsed, ex.TicketingException.Message)
+            };
+            results.AddRange(batchTickets
+                .Where(t => !string.Equals(t.Id, activeTicketId, StringComparison.Ordinal))
+                .Select(t => new ChainResult(
+                    t.Id, Array.Empty<ChainStep>(), ChainOutcome.Skipped, TimeSpan.Zero, null,
+                    SkipReason: $"ticketing backend unreachable while updating {activeTicketId}; restore connectivity and re-run")));
+            return new BatchImplementOutcome(
+                results.AsReadOnly(), null,
+                PhaseWorktreeLayout.BranchName(batchTickets[0].Id), baseRef);
+        }
+    }
+
+    private async Task<BatchImplementOutcome> RunBatchImplementSessionCoreAsync(
+        ChainPhaseOptions options,
+        IReadOnlyList<Ticket> batchTickets,
+        string sharedWorktreePath,
+        string baseRef,
+        string? chainStartSha,
+        Action<string> setActiveTicket,
         CancellationToken ct)
     {
         var batchSw = Stopwatch.StartNew();
@@ -1351,12 +1380,9 @@ public class ChainPhase
         // Transition all batch tickets Ready -> InProgress to mark that work has started.
         foreach (var ticket in batchTickets)
         {
-            try
-            {
-                await _ticketing.TransitionAsync(ticket.Id, TicketState.InProgress, ct)
-                    .ConfigureAwait(false);
-            }
-            catch { /* non-fatal: transition failure must not block the batch session */ }
+            setActiveTicket(ticket.Id);
+            await RunBatchStateWriteAsync(ticket.Id,
+                () => _ticketing.TransitionAsync(ticket.Id, TicketState.InProgress, ct)).ConfigureAwait(false);
         }
 
         // Build the chain commit range for the brief (best-effort; null is safe).
@@ -1452,6 +1478,7 @@ public class ChainPhase
                         var batchTicket = batchTickets.FirstOrDefault(
                             t => string.Equals(t.Id, confirmedTicket.TicketId, StringComparison.Ordinal));
                         if (batchTicket is null) continue;
+                        setActiveTicket(batchTicket.Id);
 
                         string summaryHtml = "";
                         if (workerResult.Blocks is not null &&
@@ -1465,11 +1492,10 @@ public class ChainPhase
                         var markerHtml =
                             $"<p>[implemented_at: {confirmedTicket.CommitSha}] (branch {batchBranchName})" +
                             $" (batch: stack_position={confirmedTicket.StackPosition})</p>{summaryHtml}";
-                        await BestEffortTicketWriteAsync(batchSessionId, batchTicket.Id, "batch_implemented_marker",
-                            () => _ticketing.CreateCommentAsync(batchTicket.Id, markerHtml, ct), ct).ConfigureAwait(false);
-
-                        await BestEffortTicketWriteAsync(batchSessionId, batchTicket.Id, "batch_transition_in_review",
-                            () => _ticketing.TransitionAsync(batchTicket.Id, TicketState.InReview, ct), ct).ConfigureAwait(false);
+                        await RunBatchStateWriteAsync(batchTicket.Id,
+                            () => _ticketing.CreateCommentAsync(batchTicket.Id, markerHtml, ct)).ConfigureAwait(false);
+                        await RunBatchStateWriteAsync(batchTicket.Id,
+                            () => _ticketing.TransitionAsync(batchTicket.Id, TicketState.InReview, ct)).ConfigureAwait(false);
                     }
 
                     // Post failure reason to the first incomplete ticket so the operator
@@ -1587,6 +1613,7 @@ public class ChainPhase
         for (int i = 0; i < batchTickets.Count; i++)
         {
             var ticket = batchTickets[i];
+            setActiveTicket(ticket.Id);
             var perTicket = perTicketResults.FirstOrDefault(
                 r => string.Equals(r.TicketId, ticket.Id, StringComparison.Ordinal));
 
@@ -1624,14 +1651,13 @@ public class ChainPhase
             var commentHtml =
                 $"<p>[implemented_at: {perTicket.CommitSha}] (branch {batchBranchName})" +
                 $" (batch: stack_position={perTicket.StackPosition})</p>{summaryHtml}";
-            // Marker posting failure must not block the batch result.
-            await BestEffortTicketWriteAsync(batchSessionId, ticket.Id, "batch_implemented_marker",
-                () => _ticketing.CreateCommentAsync(ticket.Id, commentHtml, ct), ct).ConfigureAwait(false);
+            await RunBatchStateWriteAsync(ticket.Id,
+                () => _ticketing.CreateCommentAsync(ticket.Id, commentHtml, ct)).ConfigureAwait(false);
 
             // Transition InProgress -> InReview to match single-ticket run observable state;
-            // its failure must not block the batch result either.
-            await BestEffortTicketWriteAsync(batchSessionId, ticket.Id, "batch_transition_in_review",
-                () => _ticketing.TransitionAsync(ticket.Id, TicketState.InReview, ct), ct).ConfigureAwait(false);
+            // both this state and the marker above are resume-oracle writes and stay hard.
+            await RunBatchStateWriteAsync(ticket.Id,
+                () => _ticketing.TransitionAsync(ticket.Id, TicketState.InReview, ct)).ConfigureAwait(false);
 
             var implStep = new ChainStep(
                 PhaseName: "batch-implement",
@@ -2040,12 +2066,8 @@ public class ChainPhase
         // Transition the affected ticket InReview -> InProgress so ImplementPhase's
         // state check passes. ImplementPhase will transition it back to InReview after
         // adding the rework commit and posting a new [implemented_at:] marker.
-        try
-        {
-            await _ticketing.TransitionAsync(targetTicketId, TicketState.InProgress, ct)
-                .ConfigureAwait(false);
-        }
-        catch { /* non-fatal: ImplementPhase will surface the wrong-state error if needed */ }
+        await RunBatchStateWriteAsync(targetTicketId,
+            () => _ticketing.TransitionAsync(targetTicketId, TicketState.InProgress, ct)).ConfigureAwait(false);
 
         var sessionId = _sessionIdGenerator();
         var buildOpts = BuildPhaseOptions(sessionId, targetTicketId, "batch-rework-localized");
@@ -2053,8 +2075,16 @@ public class ChainPhase
             ReviewFeedback: feedback,
             SharedWorktreePath: sharedWorktreePath);
         var implPhase = _implementFactory(buildOpts, implPhaseOpts);
-        var implResult = await implPhase.RunAsync(targetTicketId, _workingDirectory, ct)
-            .ConfigureAwait(false);
+        ImplementResult implResult;
+        try
+        {
+            implResult = await implPhase.RunAsync(targetTicketId, _workingDirectory, ct)
+                .ConfigureAwait(false);
+        }
+        catch (TicketingUnavailableException ex)
+        {
+            throw new BatchTicketingUnavailableException(targetTicketId, ex);
+        }
         return implResult.Success;
     }
 
@@ -2075,14 +2105,8 @@ public class ChainPhase
     {
         // Transition all tickets InReview -> InProgress for the rework session.
         foreach (var ticket in batchTickets)
-        {
-            try
-            {
-                await _ticketing.TransitionAsync(ticket.Id, TicketState.InProgress, ct)
-                    .ConfigureAwait(false);
-            }
-            catch { /* non-fatal */ }
-        }
+            await RunBatchStateWriteAsync(ticket.Id,
+                () => _ticketing.TransitionAsync(ticket.Id, TicketState.InProgress, ct)).ConfigureAwait(false);
 
         // Build chain commit range for context (best-effort).
         ChainCommitRange? batchCommitRange = null;
@@ -2160,10 +2184,10 @@ public class ChainPhase
             var markerHtml =
                 $"<p>[implemented_at: {confirmed.CommitSha}] (branch {batchBranchName})" +
                 $" (batch-rework: stack_position={confirmed.StackPosition})</p>";
-            await BestEffortTicketWriteAsync(reworkSessionId, confirmed.TicketId, "batch_rework_marker",
-                () => _ticketing.CreateCommentAsync(confirmed.TicketId, markerHtml, ct), ct).ConfigureAwait(false);
-            await BestEffortTicketWriteAsync(reworkSessionId, confirmed.TicketId, "batch_transition_in_review",
-                () => _ticketing.TransitionAsync(confirmed.TicketId, TicketState.InReview, ct), ct).ConfigureAwait(false);
+            await RunBatchStateWriteAsync(confirmed.TicketId,
+                () => _ticketing.CreateCommentAsync(confirmed.TicketId, markerHtml, ct)).ConfigureAwait(false);
+            await RunBatchStateWriteAsync(confirmed.TicketId,
+                () => _ticketing.TransitionAsync(confirmed.TicketId, TicketState.InReview, ct)).ConfigureAwait(false);
         }
 
         return verifyResult.ConfirmedTickets;
@@ -2413,14 +2437,17 @@ public class ChainPhase
                             options, batchTickets, sharedWorktreePath, integrationBranch, chainStartSha, ct)
                             .ConfigureAwait(false);
 
-                        foreach (var br in batchOutcome.Results)
+                        allChildResults.AddRange(batchOutcome.Results);
+                        var batchFailure = batchOutcome.Results.FirstOrDefault(
+                            br => !IsChainSuccess(br.Outcome) && br.Outcome != ChainOutcome.Skipped);
+                        if (batchFailure is not null)
                         {
-                            allChildResults.Add(br);
-                            if (!IsChainSuccess(br.Outcome))
-                            {
-                                anyStoppedEarly = true;
-                                break;
-                            }
+                            anyStoppedEarly = true;
+                            environmentFailureDetected = batchFailure.ContainsEnvironmentalStop();
+                            if (environmentFailureDetected)
+                                environmentSkipReason = batchFailure.ContainsTicketingUnavailable()
+                                    ? "ticketing backend unreachable while running a sibling; restore connectivity and re-run the chain"
+                                    : "environment gate failure in a sibling; fix the environment once and re-run the chain";
                         }
 
                         if (!anyStoppedEarly
@@ -2428,32 +2455,44 @@ public class ChainPhase
                             && batchOutcome.ConfirmedTickets is not null
                             && batchOutcome.ConfirmedTickets.Count > 0)
                         {
-                            var batchReviewPassed = await RunBatchReviewAndReworkAsync(
-                                batchTickets,
-                                batchOutcome.ConfirmedTickets,
-                                batchOutcome.BranchName,
-                                batchOutcome.BaseRef,
-                                sharedWorktreePath,
-                                chainStartSha,
-                                ct).ConfigureAwait(false);
+                            try
+                            {
+                                var batchReviewPassed = await RunBatchReviewAndReworkAsync(
+                                    batchTickets,
+                                    batchOutcome.ConfirmedTickets,
+                                    batchOutcome.BranchName,
+                                    batchOutcome.BaseRef,
+                                    sharedWorktreePath,
+                                    chainStartSha,
+                                    ct).ConfigureAwait(false);
 
-                            if (!batchReviewPassed)
-                            {
-                                anyStoppedEarly = true;
-                            }
-                            else
-                            {
-                                // Ship the reviewed batch stack into the integration branch: advance
-                                // chain/<parent> to the batch tip and mark each ticket Done. The root
-                                // landing then carries it to the target, exactly like a leaf ship.
-                                var shipReason = await ShipBatchStackAsync(
-                                    batchTickets, batchOutcome.BranchName, integrationBranch,
-                                    sharedWorktreePath, ct).ConfigureAwait(false);
-                                if (shipReason is not null)
+                                if (!batchReviewPassed)
                                 {
-                                    Console.Error.WriteLine($"[{parentTicket.Id}] batch ship failed: {shipReason}");
                                     anyStoppedEarly = true;
                                 }
+                                else
+                                {
+                                    // Ship the reviewed batch stack into the integration branch: advance
+                                    // chain/<parent> to the batch tip and mark each ticket Done. The root
+                                    // landing then carries it to the target, exactly like a leaf ship.
+                                    var shipReason = await ShipBatchStackAsync(
+                                        batchTickets, batchOutcome.BranchName, integrationBranch,
+                                        sharedWorktreePath, ct).ConfigureAwait(false);
+                                    if (shipReason is not null)
+                                    {
+                                        Console.Error.WriteLine($"[{parentTicket.Id}] batch ship failed: {shipReason}");
+                                        anyStoppedEarly = true;
+                                    }
+                                }
+                            }
+                            catch (BatchTicketingUnavailableException ex)
+                            {
+                                RecordBatchTicketingUnavailable(
+                                    allChildResults, batchTickets, ex.TicketId, ex.TicketingException);
+                                anyStoppedEarly = true;
+                                environmentFailureDetected = true;
+                                environmentSkipReason =
+                                    "ticketing backend unreachable while running a sibling; restore connectivity and re-run the chain";
                             }
                         }
                     }
@@ -2749,13 +2788,13 @@ public class ChainPhase
 
         foreach (var ticket in batchTickets)
         {
-            // The batch is already merged at this point, so neither the marker post nor the
-            // Done transition may unwind the ship.
-            await BestEffortTicketWriteAsync(_sessionIdGenerator(), ticket.Id, "batch_shipped_marker",
+            // The merge is already committed, so these hard writes are safely resumable. Do not
+            // report a shipped ticket while its marker or Done state is missing.
+            await RunBatchStateWriteAsync(ticket.Id,
                 () => _ticketing.CreateCommentAsync(ticket.Id,
-                    $"<p>[shipped_at: {shippedSha}] (batch into {integrationBranch})</p>", ct), ct).ConfigureAwait(false);
-            await BestEffortTicketWriteAsync(_sessionIdGenerator(), ticket.Id, "batch_transition_done",
-                () => _ticketing.TransitionAsync(ticket.Id, TicketState.Done, ct), ct).ConfigureAwait(false);
+                    $"<p>[shipped_at: {shippedSha}] (batch into {integrationBranch})</p>", ct)).ConfigureAwait(false);
+            await RunBatchStateWriteAsync(ticket.Id,
+                () => _ticketing.TransitionAsync(ticket.Id, TicketState.Done, ct)).ConfigureAwait(false);
             await _events.EmitAsync(new WorkflowEvent(
                 SessionId: _sessionIdGenerator(),
                 Timestamp: DateTimeOffset.UtcNow,
@@ -3260,6 +3299,24 @@ public class ChainPhase
             or ChainOutcome.RatifiedObsolete
             or ChainOutcome.ParentCompleted
             or ChainOutcome.BatchImplemented;
+
+    private static void RecordBatchTicketingUnavailable(
+        List<ChainResult> results,
+        IReadOnlyList<Ticket> batchTickets,
+        string failedTicketId,
+        TicketingUnavailableException exception)
+    {
+        var batchIds = new HashSet<string>(batchTickets.Select(t => t.Id), StringComparer.Ordinal);
+        results.RemoveAll(r => batchIds.Contains(r.TicketId));
+        results.Add(new ChainResult(
+            failedTicketId, Array.Empty<ChainStep>(), ChainOutcome.TicketingUnavailable,
+            TimeSpan.Zero, exception.Message));
+        results.AddRange(batchTickets
+            .Where(t => !string.Equals(t.Id, failedTicketId, StringComparison.Ordinal))
+            .Select(t => new ChainResult(
+                t.Id, Array.Empty<ChainStep>(), ChainOutcome.Skipped, TimeSpan.Zero, null,
+                SkipReason: $"ticketing backend unreachable while updating {failedTicketId}; restore connectivity and re-run")));
+    }
 
     // Success-only sweep of this chain's worktrees. Reuses the stack-agnostic WorktreeDecrufter
     // (git + filesystem only). Branch-prefix filtering (ticket/, chain/) is safer than nuking

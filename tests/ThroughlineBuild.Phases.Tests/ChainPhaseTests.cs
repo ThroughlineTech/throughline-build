@@ -211,6 +211,87 @@ public class ChainPhaseTests
         Assert.Contains("unreachable", result.FinalRationale);
     }
 
+    [Fact]
+    public async Task RunAsync_PersistentReviewCommentFailure_LogsAndCompletesChain()
+    {
+        var unavailable = new TicketingUnavailableException(
+            "Plane API unreachable while posting review comment",
+            new HttpRequestException("dns failure"));
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog))
+        {
+            FailCommentWhen = html => html.Contains("<strong>reviewed:</strong> pass", StringComparison.Ordinal),
+            FailCommentWith = unavailable
+        };
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        var events = new FakeEventSinkChain();
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, eventSink: events);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+        Assert.Contains(ticketing.Transitions, t => t.state == TicketState.Done);
+        Assert.Contains(events.Events, e =>
+            e.Kind == EventKind.TicketWrite
+            && e.Phase == Phase.Review
+            && e.Data.TryGetValue("action", out var action)
+            && Equals(action, "ticketing_write_failed")
+            && e.Data.TryGetValue("operation", out var operation)
+            && Equals(operation, "review_pass_comment"));
+    }
+
+    [Fact]
+    public async Task RunAsync_PersistentPlanLabelFailure_LogsAndCompletesChain()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog))
+        {
+            FailApplyLabelsWith = new TicketingUnavailableException(
+                "Plane API unreachable while applying labels",
+                new HttpRequestException("dns failure"))
+        };
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var verifiers = new Queue<IVerifier>();
+        verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
+        var events = new FakeEventSinkChain();
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, eventSink: events);
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.Completed, result.Outcome);
+        Assert.Contains(events.Events, e =>
+            e.Kind == EventKind.TicketWrite
+            && e.Phase == Phase.Plan
+            && e.Data.TryGetValue("action", out var action)
+            && Equals(action, "ticketing_write_failed")
+            && e.Data.TryGetValue("operation", out var operation)
+            && Equals(operation, "apply_plan_labels"));
+    }
+
+    [Fact]
+    public async Task RunAsync_PostCommitInReviewTransitionFailure_IsResumableTicketingStop()
+    {
+        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog))
+        {
+            FailTransitionTo = TicketState.InReview,
+            FailTransitionWith = new TicketingUnavailableException(
+                "Plane API unreachable while transitioning to InReview",
+                new HttpRequestException("dns failure"))
+        };
+        var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+
+        var chain = BuildChain(ticketing, planWorker, implWorker, new Queue<IVerifier>());
+        var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.TicketingUnavailable, result.Outcome);
+        Assert.Contains(ticketing.PostedComments, c => c.html.Contains("[implemented_at:", StringComparison.Ordinal));
+        Assert.Contains(ticketing.Transitions, t => t.state == TicketState.InReview);
+        Assert.DoesNotContain(ticketing.Transitions, t => t.state == TicketState.Done);
+    }
+
     // AC: "The gate runs after implement and before review for each chain ticket"
     [Fact]
     public async Task RunAsync_WithGateFactory_GateStepIsInsertedBetweenImplementAndReview()
@@ -1153,6 +1234,11 @@ public class ChainPhaseTests
         // TLB-545: when set, GetAsync throws this - simulates the ticketing backend being
         // unreachable after the client layer exhausted its transport retries.
         public Exception? FailGetWith { get; set; }
+        public Func<string, bool>? FailCommentWhen { get; set; }
+        public Exception? FailCommentWith { get; set; }
+        public TicketState? FailTransitionTo { get; set; }
+        public Exception? FailTransitionWith { get; set; }
+        public Exception? FailApplyLabelsWith { get; set; }
 
         public void SeedComment(string html) =>
             _seededComments.Add(new TicketComment(Guid.NewGuid().ToString(), html, DateTimeOffset.UtcNow));
@@ -1192,6 +1278,8 @@ public class ChainPhaseTests
         public Task TransitionAsync(string id, TicketState newState, CancellationToken ct)
         {
             Transitions.Add((id, newState));
+            if (FailTransitionTo == newState && FailTransitionWith is not null)
+                throw FailTransitionWith;
             if (_extraTickets.TryGetValue(id, out var extra))
             {
                 var updated = extra with { State = newState };
@@ -1221,11 +1309,14 @@ public class ChainPhaseTests
         public Task<string> CreateCommentAsync(string id, string html, CancellationToken ct)
         {
             PostedComments.Add((id, html));
+            if (FailCommentWith is not null && FailCommentWhen?.Invoke(html) == true)
+                throw FailCommentWith;
             _seededComments.Add(new TicketComment(Guid.NewGuid().ToString(), html, DateTimeOffset.UtcNow));
             return Task.FromResult("comment-id");
         }
 
-        public Task ApplyLabelsAsync(string id, IEnumerable<string> labels, CancellationToken ct) => Task.CompletedTask;
+        public Task ApplyLabelsAsync(string id, IEnumerable<string> labels, CancellationToken ct) =>
+            FailApplyLabelsWith is not null ? Task.FromException(FailApplyLabelsWith) : Task.CompletedTask;
 
         public Task<IReadOnlyList<Relation>> GetRelationsAsync(string id, CancellationToken ct)
         {
@@ -2683,6 +2774,54 @@ public class ChainPhaseTests
         // The reviewed batch stack is shipped: a shipped_at marker is posted for each ticket.
         Assert.Contains(ticketing.PostedComments, c => c.id == "TLB-2" && c.html.Contains("[shipped_at:"));
         Assert.Contains(ticketing.PostedComments, c => c.id == "TLB-3" && c.html.Contains("[shipped_at:"));
+    }
+
+    [Fact]
+    public async Task RunAsync_BatchGroup_StateTransitionUnavailable_DoesNotReportBatchSuccess()
+    {
+        var parent = MakeTicket(TicketState.Backlog);
+        var child1 = MakeChildTicket("TLB-2", "child-uuid-1", TicketState.Ready);
+        var child2 = MakeChildTicket("TLB-3", "child-uuid-2", TicketState.Ready);
+        var ticketing = new ChainFakeTicketing(parent)
+        {
+            FailTransitionTo = TicketState.InProgress,
+            FailTransitionWith = new TicketingUnavailableException(
+                "Plane API unreachable while starting batch ticket",
+                new HttpRequestException("dns failure"))
+        };
+        ticketing.SeedChildren("ticket-uuid-1", new[] { child1, child2 });
+
+        var batchWorker = new BatchFakeWorkerAgent(tickets: new[]
+        {
+            new BatchTicketResult("TLB-2", "aaa000", 0, Array.Empty<string>(), "SUMMARY_2"),
+            new BatchTicketResult("TLB-3", "bbb111", 1, Array.Empty<string>(), "SUMMARY_3")
+        });
+        var git = new FakeGitClientChain { LogShasResult = new[] { "bbb111", "aaa000" } };
+        var chain = BuildChain(
+            ticketing,
+            new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks),
+            new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks),
+            new Queue<IVerifier>(),
+            batchWorker: batchWorker,
+            git: git,
+            forwardGitToChain: true);
+
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false,
+                BatchImplementGroup: new ChainBatchImplementGroup.ExplicitList(new[] { "TLB-2", "TLB-3" })),
+            CancellationToken.None);
+
+        Assert.Equal(ChainOutcome.ParentStoppedEarly, result.Outcome);
+        Assert.Equal(0, batchWorker.CallCount);
+        Assert.Contains(("TLB-2", TicketState.InProgress), ticketing.Transitions);
+        Assert.DoesNotContain(ticketing.Transitions, t => t.state == TicketState.InReview);
+        Assert.Empty(ticketing.PostedComments.Where(c => c.html.Contains("[implemented_at:", StringComparison.Ordinal)));
+        Assert.NotNull(result.ChildResults);
+        var unavailable = Assert.Single(result.ChildResults!, r => r.Outcome == ChainOutcome.TicketingUnavailable);
+        Assert.Equal("TLB-2", unavailable.TicketId);
+        var skipped = Assert.Single(result.ChildResults!, r => r.Outcome == ChainOutcome.Skipped);
+        Assert.Equal("TLB-3", skipped.TicketId);
+        Assert.Contains("ticketing backend unreachable", skipped.SkipReason);
     }
 
     // AC3: when no BatchImplementGroup is declared the batch worker is never called;

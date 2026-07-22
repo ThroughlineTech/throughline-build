@@ -98,6 +98,19 @@ public class ChainExitCodeMapperTests
         Assert.Equal(11, ChainExitCodeMapper.GetExitCode(dispatchResult));
     }
 
+    [Fact]
+    public void ParentWithTicketingUnavailableChild_MapsToDedicatedExitCode()
+    {
+        var child = new ChainResult(
+            "TLB-2", Array.Empty<ChainStep>(), ChainOutcome.TicketingUnavailable,
+            TimeSpan.Zero, "backend unavailable");
+        var parent = new ChainResult(
+            "TLB-1", Array.Empty<ChainStep>(), ChainOutcome.ParentStoppedEarly,
+            TimeSpan.Zero, "child stopped", ChildResults: new[] { child });
+
+        Assert.Equal(11, ChainExitCodeMapper.GetExitCode(parent));
+    }
+
     private static ChainResult MakeDirtyResult(string ticketId) => new(
         TicketId: ticketId,
         Steps: Array.Empty<ChainStep>(),

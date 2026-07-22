@@ -4,6 +4,11 @@ namespace ThroughlineBuild.Cli;
 
 public static class ChainExitCodeMapper
 {
+    public static int GetExitCode(ChainResult result) =>
+        result.ContainsTicketingUnavailable() ? GetExitCode(ChainOutcome.TicketingUnavailable)
+        : result.ContainsEnvironmentFailure() ? GetExitCode(ChainOutcome.GateEnvironmentFailure)
+        : GetExitCode(result.Outcome);
+
     public static int GetExitCode(ParallelDispatchResult result) => result.Success
         ? 0
         : result.PreservedOutcome is { } outcome

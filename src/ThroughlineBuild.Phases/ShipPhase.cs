@@ -193,7 +193,7 @@ public class ShipPhase : IWorkflowPhase
             var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
             if (exeFull.StartsWith(wtFull, cmp))
             {
-                await _ticketing.CreateCommentAsync(ticketId,
+                await PostInformationalCommentAsync(ticketId, "ship_executable_location_blocked_comment",
                     $"<p><strong>ship_blocked:</strong> build.exe is running from inside the worktree being rebased ({exePath}); copy the binary to a location outside the worktree and re-run from there</p>", ct).ConfigureAwait(false);
                 await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
                 {
@@ -211,7 +211,7 @@ public class ShipPhase : IWorkflowPhase
         if (hygieneDetail is not null)
         {
             var hygieneMessage = $"working tree is not clean: {hygieneDetail}";
-            await _ticketing.CreateCommentAsync(ticketId,
+            await PostInformationalCommentAsync(ticketId, "ship_hygiene_blocked_comment",
                 $"<p><strong>ship_blocked:</strong> {hygieneMessage}</p>", ct).ConfigureAwait(false);
             await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
             {
@@ -235,7 +235,7 @@ public class ShipPhase : IWorkflowPhase
             var dirtyPaths = new List<string>();
             if (featureChanges.Count > 0) dirtyPaths.Add(canonicalWorktreePath);
             if (mainChanges.Count > 0) dirtyPaths.Add(workingDirectory);
-            await _ticketing.CreateCommentAsync(ticketId,
+            await PostInformationalCommentAsync(ticketId, "ship_dirty_tree_blocked_comment",
                 $"<p><strong>ship_blocked:</strong> uncommitted tracked changes in: {string.Join(", ", dirtyPaths)}</p>", ct).ConfigureAwait(false);
             await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
             {
@@ -265,7 +265,7 @@ public class ShipPhase : IWorkflowPhase
             var currentBranch = await _git.CurrentBranchAsync(workingDirectory, ct).ConfigureAwait(false);
             if (!string.Equals(currentBranch, targetBranch, StringComparison.Ordinal))
             {
-                await _ticketing.CreateCommentAsync(ticketId,
+                await PostInformationalCommentAsync(ticketId, "ship_wrong_branch_blocked_comment",
                     $"<p><strong>ship_blocked:</strong> main worktree is on '{currentBranch}' (or detached); must be on '{targetBranch}' before shipping</p>", ct).ConfigureAwait(false);
                 await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
                 {
@@ -394,7 +394,7 @@ public class ShipPhase : IWorkflowPhase
                             ["local_commits_replayed"] = replayedShas,
                             ["outcome"] = "raced_to_conflict"
                         }, ct).ConfigureAwait(false);
-                        await _ticketing.CreateCommentAsync(ticketId,
+                        await PostInformationalCommentAsync(ticketId, "ship_divergence_blocked_comment",
                             $"<p><strong>ship_blocked:</strong> local {localRef} and {remoteRef} have diverged; manual resolution required</p>", ct).ConfigureAwait(false);
                         await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
                         {
@@ -409,7 +409,7 @@ public class ShipPhase : IWorkflowPhase
                 }
                 else
                 {
-                    await _ticketing.CreateCommentAsync(ticketId,
+                    await PostInformationalCommentAsync(ticketId, "ship_divergence_blocked_comment",
                         $"<p><strong>ship_blocked:</strong> local {localRef} and {remoteRef} have diverged; manual resolution required</p>", ct).ConfigureAwait(false);
                     await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
                     {
@@ -442,7 +442,7 @@ public class ShipPhase : IWorkflowPhase
         {
             await _git.RebaseAbortAsync(canonicalWorktreePath, ct).ConfigureAwait(false);
             var paths = string.Join(", ", rebaseResult.ConflictingPaths);
-            await _ticketing.CreateCommentAsync(ticketId,
+            await PostInformationalCommentAsync(ticketId, "ship_rebase_conflict_comment",
                 $"<p><strong>ship_blocked:</strong> rebase conflicts in: {paths}</p>", ct).ConfigureAwait(false);
             await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
             {
@@ -455,7 +455,7 @@ public class ShipPhase : IWorkflowPhase
         if (!rebaseResult.Success)
         {
             var reason = rebaseResult.FailureReason ?? "unknown";
-            await _ticketing.CreateCommentAsync(ticketId,
+            await PostInformationalCommentAsync(ticketId, "ship_rebase_failure_comment",
                 $"<p><strong>ship_blocked:</strong> rebase failed: {reason}</p>", ct).ConfigureAwait(false);
             await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
             {
@@ -478,7 +478,7 @@ public class ShipPhase : IWorkflowPhase
         {
             var distinctMarkerFiles = markerHits.Select(h => h.Path).Distinct().ToList();
             var pathsList = string.Join(", ", distinctMarkerFiles);
-            await _ticketing.CreateCommentAsync(ticketId,
+            await PostInformationalCommentAsync(ticketId, "ship_conflict_marker_comment",
                 $"<p><strong>ship_blocked:</strong> conflict markers detected in: {pathsList}</p>", ct).ConfigureAwait(false);
             await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
             {
@@ -651,7 +651,7 @@ public class ShipPhase : IWorkflowPhase
                             }
                         }
                     }
-                    await _ticketing.CreateCommentAsync(ticketId,
+                    await PostInformationalCommentAsync(ticketId, "ship_regression_failure_comment",
                         $"<p><strong>ship_blocked:</strong> regression checks introduced failures: {string.Join(", ", regressionNames)}</p>", ct).ConfigureAwait(false);
                     await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
                     {
@@ -729,7 +729,7 @@ public class ShipPhase : IWorkflowPhase
                         }
                     }
                 }
-                await _ticketing.CreateCommentAsync(ticketId,
+                await PostInformationalCommentAsync(ticketId, "ship_regression_failure_comment",
                     $"<p><strong>ship_blocked:</strong> regression checks failed: {namesList}</p>", ct).ConfigureAwait(false);
                 await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
                 {
@@ -881,7 +881,7 @@ public class ShipPhase : IWorkflowPhase
         {
             var blockerIds = string.Join(", ", notDone.Select(c => c.Id));
             var message = $"children not Done: {blockerIds}";
-            await _ticketing.CreateCommentAsync(ticketId,
+            await PostInformationalCommentAsync(ticketId, "parent_ship_blocked_comment",
                 $"<p><strong>ship_blocked:</strong> {message}</p>", ct).ConfigureAwait(false);
             await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
             {
@@ -899,12 +899,14 @@ public class ShipPhase : IWorkflowPhase
             ["to"] = "Done"
         }, ct).ConfigureAwait(false);
 
-        await _ticketing.CreateCommentAsync(ticketId,
-            $"<p><strong>shipped:</strong> all {children.Count} children are Done; parent transitioned to Done</p>", ct).ConfigureAwait(false);
-        await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
+        if (await PostInformationalCommentAsync(ticketId, "parent_shipped_comment",
+                $"<p><strong>shipped:</strong> all {children.Count} children are Done; parent transitioned to Done</p>", ct).ConfigureAwait(false))
         {
-            ["action"] = "create_comment"
-        }, ct).ConfigureAwait(false);
+            await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
+            {
+                ["action"] = "create_comment"
+            }, ct).ConfigureAwait(false);
+        }
 
         return new ShipResult(true, ticketId, null, null, null);
     }
@@ -992,4 +994,10 @@ public class ShipPhase : IWorkflowPhase
             Phase.Ship,
             data), ct).ConfigureAwait(false);
     }
+
+    private Task<bool> PostInformationalCommentAsync(
+        string ticketId, string operation, string html, CancellationToken ct) =>
+        TicketingWritePolicy.BestEffortAsync(
+            _events, _options.SessionId, ticketId, Phase.Ship, operation,
+            () => _ticketing.CreateCommentAsync(ticketId, html, ct), ct);
 }

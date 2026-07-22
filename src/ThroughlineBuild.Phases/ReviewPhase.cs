@@ -322,11 +322,8 @@ public class ReviewPhase : IWorkflowPhase
         if (verdict.Kind == VerdictKind.Pass)
         {
             commentHtml = $"<p><strong>reviewed:</strong> pass - {verdict.Rationale}</p>";
-            await _ticketing.CreateCommentAsync(ticketId, commentHtml, ct).ConfigureAwait(false);
-            await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
-            {
-                ["action"] = "create_comment"
-            }, ct).ConfigureAwait(false);
+            await PostInformationalCommentAsync(
+                ticketId, "review_pass_comment", commentHtml, ct).ConfigureAwait(false);
         }
         else if (verdict.Kind == VerdictKind.Rework)
         {
@@ -334,11 +331,8 @@ public class ReviewPhase : IWorkflowPhase
                 ? "<br/>checks_failed: " + string.Join(", ", verdict.ChecksFailed)
                 : "";
             commentHtml = $"<p><strong>reviewed:</strong> rework - {verdict.Rationale}{checksList}</p>";
-            await _ticketing.CreateCommentAsync(ticketId, commentHtml, ct).ConfigureAwait(false);
-            await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
-            {
-                ["action"] = "create_comment"
-            }, ct).ConfigureAwait(false);
+            await PostInformationalCommentAsync(
+                ticketId, "review_rework_comment", commentHtml, ct).ConfigureAwait(false);
             await _ticketing.TransitionAsync(ticketId, TicketState.InProgress, ct).ConfigureAwait(false);
             await EmitAsync(EventKind.StateTransition, ticketId, new Dictionary<string, object>
             {
@@ -352,11 +346,8 @@ public class ReviewPhase : IWorkflowPhase
                 ? "<br/>checks_failed: " + string.Join(", ", verdict.ChecksFailed)
                 : "";
             commentHtml = $"<p><strong>reviewed:</strong> fail - {verdict.Rationale}{checksList}</p>";
-            await _ticketing.CreateCommentAsync(ticketId, commentHtml, ct).ConfigureAwait(false);
-            await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
-            {
-                ["action"] = "create_comment"
-            }, ct).ConfigureAwait(false);
+            await PostInformationalCommentAsync(
+                ticketId, "review_fail_comment", commentHtml, ct).ConfigureAwait(false);
         }
 
         // Step 14: Return success
@@ -417,11 +408,8 @@ public class ReviewPhase : IWorkflowPhase
             commentHtml = $"<p><strong>reviewed:</strong> fail - {rationale}</p>";
         }
 
-        await _ticketing.CreateCommentAsync(ticketId, commentHtml, ct).ConfigureAwait(false);
-        await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
-        {
-            ["action"] = "create_comment"
-        }, ct).ConfigureAwait(false);
+        await PostInformationalCommentAsync(
+            ticketId, "parent_review_comment", commentHtml, ct).ConfigureAwait(false);
 
         if (kind == VerdictKind.Rework)
         {
@@ -529,6 +517,20 @@ public class ReviewPhase : IWorkflowPhase
             ticketId,
             Phase.Review,
             data), ct).ConfigureAwait(false);
+    }
+
+    private async Task PostInformationalCommentAsync(
+        string ticketId, string operation, string html, CancellationToken ct)
+    {
+        if (await TicketingWritePolicy.BestEffortAsync(
+                _events, _options.SessionId, ticketId, Phase.Review, operation,
+                () => _ticketing.CreateCommentAsync(ticketId, html, ct), ct).ConfigureAwait(false))
+        {
+            await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
+            {
+                ["action"] = "create_comment"
+            }, ct).ConfigureAwait(false);
+        }
     }
 
 }

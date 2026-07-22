@@ -35,3 +35,12 @@ Composite intents:
 
 The `build` CLI is no-install - it is vendored in the repo. Run `build --help` for the full
 verb list and `build help <topic>` (config, exit-codes, summary) for reference docs.
+
+## This repository builds the `build` CLI
+
+Treat `bin/build` as both the ticketing tool and part of the system under test. Before using it
+for Plane reads or mutations while working a ticket, check whether that ticket changes the verb,
+client, transport, retry, state-transition, or serialization path the command depends on. The bug
+being fixed may invalidate the binary's result or side effects. Prefer read-only verification,
+inspect the JSON envelope and exit code, avoid chaining multiple Plane mutations blindly, and use
+the freshly verified binary for final ticket updates only after the affected path is known-good.
