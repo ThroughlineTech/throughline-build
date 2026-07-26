@@ -1,42 +1,36 @@
-To Test:
-dotnet test --nologo -v q --logger "console;verbosity=minimal"
+# Throughline Build
 
-To build the native cli:
-dotnet publish src/ThroughlineBuild.Cli -r win-x64 -c Release --nologo -v q
+Throughline Build is a .NET 10 Native AOT CLI named `build`. It coordinates
+Plane tickets, git worktrees, automated checks, and selectable coding-agent
+CLIs through plan, implement, review, ship, and recursive chain workflows.
 
-That produces the build.exe native binary (project has <PublishAot>true</PublishAot> and <AssemblyName>build</AssemblyName> in ThroughlineBuild.Cli.csproj).
-
-Swap the RID for other platforms: -r osx-arm64, -r linux-x64.
-
-If you just want to compile-check without producing a native binary: dotnet build throughline-build.sln --nologo -v q.
+For normal installation, configuration, and a first-ticket walkthrough, start
+with the [operator user guide](docs/throughline_build_userguide.md). Contributors
+building the CLI itself should use [Building from source](docs/build-command-setup.md).
 
 ## Creating tickets
 
-Use the built-in body template to start a new ticket with the correct structure:
+Create a ticket from a short request:
 
-    build new --print-template > draft.md
+```console
+build new fix the README typo
+```
 
-Edit draft.md to fill in the title, description, acceptance criteria, and out-of-scope sections,
-then create the ticket:
+For a structured Markdown draft:
 
-    build new draft.md
+```console
+build new --print-template > draft.md
+build new draft.md
+```
 
-The template uses the section headings that the NewPhase validator recognises (title via a top-level
-`#` heading, `## Acceptance criteria`, `## Out of scope`). Filling those sections avoids the
-"missing acceptance criteria" warning that appears when creating a ticket from a bare file.
+For automation, `build new - --json` accepts the strict JSON draft described by
+`build help new`.
 
-Claude Cli:
-Windows: winget install Anthropic.ClaudeCode
-Mac/Windows: curl -fsSL https://claude.ai/install.sh | bash
+## Documentation
 
-Codex install:
-Windows: powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"
-Mac: curl -fsSL https://chatgpt.com/codex/install.sh | sh
-
-Gemini install:
-Mac/Windows: npm install -g @google/gemini-cli --or-- npx @google/gemini-cli
-
-CoPilot install:
-https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli
-Mac/Windows: npm install -g @github/copilot
-
+- [Operator user guide](docs/throughline_build_userguide.md) - configuration and everyday workflow
+- [Building from source](docs/build-command-setup.md) - contributor build, test, and publish commands
+- [Architecture](docs/throughline-build-architecture.md) - as-built components and invariants
+- Wire and diagnostic references: [event log](docs/event-log-format.md), [debug transcript](docs/debug-transcript-format.md), and [worker result envelope](docs/worker-result-envelope.md)
+- [Worker agent adapters](docs/agent-tool-name-mapping.md) - shared contract and provider differences
+- [Recursive chain deep dive](docs/grandparent-chain.md) - tree scheduling, dependencies, depth, and branch topology

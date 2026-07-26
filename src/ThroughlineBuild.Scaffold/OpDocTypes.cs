@@ -2,7 +2,7 @@ using System.Runtime.CompilerServices;
 
 namespace ThroughlineBuild.Scaffold;
 
-// op-doc format version: strict, 2026-05-27 (see docs/op-docs/op-12-build-scaffold.md)
+// op-doc format version: strict, 2026-05-27 (see docs/op-docs/op-doc-spec.md)
 
 public record OpDoc(
     string OperationSlug,

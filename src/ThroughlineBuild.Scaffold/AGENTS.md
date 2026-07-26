@@ -13,9 +13,10 @@ parsing is then deterministic. Driven from Cli's `ScaffoldProfileRunner`,
 written by `ConfigProfileWriter`.
 
 GOTCHA - embedded out-of-tree docs: the csproj embeds
-`docs/op-docs/op-doc-spec.md` and `op-doc-example.md` from OUTSIDE this
-project as resources. Editing those docs changes binary behavior (`build
-op-doc spec` output, validation examples) only after a rebuild.
+`docs/op-docs/op-doc-spec.md` from OUTSIDE this project as a resource. The
+canonical example is fenced inside the spec and extracted by
+`OpDocDocsLoader.LoadExample`. Editing the guide changes binary behavior
+(`build op-doc spec` output and validation examples) only after a rebuild.
 
 GOTCHA - `Templates/*.md` (skeleton fragments + derive-profile prompt) are
 EmbeddedResource and LF-pinned via `.gitattributes` - edit as LF, rebuild to

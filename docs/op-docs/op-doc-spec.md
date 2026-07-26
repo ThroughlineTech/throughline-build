@@ -1,6 +1,6 @@
 # Op-Doc Format Spec
 
-An op-doc is a planning artifact that drives agent orchestration in the latticeflow ticket workflow. When told "turn this into an op-doc," produce a document that matches this spec exactly. Op-docs live in `docs/op-docs/` and are fed to `/op-scaffold` and `/op-run`.
+An op-doc is a planning artifact that drives agent orchestration in the latticeflow ticket workflow. When told "turn this into an op-doc," produce a document that matches this spec exactly. Op-docs live in `docs/op-docs/` and are fed to the scaffold and chain workflows. This guide is the single source for the format, chain execution contract, and canonical example.
 
 **Op-doc vs. runbook:** A runbook is reusable reference for a recurring procedure ("how to rotate the certs"). An op-doc is a one-time, bounded operation with a defined done state ("migrate X to Y - here is what done looks like, here are the briefs"). If you find yourself writing a reusable step-by-step procedure, stop - that is a runbook, not an op-doc.
 
@@ -46,6 +46,8 @@ Follow the table with one or two sentences explaining the sequencing rationale. 
 
 Effort: S (1-3 briefs, low blast radius), M (4-6 briefs or moderate cross-cutting change), L (7+ briefs, architectural change, or high blast radius).
 
+Dependencies are load-bearing. The chain runs tickets one at a time in the order implied by the declared dependencies, and scaffold writes only those declared edges to the ticket backend. Declare every real dependency. An omitted dependency can produce a wrong-order run or cause two briefs to create the same artifact independently.
+
 ### 5. `## Plan {letter}: {name}` (one per plan)
 
 Each plan section contains exactly three subsections in order:
@@ -60,6 +62,8 @@ Each plan section contains exactly three subsections in order:
 | 01 | first-brief-slug | One-line intent | - | src/Path/File.cs, tests/ |
 | 02 | second-brief-slug | One-line intent | 01 | src/Path/Other.cs |
 ```
+
+If two briefs create or modify the same artifact, order them and declare the dependency. Intra-plan dependencies use brief numbers. Cross-plan dependencies are declared with plan letters in the Dispatch order table because cross-plan brief-to-brief dependencies are not expressible. Keep tightly coupled briefs in the same plan when plan-level ordering is too coarse.
 
 **`### Briefs - detail`** - One subsection per brief (see Per-brief rules below).
 
@@ -79,7 +83,7 @@ Each brief follows this structure in order:
 
 **Goal:** One paragraph. What the system does after this brief lands and why it matters. Not a deliverables list.
 
-**Inputs:** What the implementer reads before starting. Name specific files with paths, specific line ranges if known, and specific prior-brief outputs if this brief depends on another. Prose or short bulleted list.
+**Inputs:** What the implementer reads before starting. Name specific files with paths, specific line ranges if known, and specific prior-brief outputs if this brief depends on another. "Investigate the area" is not an input. Prose or short bulleted list.
 
 **Outputs:** Bulleted list of concrete artifacts: new types, modified behaviors, CLI flags, doc sections, tests. Each bullet is specific - names the file or the exact behavior change. Not abstract ("better error handling"). Concrete ("A post-condition assertion in ShipPhase that emits a clear failure if HEAD is detached after ff-merge").
 
@@ -91,11 +95,21 @@ Each brief follows this structure in order:
 
 ---
 
+## Chain execution contract
+
+Scaffolded tickets are promoted to Ready and implemented directly. No plan worker re-investigates the work or fills gaps after scaffolding, so the op-doc itself is the implementation plan. Each brief's Goal, Inputs, Outputs, Acceptance, Notes, and OOS must be sufficient for an implementer working only from that ticket.
+
+The chain executes tickets sequentially from the dependency graph. There is no parallel execution that might accidentally satisfy an undeclared dependency. Scaffold encodes only the declared edges, and the chain reads those edges back as its ordering source. A missing edge is an incorrect execution contract, not a missed optimization.
+
+Each implement brief receives carried-forward context from prior tickets, including touched files and the commit range. A dependent brief may reference an earlier brief's outputs instead of repeating them, but only when the dependency is declared. If cross-plan plan-level ordering is not precise enough, keep the dependent briefs in the same plan.
+
+---
+
 ## Style rules
 
 - No em-dashes anywhere. Use plain hyphens (`-`).
 - File paths in brief tables and Inputs are specific: `src/ThroughlineBuild.Phases/ShipPhase.cs`, not `src/ (various)`.
-- Deps column: `-` for no deps, brief number(s) for intra-plan deps, plan letter for cross-plan deps.
+- Briefs-table Deps column: `-` for no intra-plan deps or brief number(s) for intra-plan deps. Declare cross-plan dependencies with plan letters in the Dispatch order table.
 - Brief slugs: lowercase kebab-case, 3-6 words.
 - Plan letters: A, B, C. Brief numbers: 01, 02, 03 (continuous across plans).
 - Project release gate: most stacks have a verification step that a passing local test suite does not catch - the build/compile/type-check/bundle/package step that only fails outside the unit run. Name that gate once for the target project, then add a `<gate> succeeds` checkbox to Acceptance for any brief that could break it. The gate is stack-specific, not universal: a C# Native AOT project (such as the latticeflow repo this spec lives in) uses `AOT publish succeeds` for any brief that registers new types in a source-gen JSON context; a TypeScript project might use `tsc --noEmit passes` or `production build succeeds`; a Python project `the packaged entrypoint imports cleanly`. Pick the gate that matches the stack, or omit this checkbox entirely if the project has no gate beyond its tests.
@@ -103,151 +117,206 @@ Each brief follows this structure in order:
 - "Why this exists" and "What done looks like" are prose paragraphs, not bullets.
 - Goal sections (plan-level and brief-level) are one paragraph each.
 - Notes sections do not contain bullet lists - prose only.
+- Briefs are implementation-ready. Do not assume a later planning pass will discover files, make design decisions, or fill gaps.
 
 ---
 
-## Skeleton (annotated)
+## Complete example
 
-The canonical complete example ships beside this spec as `op-doc-example.md`. The skeleton
-below is an annotated shape reference, not a second source of truth.
+This canonical example is a valid op-doc for a C# Native AOT project. Its stack-specific paths, source-generated JSON requirement, and `AOT publish succeeds` gate illustrate the conventions; substitute the paths and release gate appropriate to the target project.
 
-The example below is one concrete op-doc for a C# project. Treat the stack-specific bits (`.cs` paths, `AOT publish succeeds`, the source-gen JSON constraint) as illustrations of the conventions, not as requirements for your stack - substitute your own paths and release gate.
-
+<!-- canonical-example-start -->
 ```markdown
-# Operation: example-slug
+# Operation: cli-build-version-embedding
 
-One tight lead paragraph. What changes, what the problem is, what the key mechanism is.
-Under 100 words. Prose, no bullets, no heading. Written as "Replace X with Y so that Z."
+Add a `--version` flag to the TLB CLI and embed the build version into every structured log event. Two plans cover the work: first embed and expose the version in-process, then wire the CLI flag and event-log consumers to use it.
 
 ## Why this exists
 
-First paragraph: the incident or observation that broke this. Specific. Cite the failure
-mode, the chain run ID, the error message, whatever is concrete.
+When a chain run produces unexpected output, the first diagnostic question is "which build was this?" Currently there is no answer: the binary embeds no version, log lines carry no version metadata, and `analyze-event-log` has no way to group events by build. Bug reports arrive citing a symptom but not a binary, which forces a "reproduce from source at HEAD" step before any diagnosis can begin.
 
-Second paragraph: why the current state is structurally unacceptable (not just the one
-incident). Why it will recur.
-
-Third paragraph (optional): strategic timing note. Why now.
+The version embedding also gates a downstream improvement: the comparison harness needs a reliable build identifier to correlate benchmark runs across TLB and the config-based baseline. Landing this before the harness runs means the harness measures TLB on the versioned contract rather than an unidentified binary.
 
 ## Dispatch order
 
 | Plan | Name | Depends on | Effort |
 | ---- | ---- | ---------- | ------ |
-| A    | Foundation | - | M |
-| B    | Consumer migration | A | M |
+| A    | Version foundation | - | M |
+| B    | CLI and log integration | A | S |
 
-A first; B depends on A's output types.
+Plan A establishes the version source and in-process accessor. Plan B depends on that accessor before exposing the CLI flag and event-log behavior.
 
-## Plan A: Foundation
+## Plan A: Version foundation
 
 ### Goal
 
-After this plan, [the observable state]. One paragraph. Not a deliverables list.
+After this plan, the build version is embedded at compile time and readable through a single in-process accessor without requiring ticket-backend config, event logs, or command dispatch.
 
 ### Briefs
 
 | # | Slug | Intent | Deps | Files |
 |---|------|--------|------|-------|
-| 01 | define-protocol | Specify the contract and document it | - | docs/protocol.md (new), src/Workers.Common/Parser.cs |
-| 02 | implement-parser | Parser extracts named blocks alongside JSON envelope | 01 | src/Workers.Common/WorkerResultParser.cs, tests/ |
+| 01 | version-source | Select and document the compile-time version source | - | Directory.Build.props |
+| 02 | version-accessor | Expose the embedded version through an AOT-safe accessor | 01 | src/ThroughlineBuild.Cli/BuildVersion.cs, tests/ThroughlineBuild.Cli.Tests/BuildVersionTests.cs |
+| 03 | version-publish-gate | Prove published binaries carry a non-empty version | 02 | tests/ThroughlineBuild.Cli.Tests/BuildVersionPublishTests.cs |
 
 ### Briefs - detail
 
-#### Brief 01: define-protocol
+#### Brief 01: version-source
 
-Goal: A written specification for the contract, sufficient for the parser brief to implement
-against and for template briefs to follow.
+Goal: The repository has one documented compile-time source for the build version so local and CI builds stamp binaries through the same MSBuild path.
 
-Inputs: The current `WorkerResultParser.cs` at `src/Workers.Common/WorkerResultParser.cs`;
-the documented envelope at `docs/worker-result-envelope.md`; the specific failure case from
-the incident (cite the concrete artifact).
+Inputs:
+- `Directory.Build.props`
+- `src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj`
+- `.github/workflows/build.yml`
 
 Outputs:
-- A new `docs/protocol.md` specifying the fence-marker shape, block placement, and
-  JSON-reference convention.
-- Every failure mode enumerated: unclosed fence, mismatched names, duplicate names,
-  missing referenced block - each mapped to a documented parser error.
-- `docs/worker-result-envelope.md` updated to reference the new protocol doc.
+- `Directory.Build.props` contains the selected version property.
+- A short comment explains the local-development fallback and CI override path.
+- Existing project defaults remain unchanged except for version metadata.
 
 Acceptance:
-- [ ] Protocol document specifies marker syntax with collision-avoidance rationale
-- [ ] Block placement rule is documented (before WORKER_RESULT, never after)
-- [ ] Every failure mode is enumerated with the expected parser response
-- [ ] `docs/worker-result-envelope.md` references the new protocol doc
+- [ ] The selected MSBuild property is non-empty in a local build
+- [ ] The CI override path is documented next to the property
+- [ ] Existing project target frameworks remain unchanged
 
-Notes: The marker syntax choice is judgment-based but constrained - symmetric and named so
-a mismatched fence in a long output still locates the failure cleanly. Angle-bracket-
-prefixed markers like `<<<NAME_START` are one reasonable choice. The spec is the contract
-that both the parser brief and the template briefs implement against; completeness here
-prevents ambiguity downstream.
+Notes: The version source belongs in shared MSBuild configuration because the value describes the compiled binary, not runtime state. Keeping the fallback local and deterministic avoids making tests depend on CI-only environment variables.
 
 OOS:
-- Parser implementation (Brief 02 owns)
-- Template updates for any agent (Plan B onward)
-- Tolerant or salvage parsing for malformed fences
+- Semantic versioning policy
+- Release tag creation
+- CLI output changes
 
-#### Brief 02: implement-parser
+#### Brief 02: version-accessor
 
-Goal: WorkerResultParser scans worker output for named fenced blocks before the
-WORKER_RESULT marker and returns the extracted blocks alongside the parsed JSON envelope.
+Goal: Application code can read the embedded build version from one AOT-safe accessor that returns a non-empty value in tests and published binaries.
 
-Inputs: The protocol spec from Brief 01; the current `WorkerResultParser.cs` (read
-end-to-end); the AOT constraint requiring source-gen JSON contexts; existing parser
-failure-mode tests.
+Inputs:
+- Version property from Brief 01
+- `src/ThroughlineBuild.Cli/Program.cs`
+- `src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj`
 
 Outputs:
-- `WorkerResultParser` updated to return a structured result containing both the parsed
-  JSON envelope (today's behavior) and a name-keyed map of extracted fenced-block contents.
-- The parser scans using a deterministic line-by-line approach (no regex backtracking).
-- Malformed fences produce the documented parser failure with a clear error message naming
-  the offending fence and its location.
-- Output containing zero fenced blocks parses cleanly (returns an empty block map).
-- A consumer-side helper that resolves `_ref` fields against the block map, failing with a
-  clear error if the referenced block is missing.
-- AOT publish succeeds; no reflection-based parsing introduced.
+- `src/ThroughlineBuild.Cli/BuildVersion.cs` defines `BuildVersion.Current` from the embedded informational version.
+- `tests/ThroughlineBuild.Cli.Tests/BuildVersionTests.cs` covers the non-empty runtime value.
+- The accessor avoids runtime file reads and ticket-system calls.
 
 Acceptance:
-- [ ] Valid fenced blocks before WORKER_RESULT produce an extracted name-keyed block map
-- [ ] Output with no fenced blocks parses with an empty block map; envelope is unaffected
-- [ ] Each documented malformed-fence case produces the expected error
-- [ ] A `_ref` referencing a missing block produces a clear consumer-facing error
+- [ ] `BuildVersion.Current` is non-empty in the unit test runner
+- [ ] The accessor does not read the working tree or config files
+- [ ] The accessor works before CLI verb dispatch
 - [ ] AOT publish succeeds
 
-Notes: Line-by-line scanning avoids worst-case regex backtracking on long outputs. The
-block map carries content as raw strings; rendering is the consumer's concern. Tests cover
-all failure modes from the protocol spec - the parser is the load-bearing reliability
-layer and each failure mode is exercised at least once.
+Notes: Reading assembly metadata keeps the value tied to the binary being executed. The accessor stays small because Brief 01 owns the version policy.
 
 OOS:
-- Markdown-to-HTML rendering (separate brief)
-- Updating templates to emit fenced blocks (Plan B onward)
-- Updating consumers to resolve `_ref` fields (per-phase migration owns)
-- Tolerant or recovery parsing for malformed fences
+- `build --version` command behavior
+- Event-log schema changes
+- Analyzer output changes
 
-## Plan B: Consumer migration
+#### Brief 03: version-publish-gate
+
+Goal: The release publish path produces a binary whose embedded build version is available at runtime.
+
+Inputs:
+- `BuildVersion.Current` from Brief 02
+- `tests/ThroughlineBuild.Cli.Tests/CliTestHost.cs`
+- `.github/workflows/build.yml`
+
+Outputs:
+- `tests/ThroughlineBuild.Cli.Tests/BuildVersionPublishTests.cs` verifies the published binary exposes a non-empty version.
+- The check documents the release gate used by this project.
+- Failures point at version stamping rather than general CLI dispatch.
+
+Acceptance:
+- [ ] Release publish produces a binary with a non-empty version
+- [ ] The verification names the release gate it exercises
+- [ ] AOT publish succeeds
+
+Notes: Unit tests prove the accessor shape, while the publish gate proves the deployed artifact carries the same metadata. Keeping those concerns separate makes failures easier to diagnose.
+
+OOS:
+- Multi-RID publish matrix
+- Installer packaging
+- Release-note generation
+
+## Plan B: CLI and log integration
 
 ### Goal
 
-After this plan, [the observable state]. One paragraph.
+After this plan, operators can ask the CLI for its version without touching external services, and every structured log produced by the CLI carries that same version for later analysis.
 
 ### Briefs
 
 | # | Slug | Intent | Deps | Files |
 |---|------|--------|------|-------|
-| 03 | migrate-plan-phase | PlanPhase resolves the fenced-block ref and renders to HTML | A | src/Phases/PlanPhase.cs, tests/ |
+| 04 | version-flag | Add pre-dispatch `build --version` behavior | - | src/ThroughlineBuild.Cli/Program.cs, tests/ThroughlineBuild.Cli.Tests/VersionCommandTests.cs |
+| 05 | versioned-event-log | Stamp and surface build versions in event logs | 04 | src/ThroughlineBuild.EventLog/EventRecord.cs, src/tools/analyze-event-log.cs, tests/ThroughlineBuild.EventLog.Tests/EventRecordTests.cs |
 
 ### Briefs - detail
 
-#### Brief 03: migrate-plan-phase
+#### Brief 04: version-flag
 
-[follows the same structure as Brief 01 and 02 above]
+Goal: `build --version` prints the embedded build version and exits before config loading, ticket-backend calls, or normal verb dispatch.
+
+Inputs:
+- `BuildVersion.Current` from Plan A
+- `src/ThroughlineBuild.Cli/Program.cs`
+- `tests/ThroughlineBuild.Cli.Tests/CliTestHost.cs`
+
+Outputs:
+- Top-level CLI argument handling recognizes `--version`.
+- The command writes `throughline-build {version}` to stdout.
+- The path exits successfully before any external-service setup.
+- `tests/ThroughlineBuild.Cli.Tests/VersionCommandTests.cs` covers output and pre-dispatch behavior.
+
+Acceptance:
+- [ ] `build --version` prints a non-empty version string
+- [ ] `build --version` exits before config loading
+- [ ] Unknown command handling remains unchanged
+
+Notes: The version flag is a health-check path, so it must be available in minimal environments where ticket-backend authentication and workspace config are absent. Pre-dispatch handling is the important behavioral boundary.
+
+OOS:
+- Adding version text to help output
+- JSON-formatted version output
+- Version comparison logic
+
+#### Brief 05: versioned-event-log
+
+Goal: Structured event logs carry the build version and the analyzer surfaces it in chain summaries.
+
+Inputs:
+- `BuildVersion.Current` from Plan A
+- `src/ThroughlineBuild.EventLog/EventRecord.cs`
+- `src/ThroughlineBuild.EventLog/EventLogJsonContext.cs`
+- `src/tools/analyze-event-log.cs`
+
+Outputs:
+- `src/ThroughlineBuild.EventLog/EventRecord.cs` includes a build-version field populated at construction time.
+- `src/ThroughlineBuild.EventLog/EventLogJsonContext.cs` includes the updated event type in source-generated JSON metadata.
+- `src/tools/analyze-event-log.cs` prints the build version from the first event in a chain log.
+- `tests/ThroughlineBuild.EventLog.Tests/EventRecordTests.cs` covers new and legacy event payloads.
+
+Acceptance:
+- [ ] New event-log entries contain a non-empty build-version field
+- [ ] Existing event-log fixtures still deserialize
+- [ ] Chain summaries include the build version
+- [ ] AOT publish succeeds
+
+Notes: Stamping the base event shape keeps all event kinds consistent and avoids per-event drift. The analyzer reads the first event because one process invocation produces each log file.
+
+OOS:
+- Backfilling old event logs
+- Cross-run version comparison
+- Ticket-backend metadata updates
 
 ## What done looks like
 
-One prose paragraph from the operator's perspective. "A `build chain` run where..." or
-"After landing, an operator who..." Describes observable behavior, not what was built.
-No bullets. Closes the loop on the lead paragraph's promise.
+An operator running a chain and then inspecting `analyze-event-log` output sees the build version in the chain summary, confirming exactly which binary produced the run. `build --version` works in CI health checks and local shells without reading config or contacting the ticket backend. Bug reports now have a concrete build identifier derivable from any new log.
 ```
+<!-- canonical-example-end -->
 
 ---
 
@@ -259,6 +328,9 @@ No bullets. Closes the loop on the lead paragraph's promise.
 - Writing Goal sections as bullet lists (they must be paragraphs).
 - Putting requirements in "Why this exists" (that section is narrative context, not spec).
 - Vague file paths ("src/ThroughlineBuild.Cli/ (output layer)" - name the file).
+- Omitting a real dependency. Sequential execution turns a missing edge into a wrong-order run and often duplicated work.
+- Re-creating an artifact from an earlier brief instead of depending on that brief.
+- Writing a thin brief on the assumption that a later planning pass will flesh it out.
 - Omitting OOS sections (they are not optional; scope creep starts here).
 - Writing Notes as instructions ("do X") rather than rationale ("X was chosen because Y").
 - Making "What done looks like" a summary of the deliverables list (it is an

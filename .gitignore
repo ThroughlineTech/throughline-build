@@ -9,6 +9,7 @@ obj/
 *.rsuser
 .idea/
 .scratch/
+.claude/settings.json
 .build/brief.md
 .build/events/
 .build/sessions/

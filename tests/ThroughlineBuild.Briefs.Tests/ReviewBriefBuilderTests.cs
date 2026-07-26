@@ -524,7 +524,7 @@ public class ReviewBriefBuilderTests
     // Advisory role split. Advisory failures are presented in their own explicitly-
     // framed informational section, never mixed in with gating results: presenting
     // a failing advisory check undifferentiated made the verifier Rework a chain to
-    // death over a cosmetic lint finding (a downstream repository chain 25). These tests pin
+    // death over a cosmetic lint finding. These tests pin
     // the split and the framing.
     // ---------------------------------------------------------------------------
 

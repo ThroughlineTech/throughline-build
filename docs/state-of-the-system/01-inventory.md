@@ -1,6 +1,6 @@
 # 01 - Inventory
 
-Last refreshed: 2026-06-11 (HEAD 3a73eb9); `build setup` entry updated 2026-06-14 (`heartbeat-stage-07-cutover`: setup now also runs the Claude transport preflight)
+Last refreshed: 2026-06-11 (HEAD 3a73eb9); `build setup` entry updated 2026-06-14 (`heartbeat-stage-07-cutover`: setup now also runs the Claude transport preflight); op-doc authoring references updated 2026-07-26 (HEAD 6be6ffd); op-docs section rewritten 2026-07-26 for the complete/ -> examples/ cull
 
 Every command, library project, tool, script, and CI workflow currently in the repository, with a one-paragraph high-level description, inputs, outputs, and the major components it composes with. Status tags follow the convention defined in the index: Functional, Partial, Legacy, Aspirational, Broken.
 
@@ -201,10 +201,28 @@ Shared doubles cover ticketing, workers, sinks, console, git, and LLM clients. S
 
 ## op-docs (`docs/op-docs/`)
 
-Historical execution plans, not contracts. Top-level active/recent docs: `op-30-deterministic-chain-gate.md`, `op-32-batch-cohesion-detection.md`, `op-35-monorepo-multi-stack.md`, the authoring references `op-doc-spec.md` / `op-doc-example.md` / `op-doc-addendum.md` (now also emittable via `build op-doc spec`), `plan-brief-template-draft.md`, and `ticketing-generalization-and-agent-cli-plan.md` (the Linear/backend-generalization sketch). Completed ops are archived under [docs/op-docs/complete/](../../docs/op-docs/complete/) - 41 files, op-01 through op-34, newly including op-26 build-init, op-27 worker-result fenced payloads, op-28 chain-run defenses + feature-ship-branch, op-29 tame-the-cli + investigation-adjustment, op-31 batch-implement, op-33 model-tier-discovery + project-bootstrap, and op-34 bootstrap-onboarding-cleanup.
+Two files at top level: `op-doc-spec.md`, the authoring guide for the format `build scaffold`
+parses (also emittable via `build op-doc spec`), and [examples/](../../docs/op-docs/examples/).
 
-### Loose ends (op-docs)
-- op-30/op-32/op-35 sit at top level alongside the completed set's naming pattern; op-30's gate work and op-31's batch work are shipped in code, so the top-level/complete split no longer tracks completion state precisely.
+[examples/](../../docs/op-docs/examples/) holds five real op-docs from this repository's own
+development, kept as format specimens covering the range of shapes - op-26 (smallest complete
+op-doc), op-24 (single plan, sequential briefs), op-31 (three plans, A -> B -> C chain), op-30
+(design-heavy, with a "Deliberately not in this operation" section), and op-27, which doubles
+as the live spec for the fenced-block payload protocol and is linked from
+[06-public-surfaces.md](06-public-surfaces.md) and [07-contracts.md](07-contracts.md). They are
+point-in-time plans, not contracts; see the folder's own README.
+
+The other 36 completed op-docs (op-01 through op-34) were removed on 2026-07-26 ahead of the
+repository going public. They were pre-implementation plans that read as documentation while
+contradicting the shipped code in places - .NET 8 in op-01/02/08 against a `net10.0` repo,
+op-23/op-25's parallel multi-ticket dispatch that op-29 later removed on purpose, and two
+config-schema hard-breaks. The decisions in them not visible in the code were extracted into
+[docs/history.md](../history.md) sections 4 and 5 instead. An archive zip sits outside the
+repository.
+
+Unstarted op-doc-shaped proposals live in [docs/research/](../research/), not here:
+`op-32-batch-cohesion-detection.md` and `op-35-monorepo-multi-stack.md` alongside the
+feasibility studies (Linear backend, partial test selection, plan-phase repo index, RTK).
 
 ---
 

@@ -648,7 +648,7 @@ public class WorkerAgentReviewerTests
     // -------------------------------------------------------------------------
     // Advisory role enforcement at the verifier boundary: a verifier that lists
     // an advisory check in checks_failed must not be able to drive check-rework
-    // for it. The incident chain (a downstream repository 25) died at the rework cap with
+    // for it. The incident chain died at the rework cap with
     // every acceptance criterion passing because a cosmetic lint failure flowed
     // through checks_failed undifferentiated. Filtered by construction here.
     // -------------------------------------------------------------------------

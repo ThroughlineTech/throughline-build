@@ -199,7 +199,7 @@ public static class ReviewBriefBuilder
     // separate, explicitly-framed informational section instead of presenting them
     // undifferentiated. Presenting a failing advisory check as just another failed check made
     // the verifier return Rework for a cosmetic lint finding twice and kill the chain at the
-    // rework cap with every acceptance criterion passing (a downstream repository chain 25, 2026-06-10).
+    // rework cap with every acceptance criterion passing.
     private static string BuildAutomatedChecksSection(IReadOnlyList<CheckResult> checkResults)
     {
         var sb = new StringBuilder();

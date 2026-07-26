@@ -334,8 +334,7 @@ public class ImplementBriefBuilderReworkTests
 
     // --- check-failure briefs carry the oracle, not the theory ---
     // A reviewer's prose about WHY a check fails can confidently describe rules the tool
-    // does not have (the a downstream repository chain-25 reviewer prescribed an import order that
-    // ALSO failed the linter). The brief must carry the exact command, exit code, and
+    // does not have. The brief must carry the exact command, exit code, and
     // verbatim output, plus the instruction to re-run the command and trust its output.
 
     [Fact]

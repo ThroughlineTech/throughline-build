@@ -5,8 +5,8 @@ cycle, using Plane as the ticketing backend. This guide covers installation, con
 running your first ticket end-to-end.
 
 > **Config reference:** run `build init --print-template` to print a fully-commented config with every
-> supported key to stdout. For binary downloads and release notes see
-> https://github.com/danrichardson/latticeflow/releases.
+> supported key to stdout. Binary downloads and release notes are on this repository's Releases
+> page.
 
 ## Prerequisites
 
@@ -39,8 +39,9 @@ for a self-hosted instance use your server root. Written to `plane_base_url` in 
 Plane under Project Settings > General. Written to `plane_project_id` in config.
 
 **Plane API token** - A personal API token from your Plane profile (Settings > API Tokens).
-Written to `plane_api_token` in config; alternatively supply via environment variable using
-`plane_api_token_env`.
+Prefer keeping the value in an environment variable and writing only its name to config with
+`build init --token-env PLANE_API_TOKEN`. A literal `plane_api_token` is supported but must never
+be committed.
 
 **Default agent name** - The agent key used for plan, implement, review, and rework phases
 (e.g. `claude-code`). Must match a `[workers.<name>]` block in config. Written to `default_agent`
@@ -88,34 +89,72 @@ No other change is required. Rolling back restores the `claude --print` invocati
 transport launches interactive Claude without `--print`. Usage/billing classification is governed by
 Anthropic's current policy in either mode.
 
+## Parent tickets
+
+Commands detect a parent by querying its direct children. The current behavior is:
+
+| Command | Behavior when the named ticket has children |
+|---|---|
+| `plan` | Refuses; plan the children instead. |
+| `implement` | Refuses; implement the children instead. |
+| `review` | Aggregates direct-child states. Any child in InProgress or InReview produces Rework and moves the parent to InProgress; all children Done produces Pass; every other mix produces Fail. |
+| `ship` | Requires every direct child to be Done, then moves the parent to Done. It stops without transitioning the parent if any child is not Done. |
+| `chain` | Recurses through non-terminal children, skipping Done and Cancelled children. Sibling dependencies determine ordering; `--max-depth` limits traversal and `--dry-run` previews the post-order schedule. The source repository includes `docs/grandparent-chain.md` for implementation details. |
+| `decompose` | Has no parent-specific guard and creates additional direct children. Check existing children before running it again. |
+| `close` / `defer` | Attempts the lifecycle transition on each non-terminal direct child, then on the parent. Use `--no-cascade` to affect only the named ticket. |
+| `reopen` | Reopens only the parent and prints a note; children keep their current states. |
+| `rework` | Requires InProgress, then uses the implement path; a parent is therefore rejected by implement's child check. |
+| `amend` | Changes only the named ticket. `--parent` reparents that ticket explicitly. |
+
 ## First Ticket Walkthrough
 
-This sequence takes a repository from zero configuration to a shipped ticket. Replace `TLB-1`
-throughout with the ticket ID that `build new` prints in step 3.
+This sequence takes a repository from zero configuration to a shipped ticket. Replace the uppercase
+placeholders and use the ticket ID that `build new` prints.
 
-### 1. Initialize configuration
+### 1. Set the Plane token
+
+macOS, Linux, or Git Bash:
+
+```bash
+export PLANE_API_TOKEN="your-token"
+```
+
+PowerShell:
+
+```powershell
+$env:PLANE_API_TOKEN = "your-token"
+```
+
+### 2. Initialize configuration
 
 ```
-build init
+build init --no-interactive \
+  --plane-url PLANE_URL \
+  --workspace WORKSPACE_SLUG \
+  --project-id PROJECT_UUID \
+  --token-env PLANE_API_TOKEN
 ```
 
-You should see `.build/config.toml` written to your project root. Do not run any other `build`
-command until you complete step 2; every other verb reads config at startup and will error on
-unfilled `REQUIRED_` values.
+On PowerShell, enter the command on one line or use PowerShell backticks instead of backslashes.
+This writes `.build/config.toml` without putting the token value in the file. Running `build init`
+without `--no-interactive` at a terminal instead starts the create-or-pick Plane project flow.
 
-### 2. Fill in config values
+### 3. Verify configuration and provision the project
 
-Open `.build/config.toml` in your editor and replace every `REQUIRED_` placeholder:
+Check that `.build/config.toml` has no `REQUIRED_` placeholders and that `default_agent` under
+`[workers]` and `executable` under the matching `[workers.<agent>]` block match the worker CLI
+you installed. Then run:
 
-- `plane_base_url` - your Plane base URL
-- `plane_workspace_slug` - your workspace slug
-- `plane_project_id` - your project UUID
-- `plane_api_token` - your API token
+```
+build setup
+```
 
-Also confirm that `default_agent` under `[workers]` and `executable` under the matching
-`[workers.<agent>]` block reflect the agent CLI you installed. Save the file before continuing.
+Setup initializes local repository support, adds the managed ignore rules, provisions the required
+Plane states and labels, checks connectivity, and preflights configured Claude transports. It is
+safe to run again. Keep `.build/config.toml` ignored even when it contains only an environment
+variable name.
 
-### 3. Create a ticket
+### 4. Create a ticket
 
 ```
 build new "fix the README typo"
@@ -142,7 +181,7 @@ The list includes the stable relation ID required for exact removal. Allowed typ
 `duplicate`, `blocked_by`, `blocking`, `start_before`, `start_after`, `finish_before`, `finish_after`,
 `implemented_by`, and `implements`; spaces and hyphens are accepted in place of underscores.
 
-### 4. Plan the ticket
+### 5. Plan the ticket
 
 ```
 build plan TLB-1
@@ -155,7 +194,7 @@ For chained runs (`build chain TLB-1`, or multiple ticket IDs), start from a cle
 Tracked changes in the main worktree are refused before planning; commit, stash, or revert them
 first. Untracked files do not block the chain.
 
-### 5. Implement the ticket
+### 6. Implement the ticket
 
 ```
 build implement TLB-1
@@ -164,7 +203,7 @@ build implement TLB-1
 You should see the implement phase complete with a success message. Open Plane and confirm the ticket
 state has moved to InReview.
 
-### 6. Review the ticket
+### 7. Review the ticket
 
 ```
 build review TLB-1
@@ -173,16 +212,17 @@ build review TLB-1
 You should see a `Pass` verdict. If you see `Rework` instead, run `build rework TLB-1` and then
 re-run `build review TLB-1`; repeat until you see `Pass`.
 
-### 7. Ship the ticket
+### 8. Ship the ticket
 
 ```
 build ship TLB-1
 ```
 
-You should see a fast-forward merge on your local main branch and a success message. Open Plane and
-confirm the ticket state has moved to Done.
+You should see a fast-forward merge on the configured target branch and a success message. When the
+configured remote exists, ship pushes by default; use `--no-push` (or `[ship] push = false`) for a
+local-only ship. Open Plane and confirm the ticket state has moved to Done.
 
-### 8. Confirm the commit
+### 9. Confirm the commit
 
 ```
 git log --oneline -1

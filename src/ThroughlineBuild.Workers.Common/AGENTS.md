@@ -10,7 +10,7 @@ after the marker (trailing narration ignored). Metadata is an AOT-safe
 last-wins); `FencedBlockResolver.TryResolveRef` resolves a metadata `*_ref` to
 its block body. Batch envelopes (`BatchWorkerResultDto`) share the file.
 Protocol spec: [../../docs/worker-result-envelope.md](../../docs/worker-result-envelope.md)
-and [../../docs/op-docs/complete/op-27-worker-result-fenced-payloads.md](../../docs/op-docs/complete/op-27-worker-result-fenced-payloads.md).
+and [../../docs/op-docs/examples/op-27-worker-result-fenced-payloads.md](../../docs/op-docs/examples/op-27-worker-result-fenced-payloads.md).
 
 Also here: `CompletionClaimParser` (gate-phase completion claims),
 `ProviderErrorClassifier` (pattern-matches vendor quota/rate/auth failures
