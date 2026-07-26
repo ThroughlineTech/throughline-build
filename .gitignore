@@ -1,3 +1,4 @@
+.build/
 .worktrees/
 secrets/
 bin/
@@ -18,6 +19,7 @@ src/tools/artifacts/
 /Directory.Build.props
 /Directory.Build.targets
 .DS_Store
+.gitignored
 
 # Throughline Build (managed by 'build setup')
 .build/*.md
