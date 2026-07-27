@@ -1,0 +1,8 @@
+{"SessionId":"session-0479","Timestamp":"2026-06-10T05:22:09.2292704+00:00","Kind":5,"TicketId":"11","Phase":3,"Data":{"action":"fetch_skipped"},"build_version":"build-11"}
+{"SessionId":"session-0479","Timestamp":"2026-06-10T05:22:09.2306263+00:00","Kind":5,"TicketId":"11","Phase":3,"Data":{"action":"base_ref_resolved"},"build_version":"build-11"}
+{"SessionId":"session-0479","Timestamp":"2026-06-10T05:22:10.8730887+00:00","Kind":5,"TicketId":"11","Phase":3,"Data":{"action":"baseline_computed"},"build_version":"build-11"}
+{"SessionId":"session-0479","Timestamp":"2026-06-10T05:22:25.7175775+00:00","Kind":5,"TicketId":"11","Phase":3,"Data":{"action":"fixes_detected","count":3,"names":["typecheck","build","test"]},"build_version":"build-11"}
+{"SessionId":"session-0479","Timestamp":"2026-06-10T05:22:26.1285951+00:00","Kind":5,"TicketId":"11","Phase":3,"Data":{"action":"create_comment"},"build_version":"build-11"}
+{"SessionId":"session-0479","Timestamp":"2026-06-10T05:22:28.0197579+00:00","Kind":0,"TicketId":"11","Phase":3,"Data":{"from":"InReview","to":"Done"},"build_version":"build-11"}
+{"SessionId":"session-0479","Timestamp":"2026-06-10T05:22:29.5686978+00:00","Kind":5,"TicketId":"11","Phase":3,"Data":{"action":"decruft"},"build_version":"build-11"}
+{"SessionId":"session-0479","Timestamp":"2026-06-10T05:22:29.6353969+00:00","Kind":5,"TicketId":"11","Phase":3,"Data":{"action":"delete_branch"},"build_version":"build-11"}

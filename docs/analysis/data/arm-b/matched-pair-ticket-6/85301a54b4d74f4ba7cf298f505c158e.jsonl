@@ -1,0 +1,7 @@
+{"SessionId":"session-0565","Timestamp":"2026-05-26T18:36:06.4616663+00:00","Kind":2,"TicketId":"6","Phase":0,"Data":{"worker":"claude-code"}}
+{"SessionId":"session-0565","Timestamp":"2026-05-26T18:41:24.8387216+00:00","Kind":3,"TicketId":"6","Phase":0,"Data":{"status":"Ok"}}
+{"SessionId":"session-0565","Timestamp":"2026-05-26T18:41:24.838755+00:00","Kind":1,"TicketId":"6","Phase":0,"Data":{"wall_clock_ms":318091,"input_tokens":14,"output_tokens":14490,"cache_read_tokens":250066,"cache_create_tokens":26060}}
+{"SessionId":"session-0565","Timestamp":"2026-05-26T18:41:25.2056144+00:00","Kind":5,"TicketId":"6","Phase":0,"Data":{"action":"append_description"}}
+{"SessionId":"session-0565","Timestamp":"2026-05-26T18:41:25.6921737+00:00","Kind":5,"TicketId":"6","Phase":0,"Data":{"action":"apply_labels"}}
+{"SessionId":"session-0565","Timestamp":"2026-05-26T18:41:26.0919828+00:00","Kind":5,"TicketId":"6","Phase":0,"Data":{"action":"create_comment"}}
+{"SessionId":"session-0565","Timestamp":"2026-05-26T18:41:26.4408588+00:00","Kind":0,"TicketId":"6","Phase":0,"Data":{"from":"Backlog","to":"Ready"}}

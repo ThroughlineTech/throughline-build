@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">Near-replicate cache reads and rework</title>
+  <desc id="desc">Run 06 had no rework and 18.41 million cache-read tokens. Run 07 had two rework rounds and 9.87 million cache-read tokens. The no-rework run used 1.87 times more cache reads.</desc>
+  <rect width="1200" height="720" fill="#fbfaf7"/>
+  <style>
+    .title{font:700 35px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#172026}
+    .sub{font:400 19px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#5f6b73}
+    .name{font:650 22px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#172026}
+    .value{font:750 28px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#172026}
+    .note{font:650 19px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#a15c2f}
+    .axis{font:500 16px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#69757c}
+  </style>
+  <text x="70" y="68" class="title">Cache cost did not track rework in this near-replicate</text>
+  <text x="70" y="104" class="sub">Same operation document, build commit, worker, and model · back-to-back runs</text>
+
+  <g stroke="#d9dfdd" stroke-width="1">
+    <line x1="110" y1="560" x2="1110" y2="560"/>
+    <line x1="110" y1="458" x2="1110" y2="458"/>
+    <line x1="110" y1="356" x2="1110" y2="356"/>
+    <line x1="110" y1="254" x2="1110" y2="254"/>
+    <line x1="110" y1="152" x2="1110" y2="152"/>
+  </g>
+  <g class="axis" text-anchor="end">
+    <text x="98" y="566">0</text><text x="98" y="464">5M</text><text x="98" y="362">10M</text><text x="98" y="260">15M</text><text x="98" y="158">20M</text>
+  </g>
+
+  <rect x="235" y="184.4" width="280" height="375.6" rx="8" fill="#455a64"/>
+  <rect x="685" y="358.7" width="280" height="201.3" rx="8" fill="#0f766e"/>
+  <text x="375" y="168" class="value" text-anchor="middle">18.41M</text>
+  <text x="825" y="342" class="value" text-anchor="middle">9.87M</text>
+  <text x="375" y="604" class="name" text-anchor="middle">run-06-smoke</text>
+  <text x="375" y="636" class="sub" text-anchor="middle">0 rework rounds</text>
+  <text x="825" y="604" class="name" text-anchor="middle">run-07-smoke</text>
+  <text x="825" y="636" class="sub" text-anchor="middle">2 rework rounds</text>
+  <text x="1100" y="184" class="note" text-anchor="end">No-rework run: 1.87× more cache reads</text>
+  <text x="70" y="688" class="sub">Useful operational clue, not a controlled causal experiment.</text>
+</svg>

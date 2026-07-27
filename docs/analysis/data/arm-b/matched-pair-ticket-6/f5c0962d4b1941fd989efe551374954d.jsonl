@@ -1,0 +1,6 @@
+{"SessionId":"session-0567","Timestamp":"2026-05-26T18:51:49.0063759+00:00","Kind":0,"TicketId":"6","Phase":1,"Data":{"from":"Ready","to":"InProgress"}}
+{"SessionId":"session-0567","Timestamp":"2026-05-26T18:51:49.0077385+00:00","Kind":2,"TicketId":"6","Phase":1,"Data":{"worker":"claude-code"}}
+{"SessionId":"session-0567","Timestamp":"2026-05-26T18:54:15.7558285+00:00","Kind":3,"TicketId":"6","Phase":1,"Data":{"status":"Ok"}}
+{"SessionId":"session-0567","Timestamp":"2026-05-26T18:54:15.7558602+00:00","Kind":1,"TicketId":"6","Phase":1,"Data":{"wall_clock_ms":146739,"input_tokens":20,"output_tokens":7396,"cache_read_tokens":494452,"cache_create_tokens":23419}}
+{"SessionId":"session-0567","Timestamp":"2026-05-26T18:54:16.2087914+00:00","Kind":5,"TicketId":"6","Phase":1,"Data":{"action":"create_comment"}}
+{"SessionId":"session-0567","Timestamp":"2026-05-26T18:54:16.7172012+00:00","Kind":0,"TicketId":"6","Phase":1,"Data":{"from":"InProgress","to":"InReview"}}

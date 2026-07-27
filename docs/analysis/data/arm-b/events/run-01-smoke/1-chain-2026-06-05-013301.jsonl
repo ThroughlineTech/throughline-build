@@ -1,0 +1,5 @@
+{"SessionId":"session-0019","Timestamp":"2026-06-05T08:33:01.9460771+00:00","Kind":6,"TicketId":"1","Phase":4,"Data":{"starting_at_phase":"plan","initial_state":"Backlog"},"build_version":"build-01"}
+{"SessionId":"session-0020","Timestamp":"2026-06-05T08:33:02.0639474+00:00","Kind":2,"TicketId":"1","Phase":0,"Data":{"worker":"claude-code"},"build_version":"build-01"}
+{"SessionId":"session-0020","Timestamp":"2026-06-05T08:38:04.3640141+00:00","Kind":3,"TicketId":"1","Phase":0,"Data":{"status":"Ok"},"build_version":"build-01"}
+{"SessionId":"session-0020","Timestamp":"2026-06-05T08:38:04.3640843+00:00","Kind":1,"TicketId":"1","Phase":0,"Data":{"model":"claude-sonnet-4-6","vendor":"anthropic","wall_clock_ms":302276,"input_tokens":423,"output_tokens":15302,"cache_read_tokens":182364,"cache_create_tokens":23646,"cost_usd":0.6262055},"build_version":"build-01"}
+{"SessionId":"session-0020","Timestamp":"2026-06-05T08:38:04.712165+00:00","Kind":5,"TicketId":"1","Phase":0,"Data":{"action":"append_description"},"build_version":"build-01"}

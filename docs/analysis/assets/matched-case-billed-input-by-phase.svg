@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="820" viewBox="0 0 1400 820" role="img" aria-labelledby="title desc">
+  <title id="title">Matched historical case: billed input tokens by workflow phase</title>
+  <desc id="desc">Horizontal bars compare a prompt-driven workflow with Throughline Build. Plan falls from 2.28 million to 0.28 million tokens, implement from 5.12 million to 0.52 million, review from 2.15 million to 0.20 million, and ship from 3.21 million to zero. Total billed input falls from 12.76 million to 0.99 million, 12.87 times lower.</desc>
+  <rect width="1400" height="820" fill="#fbfaf7"/>
+  <style>
+    .title{font:700 38px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#172026}
+    .sub{font:400 21px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#5f6b73}
+    .phase{font:650 25px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#172026}
+    .label{font:650 20px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#172026}
+    .small{font:500 18px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#5f6b73}
+    .ratio{font:700 21px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#0f766e}
+    .axis{font:500 16px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#69757c}
+  </style>
+
+  <text x="80" y="72" class="title">Matched historical case: billed input by phase</text>
+  <text x="80" y="110" class="sub">Same model, day, hour, and repository template · one historical ticket pair</text>
+
+  <rect x="930" y="45" width="24" height="16" rx="3" fill="#455a64"/>
+  <text x="966" y="60" class="small">Prompt-driven</text>
+  <rect x="1135" y="45" width="24" height="16" rx="3" fill="#0f766e"/>
+  <text x="1171" y="60" class="small">Throughline Build</text>
+
+  <!-- vertical grid -->
+  <g stroke="#d9dfdd" stroke-width="1">
+    <line x1="250" y1="150" x2="250" y2="650"/>
+    <line x1="430" y1="150" x2="430" y2="650"/>
+    <line x1="610" y1="150" x2="610" y2="650"/>
+    <line x1="790" y1="150" x2="790" y2="650"/>
+    <line x1="970" y1="150" x2="970" y2="650"/>
+    <line x1="1150" y1="150" x2="1150" y2="650"/>
+  </g>
+  <g class="axis" text-anchor="middle">
+    <text x="250" y="682">0</text><text x="430" y="682">1M</text><text x="610" y="682">2M</text>
+    <text x="790" y="682">3M</text><text x="970" y="682">4M</text><text x="1150" y="682">5M</text>
+  </g>
+
+  <!-- Plan -->
+  <text x="205" y="202" class="phase" text-anchor="end">Plan</text>
+  <rect x="250" y="168" width="409.5" height="31" rx="4" fill="#455a64"/>
+  <rect x="250" y="207" width="49.7" height="31" rx="4" fill="#0f766e"/>
+  <text x="674" y="191" class="label">2.28M</text>
+  <text x="313" y="230" class="label">0.28M</text>
+  <text x="1350" y="210" class="ratio" text-anchor="end">8.24× lower</text>
+
+  <!-- Implement -->
+  <text x="205" y="332" class="phase" text-anchor="end">Implement</text>
+  <rect x="250" y="298" width="921.7" height="31" rx="4" fill="#455a64"/>
+  <rect x="250" y="337" width="93.2" height="31" rx="4" fill="#0f766e"/>
+  <text x="1185" y="321" class="label">5.12M</text>
+  <text x="357" y="360" class="label">0.52M</text>
+  <text x="1350" y="340" class="ratio" text-anchor="end">9.89× lower</text>
+
+  <!-- Review -->
+  <text x="205" y="462" class="phase" text-anchor="end">Review</text>
+  <rect x="250" y="428" width="387.7" height="31" rx="4" fill="#455a64"/>
+  <rect x="250" y="467" width="35.5" height="31" rx="4" fill="#0f766e"/>
+  <text x="652" y="451" class="label">2.15M</text>
+  <text x="299" y="490" class="label">0.20M</text>
+  <text x="1350" y="470" class="ratio" text-anchor="end">10.91× lower</text>
+
+  <!-- Ship -->
+  <text x="205" y="592" class="phase" text-anchor="end">Ship</text>
+  <rect x="250" y="558" width="577.4" height="31" rx="4" fill="#455a64"/>
+  <line x1="250" y1="612" x2="315" y2="612" stroke="#0f766e" stroke-width="5" stroke-linecap="round"/>
+  <text x="842" y="581" class="label">3.21M</text>
+  <text x="329" y="619" class="label">0 — moved to code</text>
+  <text x="1350" y="600" class="ratio" text-anchor="end">model phase eliminated</text>
+
+  <rect x="80" y="718" width="1240" height="66" rx="10" fill="#eef4f2"/>
+  <text x="105" y="760" class="label">Total billed input: 12.76M → 0.99M</text>
+  <text x="1285" y="760" class="ratio" text-anchor="end">12.87× lower</text>
+</svg>

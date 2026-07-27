@@ -1,0 +1,3 @@
+{"SessionId":"session-0004","Timestamp":"2026-05-26T19:15:24.673+00:00","Kind":2,"TicketId":"SURCC-6","Phase":3,"Data":{"worker":"claude-code"}}
+{"SessionId":"session-0004","Timestamp":"2026-05-26T19:15:28.274+00:00","Kind":3,"TicketId":"SURCC-6","Phase":3,"Data":{"status":"Ok"}}
+{"SessionId":"session-0004","Timestamp":"2026-05-26T19:15:28.274+00:00","Kind":1,"TicketId":"SURCC-6","Phase":3,"Data":{"model":"claude-opus-4-7","wall_clock_ms":3601,"input_tokens":219,"output_tokens":16485,"cache_read_tokens":3043286,"cache_create_tokens":164179}}

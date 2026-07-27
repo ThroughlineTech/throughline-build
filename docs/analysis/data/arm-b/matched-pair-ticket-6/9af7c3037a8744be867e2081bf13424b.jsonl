@@ -1,0 +1,5 @@
+{"SessionId":"session-0566","Timestamp":"2026-05-26T19:15:33.1255892+00:00","Kind":5,"TicketId":"6","Phase":3,"Data":{"action":"fetch_skipped"}}
+{"SessionId":"session-0566","Timestamp":"2026-05-26T19:15:33.8557536+00:00","Kind":5,"TicketId":"6","Phase":3,"Data":{"action":"create_comment"}}
+{"SessionId":"session-0566","Timestamp":"2026-05-26T19:15:34.2234481+00:00","Kind":0,"TicketId":"6","Phase":3,"Data":{"from":"InReview","to":"Done"}}
+{"SessionId":"session-0566","Timestamp":"2026-05-26T19:15:34.433788+00:00","Kind":5,"TicketId":"6","Phase":3,"Data":{"action":"decruft"}}
+{"SessionId":"session-0566","Timestamp":"2026-05-26T19:15:34.4898787+00:00","Kind":5,"TicketId":"6","Phase":3,"Data":{"action":"delete_branch"}}

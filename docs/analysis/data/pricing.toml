@@ -1,0 +1,24 @@
+# Anthropic public pricing page as of 2026-05-25
+# Source: https://www.anthropic.com/pricing
+# All rates are USD per 1,000,000 tokens.
+# Cache-create historically tracks at 1.25x the input rate.
+# Update this file when Anthropic publishes rate changes; no rebuild required.
+
+[models."claude-opus-4-7"]
+input_per_million = 15.00
+output_per_million = 75.00
+cache_read_per_million = 1.50
+cache_create_per_million = 18.75
+
+[models."claude-sonnet-4-7"]
+input_per_million = 3.00
+output_per_million = 15.00
+cache_read_per_million = 0.30
+cache_create_per_million = 3.75
+
+[models.default]
+# used when a run's event log doesn't name a model; assume opus
+input_per_million = 15.00
+output_per_million = 75.00
+cache_read_per_million = 1.50
+cache_create_per_million = 18.75

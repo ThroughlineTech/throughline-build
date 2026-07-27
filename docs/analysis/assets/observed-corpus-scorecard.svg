@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="360" viewBox="0 0 1440 360" role="img" aria-labelledby="title desc">
+  <title id="title">Observed Throughline Build corpus scorecard</title>
+  <desc id="desc">The historical corpus contains 101 leaf tickets, 98 tickets reaching Done, 95 first-review passes, and zero model calls during completed ship transitions.</desc>
+  <rect width="1440" height="360" fill="#fbfaf7"/>
+  <style>
+    .eyebrow{font:650 17px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;letter-spacing:1.6px;fill:#5f6b73}
+    .value{font:780 56px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#172026}
+    .label{font:600 21px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#172026}
+    .note{font:400 16px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#69757c}
+    .zero{fill:#0f766e}
+  </style>
+  <text x="55" y="48" class="eyebrow">OBSERVED HISTORICAL CORPUS</text>
+
+  <g transform="translate(45,78)">
+    <rect width="315" height="220" rx="14" fill="#f1f3f2"/>
+    <text x="28" y="82" class="value">101</text>
+    <text x="28" y="128" class="label">leaf tickets</text>
+    <text x="28" y="176" class="note">14 deduplicated runs</text>
+  </g>
+  <g transform="translate(390,78)">
+    <rect width="315" height="220" rx="14" fill="#eef4f2"/>
+    <text x="28" y="82" class="value">98</text>
+    <text x="28" y="128" class="label">reached Done</text>
+    <text x="28" y="176" class="note">three leaves did not complete ship</text>
+  </g>
+  <g transform="translate(735,78)">
+    <rect width="315" height="220" rx="14" fill="#f1f3f2"/>
+    <text x="28" y="82" class="value">95</text>
+    <text x="28" y="128" class="label">passed first review</text>
+    <text x="28" y="176" class="note">94.1% internal gate signal</text>
+  </g>
+  <g transform="translate(1080,78)">
+    <rect width="315" height="220" rx="14" fill="#eef4f2"/>
+    <text x="28" y="82" class="value zero">0</text>
+    <text x="28" y="128" class="label">ship-phase model calls</text>
+    <text x="28" y="176" class="note">across 98 completed ships</text>
+  </g>
+  <text x="45" y="334" class="note">Quality figures describe the runner against its own gates; no shared cross-pipeline quality rubric was applied.</text>
+</svg>

@@ -1,0 +1,2 @@
+{"SessionId":"session-0018","Timestamp":"2026-06-05T08:27:15.4910843+00:00","Kind":6,"TicketId":"1","Phase":4,"Data":{"starting_at_phase":"plan","initial_state":"Backlog"},"build_version":"build-01"}
+{"SessionId":"session-0018","Timestamp":"2026-06-05T08:27:16.0093988+00:00","Kind":7,"TicketId":"1","Phase":4,"Data":{"outcome":"StoppedAtPlan","phases_run":1,"rework_rounds":0,"total_duration_ms":1240},"build_version":"build-01"}

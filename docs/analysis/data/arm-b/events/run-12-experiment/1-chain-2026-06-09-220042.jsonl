@@ -1,0 +1,4 @@
+{"SessionId":"session-0477","Timestamp":"2026-06-10T05:00:43.4533686+00:00","Kind":6,"TicketId":"11","Phase":4,"Data":{"starting_at_phase":"review","initial_state":"InReview"},"build_version":"build-11"}
+{"SessionId":"session-0478","Timestamp":"2026-06-10T05:00:57.6375494+00:00","Kind":2,"TicketId":"11","Phase":2,"Data":{"worker":"claude-code","role":"verifier"},"build_version":"build-11"}
+{"SessionId":"session-0478","Timestamp":"2026-06-10T05:05:29.9983043+00:00","Kind":3,"TicketId":"11","Phase":2,"Data":{"kind":"Pass","checks_failed_count":0,"checks_failed":[]},"build_version":"build-11"}
+{"SessionId":"session-0478","Timestamp":"2026-06-10T05:05:29.9987099+00:00","Kind":1,"TicketId":"11","Phase":2,"Data":{"model":"claude-sonnet-4-6","vendor":"anthropic","wall_clock_ms":272116,"input_tokens":4,"output_tokens":10096,"cache_read_tokens":142744,"cache_create_tokens":85667,"cost_usd":1.0165339000000002},"build_version":"build-11"}

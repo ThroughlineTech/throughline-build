@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">Where Throughline Build used model calls in the 14-run corpus</title>
+  <desc id="desc">The corpus contains 22 planning calls, 109 implementation calls, 110 review calls, and zero shipping calls.</desc>
+  <rect width="1200" height="720" fill="#fbfaf7"/>
+  <style>
+    .title{font:700 36px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#172026}
+    .sub{font:400 20px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#5f6b73}
+    .phase{font:650 23px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#172026}
+    .value{font:750 28px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#172026}
+    .note{font:650 19px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#0f766e}
+    .axis{font:500 16px ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;fill:#69757c}
+  </style>
+  <text x="70" y="68" class="title">The model stayed where judgment was useful</text>
+  <text x="70" y="105" class="sub">241 recorded calls across 101 tickets · 14 historical runs</text>
+
+  <g stroke="#d9dfdd" stroke-width="1">
+    <line x1="100" y1="560" x2="1110" y2="560"/>
+    <line x1="100" y1="458" x2="1110" y2="458"/>
+    <line x1="100" y1="356" x2="1110" y2="356"/>
+    <line x1="100" y1="254" x2="1110" y2="254"/>
+    <line x1="100" y1="152" x2="1110" y2="152"/>
+  </g>
+  <g class="axis" text-anchor="end">
+    <text x="88" y="566">0</text><text x="88" y="464">30</text><text x="88" y="362">60</text><text x="88" y="260">90</text><text x="88" y="158">120</text>
+  </g>
+
+  <rect x="165" y="485.2" width="155" height="74.8" rx="7" fill="#0f766e"/>
+  <rect x="410" y="189.4" width="155" height="370.6" rx="7" fill="#0f766e"/>
+  <rect x="655" y="186" width="155" height="374" rx="7" fill="#0f766e"/>
+  <rect x="900" y="548" width="155" height="12" rx="6" fill="none" stroke="#0f766e" stroke-width="4" stroke-dasharray="8 7"/>
+
+  <text x="242.5" y="470" class="value" text-anchor="middle">22</text>
+  <text x="487.5" y="174" class="value" text-anchor="middle">109</text>
+  <text x="732.5" y="171" class="value" text-anchor="middle">110</text>
+  <text x="977.5" y="527" class="value" text-anchor="middle">0</text>
+
+  <text x="242.5" y="606" class="phase" text-anchor="middle">Plan</text>
+  <text x="487.5" y="606" class="phase" text-anchor="middle">Implement</text>
+  <text x="732.5" y="606" class="phase" text-anchor="middle">Review</text>
+  <text x="977.5" y="606" class="phase" text-anchor="middle">Ship</text>
+  <text x="977.5" y="638" class="note" text-anchor="middle">ordinary code</text>
+
+  <text x="70" y="684" class="sub">Plan was usually promoted from the operation document; ship never invoked a worker.</text>
+</svg>
