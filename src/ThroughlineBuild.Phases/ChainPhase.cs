@@ -83,6 +83,7 @@ public class ChainPhase
     private readonly Func<BuildOptions, IObsoleteRatifier>? _ratifierFactory;
     private readonly IGitClient _git;
     private readonly ChainIntegrationBranch _integrationBranch;
+    private readonly BatchImplementRunner _batchImplementRunner;
     // Optional: recovers the latest Rework verdict from the event log so an in-progress ticket
     // that carries real work can be resumed with its prior feedback. Null falls back to a
     // synthesized resume note (e.g. an interrupted initial implement that was never reviewed).
@@ -135,6 +136,17 @@ public class ChainPhase
             _git, _workingDirectory, landingRemote, landingPushEnabled);
         _feedbackRetriever = feedbackRetriever;
         _batchWorker = batchWorker;
+        _batchImplementRunner = new BatchImplementRunner(
+            batchWorker,
+            _ticketing,
+            _git,
+            _baseOptions,
+            _workingDirectory,
+            _sessionIdGenerator,
+            sessionId => EventEmitter(sessionId),
+            _planFactory,
+            (sessionId, ticketId, phaseName, round, targetBranch) =>
+                BuildPhaseOptions(sessionId, ticketId, phaseName, round, targetBranch));
         _reworkRecheckSpecs = reworkRecheckSpecs;
         _reworkRecheckRunner = reworkRecheckRunner;
         _output = output;
@@ -144,7 +156,7 @@ public class ChainPhase
     // verify the chain verb did not silently drop a dependency when constructing this phase.
     // The original --batch-implement bug was exactly a dropped ctor argument (_batchWorker left
     // null), so these let a test fail when that recurs. No runtime behavior depends on them.
-    internal IWorkerAgent? BatchWorker => _batchWorker;
+    internal IWorkerAgent? BatchWorker => _batchImplementRunner.BatchWorker;
     internal Func<BuildOptions, ShipPhase>? ChainShipFactory => _chainShipFactory;
 
     private ChainEventEmitter EventEmitter(string sessionId) =>
@@ -1145,408 +1157,6 @@ public class ChainPhase
         return verdict;
     }
 
-    // Wraps the per-ticket ChainResults from a batch implement session alongside the
-    // verified commit attributions and branch metadata needed to run a combined review.
-    // ConfirmedTickets is null when the session failed before any commits were verified.
-    private sealed record BatchImplementOutcome(
-        IReadOnlyList<ChainResult> Results,
-        IReadOnlyList<BatchTicketResult>? ConfirmedTickets,
-        string BranchName,
-        string BaseRef);
-
-    private static async Task RunBatchStateWriteAsync(string ticketId, Func<Task> write)
-    {
-        try
-        {
-            await write().ConfigureAwait(false);
-        }
-        catch (TicketingUnavailableException ex)
-        {
-            throw new BatchTicketingUnavailableException(ticketId, ex);
-        }
-    }
-
-    /// <summary>
-    /// Runs a single implement session for all tickets in the batch group, then returns one
-    /// <see cref="ChainResult"/> per ticket with outcome <see cref="ChainOutcome.BatchImplemented"/>.
-    /// The session executes inside the already-created shared chain worktree. All batch commits
-    /// stack on the first ticket's branch; the combined review runs after this returns.
-    /// </summary>
-    private async Task<BatchImplementOutcome> RunBatchImplementSessionAsync(
-        ChainPhaseOptions options,
-        IReadOnlyList<Ticket> batchTickets,
-        string sharedWorktreePath,
-        string baseRef,
-        string? chainStartSha,
-        CancellationToken ct)
-    {
-        var activeTicketId = batchTickets[0].Id;
-        var classifySw = Stopwatch.StartNew();
-        try
-        {
-            return await RunBatchImplementSessionCoreAsync(
-                options, batchTickets, sharedWorktreePath, baseRef, chainStartSha,
-                id => activeTicketId = id, ct).ConfigureAwait(false);
-        }
-        catch (BatchTicketingUnavailableException ex)
-        {
-            classifySw.Stop();
-            activeTicketId = ex.TicketId;
-            var results = new List<ChainResult>(batchTickets.Count)
-            {
-                new(activeTicketId, Array.Empty<ChainStep>(), ChainOutcome.TicketingUnavailable,
-                    classifySw.Elapsed, ex.TicketingException.Message)
-            };
-            results.AddRange(batchTickets
-                .Where(t => !string.Equals(t.Id, activeTicketId, StringComparison.Ordinal))
-                .Select(t => new ChainResult(
-                    t.Id, Array.Empty<ChainStep>(), ChainOutcome.Skipped, TimeSpan.Zero, null,
-                    SkipReason: $"ticketing backend unreachable while updating {activeTicketId}; restore connectivity and re-run")));
-            return new BatchImplementOutcome(
-                results.AsReadOnly(), null,
-                PhaseWorktreeLayout.BranchName(batchTickets[0].Id), baseRef);
-        }
-    }
-
-    private async Task<BatchImplementOutcome> RunBatchImplementSessionCoreAsync(
-        ChainPhaseOptions options,
-        IReadOnlyList<Ticket> batchTickets,
-        string sharedWorktreePath,
-        string baseRef,
-        string? chainStartSha,
-        Action<string> setActiveTicket,
-        CancellationToken ct)
-    {
-        var batchSw = Stopwatch.StartNew();
-
-        // Create the first ticket's branch in the shared worktree; all batch commits stack on it.
-        var firstTicket = batchTickets[0];
-        var batchBranchName = PhaseWorktreeLayout.BranchName(firstTicket.Id);
-        var branchResult = await _git.CreateBranchAsync(
-            batchBranchName, baseRef, sharedWorktreePath, ct).ConfigureAwait(false);
-        if (!branchResult.Success)
-        {
-            batchSw.Stop();
-            var branchFail = new ChainResult(
-                firstTicket.Id, Array.Empty<ChainStep>(),
-                ChainOutcome.StoppedAtImplement, batchSw.Elapsed,
-                $"batch implement: branch create for {batchBranchName} failed: {branchResult.FailureReason}");
-            return new BatchImplementOutcome(new[] { branchFail }, null, batchBranchName, baseRef);
-        }
-
-        // Transition all batch tickets Ready -> InProgress to mark that work has started.
-        foreach (var ticket in batchTickets)
-        {
-            setActiveTicket(ticket.Id);
-            await RunBatchStateWriteAsync(ticket.Id,
-                () => _ticketing.TransitionAsync(ticket.Id, TicketState.InProgress, ct)).ConfigureAwait(false);
-        }
-
-        // Build the chain commit range for the brief (best-effort; null is safe).
-        ChainCommitRange? batchCommitRange = null;
-        if (chainStartSha is not null)
-        {
-            try
-            {
-                var (_, currentTargetSha) = await BaseRefResolver.ResolveAsync(
-                    _git, _workingDirectory, _baseOptions.TargetBranch, ct).ConfigureAwait(false);
-                batchCommitRange = await ChainCommitRangeHelper.ComputeAsync(
-                    _git, chainStartSha, currentTargetSha, _workingDirectory, ct).ConfigureAwait(false);
-            }
-            catch { /* non-fatal */ }
-        }
-
-        // Build the RepoState for the brief.
-        string mainSha;
-        try
-        {
-            mainSha = await _git.RevParseAsync(baseRef, _workingDirectory, ct).ConfigureAwait(false);
-        }
-        catch
-        {
-            mainSha = string.Empty;
-        }
-        var topLevelEntries = Directory.EnumerateFileSystemEntries(_workingDirectory).ToList().AsReadOnly();
-        var repoState = new RepoState(mainSha, topLevelEntries);
-
-        // Build the batch implement brief.
-        var batchSessionId = _sessionIdGenerator();
-        var batchBrief = BatchImplementBriefBuilder.Build(
-            _batchWorker!.Name,
-            batchTickets,
-            repoState,
-            batchBranchName,
-            sharedWorktreePath,
-            batchCommitRange);
-
-        // Emit start step for the batch session (associated with the first ticket for tracing).
-        EventEmitter(batchSessionId).EmitPhaseStart(
-            options with { TicketId = firstTicket.Id },
-            "batch-implement",
-            -1,
-            batchSessionId);
-
-        var implSw = Stopwatch.StartNew();
-
-        // Compute the max worker size across all batch tickets.
-        var maxSize = batchTickets.Max(t => WorkerSizeMapper.FromTicketSize(t.Size));
-        var batchBuildOpts = BuildPhaseOptions(batchSessionId, firstTicket.Id, "batch-implement");
-        var workerOptions = new WorkerOptions(
-            _baseOptions.WorkerTimeout,
-            _baseOptions.WorkerAllowedTools,
-            DebugCaptureDirectory: batchBuildOpts.DebugCaptureDirectory,
-            LiveStdoutSink: _baseOptions.LiveStdoutSink,
-            LiveStderrSink: _baseOptions.LiveStderrSink,
-            ProgressDigestSink: _baseOptions.ProgressDigestSink,
-            Size: maxSize,
-            DebugTranscript: new DebugTranscriptContext(
-                BuildVersion: _baseOptions.BuildVersion, SessionId: batchSessionId));
-        if (batchBuildOpts.DebugCaptureDirectory is not null)
-            Directory.CreateDirectory(batchBuildOpts.DebugCaptureDirectory);
-
-        var workerResult = await _batchWorker!
-            .ExecuteAsync(batchBrief, sharedWorktreePath, workerOptions, ct)
-            .ConfigureAwait(false);
-
-        implSw.Stop();
-
-        // Worker failed: if some tickets were committed before the failure, advance the
-        // confirmed ones and leave the first incomplete ticket InProgress so the batch
-        // leaves a clean, recoverable boundary. An empty tickets array (or Escalate)
-        // means nothing committed; stop all tickets.
-        if (workerResult.Status == Status.Failed || workerResult.Status == Status.Escalate)
-        {
-            var failureReason = workerResult.FailureReason ?? workerResult.Summary;
-
-            // Partial failure path: worker committed some tickets before stopping.
-            if (workerResult.Status == Status.Failed &&
-                workerResult.Tickets is not null && workerResult.Tickets.Count > 0)
-            {
-                var partialBase = !string.IsNullOrEmpty(mainSha) ? mainSha : baseRef;
-                var partialVerify = await BatchCommitVerifier
-                    .VerifyAsync(_git, sharedWorktreePath, partialBase, workerResult.Tickets, ct)
-                    .ConfigureAwait(false);
-
-                if (partialVerify.Success)
-                {
-                    var confirmedIds = new HashSet<string>(
-                        partialVerify.ConfirmedTickets.Select(r => r.TicketId),
-                        StringComparer.Ordinal);
-
-                    // Advance each confirmed ticket: post implemented_at marker + InProgress->InReview.
-                    foreach (var confirmedTicket in partialVerify.ConfirmedTickets)
-                    {
-                        var batchTicket = batchTickets.FirstOrDefault(
-                            t => string.Equals(t.Id, confirmedTicket.TicketId, StringComparison.Ordinal));
-                        if (batchTicket is null) continue;
-                        setActiveTicket(batchTicket.Id);
-
-                        string summaryHtml = "";
-                        if (workerResult.Blocks is not null &&
-                            !string.IsNullOrEmpty(confirmedTicket.SummaryRef) &&
-                            workerResult.Blocks.TryGetValue(confirmedTicket.SummaryRef, out var summaryMd) &&
-                            !string.IsNullOrEmpty(summaryMd))
-                        {
-                            summaryHtml = MarkdownRenderer.Render(summaryMd);
-                        }
-
-                        var markerHtml =
-                            $"<p>[implemented_at: {confirmedTicket.CommitSha}] (branch {batchBranchName})" +
-                            $" (batch: stack_position={confirmedTicket.StackPosition})</p>{summaryHtml}";
-                        await RunBatchStateWriteAsync(batchTicket.Id,
-                            () => _ticketing.CreateCommentAsync(batchTicket.Id, markerHtml, ct)).ConfigureAwait(false);
-                        await RunBatchStateWriteAsync(batchTicket.Id,
-                            () => _ticketing.TransitionAsync(batchTicket.Id, TicketState.InReview, ct)).ConfigureAwait(false);
-                    }
-
-                    // Post failure reason to the first incomplete ticket so the operator
-                    // can see why the batch stopped without consulting the event log.
-                    var firstIncomplete = batchTickets.FirstOrDefault(t => !confirmedIds.Contains(t.Id));
-                    if (firstIncomplete is not null)
-                    {
-                        var failHtml = $"<p>batch implement stopped: {WebUtility.HtmlEncode(failureReason)}</p>";
-                        await EventEmitter(batchSessionId).BestEffortTicketWriteAsync(
-                            firstIncomplete.Id,
-                            "batch_stopped_comment",
-                            ticketing => ticketing.CreateCommentAsync(firstIncomplete.Id, failHtml, ct),
-                            ct).ConfigureAwait(false);
-                    }
-
-                    // Return mixed results: confirmed tickets -> BatchImplemented,
-                    // incomplete tickets -> StoppedAtImplement.
-                    batchSw.Stop();
-                    var partialResults = new List<ChainResult>(batchTickets.Count);
-                    for (int i = 0; i < batchTickets.Count; i++)
-                    {
-                        var ticket = batchTickets[i];
-                        var perResult = partialVerify.ConfirmedTickets.FirstOrDefault(
-                            r => string.Equals(r.TicketId, ticket.Id, StringComparison.Ordinal));
-
-                        if (perResult is not null)
-                        {
-                            var implStep = new ChainStep(
-                                PhaseName: "batch-implement",
-                                ReworkRoundNumber: 0,
-                                Status: Status.Ok,
-                                FailureReason: null,
-                                Verdict: null,
-                                Duration: implSw.Elapsed,
-                                PhaseSessionId: batchSessionId);
-                            partialResults.Add(new ChainResult(
-                                TicketId: ticket.Id,
-                                Steps: new[] { implStep },
-                                Outcome: ChainOutcome.BatchImplemented,
-                                TotalDuration: batchSw.Elapsed,
-                                FinalRationale: $"batch implement succeeded; commit {perResult.CommitSha}"));
-                        }
-                        else
-                        {
-                            partialResults.Add(new ChainResult(
-                                ticket.Id, Array.Empty<ChainStep>(),
-                                ChainOutcome.StoppedAtImplement, batchSw.Elapsed,
-                                failureReason));
-                        }
-                    }
-                    return new BatchImplementOutcome(
-                        partialResults.AsReadOnly(), null, batchBranchName,
-                        !string.IsNullOrEmpty(mainSha) ? mainSha : baseRef);
-                }
-                // Partial verification failed: fall through to total failure path.
-            }
-
-            batchSw.Stop();
-            return new BatchImplementOutcome(
-                batchTickets.Select(t => new ChainResult(
-                    t.Id, Array.Empty<ChainStep>(),
-                    ChainOutcome.StoppedAtImplement, batchSw.Elapsed,
-                    failureReason)).ToList().AsReadOnly(),
-                null, batchBranchName, baseRef);
-        }
-
-        // Worker succeeded: confirm the worktree is clean and that each reported SHA
-        // exists in the branch in declared stack order. Fail before any marker is posted
-        // when the check does not hold, naming the first ticket that fails.
-        var verifyBase = !string.IsNullOrEmpty(mainSha) ? mainSha : baseRef;
-
-        // Prefer the worker's per-ticket self-report; if it omitted the tickets array,
-        // reconstruct attribution from the actual commits. The brief mandates one commit
-        // per ticket in declared stack order, so the commits map 1:1 onto the tickets -
-        // git is the source of truth and a forgotten echo must not discard real work.
-        var reportedTickets = workerResult.Tickets;
-        if (reportedTickets is null || reportedTickets.Count == 0)
-        {
-            var recon = await BatchCommitVerifier
-                .ReconstructFromGitAsync(
-                    _git, sharedWorktreePath, verifyBase,
-                    batchTickets.Select(t => t.Id).ToList(), ct)
-                .ConfigureAwait(false);
-            if (!recon.Success)
-            {
-                batchSw.Stop();
-                return new BatchImplementOutcome(
-                    batchTickets.Select(t => new ChainResult(
-                        t.Id, Array.Empty<ChainStep>(),
-                        ChainOutcome.StoppedAtImplement, batchSw.Elapsed,
-                        recon.FailureReason)).ToList().AsReadOnly(),
-                    null, batchBranchName, verifyBase);
-            }
-            reportedTickets = recon.ConfirmedTickets;
-        }
-
-        var verifyResult = await BatchCommitVerifier
-            .VerifyAsync(_git, sharedWorktreePath, verifyBase, reportedTickets, ct)
-            .ConfigureAwait(false);
-        if (!verifyResult.Success)
-        {
-            batchSw.Stop();
-            return new BatchImplementOutcome(
-                batchTickets.Select(t => new ChainResult(
-                    t.Id, Array.Empty<ChainStep>(),
-                    ChainOutcome.StoppedAtImplement, batchSw.Elapsed,
-                    verifyResult.FailureReason)).ToList().AsReadOnly(),
-                null, batchBranchName, !string.IsNullOrEmpty(mainSha) ? mainSha : baseRef);
-        }
-
-        // Produce a BatchImplemented result for each ticket, sourcing per-ticket commit
-        // attribution from the confirmed git state rather than the worker's self-report.
-        // For each confirmed ticket, post the implemented_at marker and transition to InReview
-        // so downstream review and ship read the batch stack through the same markers and states
-        // as a single-ticket run.
-        var perTicketResults = verifyResult.ConfirmedTickets;
-        var results = new List<ChainResult>(batchTickets.Count);
-        for (int i = 0; i < batchTickets.Count; i++)
-        {
-            var ticket = batchTickets[i];
-            setActiveTicket(ticket.Id);
-            var perTicket = perTicketResults.FirstOrDefault(
-                r => string.Equals(r.TicketId, ticket.Id, StringComparison.Ordinal));
-
-            if (perTicket is null)
-            {
-                // No commit attribution for this ticket: without a SHA we cannot post the
-                // implemented_at marker, transition to InReview, or ship it. Stop it
-                // explicitly rather than laundering it into a BatchImplemented success that
-                // never advances - that silent half-complete is what made a fully-committed
-                // batch read as "child did not complete" to the parent chain.
-                results.Add(new ChainResult(
-                    TicketId: ticket.Id,
-                    Steps: Array.Empty<ChainStep>(),
-                    Outcome: ChainOutcome.StoppedAtImplement,
-                    TotalDuration: batchSw.Elapsed,
-                    FinalRationale:
-                        $"batch implement: no commit attribution for {ticket.Id}; the worker " +
-                        "self-report omitted it and it could not be reconstructed from git"));
-                continue;
-            }
-
-            // Resolve per-ticket summary markdown from the worker's fenced blocks (best-effort).
-            string summaryHtml = "";
-            if (workerResult.Blocks is not null &&
-                !string.IsNullOrEmpty(perTicket.SummaryRef) &&
-                workerResult.Blocks.TryGetValue(perTicket.SummaryRef, out var summaryMarkdown) &&
-                !string.IsNullOrEmpty(summaryMarkdown))
-            {
-                summaryHtml = MarkdownRenderer.Render(summaryMarkdown);
-            }
-
-            // Post the implemented_at marker in the same shape as a single-ticket run.
-            // Batch fields use parens (not brackets) so the marker parser does not read
-            // them as additional markers.
-            var commentHtml =
-                $"<p>[implemented_at: {perTicket.CommitSha}] (branch {batchBranchName})" +
-                $" (batch: stack_position={perTicket.StackPosition})</p>{summaryHtml}";
-            await RunBatchStateWriteAsync(ticket.Id,
-                () => _ticketing.CreateCommentAsync(ticket.Id, commentHtml, ct)).ConfigureAwait(false);
-
-            // Transition InProgress -> InReview to match single-ticket run observable state;
-            // both this state and the marker above are resume-oracle writes and stay hard.
-            await RunBatchStateWriteAsync(ticket.Id,
-                () => _ticketing.TransitionAsync(ticket.Id, TicketState.InReview, ct)).ConfigureAwait(false);
-
-            var implStep = new ChainStep(
-                PhaseName: "batch-implement",
-                ReworkRoundNumber: 0,
-                Status: Status.Ok,
-                FailureReason: null,
-                Verdict: null,
-                Duration: implSw.Elapsed,
-                PhaseSessionId: batchSessionId);
-
-            results.Add(new ChainResult(
-                TicketId: ticket.Id,
-                Steps: new[] { implStep },
-                Outcome: ChainOutcome.BatchImplemented,
-                TotalDuration: batchSw.Elapsed,
-                FinalRationale: $"batch implement succeeded; commit {perTicket.CommitSha}"));
-        }
-
-        return new BatchImplementOutcome(
-            results.AsReadOnly(),
-            verifyResult.ConfirmedTickets,
-            batchBranchName,
-            !string.IsNullOrEmpty(mainSha) ? mainSha : baseRef);
-    }
-
     // Outcome returned by RunCombinedBatchReviewAsync so callers can distinguish
     // Pass / Rework / Fail and read the feedback without re-parsing worker metadata.
     private sealed record BatchReviewOutcome(
@@ -1796,42 +1406,6 @@ public class ChainPhase
     /// Classifies batch review rework feedback as localized (names exactly one batch ticket)
     /// or cross-ticket (names zero or multiple tickets, or relates to integration seams).
     /// </summary>
-    /// <summary>
-    /// Checks the declared batch group against the configured size caps before any session
-    /// starts. Returns a human-readable description of the first exceeded cap (e.g.
-    /// "max_tickets=8 (actual 10)"), or null when all caps pass. Three caps are checked
-    /// in order: ticket count, aggregate size score (S=1/M=2/L=4), and total description
-    /// bytes (a proxy for estimated worker context). The caller logs the returned string and
-    /// falls back to the per-ticket chain path.
-    /// </summary>
-    internal static string? CheckBatchSizeCaps(IReadOnlyList<Ticket> batchTickets, BuildOptions opts)
-    {
-        if (batchTickets.Count > opts.BatchMaxTickets)
-            return $"max_tickets={opts.BatchMaxTickets} (actual {batchTickets.Count})";
-
-        int sizeScore = 0;
-        foreach (var t in batchTickets)
-        {
-            sizeScore += t.Size switch
-            {
-                Size.S => 1,
-                Size.M => 2,
-                Size.L => 4,
-                _ => 1
-            };
-        }
-        if (sizeScore > opts.BatchMaxSizeScore)
-            return $"max_size_score={opts.BatchMaxSizeScore} (actual {sizeScore})";
-
-        int descBytes = 0;
-        foreach (var t in batchTickets)
-            descBytes += System.Text.Encoding.UTF8.GetByteCount(t.DescriptionHtml ?? string.Empty);
-        if (descBytes > opts.BatchMaxDescriptionBytes)
-            return $"max_description_bytes={opts.BatchMaxDescriptionBytes} (actual {descBytes})";
-
-        return null;
-    }
-
     internal static BatchReworkRoute ClassifyBatchRework(
         IReadOnlyList<Ticket> batchTickets,
         string rationale)
@@ -1927,7 +1501,7 @@ public class ChainPhase
         // Transition the affected ticket InReview -> InProgress so ImplementPhase's
         // state check passes. ImplementPhase will transition it back to InReview after
         // adding the rework commit and posting a new [implemented_at:] marker.
-        await RunBatchStateWriteAsync(targetTicketId,
+        await BatchTicketWriter.RunBatchStateWriteAsync(targetTicketId,
             () => _ticketing.TransitionAsync(targetTicketId, TicketState.InProgress, ct)).ConfigureAwait(false);
 
         var sessionId = _sessionIdGenerator();
@@ -1966,7 +1540,7 @@ public class ChainPhase
     {
         // Transition all tickets InReview -> InProgress for the rework session.
         foreach (var ticket in batchTickets)
-            await RunBatchStateWriteAsync(ticket.Id,
+            await BatchTicketWriter.RunBatchStateWriteAsync(ticket.Id,
                 () => _ticketing.TransitionAsync(ticket.Id, TicketState.InProgress, ct)).ConfigureAwait(false);
 
         // Build chain commit range for context (best-effort).
@@ -2045,9 +1619,9 @@ public class ChainPhase
             var markerHtml =
                 $"<p>[implemented_at: {confirmed.CommitSha}] (branch {batchBranchName})" +
                 $" (batch-rework: stack_position={confirmed.StackPosition})</p>";
-            await RunBatchStateWriteAsync(confirmed.TicketId,
+            await BatchTicketWriter.RunBatchStateWriteAsync(confirmed.TicketId,
                 () => _ticketing.CreateCommentAsync(confirmed.TicketId, markerHtml, ct)).ConfigureAwait(false);
-            await RunBatchStateWriteAsync(confirmed.TicketId,
+            await BatchTicketWriter.RunBatchStateWriteAsync(confirmed.TicketId,
                 () => _ticketing.TransitionAsync(confirmed.TicketId, TicketState.InReview, ct)).ConfigureAwait(false);
         }
 
@@ -2246,7 +1820,8 @@ public class ChainPhase
                 {
                     if (candidate.State == TicketState.Backlog)
                     {
-                        var planReason = await PlanForBatchAsync(options, candidate.Id, ct).ConfigureAwait(false);
+                        var planReason = await _batchImplementRunner
+                            .PlanForBatchAsync(options, candidate.Id, ct).ConfigureAwait(false);
                         if (planReason is not null)
                         {
                             allChildResults.Add(new ChainResult(candidate.Id, Array.Empty<ChainStep>(),
@@ -2264,7 +1839,8 @@ public class ChainPhase
 
                 if (!planStopped && batchTickets.Count > 0)
                 {
-                    var capViolation = CheckBatchSizeCaps(batchTickets, _baseOptions);
+                    var capViolation = BatchImplementRunner.CheckBatchSizeCaps(
+                        batchTickets, _baseOptions);
                     if (capViolation is not null)
                     {
                         Console.Error.WriteLine(
@@ -2288,7 +1864,7 @@ public class ChainPhase
                         batchedTicketIds = new HashSet<string>(
                             batchTickets.Select(t => t.Id), StringComparer.Ordinal);
 
-                        var batchOutcome = await RunBatchImplementSessionAsync(
+                        var batchOutcome = await _batchImplementRunner.RunBatchImplementSessionAsync(
                             options, batchTickets, sharedWorktreePath, integrationBranch, chainStartSha, ct)
                             .ConfigureAwait(false);
 
@@ -2568,32 +2144,6 @@ public class ChainPhase
             TotalDuration: totalSw.Elapsed,
             FinalRationale: finalRationale,
             ChildResults: childResults.AsReadOnly());
-    }
-
-    /// <summary>
-    /// Plans a single Backlog candidate for a batch group. Planning stays per-ticket (only the
-    /// implement/review/ship is batched). Returns null on success, or a failure reason on failure.
-    /// Emits plan START/done through the OnStep stream under the candidate's id so the operator sees
-    /// the per-ticket planning the same way the per-ticket chain shows it.
-    /// </summary>
-    private async Task<string?> PlanForBatchAsync(ChainPhaseOptions options, string ticketId, CancellationToken ct)
-    {
-        var sessionId = _sessionIdGenerator();
-        var buildOpts = BuildPhaseOptions(sessionId, ticketId, "plan", targetBranch: options.ChainTargetBranch);
-        var childOptions = options with { TicketId = ticketId };
-        EventEmitter(sessionId).EmitPhaseStart(childOptions, "plan", -1, sessionId);
-        var sw = Stopwatch.StartNew();
-        var planResult = await _planFactory(buildOpts).RunAsync(ticketId, _workingDirectory, ct).ConfigureAwait(false);
-        sw.Stop();
-        childOptions.OnStep?.Invoke(ticketId, new ChainStep(
-            PhaseName: "plan",
-            ReworkRoundNumber: -1,
-            Status: planResult.Success ? Status.Ok : Status.Failed,
-            FailureReason: planResult.FailureReason,
-            Verdict: null,
-            Duration: sw.Elapsed,
-            PhaseSessionId: sessionId));
-        return planResult.Success ? null : (planResult.FailureReason ?? "planning failed");
     }
 
     private static IReadOnlySet<string> AddVisited(IReadOnlySet<string>? visited, string uuid)

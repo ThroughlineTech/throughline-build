@@ -39,7 +39,7 @@ public class BatchSizeFallbackTests
     [Fact]
     public void CheckBatchSizeCaps_EmptyGroup_ReturnsNull()
     {
-        var result = ChainPhase.CheckBatchSizeCaps(Array.Empty<Ticket>(), MakeOpts());
+        var result = BatchImplementRunner.CheckBatchSizeCaps(Array.Empty<Ticket>(), MakeOpts());
 
         Assert.Null(result);
     }
@@ -53,7 +53,7 @@ public class BatchSizeFallbackTests
             MakeTicket("TLB-2", Size.M, "plan B"),
         };
 
-        var result = ChainPhase.CheckBatchSizeCaps(tickets, MakeOpts(maxTickets: 8, maxSizeScore: 16));
+        var result = BatchImplementRunner.CheckBatchSizeCaps(tickets, MakeOpts(maxTickets: 8, maxSizeScore: 16));
 
         Assert.Null(result);
     }
@@ -64,7 +64,7 @@ public class BatchSizeFallbackTests
         // 4 tickets, cap is 4 - should pass (boundary is inclusive)
         var tickets = Enumerable.Range(1, 4).Select(i => MakeTicket($"TLB-{i}")).ToArray();
 
-        var result = ChainPhase.CheckBatchSizeCaps(tickets, MakeOpts(maxTickets: 4));
+        var result = BatchImplementRunner.CheckBatchSizeCaps(tickets, MakeOpts(maxTickets: 4));
 
         Assert.Null(result);
     }
@@ -75,7 +75,7 @@ public class BatchSizeFallbackTests
         // 4 x S (score 1 each = 4 total), cap is 4
         var tickets = Enumerable.Range(1, 4).Select(i => MakeTicket($"TLB-{i}", Size.S)).ToArray();
 
-        var result = ChainPhase.CheckBatchSizeCaps(tickets, MakeOpts(maxTickets: 10, maxSizeScore: 4));
+        var result = BatchImplementRunner.CheckBatchSizeCaps(tickets, MakeOpts(maxTickets: 10, maxSizeScore: 4));
 
         Assert.Null(result);
     }
@@ -87,7 +87,7 @@ public class BatchSizeFallbackTests
     {
         var tickets = Enumerable.Range(1, 5).Select(i => MakeTicket($"TLB-{i}")).ToArray();
 
-        var result = ChainPhase.CheckBatchSizeCaps(tickets, MakeOpts(maxTickets: 4));
+        var result = BatchImplementRunner.CheckBatchSizeCaps(tickets, MakeOpts(maxTickets: 4));
 
         Assert.NotNull(result);
         Assert.Contains("max_tickets=4", result);
@@ -99,7 +99,7 @@ public class BatchSizeFallbackTests
     {
         var tickets = new[] { MakeTicket("TLB-1"), MakeTicket("TLB-2") };
 
-        var result = ChainPhase.CheckBatchSizeCaps(tickets, MakeOpts(maxTickets: 1));
+        var result = BatchImplementRunner.CheckBatchSizeCaps(tickets, MakeOpts(maxTickets: 1));
 
         Assert.NotNull(result);
         Assert.Contains("max_tickets=1", result);
@@ -117,7 +117,7 @@ public class BatchSizeFallbackTests
             MakeTicket("TLB-2", Size.L),
         };
 
-        var result = ChainPhase.CheckBatchSizeCaps(tickets, MakeOpts(maxTickets: 10, maxSizeScore: 6));
+        var result = BatchImplementRunner.CheckBatchSizeCaps(tickets, MakeOpts(maxTickets: 10, maxSizeScore: 6));
 
         Assert.NotNull(result);
         Assert.Contains("max_size_score=6", result);
@@ -135,7 +135,7 @@ public class BatchSizeFallbackTests
             MakeTicket("TLB-3", Size.L),
         };
 
-        var result = ChainPhase.CheckBatchSizeCaps(tickets, MakeOpts(maxTickets: 10, maxSizeScore: 6));
+        var result = BatchImplementRunner.CheckBatchSizeCaps(tickets, MakeOpts(maxTickets: 10, maxSizeScore: 6));
 
         Assert.NotNull(result);
         Assert.Contains("max_size_score=6", result);
@@ -155,7 +155,7 @@ public class BatchSizeFallbackTests
             MakeTicket("TLB-2", Size.S, bigDesc),
         };
 
-        var result = ChainPhase.CheckBatchSizeCaps(tickets, MakeOpts(maxDescriptionBytes: 150));
+        var result = BatchImplementRunner.CheckBatchSizeCaps(tickets, MakeOpts(maxDescriptionBytes: 150));
 
         Assert.NotNull(result);
         Assert.Contains("max_description_bytes=150", result);
@@ -168,7 +168,7 @@ public class BatchSizeFallbackTests
         var desc = new string('x', 100);
         var tickets = new[] { MakeTicket("TLB-1", Size.S, desc) };
 
-        var result = ChainPhase.CheckBatchSizeCaps(tickets, MakeOpts(maxDescriptionBytes: 100));
+        var result = BatchImplementRunner.CheckBatchSizeCaps(tickets, MakeOpts(maxDescriptionBytes: 100));
 
         Assert.Null(result);
     }
@@ -181,7 +181,7 @@ public class BatchSizeFallbackTests
         // 5 L tickets: count > 4, score = 20 > 10 - count cap fires first
         var tickets = Enumerable.Range(1, 5).Select(i => MakeTicket($"TLB-{i}", Size.L)).ToArray();
 
-        var result = ChainPhase.CheckBatchSizeCaps(tickets, MakeOpts(maxTickets: 4, maxSizeScore: 10));
+        var result = BatchImplementRunner.CheckBatchSizeCaps(tickets, MakeOpts(maxTickets: 4, maxSizeScore: 10));
 
         Assert.NotNull(result);
         Assert.Contains("max_tickets=4", result);
@@ -195,7 +195,7 @@ public class BatchSizeFallbackTests
         // Empty description = 0 UTF-8 bytes; even a low cap should not trigger.
         var tickets = new[] { MakeTicket("TLB-1", Size.S, string.Empty) };
 
-        var result = ChainPhase.CheckBatchSizeCaps(tickets, MakeOpts(maxDescriptionBytes: 1));
+        var result = BatchImplementRunner.CheckBatchSizeCaps(tickets, MakeOpts(maxDescriptionBytes: 1));
 
         Assert.Null(result);
     }

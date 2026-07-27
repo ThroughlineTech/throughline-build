@@ -82,10 +82,10 @@ public sealed class ChainIntegrationBranch
 
         foreach (var ticket in batchTickets)
         {
-            await RunBatchStateWriteAsync(ticket.Id,
+            await BatchTicketWriter.RunBatchStateWriteAsync(ticket.Id,
                 () => ticketing.CreateCommentAsync(ticket.Id,
                     $"<p>[shipped_at: {shippedSha}] (batch into {integrationBranch})</p>", ct)).ConfigureAwait(false);
-            await RunBatchStateWriteAsync(ticket.Id,
+            await BatchTicketWriter.RunBatchStateWriteAsync(ticket.Id,
                 () => ticketing.TransitionAsync(ticket.Id, TicketState.Done, ct)).ConfigureAwait(false);
             await eventEmitterFactory().EmitAsync(
                 EventKind.StateTransition,
@@ -398,23 +398,4 @@ public sealed class ChainIntegrationBranch
         }
     }
 
-    private static async Task RunBatchStateWriteAsync(string ticketId, Func<Task> write)
-    {
-        try
-        {
-            await write().ConfigureAwait(false);
-        }
-        catch (TicketingUnavailableException ex)
-        {
-            throw new BatchTicketingUnavailableException(ticketId, ex);
-        }
-    }
-}
-
-internal sealed class BatchTicketingUnavailableException(
-    string ticketId,
-    TicketingUnavailableException innerException) : Exception(innerException.Message, innerException)
-{
-    public string TicketId { get; } = ticketId;
-    public TicketingUnavailableException TicketingException { get; } = innerException;
 }
