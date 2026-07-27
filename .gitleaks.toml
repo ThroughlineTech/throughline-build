@@ -9,3 +9,10 @@ regexTarget = "match"
 regexes = [
   '''sk-ant-LEAKEDvalue1234567''',
 ]
+
+[[allowlists]]
+description = "Historical code assigns a secret value to a client option without embedding it"
+regexTarget = "match"
+regexes = [
+  '''ApiKey\s*=\s*secrets2\.AnthropicApiKey''',
+]
