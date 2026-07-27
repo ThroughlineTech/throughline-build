@@ -259,8 +259,14 @@ public class ChainPhase
         // map directly to plan/implement/review. Planning and InProgress are non-terminal "stuck"
         // states an interrupted plan/implement leaves behind; the chain resumes them (reconciling any
         // orphaned branch/worktree first) rather than refusing. Only the terminal Done/Cancelled
-        // states are genuinely un-runnable. ResolveEntryAsync performs any reset/prune side effects.
-        var entry = await ResolveEntryAsync(ticket, chainSessionId, ct).ConfigureAwait(false);
+        // states are genuinely un-runnable. ChainResumeResolver performs any reset/prune side effects.
+        var entry = await new ChainResumeResolver(
+                _ticketing,
+                _git,
+                _feedbackRetriever,
+                EventEmitter(chainSessionId))
+            .ResolveAsync(ticket, _workingDirectory, _baseOptions.TargetBranch, ct)
+            .ConfigureAwait(false);
         var startPhase = entry.StartPhase;
 
         var startingAtPhaseStr = startPhase switch
@@ -3048,117 +3054,4 @@ public class ChainPhase
         catch { /* cleanup must never fail a successful chain */ }
     }
 
-    /// <summary>
-    /// Decides where the chain enters for a single (leaf) ticket and performs any state-reconciliation
-    /// side effects required to make that entry valid. Backlog/Ready/InReview map directly; the
-    /// non-terminal "stuck" states (Planning, InProgress) are resumed; Done/Cancelled are refused.
-    /// </summary>
-    private async Task<ChainEntry> ResolveEntryAsync(Ticket ticket, string chainSessionId, CancellationToken ct)
-    {
-        switch (ticket.State)
-        {
-            case TicketState.Backlog:
-                return new ChainEntry(StartPhase.Plan, null, 0);
-            case TicketState.Ready:
-                return new ChainEntry(StartPhase.Implement, null, 0);
-            case TicketState.InReview:
-                return new ChainEntry(StartPhase.Review, null, 0);
-            case TicketState.Planning:
-                // Plan started but never finished: Backlog->Planning happens before the plan worker
-                // runs, and no plan artifact is appended until it succeeds, so a Planning ticket has
-                // nothing to preserve. Reset to Backlog and replan from scratch.
-                await _ticketing.TransitionAsync(ticket.Id, TicketState.Backlog, ct).ConfigureAwait(false);
-                await EmitResumeTransitionAsync(chainSessionId, ticket.Id, "Planning", "Backlog", ct).ConfigureAwait(false);
-                return new ChainEntry(StartPhase.Plan, null, 0);
-            case TicketState.InProgress:
-                return await ResolveInProgressAsync(ticket, chainSessionId, ct).ConfigureAwait(false);
-            default:
-                return new ChainEntry(StartPhase.Refused, null, 0);
-        }
-    }
-
-    /// <summary>
-    /// Resolves how to resume an InProgress ticket. If the ticket's branch carries no committed work
-    /// beyond the base (an interrupted *initial* implement transitions Ready->InProgress before the
-    /// worker commits), the orphaned branch/worktree are pruned and the ticket is reset to Ready so a
-    /// clean implement runs - crucially, in a parent chain this lets the branch be recreated inside the
-    /// shared worktree rather than re-using an orphaned standalone one (the source of the
-    /// shared-vs-standalone worktree confusion). A branch with commits is real in-progress work and is
-    /// resumed in place via the rework path.
-    /// </summary>
-    private async Task<ChainEntry> ResolveInProgressAsync(Ticket ticket, string chainSessionId, CancellationToken ct)
-    {
-        var names = PhaseWorktreeLayout.Compute(ticket.Id, ticket.Title, _workingDirectory);
-
-        int commitsOnBranch = 0;
-        try
-        {
-            var (baseRef, _) = await BaseRefResolver.ResolveAsync(_git, _workingDirectory, _baseOptions.TargetBranch, ct)
-                .ConfigureAwait(false);
-            commitsOnBranch = await _git.RevListCountAsync($"{baseRef}..{names.BranchName}", _workingDirectory, ct)
-                .ConfigureAwait(false);
-        }
-        catch { /* best-effort: a git failure (e.g. branch absent) is treated as no commits */ }
-
-        if (commitsOnBranch == 0)
-        {
-            await PruneOrphanBranchAsync(names.BranchName, ct).ConfigureAwait(false);
-            await _ticketing.TransitionAsync(ticket.Id, TicketState.Ready, ct).ConfigureAwait(false);
-            await EmitResumeTransitionAsync(chainSessionId, ticket.Id, "InProgress", "Ready", ct).ConfigureAwait(false);
-            return new ChainEntry(StartPhase.Implement, null, 0);
-        }
-
-        // Resume rework in place. Recover the last Rework verdict from the event log if present,
-        // else synthesize a neutral resume note (an interrupted implement may never have been reviewed).
-        var recovered = _feedbackRetriever?.GetLatestRework(ticket.Id);
-        var feedback = recovered is not null
-            ? recovered with { ReworkRoundNumber = 1 }
-            : new ReviewFeedback(
-                "Resume interrupted implementation: a prior implement round for this ticket did not finish. " +
-                "Continue or redo the implementation from the current worktree state.",
-                Array.Empty<string>(),
-                1);
-        return new ChainEntry(StartPhase.ResumeImplement, feedback, 1);
-    }
-
-    /// <summary>
-    /// Removes an orphaned ticket branch and its worktree (if any) so a fresh implement can recreate
-    /// the branch without a "branch already exists" collision. Best-effort: a worktree/branch that
-    /// cannot be removed is left for the implement phase to surface.
-    /// </summary>
-    private async Task PruneOrphanBranchAsync(string branchName, CancellationToken ct)
-    {
-        try
-        {
-            var worktrees = await _git.ListWorktreesAsync(ct).ConfigureAwait(false);
-            foreach (var w in worktrees)
-            {
-                if (string.Equals(w.Branch, branchName, StringComparison.OrdinalIgnoreCase))
-                {
-                    await _git.RemoveWorktreeAsync(w.Path, force: true, ct).ConfigureAwait(false);
-                    break;
-                }
-            }
-            await _git.DeleteBranchAsync(branchName, force: true, _workingDirectory, ct).ConfigureAwait(false);
-        }
-        catch { /* non-fatal */ }
-    }
-
-    private async Task EmitResumeTransitionAsync(string chainSessionId, string ticketId, string from, string to, CancellationToken ct)
-    {
-        await EventEmitter(chainSessionId).EmitAsync(
-            EventKind.StateTransition,
-            ticketId,
-            Phase.Chain,
-            new Dictionary<string, object>
-            {
-                ["from"] = from,
-                ["to"] = to,
-                ["reason"] = "chain_resume"
-            }, ct).ConfigureAwait(false);
-    }
-
-    private sealed record ChainEntry(StartPhase StartPhase, ReviewFeedback? ResumeFeedback, int ResumeStartRound);
-
-    private enum StartPhase { Plan, Implement, ResumeImplement, Review, Refused }
 }
