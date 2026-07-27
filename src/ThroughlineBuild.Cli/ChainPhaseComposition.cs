@@ -11,15 +11,20 @@ namespace ThroughlineBuild.Cli;
 /// test-coverable seam. The original --batch-implement bug (the batchWorker argument omitted from
 /// the inline ChainPhase construction) went undetected for the feature's whole life precisely
 /// because the composition root had no test; building the phase here lets one Cli.Tests check fail
-/// if a required dependency is ever dropped again. This is a pure extraction - it only news up the
-/// ChainPhase the inline code built before, with identical arguments.
+/// if a required dependency is ever dropped again. It is also the output boundary: the CLI supplies
+/// the normal-output and diagnostics writers that the phase assembly must never resolve globally.
 /// </summary>
 internal static class ChainPhaseComposition
 {
+    internal static TextWriter SelectHumanOutput(
+        bool summaryJson,
+        TextWriter standardOutput) =>
+        summaryJson ? TextWriter.Null : standardOutput;
+
     /// <summary>
     /// Builds the ChainPhase used by the chain verb from resolved dependencies. The batch-implement
     /// worker is created here from the same implement agent the per-ticket implement factory uses;
-    /// dropping it leaves the batch path in RunParentChainAsync unreachable.
+    /// dropping it leaves the ParentChainRunner batch path unreachable.
     /// </summary>
     internal static ChainPhase BuildChainPhase(
         ITicketing ticketing,
@@ -36,6 +41,8 @@ internal static class ChainPhaseComposition
         Func<string, string> effectiveAgentFor,
         string? landingRemote,
         bool landingPushEnabled,
+        TextWriter output,
+        TextWriter diagnostics,
         // The deterministic gate (op-30) runs between implement and review. Optional: null leaves the
         // chain on its pre-gate path. Forwarded through the same single composition seam as the batch
         // worker so neither can be silently dropped from the ChainPhase construction.
@@ -78,6 +85,7 @@ internal static class ChainPhaseComposition
                     reworkRecheckSpecs is { Count: > 0 }
                         ? new AutomatedChecksRunner()
                         : null,
-                Output = null
+                Output = output,
+                Diagnostics = diagnostics
             });
 }

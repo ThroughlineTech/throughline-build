@@ -48,6 +48,7 @@ public class GatePhase
     // when an environment failure is detected and the on-disk specs differ, the gate re-runs once
     // with the fresh specs and recovers in-run. Null disables the recovery arm.
     private readonly Func<IReadOnlyList<CheckSpec>?>? _gateChecksReloader;
+    private readonly TextWriter _diagnostics;
 
     public GatePhase(
         ITicketing ticketing,
@@ -58,7 +59,8 @@ public class GatePhase
         AutomatedChecksRunner? checksRunner = null,
         GateVacuityProver? vacuityProver = null,
         GateControlProber? controlProber = null,
-        Func<IReadOnlyList<CheckSpec>?>? gateChecksReloader = null)
+        Func<IReadOnlyList<CheckSpec>?>? gateChecksReloader = null,
+        TextWriter? diagnostics = null)
     {
         _ticketing = ticketing;
         _events = events;
@@ -69,6 +71,7 @@ public class GatePhase
         _vacuityProver = vacuityProver;
         _controlProber = controlProber;
         _gateChecksReloader = gateChecksReloader;
+        _diagnostics = diagnostics ?? TextWriter.Null;
     }
 
     public async Task<GateOutcome> RunAsync(
@@ -409,5 +412,5 @@ public class GatePhase
         string ticketId, string operation, string html, CancellationToken ct) =>
         TicketingWritePolicy.BestEffortAsync(
             _events, _options.SessionId, ticketId, Phase.Gate, operation,
-            () => _ticketing.CreateCommentAsync(ticketId, html, ct), ct);
+            () => _ticketing.CreateCommentAsync(ticketId, html, ct), _diagnostics, ct);
 }

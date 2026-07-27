@@ -93,7 +93,7 @@ public class ChainIntegrationBranchTests
         var git = new FakeGit();
         var collaborators = BuildCollaborators(git, workingDirectory);
         var integrationBranch = new ChainIntegrationBranch(
-            git, workingDirectory, remote, pushEnabled);
+            git, workingDirectory, remote, pushEnabled, TextWriter.Null);
 
         var failure = await integrationBranch.LandRootIntegrationBranchAsync(
             "TLB-1",
@@ -147,7 +147,7 @@ public class ChainIntegrationBranchTests
         try
         {
             var git = new ProcessGitClient(repositoryDirectory);
-            var integration = new ChainIntegrationBranch(git, repositoryDirectory, null, false);
+            var integration = new ChainIntegrationBranch(git, repositoryDirectory, null, false, TextWriter.Null);
             var ticket = MakeTicket();
             var branch = ChainIntegrationBranch.BranchName(ticket);
             var worktreePath = Path.Combine(repositoryDirectory, ".worktrees", "tlb-574");
@@ -210,7 +210,7 @@ public class ChainIntegrationBranchTests
         var events = new RecordingEventSink();
         var ticketing = new StubTicketing();
         return (
-            new ChainIntegrationBranch(git, workingDirectory, null, false),
+            new ChainIntegrationBranch(git, workingDirectory, null, false, TextWriter.Null),
             new ChainEventEmitter(events, ticketing, "session"),
             events);
     }

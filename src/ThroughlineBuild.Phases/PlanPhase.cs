@@ -55,6 +55,7 @@ public class PlanPhase : IWorkflowPhase
     private readonly BuildOptions _options;
     private readonly IGitClient _git;
     private readonly ProjectContext _project;
+    private readonly TextWriter _diagnostics;
 
     public PlanPhase(
         ITicketing ticketing,
@@ -62,7 +63,8 @@ public class PlanPhase : IWorkflowPhase
         IEventSink events,
         BuildOptions options,
         IGitClient? gitClient = null,
-        ProjectContext? project = null)
+        ProjectContext? project = null,
+        TextWriter? diagnostics = null)
     {
         _ticketing = ticketing;
         _worker = worker;
@@ -70,6 +72,7 @@ public class PlanPhase : IWorkflowPhase
         _options = options;
         _git = gitClient ?? new ProcessGitClient();
         _project = project ?? ProjectContext.Empty;
+        _diagnostics = diagnostics ?? TextWriter.Null;
     }
 
     public Phase Phase => Phase.Plan;
@@ -214,7 +217,7 @@ public class PlanPhase : IWorkflowPhase
     private Task<bool> BestEffortWriteAsync(
         string ticketId, string operation, Func<Task> write, CancellationToken ct) =>
         TicketingWritePolicy.BestEffortAsync(
-            _events, _options.SessionId, ticketId, Phase.Plan, operation, write, ct);
+            _events, _options.SessionId, ticketId, Phase.Plan, operation, write, _diagnostics, ct);
 
 
     private static IReadOnlyList<string> MergeRiskSizeLabels(

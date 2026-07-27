@@ -15,17 +15,20 @@ public sealed class ChainIntegrationBranch
     private readonly string _workingDirectory;
     private readonly string? _landingRemote;
     private readonly bool _landingPushEnabled;
+    private readonly TextWriter _output;
 
     public ChainIntegrationBranch(
         IGitClient git,
         string workingDirectory,
         string? landingRemote,
-        bool landingPushEnabled)
+        bool landingPushEnabled,
+        TextWriter output)
     {
         _git = git;
         _workingDirectory = workingDirectory;
         _landingRemote = landingRemote;
         _landingPushEnabled = landingPushEnabled;
+        _output = output;
     }
 
     public static string BranchName(Ticket ticket) => BranchNameFromId(ticket.Id);
@@ -150,7 +153,7 @@ public sealed class ChainIntegrationBranch
                         ["remote"] = _landingRemote,
                         ["target_branch"] = targetBranch
                     }, ct).ConfigureAwait(false);
-                Console.WriteLine(
+                _output.WriteLine(
                     $"[{ticketId}] chain landed {integrationBranch} onto {targetBranch} " +
                     $"locally; push skipped (no '{_landingRemote}' remote configured).");
                 return null;
@@ -335,7 +338,7 @@ public sealed class ChainIntegrationBranch
         try { refreshedSha = await _git.HeadShaAsync(integrationWorktreePath, ct).ConfigureAwait(false); }
         catch { refreshedSha = "(unknown)"; }
 
-        Console.WriteLine(
+        _output.WriteLine(
             $"[{ticketId}] {integrationBranch} was behind {baseRef}; rebased onto the current tip " +
             "before dispatching children.");
         await eventEmitterFactory().EmitAsync(

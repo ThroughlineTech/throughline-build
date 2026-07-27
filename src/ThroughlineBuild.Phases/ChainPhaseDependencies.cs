@@ -51,5 +51,6 @@ public sealed record ChainPhaseExecutionDependencies
     public required bool LandingPushEnabled { get; init; }
     public required IReadOnlyList<CheckSpec>? ReworkRecheckSpecs { get; init; }
     public required AutomatedChecksRunner? ReworkRecheckRunner { get; init; }
-    public required TextWriter? Output { get; init; }
+    public required TextWriter Output { get; init; }
+    public required TextWriter Diagnostics { get; init; }
 }

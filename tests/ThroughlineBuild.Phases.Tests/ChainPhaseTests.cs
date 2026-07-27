@@ -98,7 +98,9 @@ public class ChainPhaseTests
         Func<BuildOptions, GateOutcome?, ReviewPhase>? reviewFactoryOverride = null,
         // Post-rework deterministic check re-run: both must be set for the recheck to engage.
         IReadOnlyList<CheckSpec>? reworkRecheckSpecs = null,
-        AutomatedChecksRunner? reworkRecheckRunner = null)
+        AutomatedChecksRunner? reworkRecheckRunner = null,
+        TextWriter? output = null,
+        TextWriter? diagnostics = null)
     {
         _sessionCounter = 0;
         var events = eventSink ?? new FakeEventSinkChain();
@@ -107,7 +109,7 @@ public class ChainPhaseTests
         var baseOpts = baseOptions ?? MakeBaseOptions();
 
         Func<BuildOptions, PlanPhase> planFactory = opts =>
-            new PlanPhase(ticketing, planWorker, events, opts, git);
+            new PlanPhase(ticketing, planWorker, events, opts, git, diagnostics: diagnostics);
 
         Func<BuildOptions, ImplementPhaseOptions, ImplementPhase> implFactory = (opts, phaseOpts) =>
             new ImplementPhase(ticketing, implWorker, events, opts, git, phaseOptions: phaseOpts);
@@ -119,7 +121,7 @@ public class ChainPhaseTests
             reviewTargetBranches?.Add(opts.TargetBranch);
             var verifier = verifierQueue.Dequeue();
             return new ReviewPhase(ticketing, new FakeWorkerAgent(null), events, opts,
-                MakeReviewOptions(), git, verifierOverride: verifier);
+                MakeReviewOptions(), git, verifierOverride: verifier, diagnostics: diagnostics);
         });
 
         Func<BuildOptions, ShipPhase> shipFactory = opts =>
@@ -127,7 +129,8 @@ public class ChainPhaseTests
                 checksRunner: new FakeChecksRunnerChain(Array.Empty<CheckResult>()),
                 markerScanner: (_, _) => Task.FromResult<IReadOnlyList<ConflictMarkerHit>>(Array.Empty<ConflictMarkerHit>()),
                 decrufter: new FakeDecrufterChain(git),
-                processPathProvider: () => null);
+                processPathProvider: () => null,
+                diagnostics: diagnostics);
 
         // Mirror the production chainShipPhaseFactory: honor the phase target branch (so a leaf
         // ships into its parent's integration branch), skip decruft, keep the feature branch,
@@ -147,7 +150,8 @@ public class ChainPhaseTests
                 checksRunner: new FakeChecksRunnerChain(Array.Empty<CheckResult>()),
                 markerScanner: (_, _) => Task.FromResult<IReadOnlyList<ConflictMarkerHit>>(Array.Empty<ConflictMarkerHit>()),
                 decrufter: new FakeDecrufterChain(git),
-                processPathProvider: () => null);
+                processPathProvider: () => null,
+                diagnostics: diagnostics);
 
         return new ChainPhase(
             new ChainPhaseCoreDependencies
@@ -177,7 +181,8 @@ public class ChainPhaseTests
                 LandingPushEnabled = true,
                 ReworkRecheckSpecs = reworkRecheckSpecs,
                 ReworkRecheckRunner = reworkRecheckRunner,
-                Output = null
+                Output = output ?? TextWriter.Null,
+                Diagnostics = diagnostics ?? TextWriter.Null
             });
     }
 
@@ -219,12 +224,21 @@ public class ChainPhaseTests
         };
         var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
+        var diagnostics = new StringWriter();
 
-        var chain = BuildChain(ticketing, planWorker, implWorker, new Queue<IVerifier>());
+        var chain = BuildChain(
+            ticketing,
+            planWorker,
+            implWorker,
+            new Queue<IVerifier>(),
+            diagnostics: diagnostics);
         var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
 
         Assert.Equal(ChainOutcome.TicketingUnavailable, result.Outcome);
         Assert.Contains("unreachable", result.FinalRationale);
+        Assert.Equal(
+            $"[{TicketId}] chain stopped: ticketing backend unreachable - {ticketing.FailGetWith.Message}{Environment.NewLine}",
+            diagnostics.ToString());
     }
 
     [Fact]
@@ -243,8 +257,15 @@ public class ChainPhaseTests
         var verifiers = new Queue<IVerifier>();
         verifiers.Enqueue(new FakeVerifierChain(new Verdict(VerdictKind.Pass, "lgtm", Array.Empty<string>())));
         var events = new FakeEventSinkChain();
+        var diagnostics = new StringWriter();
 
-        var chain = BuildChain(ticketing, planWorker, implWorker, verifiers, eventSink: events);
+        var chain = BuildChain(
+            ticketing,
+            planWorker,
+            implWorker,
+            verifiers,
+            eventSink: events,
+            diagnostics: diagnostics);
         var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
 
         Assert.Equal(ChainOutcome.Completed, result.Outcome);
@@ -256,6 +277,9 @@ public class ChainPhaseTests
             && Equals(action, "ticketing_write_failed")
             && e.Data.TryGetValue("operation", out var operation)
             && Equals(operation, "review_pass_comment"));
+        Assert.Equal(
+            $"[{TicketId}] warning: ticketing write 'review_pass_comment' failed ({unavailable.Message}); continuing{Environment.NewLine}",
+            diagnostics.ToString());
     }
 
     [Fact]
@@ -487,7 +511,7 @@ public class ChainPhaseTests
             Assert.True(startIdx >= 0, $"missing START marker for {phase}");
             Assert.True(doneIdx > startIdx, $"START marker for {phase} must precede its completion");
         }
-        // Start markers are console-only: never added to the returned ChainResult.
+        // Start markers are progress-only: never added to the returned ChainResult.
         Assert.DoesNotContain(result.Steps, s => s.IsStart);
     }
 
@@ -1144,7 +1168,8 @@ public class ChainPhaseTests
                 LandingPushEnabled = false,
                 ReworkRecheckSpecs = null,
                 ReworkRecheckRunner = null,
-                Output = null
+                Output = TextWriter.Null,
+                Diagnostics = TextWriter.Null
             });
 
         var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
@@ -1994,22 +2019,17 @@ public class ChainPhaseTests
         var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
         var planWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
         var implWorker = new FakeWorkerAgent(OkWorkerResult().Metadata, blocks: OkWorkerResult().Blocks);
-        var chain = BuildChain(ticketing, planWorker, implWorker, new Queue<IVerifier>());
-
-        var originalOut = Console.Out;
         var stdout = new StringWriter();
-        Console.SetOut(stdout);
-        ChainResult result;
-        try
-        {
-            result = await chain.RunAsync(
-                new ChainPhaseOptions(TicketId, false, DryRun: true),
-                CancellationToken.None);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
+        var chain = BuildChain(
+            ticketing,
+            planWorker,
+            implWorker,
+            new Queue<IVerifier>(),
+            output: stdout);
+
+        var result = await chain.RunAsync(
+            new ChainPhaseOptions(TicketId, false, DryRun: true),
+            CancellationToken.None);
 
         Assert.Equal(ChainOutcome.DryRunPreview, result.Outcome);
         var preview = Assert.Single(result.ChildResults!);
@@ -2020,10 +2040,15 @@ public class ChainPhaseTests
         Assert.Empty(planWorker.SeenOptions);
         Assert.Empty(implWorker.SeenOptions);
 
-        var output = stdout.ToString();
-        Assert.Contains("post-order schedule:", output);
-        Assert.Contains("1. TLB-1 - run plan/implement/review/ship", output);
-        Assert.Contains("ticket/tlb-1 from main before TLB-1", output);
+        Assert.Equal(
+            string.Join(Environment.NewLine,
+                "[TLB-1] dry-run chain plan (max depth 16):",
+                "post-order schedule:",
+                "  1. TLB-1 - run plan/implement/review/ship",
+                "branch topology:",
+                "  ticket/tlb-1 from main before TLB-1",
+                string.Empty),
+            stdout.ToString());
     }
 
     [Fact]
@@ -3463,7 +3488,8 @@ public class ChainPhaseTests
                     LandingPushEnabled = true,
                     ReworkRecheckSpecs = null,
                     ReworkRecheckRunner = null,
-                    Output = null
+                    Output = TextWriter.Null,
+                    Diagnostics = TextWriter.Null
                 });
 
             var batchGroup = new ChainBatchImplementGroup.ExplicitList(new[] { "TLB-2", "TLB-3" });

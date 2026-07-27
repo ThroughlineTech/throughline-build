@@ -27,5 +27,11 @@ Things that bite:
 - `ChainPhase` construction lives in Cli's `ChainPhaseComposition`.
 - Informational Plane writes go through `TicketingWritePolicy`; lifecycle
   transitions and resume markers remain hard writes.
+- Phase code does not read or write `Console` directly. Operator output and
+  diagnostics are explicit `TextWriter` dependencies supplied by the CLI
+  composition root; chain progress that represents a phase step uses
+  `ChainPhaseOptions.OnStep`. Keep normal output on the output writer and
+  refusals, warnings, and recovery diagnostics on the diagnostics writer so
+  structured stdout modes remain uncontaminated.
 
 Lifecycle detail: [../../docs/state-of-the-system/10-lifecycle-orchestration.md](../../docs/state-of-the-system/10-lifecycle-orchestration.md).

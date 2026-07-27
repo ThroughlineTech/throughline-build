@@ -15,18 +15,9 @@ public class AggregateReportTests
     // Helper to run PrintAggregateReport and capture stdout.
     private static string CaptureAggregateReport(IReadOnlyList<ChainResult> results)
     {
-        var originalOut = Console.Out;
         var sw = new StringWriter();
-        Console.SetOut(sw);
-        try
-        {
-            ChainCommand.PrintAggregateReport(results);
-            return sw.ToString();
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
+        ChainCommand.PrintAggregateReport(results, sw);
+        return sw.ToString();
     }
 
     private static ChainResult MakeResult(

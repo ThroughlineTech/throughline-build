@@ -56,6 +56,7 @@ public class ShipPhase : IWorkflowPhase
     private readonly TextWriter? _progress;
     private readonly bool _verbose;
     private readonly GateControlProber? _baselineProber;
+    private readonly TextWriter _diagnostics;
 
     public ShipPhase(
         ITicketing ticketing,
@@ -69,7 +70,8 @@ public class ShipPhase : IWorkflowPhase
         Func<string?>? processPathProvider = null,
         TextWriter? progressWriter = null,
         bool verbose = false,
-        GateControlProber? baselineProber = null)
+        GateControlProber? baselineProber = null,
+        TextWriter? diagnostics = null)
     {
         _ticketing = ticketing;
         _events = events;
@@ -83,6 +85,7 @@ public class ShipPhase : IWorkflowPhase
         _progress = progressWriter;
         _verbose = verbose;
         _baselineProber = baselineProber;
+        _diagnostics = diagnostics ?? TextWriter.Null;
     }
 
     private void ReportProgress(string message) => _progress?.WriteLine(message);
@@ -999,5 +1002,5 @@ public class ShipPhase : IWorkflowPhase
         string ticketId, string operation, string html, CancellationToken ct) =>
         TicketingWritePolicy.BestEffortAsync(
             _events, _options.SessionId, ticketId, Phase.Ship, operation,
-            () => _ticketing.CreateCommentAsync(ticketId, html, ct), ct);
+            () => _ticketing.CreateCommentAsync(ticketId, html, ct), _diagnostics, ct);
 }

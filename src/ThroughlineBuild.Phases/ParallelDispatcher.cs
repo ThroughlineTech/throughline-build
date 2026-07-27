@@ -9,13 +9,15 @@ public sealed class ParallelDispatcher
     private readonly Func<ChainPhaseOptions, CancellationToken, Task<ChainResult>> _runChain;
     private readonly IEventSink _eventSink;
     private readonly int _maxConcurrency;
+    private readonly TextWriter _output;
 
     // Dispatch session ID used as the SessionId field on DispatchStart/DispatchEnd events.
     private readonly Func<string> _sessionIdGenerator;
 
     public ParallelDispatcher(ChainPhase chainPhase, IEventSink eventSink, int maxConcurrency,
+        TextWriter output,
         Func<string>? sessionIdGenerator = null)
-        : this((opts, ct) => chainPhase.RunAsync(opts, ct), eventSink, maxConcurrency, sessionIdGenerator)
+        : this((opts, ct) => chainPhase.RunAsync(opts, ct), eventSink, maxConcurrency, output, sessionIdGenerator)
     {
     }
 
@@ -24,6 +26,7 @@ public sealed class ParallelDispatcher
         Func<ChainPhaseOptions, CancellationToken, Task<ChainResult>> runChain,
         IEventSink eventSink,
         int maxConcurrency,
+        TextWriter output,
         Func<string>? sessionIdGenerator = null)
     {
         _runChain = runChain;
@@ -33,6 +36,7 @@ public sealed class ParallelDispatcher
         // that the merge-contention machinery existed to handle. The maxConcurrency
         // parameter is retained for API stability; it is ignored.
         _maxConcurrency = 1;
+        _output = output;
         _sessionIdGenerator = sessionIdGenerator ?? (() => Guid.NewGuid().ToString("N"));
     }
 
@@ -222,11 +226,11 @@ public sealed class ParallelDispatcher
     /// Each level is a set of tickets with no blocked_by edge between them; within a
     /// level they are unordered relative to each other, making a missing edge obvious.
     /// </summary>
-    private static void PrintDispatchOrder(
+    private void PrintDispatchOrder(
         IReadOnlyList<string> ticketIds,
         IReadOnlyList<IReadOnlyList<string>> levels)
     {
-        Console.WriteLine($"dispatch order ({ticketIds.Count} ticket{(ticketIds.Count == 1 ? "" : "s")}, {levels.Count} level{(levels.Count == 1 ? "" : "s")}):");
+        _output.WriteLine($"dispatch order ({ticketIds.Count} ticket{(ticketIds.Count == 1 ? "" : "s")}, {levels.Count} level{(levels.Count == 1 ? "" : "s")}):");
         for (int i = 0; i < levels.Count; i++)
         {
             // Only include IDs that are in the requested ticketIds set (same filter as dispatch loop).
@@ -235,7 +239,7 @@ public sealed class ParallelDispatcher
                 continue;
             var ticketList = string.Join(", ", level);
             var unorderedNote = level.Count > 1 ? " (unordered)" : "";
-            Console.WriteLine($"  level {i + 1}: {ticketList}{unorderedNote}");
+            _output.WriteLine($"  level {i + 1}: {ticketList}{unorderedNote}");
         }
     }
 }

@@ -40,6 +40,7 @@ public class ReviewPhase : IWorkflowPhase
     private readonly AutomatedChecksRunner? _checksRunner;
     private readonly ProjectContext _project;
     private readonly IReadOnlyList<SmokeSignal>? _preRunSmokeSignals;
+    private readonly TextWriter _diagnostics;
 
     public ReviewPhase(
         ITicketing ticketing,
@@ -51,7 +52,8 @@ public class ReviewPhase : IWorkflowPhase
         IVerifier? verifierOverride = null,
         AutomatedChecksRunner? checksRunner = null,
         ProjectContext? project = null,
-        IReadOnlyList<SmokeSignal>? preRunSmokeSignals = null)
+        IReadOnlyList<SmokeSignal>? preRunSmokeSignals = null,
+        TextWriter? diagnostics = null)
     {
         _ticketing = ticketing;
         _verifierWorker = verifierWorker;
@@ -63,6 +65,7 @@ public class ReviewPhase : IWorkflowPhase
         _checksRunner = checksRunner;
         _project = project ?? ProjectContext.Empty;
         _preRunSmokeSignals = preRunSmokeSignals;
+        _diagnostics = diagnostics ?? TextWriter.Null;
     }
 
     public Phase Phase => Phase.Review;
@@ -131,7 +134,7 @@ public class ReviewPhase : IWorkflowPhase
                 {
                     canonicalWorktreePath = recovered.AbsolutePath ?? canonicalWorktreePath;
                     worktreeFound = true;
-                    Console.Error.WriteLine(
+                    _diagnostics.WriteLine(
                         $"[{ticket.Id}] review: feature worktree was missing; reconstructed from branch " +
                         $"{canonicalBranchName} at {canonicalWorktreePath}");
                 }
@@ -524,7 +527,7 @@ public class ReviewPhase : IWorkflowPhase
     {
         if (await TicketingWritePolicy.BestEffortAsync(
                 _events, _options.SessionId, ticketId, Phase.Review, operation,
-                () => _ticketing.CreateCommentAsync(ticketId, html, ct), ct).ConfigureAwait(false))
+                () => _ticketing.CreateCommentAsync(ticketId, html, ct), _diagnostics, ct).ConfigureAwait(false))
         {
             await EmitAsync(EventKind.TicketWrite, ticketId, new Dictionary<string, object>
             {

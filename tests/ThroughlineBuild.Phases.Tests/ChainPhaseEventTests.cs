@@ -136,7 +136,8 @@ public class ChainPhaseEventTests
                 LandingPushEnabled = false,
                 ReworkRecheckSpecs = null,
                 ReworkRecheckRunner = null,
-                Output = null
+                Output = TextWriter.Null,
+                Diagnostics = TextWriter.Null
             });
 
         return (chain, sink);

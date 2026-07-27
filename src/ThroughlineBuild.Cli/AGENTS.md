@@ -15,8 +15,10 @@ are extracted; ticket IDs are extracted for phase verbs.
 Help is the `Help/` subsystem: `Tier0Renderer` (verb list), `Tier1Renderer`
 (`build <verb> --help`), topics in `Help/Topics/`, all fed by
 `HelpRegistryFactory`. `CliUsage.cs` is legacy (tests only). `models` and
-`sweep` are not in the 24-entry help registry. To add a verb: dispatch block in
-`Program.cs` + entry in `Help/HelpRegistryFactory.cs`.
+`sweep` are not in the 24-entry help registry. To add a verb: add the registry
+entry in `CliVerbRegistryFactory` and the corresponding dispatch in
+`CliApplication`; add its help entry in `Help/HelpRegistryFactory.cs` when the
+verb belongs on the tiered help surface.
 
 `init`, `settarget`, `user-guide`, `op-doc`, and `models refresh` have
 `RunsBeforeConfig = true` registry entries. Worker wiring: config agent names -> `WorkerAgentBuilder.Create`

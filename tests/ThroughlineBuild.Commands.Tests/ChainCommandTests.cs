@@ -13,6 +13,8 @@ namespace ThroughlineBuild.Commands.Tests;
 [Collection("CommandConsoleTests")]
 public class ChainCommandTests
 {
+    private static readonly Dictionary<ChainCommand, StringWriter> CapturedOutput = new();
+
     private static Ticket MakeTicket(TicketState state = TicketState.Ready) =>
         new Ticket(
             Id: "TLB-1",
@@ -43,27 +45,21 @@ public class ChainCommandTests
         var t = ticket ?? MakeTicket();
         var ticketing = new FakeTicketing(t);
         var runner = new FakeChainRunner();
-        var cmd = new ChainCommand(runner, ticketing);
+        var output = new StringWriter();
+        var cmd = new ChainCommand(runner, ticketing, output);
+        CapturedOutput.Add(cmd, output);
         return (cmd, runner, ticketing);
     }
 
-    // Captures Console.Out and returns all written lines.
+    // Returns the text written through the command's injected output writer.
     private static async Task<(CommandResult result, string output)> RunCapturingStdout(
         ChainCommand cmd,
         TicketCommandContext ctx)
     {
-        var originalOut = Console.Out;
-        var sw = new System.IO.StringWriter();
-        Console.SetOut(sw);
-        try
-        {
-            var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
-            return (result, sw.ToString());
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
+        var output = CapturedOutput[cmd];
+        output.GetStringBuilder().Clear();
+        var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
+        return (result, output.ToString());
     }
 
     // --- happy path ---
@@ -751,7 +747,7 @@ public class ChainCommandTests
         var t = MakeTicket();
         var ticketing = new FakeTicketing(t);
         var runner = new FakeThrowingChainRunner(new InvalidOperationException("chain failed internally"));
-        var cmd = new ChainCommand(runner, ticketing);
+        var cmd = new ChainCommand(runner, ticketing, TextWriter.Null);
         var ctx = MakeCtx();
 
         var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);

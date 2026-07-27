@@ -176,7 +176,8 @@ public class SequenceContractChainTests
                 LandingPushEnabled = false,
                 ReworkRecheckSpecs = null,
                 ReworkRecheckRunner = null,
-                Output = null
+                Output = TextWriter.Null,
+                Diagnostics = TextWriter.Null
             });
     }
 

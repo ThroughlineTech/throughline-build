@@ -2,17 +2,12 @@ using System.Runtime.CompilerServices;
 
 namespace ThroughlineBuild.Commands.Tests;
 
-// Silences command console chatter ("[TLB-x] chain starting ...", etc.) written
-// straight to Console by the command layer (e.g. ChainCommand) for the whole
-// test assembly. Most tests assert on return values / fakes, so those lines are
-// test-runner noise.
+// Silences command console chatter still written straight to Console by legacy
+// command-layer paths. ChainCommand uses an injected TextWriter and does not
+// depend on this assembly-wide redirection.
 //
-// Tests that DO assert on console output capture it themselves via
-// Console.SetOut / Console.SetError into a StringWriter (serialized through the
-// CommandConsoleTests collection - see TestFakes.cs) and restore afterward, so
-// they override this default locally and are unaffected. Muting the default only
-// silences the un-captured stray writes. On a failing test xUnit reports the
-// assertion and stack independently of Console.
+// Tests that assert on a remaining console path capture it locally and restore
+// it afterward. Muting the default only silences un-captured stray writes.
 internal static class TestConsoleSilencer
 {
     [ModuleInitializer]

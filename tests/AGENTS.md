@@ -13,10 +13,11 @@ reflection and miss the AOT regression they exist to catch.
 
 Doubles are per-project copies, not a shared library: most projects carry
 their own `FakeTicketing`, `FakeEventSink`, `FakeGitClient`,
-`FakeWorkerAgent`, etc. Reuse the project-local ones. Console/diagnostic
-muting is assembly-wide via `[ModuleInitializer]` (`TestConsoleSilencer`,
-`TestDiagnosticsSilencer`); tests that assert on output capture it locally
-with `Console.SetOut`.
+`FakeWorkerAgent`, etc. Reuse the project-local ones. Some suites still mute
+console/diagnostic noise assembly-wide via `[ModuleInitializer]`
+(`TestConsoleSilencer`, `TestDiagnosticsSilencer`). Phases tests instead pass
+`TextWriter.Null` or a local `StringWriter` through the production injection
+points; do not restore process-global console redirection there.
 
 Snapshot infrastructure lives in `ThroughlineBuild.Briefs.Tests` (`Snapshots/`
 + `Templates/`, LF-pinned via `.gitattributes`) - template changes need a

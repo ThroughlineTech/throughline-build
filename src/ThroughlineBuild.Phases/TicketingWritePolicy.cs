@@ -19,6 +19,7 @@ internal static class TicketingWritePolicy
         Phase phase,
         string operation,
         Func<Task> write,
+        TextWriter diagnostics,
         CancellationToken ct)
     {
         try
@@ -32,7 +33,7 @@ internal static class TicketingWritePolicy
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine(
+            diagnostics.WriteLine(
                 $"[{ticketId}] warning: ticketing write '{operation}' failed ({ex.Message}); continuing");
             try
             {

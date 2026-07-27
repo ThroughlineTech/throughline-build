@@ -205,7 +205,8 @@ public class HandoffTests
                 LandingPushEnabled = false,
                 ReworkRecheckSpecs = null,
                 ReworkRecheckRunner = null,
-                Output = null
+                Output = TextWriter.Null,
+                Diagnostics = TextWriter.Null
             });
 
         var result = await chain.RunAsync(new ChainPhaseOptions(ParentId, false), CancellationToken.None);

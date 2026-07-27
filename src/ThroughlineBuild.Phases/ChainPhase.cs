@@ -82,7 +82,8 @@ public class ChainPhase
     // Optional: when set, batch implement groups in the parent chain dispatch one session here
     // instead of running a per-ticket implement+review+ship loop for each group member.
     private readonly IWorkerAgent? _batchWorker;
-    private readonly TextWriter? _output;
+    private readonly TextWriter _output;
+    private readonly TextWriter _diagnostics;
 
     public ChainPhase(
         ChainPhaseCoreDependencies core,
@@ -103,7 +104,8 @@ public class ChainPhase
             _git,
             _workingDirectory,
             execution.LandingRemote,
-            execution.LandingPushEnabled);
+            execution.LandingPushEnabled,
+            execution.Output);
         _feedbackRetriever = execution.FeedbackRetriever;
         _batchWorker = execution.BatchWorker;
         _phaseOptionsBuilder = new PhaseOptionsBuilder(_baseOptions);
@@ -153,8 +155,10 @@ public class ChainPhase
             sessionId => EventEmitter(sessionId),
             (childOptions, childCt) => RunAsync(childOptions, childCt),
             _workingDirectory,
-            execution.Output);
+            execution.Output,
+            execution.Diagnostics);
         _output = execution.Output;
+        _diagnostics = execution.Diagnostics;
     }
 
     // Inert read-only accessors over the wired collaborators, for composition-root tests that
@@ -163,11 +167,11 @@ public class ChainPhase
     // null), so these let a test fail when that recurs. No runtime behavior depends on them.
     internal IWorkerAgent? BatchWorker => _batchImplementRunner.BatchWorker;
     internal Func<BuildOptions, ShipPhase>? ChainShipFactory => _chainShipFactory;
+    internal TextWriter OutputWriter => _output;
+    internal TextWriter DiagnosticsWriter => _diagnostics;
 
     private ChainEventEmitter EventEmitter(string sessionId) =>
-        new(_events, _ticketing, sessionId);
-
-    private TextWriter Output => _output ?? Console.Out;
+        new(_events, _ticketing, sessionId, _diagnostics);
 
     public async Task<ChainResult> RunAsync(ChainPhaseOptions options, CancellationToken ct)
     {
@@ -186,7 +190,7 @@ public class ChainPhase
         catch (TicketingUnavailableException ex)
         {
             classifySw.Stop();
-            Console.Error.WriteLine(
+            _diagnostics.WriteLine(
                 $"[{options.TicketId}] chain stopped: ticketing backend unreachable - {ex.Message}");
             var result = new ChainResult(options.TicketId, Array.Empty<ChainStep>(),
                 ChainOutcome.TicketingUnavailable, classifySw.Elapsed, ex.Message);
@@ -226,7 +230,7 @@ public class ChainPhase
 
         if (options.DryRun)
         {
-            var planner = new ChainDryRunPlanner(_ticketing, Output);
+            var planner = new ChainDryRunPlanner(_ticketing, _output);
             var plan = await planner
                 .BuildAsync(ticket, _baseOptions.TargetBranch, options.MaxDepth, ct)
                 .ConfigureAwait(false);
@@ -536,7 +540,7 @@ public class ChainPhase
         if (refusal.Outcome == ChainOutcome.RefusedWrongBranch
             || refusal.DirtyTreeCause == DirtyTreeCause.TrackedChanges)
         {
-            Console.Error.WriteLine($"[{options.TicketId}] chain refused: {refusal.Message}");
+            _diagnostics.WriteLine($"[{options.TicketId}] chain refused: {refusal.Message}");
         }
 
         await EventEmitter(chainSessionId).EmitAsync(

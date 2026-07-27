@@ -86,7 +86,8 @@ public class ParallelDispatcherTests
     private static (ParallelDispatcher dispatcher, RecordingEventSink sink) MakeDispatcher(
         Dictionary<string, ChainResult> results,
         int maxConcurrency = 4,
-        List<string>? callOrder = null)
+        List<string>? callOrder = null,
+        TextWriter? output = null)
     {
         var sink = new RecordingEventSink();
         async Task<ChainResult> RunChain(ChainPhaseOptions opts, CancellationToken ct)
@@ -97,7 +98,7 @@ public class ParallelDispatcherTests
             await Task.Yield(); // simulate async
             return r;
         }
-        var dispatcher = new ParallelDispatcher(RunChain, sink, maxConcurrency,
+        var dispatcher = new ParallelDispatcher(RunChain, sink, maxConcurrency, output ?? TextWriter.Null,
             sessionIdGenerator: () => "test-session");
         return (dispatcher, sink);
     }
@@ -143,11 +144,19 @@ public class ParallelDispatcherTests
         g.AddNode("B");
         g.AddEdge("A", "B");
 
-        var (dispatcher, _) = MakeDispatcher(results, callOrder: callOrder);
+        var output = new StringWriter();
+        var (dispatcher, _) = MakeDispatcher(results, callOrder: callOrder, output: output);
         var ids = new[] { "A", "B" };
         var outcome = await dispatcher.RunAsync(ids, g, BaseOptions, CancellationToken.None);
 
         Assert.True(outcome.Success);
+        Assert.Equal(
+            string.Join(Environment.NewLine,
+                "dispatch order (2 tickets, 2 levels):",
+                "  level 1: A",
+                "  level 2: B",
+                string.Empty),
+            output.ToString());
         Assert.Equal(2, callOrder.Count);
         Assert.Equal("A", callOrder[0]);
         Assert.Equal("B", callOrder[1]);

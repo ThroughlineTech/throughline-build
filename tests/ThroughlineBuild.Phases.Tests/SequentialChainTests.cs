@@ -182,7 +182,8 @@ public class SequentialChainTests
                 LandingPushEnabled = false,
                 ReworkRecheckSpecs = null,
                 ReworkRecheckRunner = null,
-                Output = null
+                Output = TextWriter.Null,
+                Diagnostics = TextWriter.Null
             });
     }
 
@@ -305,7 +306,7 @@ public class SequentialChainTests
         g.AddNode("B");
         g.AddEdge("A", "B"); // A blocks B
 
-        var dispatcher = new ParallelDispatcher(RunChain, sink, maxConcurrency: 4,
+        var dispatcher = new ParallelDispatcher(RunChain, sink, maxConcurrency: 4, TextWriter.Null,
             sessionIdGenerator: () => "seq-test-session");
 
         var baseOpts = new ChainPhaseOptions(TicketId: "ignored", Debug: false);
@@ -340,7 +341,7 @@ public class SequentialChainTests
         Task<ChainResult> RunChain(ChainPhaseOptions opts, CancellationToken ct) =>
             Task.FromResult(new ChainResult("A", Array.Empty<ChainStep>(), ChainOutcome.Completed, TimeSpan.Zero, null));
 
-        var dispatcher = new ParallelDispatcher(RunChain, sink, maxConcurrency: 4,
+        var dispatcher = new ParallelDispatcher(RunChain, sink, maxConcurrency: 4, TextWriter.Null,
             sessionIdGenerator: () => "seq-exit-test");
         var baseOpts = new ChainPhaseOptions(TicketId: "ignored", Debug: false);
 
@@ -475,7 +476,8 @@ public class SequentialChainTests
                 LandingPushEnabled = false,
                 ReworkRecheckSpecs = null,
                 ReworkRecheckRunner = null,
-                Output = null
+                Output = TextWriter.Null,
+                Diagnostics = TextWriter.Null
             });
 
         // Act

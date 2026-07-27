@@ -15,11 +15,16 @@ public sealed class ChainCommand : ITicketCommand
 {
     private readonly IChainRunner _runner;
     private readonly ITicketing _ticketing;
+    private readonly TextWriter _output;
 
-    public ChainCommand(IChainRunner runner, ITicketing ticketing)
+    public ChainCommand(
+        IChainRunner runner,
+        ITicketing ticketing,
+        TextWriter output)
     {
         _runner = runner;
         _ticketing = ticketing;
+        _output = output;
     }
 
     /// <summary>
@@ -86,7 +91,7 @@ public sealed class ChainCommand : ITicketCommand
         }
 
         // Write "chain starting" header with initial state.
-        Console.WriteLine($"[{ticketId}] chain starting (initial state: {initialTicket.State})");
+        _output.WriteLine($"[{ticketId}] chain starting (initial state: {initialTicket.State})");
 
         ChainResult result;
         try
@@ -95,7 +100,7 @@ public sealed class ChainCommand : ITicketCommand
             result = await _runner.RunAsync(
                 ticketId,
                 debugMode,
-                (id, step) => Console.WriteLine(FormatStepLine(id, step)),
+                (id, step) => _output.WriteLine(FormatStepLine(id, step)),
                 ct,
                 noAutoResolve,
                 batchImplementGroup,
@@ -120,14 +125,14 @@ public sealed class ChainCommand : ITicketCommand
 
         // Write final chain completion/stop line and operator triage.
         var finalLine = FormatFinalLine(ticketId, result);
-        Console.WriteLine(finalLine);
+        _output.WriteLine(finalLine);
 
         // For parent-chain results, print per-child summary lines.
         if (result.ChildResults is { Count: > 0 })
         {
             foreach (var child in result.ChildResults)
             {
-                Console.WriteLine(FormatChildSummaryLine(child));
+                _output.WriteLine(FormatChildSummaryLine(child));
             }
         }
 
@@ -140,8 +145,8 @@ public sealed class ChainCommand : ITicketCommand
             var triage = GetOperatorTriageSuggestions(ticketId, result, initialTicket);
             if (!string.IsNullOrEmpty(triage))
             {
-                Console.WriteLine();
-                Console.WriteLine(triage);
+                _output.WriteLine();
+                _output.WriteLine(triage);
             }
         }
 
@@ -267,9 +272,11 @@ public sealed class ChainCommand : ITicketCommand
     ///   [TLB-C] Skipped (0.0s) - skipped (ancestor TLB-B failed)
     ///   3 tickets: 1 completed, 1 failed, 1 skipped
     /// </summary>
-    public static void PrintAggregateReport(IReadOnlyList<ChainResult> results)
+    public static void PrintAggregateReport(
+        IReadOnlyList<ChainResult> results,
+        TextWriter output)
     {
-        Console.WriteLine("--- aggregate report ---");
+        output.WriteLine("--- aggregate report ---");
 
         int completed = 0;
         int failed = 0;
@@ -288,23 +295,23 @@ public sealed class ChainCommand : ITicketCommand
             {
                 skipped++;
                 var skipSuffix = r.SkipReason is not null ? $" - {r.SkipReason}" : "";
-                Console.WriteLine($"[{r.TicketId}] Skipped ({durationStr}){skipSuffix}");
+                output.WriteLine($"[{r.TicketId}] Skipped ({durationStr}){skipSuffix}");
             }
             else if (isSuccess)
             {
                 completed++;
-                Console.WriteLine($"[{r.TicketId}] Completed ({durationStr})");
+                output.WriteLine($"[{r.TicketId}] Completed ({durationStr})");
             }
             else
             {
                 failed++;
                 var failSuffix = r.FinalRationale is not null ? $" - {r.FinalRationale}" : "";
-                Console.WriteLine($"[{r.TicketId}] Failed ({durationStr}){failSuffix}");
+                output.WriteLine($"[{r.TicketId}] Failed ({durationStr}){failSuffix}");
             }
         }
 
         int total = results.Count;
-        Console.WriteLine($"{total} ticket{(total == 1 ? "" : "s")}: {completed} completed, {failed} failed, {skipped} skipped");
+        output.WriteLine($"{total} ticket{(total == 1 ? "" : "s")}: {completed} completed, {failed} failed, {skipped} skipped");
     }
 
     private static string FormatChildSummaryLine(ChainResult child)

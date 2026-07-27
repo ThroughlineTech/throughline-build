@@ -24,7 +24,8 @@ public sealed class ParentChainRunner
         CancellationToken,
         Task<ChainResult>> _runChainAsync;
     private readonly string _workingDirectory;
-    private readonly TextWriter? _output;
+    private readonly TextWriter _output;
+    private readonly TextWriter _diagnostics;
 
     public ParentChainRunner(
         ITicketing ticketing,
@@ -39,7 +40,8 @@ public sealed class ParentChainRunner
         Func<ChainPhaseOptions, CancellationToken, Task<ChainResult>>
             runChainAsync,
         string workingDirectory,
-        TextWriter? output)
+        TextWriter output,
+        TextWriter diagnostics)
     {
         _ticketing = ticketing;
         _baseOptions = baseOptions;
@@ -53,12 +55,11 @@ public sealed class ParentChainRunner
         _runChainAsync = runChainAsync;
         _workingDirectory = workingDirectory;
         _output = output;
+        _diagnostics = diagnostics;
     }
 
     private ChainEventEmitter EventEmitter(string sessionId) =>
         _eventEmitterFactory(sessionId);
-
-    private TextWriter Output => _output ?? Console.Out;
 
     public async Task<ChainResult> RunAsync(
         ChainPhaseOptions options,
@@ -88,7 +89,7 @@ public sealed class ParentChainRunner
         // Print the dependency order derived from Plane before any phase runs so a wrong
         // or missing edge is visible up front. Tickets in the same level have no blocked_by
         // edge between them and are unordered relative to each other (Brief 17).
-        new ChainDryRunPlanner(_ticketing, Output).PrintDispatchOrder(options.TicketId, levels);
+        new ChainDryRunPlanner(_ticketing, _output).PrintDispatchOrder(options.TicketId, levels);
 
         var integrationBaseRef = options.ChainTargetBranch ?? _baseOptions.TargetBranch;
         var integrationNames = PhaseWorktreeLayout.Compute(parentTicket.Id, parentTicket.Title, _workingDirectory);
@@ -137,7 +138,7 @@ public sealed class ParentChainRunner
             }
             else
             {
-                Console.Error.WriteLine(
+                _diagnostics.WriteLine(
                     $"[{parentTicket.Id}] integration worktree unavailable " +
                     $"({createResult.FailureReason}); cannot safely accumulate nested chain branches.");
                 await EventEmitter(_sessionIdGenerator()).EmitAsync(
@@ -221,7 +222,7 @@ public sealed class ParentChainRunner
                         g => g.State != TicketState.Done && g.State != TicketState.Cancelled);
                     if (hasLiveChildren)
                     {
-                        Console.Error.WriteLine(
+                        _diagnostics.WriteLine(
                             $"[{parentTicket.Id}] batch-implement: skipping {candidate.Id} - it is an " +
                             "internal node (has non-terminal children); chaining it as a parent instead.");
                         await EventEmitter(_sessionIdGenerator()).EmitAsync(
@@ -275,7 +276,7 @@ public sealed class ParentChainRunner
                         batchTickets, _baseOptions);
                     if (capViolation is not null)
                     {
-                        Console.Error.WriteLine(
+                        _diagnostics.WriteLine(
                             $"[{parentTicket.Id}] batch-size-fallback: cap exceeded ({capViolation}); " +
                             $"running per-ticket chain for all {batchTickets.Count} ticket(s) instead.");
                         await EventEmitter(_sessionIdGenerator()).EmitAsync(
@@ -344,7 +345,7 @@ public sealed class ParentChainRunner
                                         () => EventEmitter(_sessionIdGenerator()), ct).ConfigureAwait(false);
                                     if (shipReason is not null)
                                     {
-                                        Console.Error.WriteLine($"[{parentTicket.Id}] batch ship failed: {shipReason}");
+                                        _diagnostics.WriteLine($"[{parentTicket.Id}] batch ship failed: {shipReason}");
                                         anyStoppedEarly = true;
                                     }
                                 }
@@ -366,7 +367,7 @@ public sealed class ParentChainRunner
         else if (options.BatchImplementGroup is not null && !anyStoppedEarly)
         {
             // Batch implement was requested but the batch path cannot run (no batch worker wired,
-            // or no eligible children to batch). Surface the downgrade loudly - a visible console
+            // or no eligible children to batch). Surface the downgrade loudly - a visible diagnostic
             // line plus a GateFailure-style event - instead of silently falling back to the
             // per-ticket chain. A silent downgrade reads as "batch ran" when it did not, the
             // failure mode op-31 Brief 10 calls out. Mirrors the size-cap fallback logging above.
@@ -375,7 +376,7 @@ public sealed class ParentChainRunner
                 : sharedWorktreePath is null
                     ? "no eligible children to batch"
                     : "batch path unavailable";
-            Console.Error.WriteLine(
+            _diagnostics.WriteLine(
                 $"[{parentTicket.Id}] batch-implement requested but {downgradeReason}; " +
                 "running per-ticket chain instead.");
             await EventEmitter(_sessionIdGenerator()).EmitAsync(

@@ -11,15 +11,18 @@ public sealed class ChainEventEmitter
     private readonly IEventSink _events;
     private readonly ITicketing _ticketing;
     private readonly string _chainSessionId;
+    private readonly TextWriter _diagnostics;
 
     public ChainEventEmitter(
         IEventSink events,
         ITicketing ticketing,
-        string chainSessionId)
+        string chainSessionId,
+        TextWriter? diagnostics = null)
     {
         _events = events;
         _ticketing = ticketing;
         _chainSessionId = chainSessionId;
+        _diagnostics = diagnostics ?? TextWriter.Null;
     }
 
     public Task EmitAsync(
@@ -37,7 +40,7 @@ public sealed class ChainEventEmitter
             Data: data), ct);
 
     // Emits a pre-run START notice through the OnStep stream so the operator sees a
-    // phase has begun, not just its completion line. Start markers are console-only:
+    // phase has begun, not just its completion line. Start markers are progress-only:
     // they are never added to the steps list, so the returned ChainResult is unchanged.
     public void EmitPhaseStart(
         ChainPhaseOptions options,
@@ -93,6 +96,7 @@ public sealed class ChainEventEmitter
             Phase.Chain,
             operation,
             () => write(_ticketing),
+            _diagnostics,
             ct);
 
     public Task EmitCostLedgerAsync(

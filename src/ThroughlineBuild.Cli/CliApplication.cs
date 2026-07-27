@@ -1843,7 +1843,7 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
         WorkerName: config.Workers.DefaultAgent,
         WorkerTimeout: TimeSpan.FromMinutes(config.Workers.TimeoutMinutes),
         DebugCaptureDirectory: debugCaptureDir,
-        LiveStdoutSink: debugMode ? Console.Out : null,
+        LiveStdoutSink: debugMode && !summaryJson ? Console.Out : null,
         LiveStderrSink: debugMode ? Console.Error : null,
         ProgressDigestSink: enableDigest ? Console.Error : null,
         TargetBranch: config.ResolveTargetBranch(),
@@ -1869,7 +1869,7 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
 
     if (verbKind == CliVerbKind.Plan)
     {
-        var phase = new PlanPhase(ticketing, workerFactory.Create(effectiveAgentFor("plan")), eventSink, buildOptions, project: config.Project);
+        var phase = new PlanPhase(ticketing, workerFactory.Create(effectiveAgentFor("plan")), eventSink, buildOptions, project: config.Project, diagnostics: Console.Error);
         PlanResult result;
         try
         {
@@ -1986,7 +1986,7 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
             TimeSpan.FromMinutes(config.Review.VerifierTimeoutMinutes),
             config.Review.VerifierAllowedTools,
             DebugCaptureDirectory: debugCaptureDir,
-            LiveStdoutSink: debugMode ? Console.Out : null,
+            LiveStdoutSink: debugMode && !summaryJson ? Console.Out : null,
             LiveStderrSink: debugMode ? Console.Error : null,
             ProgressDigestSink: enableDigest ? Console.Error : null,
             DebugTranscript: new DebugTranscriptContext(
@@ -1994,7 +1994,7 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
         var reviewToolWarning = VerifierToolEnforcement.UnenforcedWarning(effectiveAgentFor("review"), config.Review.VerifierAllowedTools);
         if (reviewToolWarning is not null) Console.Error.WriteLine($"[build] {reviewToolWarning}");
         var reviewOptions = new ReviewOptions(config.Review.Checks, verifierWorkerOptions);
-        var phase = new ReviewPhase(ticketing, workerFactory.Create(effectiveAgentFor("review")), eventSink, buildOptions, reviewOptions, project: config.Project);
+        var phase = new ReviewPhase(ticketing, workerFactory.Create(effectiveAgentFor("review")), eventSink, buildOptions, reviewOptions, project: config.Project, diagnostics: Console.Error);
         ReviewResult result;
         try
         {
@@ -2054,7 +2054,7 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
         var checksRunner = new AutomatedChecksRunner();
         var shipProgress = quietMode || summaryJson ? null : Console.Error;
         var phase = new ShipPhase(ticketing, eventSink, buildOptions, shipOptions, gitClient: gitClient, checksRunner: checksRunner, progressWriter: shipProgress, verbose: debugMode,
-            baselineProber: new GateControlProber());
+            baselineProber: new GateControlProber(), diagnostics: Console.Error);
         ShipResult result;
         try
         {
@@ -2140,7 +2140,7 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
         var (chainCode, chainDirect) = await RunChainVerbAsync(
             ticketId, args, cwd, ticketing, eventSink, buildOptions, config,
             workerFactory, debugMode, debugCaptureDir, enableDigest,
-            noAutoMerge, noAutoResolve, continuePastFailure, fromBrief, noPush, skipBaseline, chainDryRun, chainMaxDepth, effectiveAgentFor,
+            noAutoMerge, noAutoResolve, continuePastFailure, fromBrief, noPush, skipBaseline, chainDryRun, chainMaxDepth, summaryJson, effectiveAgentFor,
             batchImplementTicketIds, batchImplementAllChildren);
         // chainDirect=true means return from RunAsync; false means set dispatchExitCode + break
         return (chainCode, chainDirect ? 2 : 1);
@@ -2169,11 +2169,14 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
     bool skipBaseline,
     bool chainDryRun,
     string? chainMaxDepth,
+    bool summaryJson,
     Func<string, string> effectiveAgentFor,
     IReadOnlyList<string>? batchImplementTicketIds,
     bool batchImplementAllChildren = false)
 {
     var parsedMaxDepth = 16;
+    var chainHumanOutput =
+        ChainPhaseComposition.SelectHumanOutput(summaryJson, Console.Out);
     if (!string.IsNullOrWhiteSpace(chainMaxDepth) &&
         (!int.TryParse(chainMaxDepth, out parsedMaxDepth) || parsedMaxDepth < 0))
     {
@@ -2191,7 +2194,7 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
 
     // Construct per-phase factories for ChainPhase.
     var planPhaseFactory = (BuildOptions buildOpts) =>
-        new PlanPhase(ticketing, workerFactory.Create(effectiveAgentFor("plan")), eventSink, buildOpts, project: config.Project);
+        new PlanPhase(ticketing, workerFactory.Create(effectiveAgentFor("plan")), eventSink, buildOpts, project: config.Project, diagnostics: Console.Error);
 
     var implementPhaseFactory = (BuildOptions buildOpts, ImplementPhaseOptions implOpts) =>
         new ImplementPhase(ticketing, workerFactory.Create(effectiveAgentFor("implement")), eventSink, buildOpts, project: config.Project, phaseOptions: implOpts);
@@ -2223,7 +2226,7 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
     {
         var gateOptions = new GateOptions(config.Review.Checks);
         return new GatePhase(ticketing, eventSink, buildOpts, gateOptions, vacuityProver: gateVacuityProver,
-            controlProber: gateControlProber, gateChecksReloader: gateChecksReloader);
+            controlProber: gateControlProber, gateChecksReloader: gateChecksReloader, diagnostics: Console.Error);
     };
 
     var reviewPhaseFactory = (BuildOptions buildOpts, GateOutcome? gateOutcome) =>
@@ -2232,7 +2235,7 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             TimeSpan.FromMinutes(config.Review.VerifierTimeoutMinutes),
             config.Review.VerifierAllowedTools,
             DebugCaptureDirectory: debugCaptureDir,
-            LiveStdoutSink: debugMode ? Console.Out : null,
+            LiveStdoutSink: debugMode ? chainHumanOutput : null,
             LiveStderrSink: debugMode ? Console.Error : null,
             ProgressDigestSink: enableDigest ? Console.Error : null,
             DebugTranscript: new DebugTranscriptContext(
@@ -2245,7 +2248,7 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             : null;
         var preRunSmokeSignals = gateOutcome?.SmokeSignals;
         return new ReviewPhase(ticketing, workerFactory.Create(effectiveAgentFor("review")), eventSink, buildOpts, reviewOptions,
-            checksRunner: checksRunner, preRunSmokeSignals: preRunSmokeSignals, project: config.Project);
+            checksRunner: checksRunner, preRunSmokeSignals: preRunSmokeSignals, project: config.Project, diagnostics: Console.Error);
     };
     // Once-per-chain honesty warning when the review worker won't enforce verifier_allowed_tools.
     var chainReviewToolWarning = VerifierToolEnforcement.UnenforcedWarning(effectiveAgentFor("review"), config.Review.VerifierAllowedTools);
@@ -2271,7 +2274,7 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
         var gitClient = new ProcessGitClient(cwd);
         var checksRunner = new AutomatedChecksRunner();
         return new ShipPhase(ticketing, eventSink, buildOpts, shipOptions, gitClient: gitClient, checksRunner: checksRunner, progressWriter: buildOpts.ProgressDigestSink, verbose: debugMode,
-            baselineProber: gateControlProber);
+            baselineProber: gateControlProber, diagnostics: Console.Error);
     };
 
     var ratifierFactory = (BuildOptions ratifyBuildOpts) =>
@@ -2280,7 +2283,7 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             TimeSpan.FromMinutes(config.Review.VerifierTimeoutMinutes),
             config.Review.VerifierAllowedTools,
             DebugCaptureDirectory: debugCaptureDir,
-            LiveStdoutSink: debugMode ? Console.Out : null,
+            LiveStdoutSink: debugMode ? chainHumanOutput : null,
             LiveStderrSink: debugMode ? Console.Error : null,
             ProgressDigestSink: enableDigest ? Console.Error : null,
             DebugTranscript: new DebugTranscriptContext(
@@ -2315,7 +2318,7 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
         var gitClient = new ProcessGitClient(cwd);
         var checksRunner = new AutomatedChecksRunner();
         return new ShipPhase(ticketing, eventSink, buildOpts, chainShipOptions, gitClient: gitClient, checksRunner: checksRunner, progressWriter: buildOpts.ProgressDigestSink, verbose: debugMode,
-            baselineProber: gateControlProber);
+            baselineProber: gateControlProber, diagnostics: Console.Error);
     };
 
     // Wire the chain phase through the composition helper so the construction has a single
@@ -2338,6 +2341,8 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
         effectiveAgentFor,
         landingRemote: config.Ship.Remote,
         landingPushEnabled: !(noPush || !config.Ship.Push),
+        output: chainHumanOutput,
+        diagnostics: Console.Error,
         gateFactory: gatePhaseFactory,
         // Post-rework check re-run uses the same check set the gate and review run, so the
         // recheck's verdict on a named check matches what the gate would conclude later.
@@ -2411,7 +2416,8 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
         var dispatcher = new ThroughlineBuild.Phases.ParallelDispatcher(
             chainPhase,
             eventSink,
-            config.Workers.MaxConcurrency);
+            config.Workers.MaxConcurrency,
+            chainHumanOutput);
 
         var baseChainOptions = new ThroughlineBuild.Phases.ChainPhaseOptions(
             TicketId: ticketId,
@@ -2439,7 +2445,7 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
         foreach (var r in dispatchResult.Results)
         {
             var durationMs = (long)r.TotalDuration.TotalMilliseconds;
-            Console.WriteLine($"[{r.TicketId}] {r.Outcome} ({durationMs}ms)");
+            chainHumanOutput.WriteLine($"[{r.TicketId}] {r.Outcome} ({durationMs}ms)");
         }
 
         return (ChainExitCodeMapper.GetExitCode(dispatchResult), true);
@@ -2447,7 +2453,7 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
 
     // Single-ticket path (original behavior).
     var chainRunner = new DefaultChainRunner(chainPhase);
-    var chainCommand = new ChainCommand(chainRunner, ticketing);
+    var chainCommand = new ChainCommand(chainRunner, ticketing, chainHumanOutput);
 
     // Collect all ticket IDs from args: args[1] is the primary, plus any additional
     // positional args that don't start with '--'.
@@ -2485,7 +2491,7 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
                             _ => ""
                         }
                     });
-                    var singleCommand = new ChainCommand(chainRunner, ticketing);
+                    var singleCommand = new ChainCommand(chainRunner, ticketing, chainHumanOutput);
                     await singleCommand.ExecuteAsync(singleCtx, token).ConfigureAwait(false);
                     return singleCommand.LastChainResult ?? new ChainResult(
                         TicketId: tid,
@@ -2497,7 +2503,7 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
                 continuePastFailure,
                 cts.Token).ConfigureAwait(false);
 
-            ChainCommand.PrintAggregateReport(allResults);
+            ChainCommand.PrintAggregateReport(allResults, chainHumanOutput);
 
             // Exit 0 if all results are success or skipped; non-zero if any failed.
             bool allGood = allResults.All(r =>
