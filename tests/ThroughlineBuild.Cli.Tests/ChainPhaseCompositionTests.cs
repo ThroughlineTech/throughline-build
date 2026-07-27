@@ -17,8 +17,15 @@ namespace ThroughlineBuild.Cli.Tests;
 /// </summary>
 public class ChainPhaseCompositionTests
 {
+    /// <summary>
+    /// The chain verb has no --summary-json envelope of its own (WriteSummary is only reached from
+    /// the decompose/plan/implement/review/ship branches), so its human transcript must always reach
+    /// the output writer. A previous revision routed that writer to TextWriter.Null under
+    /// --summary-json, which silenced the verb outright and left nothing on stdout to replace it.
+    /// This pins the split: transcript on the output writer, refusals and stops on diagnostics.
+    /// </summary>
     [Fact]
-    public async Task SummaryJson_ActualChainCommand_SuppressesHumanStdout_AndPreservesDiagnostics()
+    public async Task Chain_WritesHumanTranscriptToOutputWriter_AndDiagnosticsToDiagnosticsWriter()
     {
         var ticket = new Ticket(
             "TLB-1",
@@ -38,9 +45,6 @@ public class ChainPhaseCompositionTests
         var ticketing = new StubTicketing(ticket, unavailable);
         var stdout = new StringWriter();
         var diagnostics = new StringWriter();
-        var humanOutput = ChainPhaseComposition.SelectHumanOutput(
-            summaryJson: true,
-            standardOutput: stdout);
         var workerFactory = new RecordingWorkerFactory(new StubWorker());
         var buildOptions = new BuildOptions(
             SessionId: "summary-json-session",
@@ -61,12 +65,12 @@ public class ChainPhaseCompositionTests
             effectiveAgentFor: phase => $"agent-for-{phase}",
             landingRemote: "origin",
             landingPushEnabled: true,
-            output: humanOutput,
+            output: stdout,
             diagnostics: diagnostics);
         var command = new ChainCommand(
             new DefaultChainRunner(chain),
             ticketing,
-            humanOutput);
+            stdout);
 
         var result = await command.ExecuteAsync(
             new TicketCommandContext(
@@ -75,27 +79,25 @@ public class ChainPhaseCompositionTests
             CancellationToken.None);
 
         Assert.False(result.Success);
-        Assert.Equal(string.Empty, stdout.ToString());
+
+        // The transcript must land on the output writer, in full. Asserting on the writer the
+        // production seam was handed - rather than on a writer the seam discarded - is what makes
+        // this fail if the human output is ever routed to TextWriter.Null again.
+        var transcript = stdout.ToString();
+        Assert.Contains(
+            $"[{ticket.Id}] chain starting (initial state: {TicketState.Backlog})",
+            transcript);
+        Assert.Contains(
+            $"[{ticket.Id}] chain stopped: ticketing backend unreachable - transport failure "
+                + "persisted through client retries; restore connectivity, not the ticket",
+            transcript);
+
+        // Diagnostics stay on their own writer: exactly the stop notice, and none of the
+        // transcript leaks across.
         Assert.Equal(
             $"[{ticket.Id}] chain stopped: ticketing backend unreachable - backend down{Environment.NewLine}",
             diagnostics.ToString());
-    }
-
-    [Fact]
-    public void SelectHumanOutput_NormalMode_PreservesTheLiveStdoutWriter()
-    {
-        var stdout = new StringWriter();
-
-        Assert.Same(
-            stdout,
-            ChainPhaseComposition.SelectHumanOutput(
-                summaryJson: false,
-                standardOutput: stdout));
-        Assert.Same(
-            TextWriter.Null,
-            ChainPhaseComposition.SelectHumanOutput(
-                summaryJson: true,
-                standardOutput: stdout));
+        Assert.DoesNotContain("chain starting", diagnostics.ToString());
     }
 
     [Fact]

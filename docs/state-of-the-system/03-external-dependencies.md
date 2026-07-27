@@ -1,6 +1,6 @@
 # 03 - External Dependencies
 
-Last refreshed: 2026-07-26 (HEAD 00dc074)
+Last refreshed: 2026-07-27 (TLB-580)
 
 Every service, API, CLI, and runtime library this repo depends on; what specific endpoints or tools it touches; what happens when the dependency is missing or unauthenticated.
 
@@ -108,7 +108,7 @@ The `Capabilities` property returns `BackendCapabilities(TypedRelations: true, T
 - **Unauthorized (401/403) response from Plane:** raised as `PlaneApiException(status, body)` and surfaces as a phase failure with exit 1. During `build setup`/connectivity probing, 401/403 is rendered as a "token is not authorized to create issues" message instead ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:133-138](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L133-L138)).
 - **Rate limit (429) or transient 5xx:** retried up to `MaxRetryAttempts` (default 5) by the Polly pipeline before raising.
 - **Workspace or project UUID wrong:** Plane returns 404. `build setup`, connected `build init`, and the connectivity probe map it to the actionable `BuildProjectNotFoundMessage` remedy; phase verbs still surface it as a `PlaneApiException` failure.
-- **Network unreachable / DNS / TLS / timeout (TLB-545):** retried by the transport funnel, then wrapped in `TicketingUnavailableException`. `ChainPhase` catches it at the per-ticket boundary and classifies it as environmental: the chain stops cleanly with `ChainOutcome.TicketingUnavailable` (the ticket's work is already committed to its branch, so the run is resumable) and remaining siblings/roots are marked `Skipped` instead of the process crashing ([src/ThroughlineBuild.Phases/ChainPhase.cs:166-181](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L166-L181), outcome defined in [src/ThroughlineBuild.Contracts/Models/ChainOutcome.cs](../../src/ThroughlineBuild.Contracts/Models/ChainOutcome.cs)). Verbs without that boundary still surface the exception as a failure.
+- **Network unreachable / DNS / TLS / timeout (TLB-545):** retried by the transport funnel, then wrapped in `TicketingUnavailableException`. `ChainPhase` catches it at the per-ticket boundary and classifies it as environmental: the chain stops cleanly with `ChainOutcome.TicketingUnavailable` (the ticket's work is already committed to its branch, so the run is resumable) and remaining siblings/roots are marked `Skipped` instead of the process crashing ([src/ThroughlineBuild.Phases/ChainPhase.cs:176-193](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L176-L193), outcome defined in [src/ThroughlineBuild.Contracts/Models/ChainOutcome.cs](../../src/ThroughlineBuild.Contracts/Models/ChainOutcome.cs)). Verbs without that boundary still surface the exception as a failure.
 - **State not installed in the project:** `TransitionAsync` / `TransitionLifecycleAsync` warn to stderr (`Warning: Plane project has no '<state>' state; leaving <id> in its current state.`) and leave the ticket where it is rather than throwing ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:727-735](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L727-L735)). `build setup` exists to create the missing states up front.
 
 ### Loose ends - Plane
