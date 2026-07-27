@@ -36,7 +36,7 @@ public class GatePhaseTests
             ticketing ?? new FakeGateTicketing(),
             events ?? new FakeGateEventSink(),
             MakeBuildOptions(),
-            new GateOptions(specs ?? Array.Empty<CheckSpec>()),
+            new GateOptions(specs ?? new[] { GatingSpec() }),
             git ?? new FakeGateGitClient(),
             new PreComputedChecksRunner(checkResults ?? Array.Empty<CheckResult>()),
             prover,
@@ -65,6 +65,27 @@ public class GatePhaseTests
             => _verdict = new GateVacuityVerdict(outcome, check, reason);
         public override Task<GateVacuityVerdict> ProveAsync(CheckSpec spec, AutomatedChecksRunner runner, IGitClient git, string worktreePath, CancellationToken ct)
         { Calls++; return Task.FromResult(_verdict); }
+    }
+
+    [Fact]
+    public async Task RunAsync_NoGatingChecks_HardFailsAsIntegrityFailure()
+    {
+        var gate = MakeGate(
+            checkResults: Array.Empty<CheckResult>(),
+            specs: Array.Empty<CheckSpec>());
+
+        var outcome = await gate.RunAsync(
+            TicketId,
+            "/fake/worktree",
+            "ticket/tlb-1",
+            MainSha,
+            "/fake/working",
+            claim: null,
+            CancellationToken.None);
+
+        Assert.False(outcome.Passed);
+        Assert.True(outcome.Vacuous);
+        Assert.Contains("no gating checks", outcome.HardFailReason);
     }
 
     // --- non-vacuity prover wiring (commit 4) ---
@@ -194,7 +215,7 @@ public class GatePhaseTests
         var prover = new FakeVacuityProver(GateVacuityOutcome.Vacuous);
         var gate = MakeGate(
             checkResults: new[] { Pass("lint", CheckRole.Advisory) },
-            specs: new[] { AdvisorySpec("lint") },
+            specs: new[] { GatingSpec(), AdvisorySpec("lint") },
             prover: prover);
 
         var outcome = await gate.RunAsync(

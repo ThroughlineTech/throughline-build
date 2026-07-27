@@ -23,7 +23,7 @@ public sealed class BatchImplementRunner
     private readonly Func<string> _sessionIdGenerator;
     private readonly Func<string, ChainEventEmitter> _eventEmitterFactory;
     private readonly Func<BuildOptions, PlanPhase> _planFactory;
-    private readonly Func<string, string, string, int?, string?, BuildOptions> _phaseOptionsFactory;
+    private readonly PhaseOptionsBuilder _phaseOptionsBuilder;
 
     public BatchImplementRunner(
         IWorkerAgent? batchWorker,
@@ -34,7 +34,7 @@ public sealed class BatchImplementRunner
         Func<string> sessionIdGenerator,
         Func<string, ChainEventEmitter> eventEmitterFactory,
         Func<BuildOptions, PlanPhase> planFactory,
-        Func<string, string, string, int?, string?, BuildOptions> phaseOptionsFactory)
+        PhaseOptionsBuilder phaseOptionsBuilder)
     {
         _batchWorker = batchWorker;
         _ticketing = ticketing;
@@ -44,7 +44,7 @@ public sealed class BatchImplementRunner
         _sessionIdGenerator = sessionIdGenerator;
         _eventEmitterFactory = eventEmitterFactory;
         _planFactory = planFactory;
-        _phaseOptionsFactory = phaseOptionsFactory;
+        _phaseOptionsBuilder = phaseOptionsBuilder;
     }
 
     internal IWorkerAgent? BatchWorker => _batchWorker;
@@ -90,7 +90,7 @@ public sealed class BatchImplementRunner
         CancellationToken ct)
     {
         var sessionId = _sessionIdGenerator();
-        var buildOptions = _phaseOptionsFactory(
+        var buildOptions = _phaseOptionsBuilder.BuildPhaseOptions(
             sessionId, ticketId, "plan", null, options.ChainTargetBranch);
         var childOptions = options with { TicketId = ticketId };
         _eventEmitterFactory(sessionId).EmitPhaseStart(
@@ -247,7 +247,7 @@ public sealed class BatchImplementRunner
             -1,
             batchSessionId);
 
-        var batchBuildOptions = _phaseOptionsFactory(
+        var batchBuildOptions = _phaseOptionsBuilder.BuildPhaseOptions(
             batchSessionId, firstTicket.Id, "batch-implement", null, null);
         var workerOptions = BuildWorkerOptions(
             batchTickets, batchSessionId, batchBuildOptions.DebugCaptureDirectory);

@@ -25,7 +25,7 @@ public sealed class BatchReviewRunner
     private readonly Func<string> _sessionIdGenerator;
     private readonly Func<string, ChainEventEmitter> _eventEmitterFactory;
     private readonly Func<BuildOptions, ImplementPhaseOptions, ImplementPhase> _implementFactory;
-    private readonly Func<string, string, string, int?, string?, BuildOptions> _phaseOptionsFactory;
+    private readonly PhaseOptionsBuilder _phaseOptionsBuilder;
 
     public BatchReviewRunner(
         IWorkerAgent? batchWorker,
@@ -36,7 +36,7 @@ public sealed class BatchReviewRunner
         Func<string> sessionIdGenerator,
         Func<string, ChainEventEmitter> eventEmitterFactory,
         Func<BuildOptions, ImplementPhaseOptions, ImplementPhase> implementFactory,
-        Func<string, string, string, int?, string?, BuildOptions> phaseOptionsFactory)
+        PhaseOptionsBuilder phaseOptionsBuilder)
     {
         _batchWorker = batchWorker;
         _ticketing = ticketing;
@@ -46,7 +46,7 @@ public sealed class BatchReviewRunner
         _sessionIdGenerator = sessionIdGenerator;
         _eventEmitterFactory = eventEmitterFactory;
         _implementFactory = implementFactory;
-        _phaseOptionsFactory = phaseOptionsFactory;
+        _phaseOptionsBuilder = phaseOptionsBuilder;
     }
 
     internal enum BatchReworkRoute
@@ -444,7 +444,7 @@ public sealed class BatchReviewRunner
                 targetTicketId, TicketState.InProgress, ct)).ConfigureAwait(false);
 
         var sessionId = _sessionIdGenerator();
-        var buildOptions = _phaseOptionsFactory(
+        var buildOptions = _phaseOptionsBuilder.BuildPhaseOptions(
             sessionId,
             targetTicketId,
             "batch-rework-localized",
@@ -496,7 +496,7 @@ public sealed class BatchReviewRunner
 
         var reworkSessionId = _sessionIdGenerator();
         var firstTicket = batchTickets[0];
-        var batchBuildOptions = _phaseOptionsFactory(
+        var batchBuildOptions = _phaseOptionsBuilder.BuildPhaseOptions(
             reworkSessionId,
             firstTicket.Id,
             "batch-rework-cross",

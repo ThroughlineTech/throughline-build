@@ -230,11 +230,7 @@ public class BatchReviewRunnerTests
             implementFactory ?? ((_, _) =>
                 throw new InvalidOperationException(
                     "localized implement factory not used")),
-            (sessionId, _, _, _, targetBranch) => baseOptions with
-            {
-                SessionId = sessionId,
-                TargetBranch = targetBranch ?? baseOptions.TargetBranch
-            });
+            new PhaseOptionsBuilder(baseOptions));
     }
 
     private static WorkerResult WorkerResultWithMetadata(

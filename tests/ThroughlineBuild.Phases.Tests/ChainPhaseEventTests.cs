@@ -353,7 +353,14 @@ public class ChainPhaseEventTests
         var sink = new CapturingEventSink();
         var (chain, _) = BuildChain(ticketing, planWorker, implWorker, verifiers, git, eventSink: sink,
             gateFactory: opts => new GatePhase(ticketing, sink, opts,
-                new GateOptions(Array.Empty<CheckSpec>()), git,
+                new GateOptions(new[]
+                {
+                    new CheckSpec(
+                        "gate-proof",
+                        "noop",
+                        Array.Empty<string>(),
+                        TimeSpan.FromMinutes(1))
+                }), git,
                 new PreComputedChecksRunner(new[] { GatingPass("build", elapsedMs: 500) })));
 
         var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
@@ -402,7 +409,14 @@ public class ChainPhaseEventTests
 
         var (chain, _) = BuildChain(ticketing, planWorker, implWorker, verifiers, git, eventSink: sink,
             gateFactory: opts => new GatePhase(ticketing, sink, opts,
-                new GateOptions(Array.Empty<CheckSpec>()), git,
+                new GateOptions(new[]
+                {
+                    new CheckSpec(
+                        "gate-proof",
+                        "noop",
+                        Array.Empty<string>(),
+                        TimeSpan.FromMinutes(1))
+                }), git,
                 new PreComputedChecksRunner(gateCheckQueue.Dequeue())));
 
         var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
@@ -454,7 +468,14 @@ public class ChainPhaseEventTests
 
         var (chain, _) = BuildChain(ticketing, planWorker, implWorker, verifiers, git, eventSink: sink,
             gateFactory: opts => new GatePhase(ticketing, sink, opts,
-                new GateOptions(Array.Empty<CheckSpec>()), git,
+                new GateOptions(new[]
+                {
+                    new CheckSpec(
+                        "gate-proof",
+                        "noop",
+                        Array.Empty<string>(),
+                        TimeSpan.FromMinutes(1))
+                }), git,
                 new PreComputedChecksRunner(gateCheckQueue.Dequeue())));
 
         var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
@@ -487,7 +508,14 @@ public class ChainPhaseEventTests
         // Gate always fails - will hit MaxReworkRounds=2 (rounds 0, 1, 2)
         var (chain, _) = BuildChain(ticketing, planWorker, implWorker, verifiers, git, eventSink: sink,
             gateFactory: opts => new GatePhase(ticketing, sink, opts,
-                new GateOptions(Array.Empty<CheckSpec>()), git,
+                new GateOptions(new[]
+                {
+                    new CheckSpec(
+                        "gate-proof",
+                        "noop",
+                        Array.Empty<string>(),
+                        TimeSpan.FromMinutes(1))
+                }), git,
                 new PreComputedChecksRunner(new[] { GatingFail("build", elapsedMs: 100) })));
 
         var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);

@@ -310,7 +310,14 @@ public class ChainPhaseTests
             gateWasCalled = true;
             return new GatePhase(
                 ticketing, events, opts,
-                new GateOptions(Array.Empty<CheckSpec>()),
+                new GateOptions(new[]
+                {
+                    new CheckSpec(
+                        "gate-proof",
+                        "noop",
+                        Array.Empty<string>(),
+                        TimeSpan.FromMinutes(1))
+                }),
                 git,
                 new PreComputedChecksRunner(Array.Empty<CheckResult>()));
         };

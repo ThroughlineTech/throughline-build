@@ -98,6 +98,27 @@ public class GatePhase
             }
         }
 
+        // A gate with no gating check is not a gate. Treat this as the same non-reworkable
+        // integrity failure as a vacuous canary so an empty or advisory-only configuration
+        // cannot silently approve a ticket.
+        if (!_gateOptions.Checks.Any(spec => spec.Role == CheckRole.Gating))
+        {
+            const string reason =
+                "gate: no gating checks are configured";
+            await EmitAsync(EventKind.GateFailure, ticketId,
+                new Dictionary<string, object>
+                {
+                    ["kind"] = "gate_no_gating_checks",
+                    ["reason"] = reason
+                }, ct).ConfigureAwait(false);
+            return new GateOutcome(
+                false,
+                Array.Empty<CheckResult>(),
+                Array.Empty<SmokeSignal>(),
+                reason,
+                Vacuous: true);
+        }
+
         // Run the configured checks against the warm worktree the implementer left.
         var runner = _checksRunner ?? new AutomatedChecksRunner();
         var checkResults = await runner.RunAsync(_gateOptions.Checks, worktreePath, ct).ConfigureAwait(false);

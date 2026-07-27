@@ -109,11 +109,7 @@ public class BatchImplementRunnerTests
             () => $"session-{++session}",
             sessionId => new ChainEventEmitter(events, ticketing, sessionId),
             _ => throw new InvalidOperationException("plan factory not used"),
-            (sessionId, _, _, _, targetBranch) => baseOptions with
-            {
-                SessionId = sessionId,
-                TargetBranch = targetBranch ?? baseOptions.TargetBranch
-            });
+            new PhaseOptionsBuilder(baseOptions));
     }
 
     private static Ticket MakeTicket(string id) => new(

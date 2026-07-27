@@ -70,7 +70,8 @@ public sealed class ChainEventEmitter
             ["rework_rounds"] = reworkRounds,
             ["total_duration_ms"] = (long)result.TotalDuration.TotalMilliseconds
         };
-        var preview = RationalePreview(result.FinalRationale);
+        var preview = ImplementReviewLoop.RationalePreview(
+            result.FinalRationale);
         if (preview != null)
             data["final_rationale_preview"] = preview;
 
@@ -159,10 +160,4 @@ public sealed class ChainEventEmitter
                     $"ticketing backend unreachable while updating {failedTicketId}; restore connectivity and re-run")));
     }
 
-    internal static string? RationalePreview(string? rationale)
-    {
-        if (string.IsNullOrEmpty(rationale))
-            return null;
-        return rationale.Length <= 200 ? rationale : rationale.Substring(0, 200);
-    }
 }
