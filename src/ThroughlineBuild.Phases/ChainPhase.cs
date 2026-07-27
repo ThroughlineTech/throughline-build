@@ -149,6 +149,9 @@ public class ChainPhase
     internal IWorkerAgent? BatchWorker => _batchWorker;
     internal Func<BuildOptions, ShipPhase>? ChainShipFactory => _chainShipFactory;
 
+    private ChainEventEmitter EventEmitter(string sessionId) =>
+        new(_events, _ticketing, sessionId);
+
     public async Task<ChainResult> RunAsync(ChainPhaseOptions options, CancellationToken ct)
     {
         // TLB-545: a ticketing backend that is unreachable at the transport level (after the
@@ -174,7 +177,8 @@ public class ChainPhase
             // logging failure mask the classified result.
             try
             {
-                await EmitChainEndAsync(result, _sessionIdGenerator(), options.TicketId, ct).ConfigureAwait(false);
+                await EventEmitter(_sessionIdGenerator())
+                    .EmitChainEndAsync(result, options.TicketId, ct).ConfigureAwait(false);
             }
             catch { /* non-fatal */ }
             return result;
@@ -260,25 +264,24 @@ public class ChainPhase
             _ => "refused"
         };
 
-        await _events.EmitAsync(new WorkflowEvent(
-            SessionId: chainSessionId,
-            Timestamp: DateTimeOffset.UtcNow,
-            Kind: EventKind.ChainStart,
-            TicketId: options.TicketId,
-            Phase: Phase.Chain,
-            Data: new Dictionary<string, object>
+        await EventEmitter(chainSessionId).EmitAsync(
+            EventKind.ChainStart,
+            options.TicketId,
+            Phase.Chain,
+            new Dictionary<string, object>
             {
                 ["starting_at_phase"] = startingAtPhaseStr,
                 ["initial_state"] = ticket.State.ToString(),
                 ["chain_session_id"] = chainSessionId
-            }), ct).ConfigureAwait(false);
+            }, ct).ConfigureAwait(false);
 
         if (startPhase == StartPhase.Refused)
         {
             totalSw.Stop();
             var refusedResult = new ChainResult(options.TicketId, steps, ChainOutcome.RefusedInitialState,
                 totalSw.Elapsed, null);
-            await EmitChainEndAsync(refusedResult, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
+            await EventEmitter(chainSessionId)
+                .EmitChainEndAsync(refusedResult, options.TicketId, ct).ConfigureAwait(false);
             return refusedResult;
         }
 
@@ -286,7 +289,7 @@ public class ChainPhase
         {
             var sessionId = _sessionIdGenerator();
             var buildOpts = BuildPhaseOptions(sessionId, options.TicketId, "plan", targetBranch: options.ChainTargetBranch);
-            EmitPhaseStart(options, "plan", -1, sessionId);
+            EventEmitter(chainSessionId).EmitPhaseStart(options, "plan", -1, sessionId);
             var sw = Stopwatch.StartNew();
             var planResult = await _planFactory(buildOpts).RunAsync(options.TicketId, _workingDirectory, ct)
                 .ConfigureAwait(false);
@@ -319,25 +322,30 @@ public class ChainPhase
                         var evidence = ExtractSubsumedByEvidence(planResult.EscalationWorkerResult);
                         var finalRationale = FormatSubsumedRationale(evidence);
                         await _ticketing.TransitionAsync(options.TicketId, TicketState.Done, ct).ConfigureAwait(false);
-                        await BestEffortTicketWriteAsync(chainSessionId, options.TicketId, "subsumed_rationale_comment",
-                            () => _ticketing.CreateCommentAsync(options.TicketId, "<p>" + WebUtility.HtmlEncode(finalRationale) + "</p>", ct), ct).ConfigureAwait(false);
-                        await _events.EmitAsync(new WorkflowEvent(
-                            SessionId: chainSessionId,
-                            Timestamp: DateTimeOffset.UtcNow,
-                            Kind: EventKind.TicketSubsumed,
-                            TicketId: options.TicketId,
-                            Phase: Phase.Chain,
-                            Data: new Dictionary<string, object>
+                        await EventEmitter(chainSessionId).BestEffortTicketWriteAsync(
+                            options.TicketId,
+                            "subsumed_rationale_comment",
+                            ticketing => ticketing.CreateCommentAsync(
+                                options.TicketId,
+                                "<p>" + WebUtility.HtmlEncode(finalRationale) + "</p>",
+                                ct),
+                            ct).ConfigureAwait(false);
+                        await EventEmitter(chainSessionId).EmitAsync(
+                            EventKind.TicketSubsumed,
+                            options.TicketId,
+                            Phase.Chain,
+                            new Dictionary<string, object>
                             {
                                 ["ticket_id"] = options.TicketId,
                                 ["subsumed_by_commit"] = evidence?.Commit ?? "",
                                 ["files"] = evidence?.Files.ToArray() ?? Array.Empty<string>(),
                                 ["rationale"] = evidence?.Rationale ?? ""
-                            }), ct).ConfigureAwait(false);
+                            }, ct).ConfigureAwait(false);
                         totalSw.Stop();
                         var ratified = new ChainResult(options.TicketId, steps, ChainOutcome.RatifiedObsolete,
                             totalSw.Elapsed, finalRationale, evidence);
-                        await EmitChainEndAsync(ratified, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
+                        await EventEmitter(chainSessionId)
+                            .EmitChainEndAsync(ratified, options.TicketId, ct).ConfigureAwait(false);
                         return ratified;
                     }
                     // Ratifier rejected - fall through to StoppedAtPlan
@@ -345,7 +353,8 @@ public class ChainPhase
                 totalSw.Stop();
                 var stoppedAtPlan = new ChainResult(options.TicketId, steps, ChainOutcome.StoppedAtPlan,
                     totalSw.Elapsed, null);
-                await EmitChainEndAsync(stoppedAtPlan, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
+                await EventEmitter(chainSessionId)
+                    .EmitChainEndAsync(stoppedAtPlan, options.TicketId, ct).ConfigureAwait(false);
                 return stoppedAtPlan;
             }
         }
@@ -365,7 +374,8 @@ public class ChainPhase
             {
                 totalSw.Stop();
                 var finalResult = loopFailure with { TotalDuration = totalSw.Elapsed };
-                await EmitChainEndAsync(finalResult, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
+                await EventEmitter(chainSessionId)
+                    .EmitChainEndAsync(finalResult, options.TicketId, ct).ConfigureAwait(false);
                 return finalResult;
             }
             shippedProvides = loopProvides;
@@ -378,7 +388,8 @@ public class ChainPhase
             {
                 totalSw.Stop();
                 var finalResult = loopFailure with { TotalDuration = totalSw.Elapsed };
-                await EmitChainEndAsync(finalResult, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
+                await EventEmitter(chainSessionId)
+                    .EmitChainEndAsync(finalResult, options.TicketId, ct).ConfigureAwait(false);
                 return finalResult;
             }
             shippedProvides = loopProvides;
@@ -386,7 +397,7 @@ public class ChainPhase
 
         var shipSessionId = _sessionIdGenerator();
         var shipBuildOpts = BuildPhaseOptions(shipSessionId, options.TicketId, "ship", targetBranch: options.ChainTargetBranch);
-        EmitPhaseStart(options, "ship", -1, shipSessionId);
+        EventEmitter(chainSessionId).EmitPhaseStart(options, "ship", -1, shipSessionId);
         var shipSw = Stopwatch.StartNew();
         // When running inside a parent-chain integration branch, use the chain ship factory
         // when supplied. The factory honors BuildOptions.TargetBranch, so the leaf ships into
@@ -423,7 +434,8 @@ public class ChainPhase
         {
             var stoppedAtShip = new ChainResult(options.TicketId, steps, ChainOutcome.StoppedAtShip,
                 totalSw.Elapsed, null);
-            await EmitChainEndAsync(stoppedAtShip, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
+            await EventEmitter(chainSessionId)
+                .EmitChainEndAsync(stoppedAtShip, options.TicketId, ct).ConfigureAwait(false);
             return stoppedAtShip;
         }
 
@@ -431,7 +443,8 @@ public class ChainPhase
             ShippedProvides: shippedProvides);
         if (options.ChainTargetBranch is null)
             await SweepChainWorktreesAsync(options.TicketId, chainSessionId, ct).ConfigureAwait(false);
-        await EmitChainEndAsync(completed, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
+        await EventEmitter(chainSessionId)
+            .EmitChainEndAsync(completed, options.TicketId, ct).ConfigureAwait(false);
         return completed;
     }
 
@@ -463,13 +476,12 @@ public class ChainPhase
             Console.Error.WriteLine($"[{options.TicketId}] chain refused: {refusal.Message}");
         }
 
-        await _events.EmitAsync(new WorkflowEvent(
-            SessionId: chainSessionId,
-            Timestamp: DateTimeOffset.UtcNow,
-            Kind: EventKind.GateFailure,
-            TicketId: options.TicketId,
-            Phase: Phase.Chain,
-            Data: refusal.EventData), ct).ConfigureAwait(false);
+        await EventEmitter(chainSessionId).EmitAsync(
+            EventKind.GateFailure,
+            options.TicketId,
+            Phase.Chain,
+            refusal.EventData,
+            ct).ConfigureAwait(false);
 
         totalSw.Stop();
         var result = new ChainResult(
@@ -479,64 +491,9 @@ public class ChainPhase
             totalSw.Elapsed,
             refusal.Message,
             DirtyTreeCause: refusal.DirtyTreeCause);
-        await EmitChainEndAsync(result, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
+        await EventEmitter(chainSessionId)
+            .EmitChainEndAsync(result, options.TicketId, ct).ConfigureAwait(false);
         return result;
-    }
-
-    // Emits a pre-run START notice through the OnStep stream so the operator sees a
-    // phase has begun, not just its completion line. Start markers are console-only:
-    // they are never added to the steps list, so the returned ChainResult is unchanged.
-    private static void EmitPhaseStart(ChainPhaseOptions options, string phaseName, int reworkRoundNumber, string sessionId)
-    {
-        options.OnStep?.Invoke(options.TicketId, new ChainStep(
-            PhaseName: phaseName,
-            ReworkRoundNumber: reworkRoundNumber,
-            Status: Status.Ok,
-            FailureReason: null,
-            Verdict: null,
-            Duration: TimeSpan.Zero,
-            PhaseSessionId: sessionId,
-            IsStart: true));
-    }
-
-    private async Task EmitChainEndAsync(ChainResult result, string chainSessionId, string ticketId, CancellationToken ct)
-    {
-        var reworkRounds = result.Steps.Count(s => s.PhaseName == "implement" && s.ReworkRoundNumber >= 1);
-        var data = new Dictionary<string, object>
-        {
-            ["outcome"] = result.Outcome.ToString(),
-            ["phases_run"] = result.Steps.Count,
-            ["rework_rounds"] = reworkRounds,
-            ["total_duration_ms"] = (long)result.TotalDuration.TotalMilliseconds
-        };
-        var preview = RationalePreview(result.FinalRationale);
-        if (preview != null)
-            data["final_rationale_preview"] = preview;
-
-        await _events.EmitAsync(new WorkflowEvent(
-            SessionId: chainSessionId,
-            Timestamp: DateTimeOffset.UtcNow,
-            Kind: EventKind.ChainEnd,
-            TicketId: ticketId,
-            Phase: Phase.Chain,
-            Data: data), ct).ConfigureAwait(false);
-    }
-
-    /// <summary>
-    /// Runs a non-state-bearing ticketing write (informational comment, label apply) without
-    /// letting its failure abort the run: on final failure (the client layer has already spent
-    /// its transport retries) the write is event-logged as <c>ticketing_write_failed</c> with a
-    /// stderr warning, and the chain continues (TLB-545). State-bearing writes - state
-    /// transitions and the [implemented_at:]/[planned_at:] marker comments downstream phases
-    /// parse to reconstruct state - must NOT route through here; their failure stops the ticket
-    /// with a resumable outcome instead. Batch-path writes that were already deliberately
-    /// non-fatal route through here too so their failures stop being silent.
-    /// </summary>
-    private async Task BestEffortTicketWriteAsync(
-        string sessionId, string ticketId, string operation, Func<Task> write, CancellationToken ct)
-    {
-        await TicketingWritePolicy.BestEffortAsync(
-            _events, sessionId, ticketId, Phase.Chain, operation, write, ct).ConfigureAwait(false);
     }
 
     private async Task<(ChainResult? abort, IReadOnlyList<string>? successProvides)> RunImplementReviewLoopAsync(
@@ -550,6 +507,7 @@ public class ChainPhase
     {
         int round = startRound;
         ReviewFeedback? feedback = initialFeedback;
+        var eventEmitter = EventEmitter(chainSessionId);
 
         // Carries the prior round's HEAD across iterations so a rework round can record the
         // commit sha BEFORE it ran (sha_after comes from the round's own implResult). Null on
@@ -581,7 +539,7 @@ public class ChainPhase
             // own edits already in place, so replaying the handoff is redundant.
             var implChainRange = (feedback is null) ? options.ChainCommitRange : null;
             var implPhaseOpts = new ImplementPhaseOptions(feedback, options.SharedWorktreePath, implChainRange);
-            EmitPhaseStart(options, "implement", round, implSessionId);
+            eventEmitter.EmitPhaseStart(options, "implement", round, implSessionId);
             var implSw = Stopwatch.StartNew();
             var implResult = await _implementFactory(implBuildOpts, implPhaseOpts)
                 .RunAsync(options.TicketId, _workingDirectory, ct).ConfigureAwait(false);
@@ -636,21 +594,25 @@ public class ChainPhase
                         var evidence = ExtractSubsumedByEvidence(implResult.EscalationWorkerResult);
                         var finalRationale = FormatSubsumedRationale(evidence);
                         await _ticketing.TransitionAsync(options.TicketId, TicketState.Done, ct).ConfigureAwait(false);
-                        await BestEffortTicketWriteAsync(chainSessionId, options.TicketId, "subsumed_rationale_comment",
-                            () => _ticketing.CreateCommentAsync(options.TicketId, "<p>" + WebUtility.HtmlEncode(finalRationale) + "</p>", ct), ct).ConfigureAwait(false);
-                        await _events.EmitAsync(new WorkflowEvent(
-                            SessionId: chainSessionId,
-                            Timestamp: DateTimeOffset.UtcNow,
-                            Kind: EventKind.TicketSubsumed,
-                            TicketId: options.TicketId,
-                            Phase: Phase.Chain,
-                            Data: new Dictionary<string, object>
+                        await eventEmitter.BestEffortTicketWriteAsync(
+                            options.TicketId,
+                            "subsumed_rationale_comment",
+                            ticketing => ticketing.CreateCommentAsync(
+                                options.TicketId,
+                                "<p>" + WebUtility.HtmlEncode(finalRationale) + "</p>",
+                                ct),
+                            ct).ConfigureAwait(false);
+                        await eventEmitter.EmitAsync(
+                            EventKind.TicketSubsumed,
+                            options.TicketId,
+                            Phase.Chain,
+                            new Dictionary<string, object>
                             {
                                 ["ticket_id"] = options.TicketId,
                                 ["subsumed_by_commit"] = evidence?.Commit ?? "",
                                 ["files"] = evidence?.Files.ToArray() ?? Array.Empty<string>(),
                                 ["rationale"] = evidence?.Rationale ?? ""
-                            }), ct).ConfigureAwait(false);
+                            }, ct).ConfigureAwait(false);
                         totalSw.Stop();
                         return (new ChainResult(options.TicketId, steps, ChainOutcome.RatifiedObsolete,
                             totalSw.Elapsed, finalRationale, evidence), null);
@@ -658,7 +620,7 @@ public class ChainPhase
                     // Ratifier rejected - fall through to StoppedAtImplement
                 }
                 if (gateWasEngaged)
-                    await EmitCostLedgerAsync(chainSessionId, options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
+                    await eventEmitter.EmitCostLedgerAsync(options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
                 return (new ChainResult(options.TicketId, steps, ChainOutcome.StoppedAtImplement,
                     TimeSpan.Zero, null), null);
             }
@@ -688,19 +650,17 @@ public class ChainPhase
                 if (stillFailing.Count > 0)
                 {
                     var stillFailingNames = stillFailing.Select(r => r.Name).ToList();
-                    await _events.EmitAsync(new WorkflowEvent(
-                        SessionId: chainSessionId,
-                        Timestamp: DateTimeOffset.UtcNow,
-                        Kind: EventKind.GateFailure,
-                        TicketId: options.TicketId,
-                        Phase: Phase.Implement,
-                        Data: new Dictionary<string, object>
+                    await eventEmitter.EmitAsync(
+                        EventKind.GateFailure,
+                        options.TicketId,
+                        Phase.Implement,
+                        new Dictionary<string, object>
                         {
                             ["kind"] = "rework_recheck_failed",
                             ["round"] = round,
                             ["retry"] = checkRetriesThisRound + 1,
                             ["checks_still_failing"] = stillFailingNames
-                        }), ct).ConfigureAwait(false);
+                        }, ct).ConfigureAwait(false);
 
                     var recheckRationale =
                         $"Post-rework re-run: the failing check(s) that triggered rework round {round} " +
@@ -731,7 +691,7 @@ public class ChainPhase
                         $"- {r.Name} (exit {r.ExitCode}; command: {r.CommandLine}): " +
                         (string.IsNullOrWhiteSpace(r.StderrTail) ? r.StdoutTail.Trim() : r.StderrTail.Trim())));
                     if (gateWasEngaged)
-                        await EmitCostLedgerAsync(chainSessionId, options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
+                        await eventEmitter.EmitCostLedgerAsync(options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
                     return (new ChainResult(options.TicketId, steps, ChainOutcome.ReworkCapExceeded,
                         TimeSpan.Zero, recheckRationale + "\n" + failTail), null);
                 }
@@ -747,7 +707,7 @@ public class ChainPhase
             {
                 var gateSessionId = _sessionIdGenerator();
                 var gateBuildOpts = BuildPhaseOptions(gateSessionId, options.TicketId, "gate", round, options.ChainTargetBranch);
-                EmitPhaseStart(options, "gate", round, gateSessionId);
+                eventEmitter.EmitPhaseStart(options, "gate", round, gateSessionId);
                 var gateSw = Stopwatch.StartNew();
 
                 var gateWorktreePath = implResult.WorktreePath ?? _workingDirectory;
@@ -793,7 +753,7 @@ public class ChainPhase
                         // here WITHOUT a rework round. As a chain FAILURE, preserve-on-failure leaves the worktrees
                         // in place for inspection.
                         if (gateWasEngaged)
-                            await EmitCostLedgerAsync(chainSessionId, options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
+                            await eventEmitter.EmitCostLedgerAsync(options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
                         return (new ChainResult(options.TicketId, steps, ChainOutcome.GateVacuous, TimeSpan.Zero, gateOutcome.HardFailReason), null);
                     }
 
@@ -807,7 +767,7 @@ public class ChainPhase
                         var falseFails = gateOutcome.CheckResults
                             .Count(r => r.Role == CheckRole.Gating && !r.Passed && !r.Skipped);
                         if (gateWasEngaged)
-                            await EmitCostLedgerAsync(chainSessionId, options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct, falseFails: Math.Max(falseFails, 1)).ConfigureAwait(false);
+                            await eventEmitter.EmitCostLedgerAsync(options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct, falseFails: Math.Max(falseFails, 1)).ConfigureAwait(false);
                         return (new ChainResult(options.TicketId, steps, ChainOutcome.GateEnvironmentFailure, TimeSpan.Zero, gateOutcome.HardFailReason), null);
                     }
 
@@ -823,23 +783,21 @@ public class ChainPhase
                     {
                         feedback = new ReviewFeedback(gateRationale, gatingFailed, round + 1,
                             GateFailedChecks: gatingFailedResults);
-                        await _events.EmitAsync(new WorkflowEvent(
-                            SessionId: chainSessionId,
-                            Timestamp: DateTimeOffset.UtcNow,
-                            Kind: EventKind.ReworkRound,
-                            TicketId: options.TicketId,
-                            Phase: Phase.Implement,
-                            Data: new Dictionary<string, object>
+                        await eventEmitter.EmitAsync(
+                            EventKind.ReworkRound,
+                            options.TicketId,
+                            Phase.Implement,
+                            new Dictionary<string, object>
                             {
                                 ["round"] = round + 1,
                                 ["verdict_that_triggered"] = "GateFailure",
-                                ["rationale_preview"] = RationalePreview(gateRationale) ?? ""
-                            }), ct).ConfigureAwait(false);
+                                ["rationale_preview"] = ChainEventEmitter.RationalePreview(gateRationale) ?? ""
+                            }, ct).ConfigureAwait(false);
                         thisRoundIsGateAttributable = true;
                         round++;
                         continue;
                     }
-                    await EmitCostLedgerAsync(chainSessionId, options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
+                    await eventEmitter.EmitCostLedgerAsync(options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
                     return (new ChainResult(options.TicketId, steps, ChainOutcome.ReworkCapExceeded,
                         TimeSpan.Zero, gateRationale), null);
                 }
@@ -850,7 +808,7 @@ public class ChainPhase
             if (reviewResult.abort is not null)
             {
                 if (gateWasEngaged)
-                    await EmitCostLedgerAsync(chainSessionId, options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
+                    await eventEmitter.EmitCostLedgerAsync(options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
                 return (reviewResult.abort, null);
             }
 
@@ -859,14 +817,14 @@ public class ChainPhase
             if (rv.Kind == VerdictKind.Pass)
             {
                 if (gateWasEngaged)
-                    await EmitCostLedgerAsync(chainSessionId, options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
+                    await eventEmitter.EmitCostLedgerAsync(options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
                 return (null, implResult.CompletionClaim?.Provides);
             }
 
             if (rv.Kind == VerdictKind.Fail)
             {
                 if (gateWasEngaged)
-                    await EmitCostLedgerAsync(chainSessionId, options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
+                    await eventEmitter.EmitCostLedgerAsync(options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
                 return (new ChainResult(options.TicketId, steps, ChainOutcome.StoppedAtReview,
                     TimeSpan.Zero, rv.Rationale), null);
             }
@@ -875,24 +833,22 @@ public class ChainPhase
             {
                 feedback = new ReviewFeedback(rv.Rationale, rv.ChecksFailed, round + 1,
                     FailedCheckDetails: MatchFailedCheckDetails(rv.ChecksFailed, reviewResult.checkResults));
-                await _events.EmitAsync(new WorkflowEvent(
-                    SessionId: chainSessionId,
-                    Timestamp: DateTimeOffset.UtcNow,
-                    Kind: EventKind.ReworkRound,
-                    TicketId: options.TicketId,
-                    Phase: Phase.Implement,
-                    Data: new Dictionary<string, object>
+                await eventEmitter.EmitAsync(
+                    EventKind.ReworkRound,
+                    options.TicketId,
+                    Phase.Implement,
+                    new Dictionary<string, object>
                     {
                         ["round"] = round + 1,
                         ["verdict_that_triggered"] = "Rework",
-                        ["rationale_preview"] = RationalePreview(rv.Rationale) ?? ""
-                    }), ct).ConfigureAwait(false);
+                        ["rationale_preview"] = ChainEventEmitter.RationalePreview(rv.Rationale) ?? ""
+                    }, ct).ConfigureAwait(false);
                 round++;
             }
             else
             {
                 if (gateWasEngaged)
-                    await EmitCostLedgerAsync(chainSessionId, options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
+                    await eventEmitter.EmitCostLedgerAsync(options.TicketId, gateWallMs, gateAttributableReworkRounds, gateAttributableReworkInputTokens, gateAttributableReworkOutputTokens, gateAttributableReworkTokensTracked, ct).ConfigureAwait(false);
                 return (new ChainResult(options.TicketId, steps, ChainOutcome.ReworkCapExceeded,
                     TimeSpan.Zero, rv.Rationale), null);
             }
@@ -924,61 +880,18 @@ public class ChainPhase
 
         var feedback = new ReviewFeedback(rv.Rationale, rv.ChecksFailed, round + 1,
             FailedCheckDetails: MatchFailedCheckDetails(rv.ChecksFailed, reviewResult.checkResults));
-        await _events.EmitAsync(new WorkflowEvent(
-            SessionId: chainSessionId,
-            Timestamp: DateTimeOffset.UtcNow,
-            Kind: EventKind.ReworkRound,
-            TicketId: options.TicketId,
-            Phase: Phase.Implement,
-            Data: new Dictionary<string, object>
+        await EventEmitter(chainSessionId).EmitAsync(
+            EventKind.ReworkRound,
+            options.TicketId,
+            Phase.Implement,
+            new Dictionary<string, object>
             {
                 ["round"] = round + 1,
                 ["verdict_that_triggered"] = "Rework",
-                ["rationale_preview"] = RationalePreview(rv.Rationale) ?? ""
-            }), ct).ConfigureAwait(false);
+                ["rationale_preview"] = ChainEventEmitter.RationalePreview(rv.Rationale) ?? ""
+            }, ct).ConfigureAwait(false);
         return await RunImplementReviewLoopAsync(options, steps, chainSessionId, round + 1, feedback, totalSw, ct)
             .ConfigureAwait(false);
-    }
-
-    // Emits a CostLedger event capturing gate wall time, gate-attributable rework token counts,
-    // and annotatable slots (cascade_caught, false_fails) for post-run analysis.
-    private async Task EmitCostLedgerAsync(
-        string chainSessionId,
-        string ticketId,
-        long gateWallMs,
-        int gateAttributableReworkRounds,
-        long gateAttributableReworkInputTokens,
-        long gateAttributableReworkOutputTokens,
-        bool gateAttributableReworkTokensTracked,
-        CancellationToken ct,
-        // Gate hard-fails proven environmental by the base-ref control run (TLB-538). Zero on
-        // every path except the GateEnvironmentFailure stop, where the failure was a false fail
-        // by construction - the same checks fail on code identical to the base.
-        int falseFails = 0)
-    {
-        var data = new Dictionary<string, object>
-        {
-            ["gate_wall_ms"] = gateWallMs,
-            ["gate_attributable_rework_rounds"] = gateAttributableReworkRounds,
-            ["cascade_caught"] = 0,
-            ["false_fails"] = falseFails
-        };
-        if (gateAttributableReworkRounds > 0 && gateAttributableReworkTokensTracked)
-        {
-            data["gate_attributable_rework_input_tokens"] = gateAttributableReworkInputTokens;
-            data["gate_attributable_rework_output_tokens"] = gateAttributableReworkOutputTokens;
-        }
-        else if (gateAttributableReworkRounds > 0)
-        {
-            data["gate_attributable_rework_tokens_available"] = false;
-        }
-        await _events.EmitAsync(new WorkflowEvent(
-            SessionId: chainSessionId,
-            Timestamp: DateTimeOffset.UtcNow,
-            Kind: EventKind.CostLedger,
-            TicketId: ticketId,
-            Phase: Phase.Gate,
-            Data: data), ct).ConfigureAwait(false);
     }
 
     private async Task<(ChainResult? abort, Verdict? verdict, IReadOnlyList<CheckResult>? checkResults)> RunOneReviewAsync(
@@ -995,7 +908,7 @@ public class ChainPhase
         // accumulated stack diff instead of just this ticket's own commit. In the non-chain path
         // ChainTargetBranch is null, so this falls back to the root target exactly as before.
         var revBuildOpts = BuildPhaseOptions(revSessionId, options.TicketId, "review", round, options.ChainTargetBranch);
-        EmitPhaseStart(options, "review", -1, revSessionId);
+        EventEmitter(revSessionId).EmitPhaseStart(options, "review", -1, revSessionId);
         var revSw = Stopwatch.StartNew();
         var revResult = await _reviewFactory(revBuildOpts, gateOutcome)
             .RunAsync(options.TicketId, _workingDirectory, ct).ConfigureAwait(false);
@@ -1061,13 +974,6 @@ public class ChainPhase
         var rationale = evidence?.Rationale ?? "(no rationale)";
         var files = evidence?.Files is { Count: > 0 } f ? string.Join(", ", f) : "(none)";
         return $"Subsumed by {commit}: {rationale}; files: {files}";
-    }
-
-    private static string? RationalePreview(string? rationale)
-    {
-        if (string.IsNullOrEmpty(rationale))
-            return null;
-        return rationale.Length <= 200 ? rationale : rationale.Substring(0, 200);
     }
 
     private BuildOptions BuildPhaseOptions(string sessionId, string ticketId, string phaseName, int? round = null, string? targetBranch = null)
@@ -1210,7 +1116,7 @@ public class ChainPhase
 
         var ticket = await _ticketing.GetAsync(options.TicketId, ct).ConfigureAwait(false);
 
-        EmitPhaseStart(options, "ratify", -1, sessionId);
+        EventEmitter(sessionId).EmitPhaseStart(options, "ratify", -1, sessionId);
         var sw = Stopwatch.StartNew();
         var verdict = await ratifier.RatifyAsync(ticket, escalateResult, evidenceDirectory, ct).ConfigureAwait(false);
         sw.Stop();
@@ -1371,7 +1277,11 @@ public class ChainPhase
             batchCommitRange);
 
         // Emit start step for the batch session (associated with the first ticket for tracing).
-        EmitPhaseStart(options with { TicketId = firstTicket.Id }, "batch-implement", -1, batchSessionId);
+        EventEmitter(batchSessionId).EmitPhaseStart(
+            options with { TicketId = firstTicket.Id },
+            "batch-implement",
+            -1,
+            batchSessionId);
 
         var implSw = Stopwatch.StartNew();
 
@@ -1452,8 +1362,11 @@ public class ChainPhase
                     if (firstIncomplete is not null)
                     {
                         var failHtml = $"<p>batch implement stopped: {WebUtility.HtmlEncode(failureReason)}</p>";
-                        await BestEffortTicketWriteAsync(batchSessionId, firstIncomplete.Id, "batch_stopped_comment",
-                            () => _ticketing.CreateCommentAsync(firstIncomplete.Id, failHtml, ct), ct).ConfigureAwait(false);
+                        await EventEmitter(batchSessionId).BestEffortTicketWriteAsync(
+                            firstIncomplete.Id,
+                            "batch_stopped_comment",
+                            ticketing => ticketing.CreateCommentAsync(firstIncomplete.Id, failHtml, ct),
+                            ct).ConfigureAwait(false);
                     }
 
                     // Return mixed results: confirmed tickets -> BatchImplemented,
@@ -1673,17 +1586,15 @@ public class ChainPhase
         }
         catch (Exception ex)
         {
-            await _events.EmitAsync(new WorkflowEvent(
-                SessionId: chainSessionId,
-                Timestamp: DateTimeOffset.UtcNow,
-                Kind: EventKind.GateFailure,
-                TicketId: primaryTicketId,
-                Phase: Phase.Review,
-                Data: new Dictionary<string, object>
+            await EventEmitter(chainSessionId).EmitAsync(
+                EventKind.GateFailure,
+                primaryTicketId,
+                Phase.Review,
+                new Dictionary<string, object>
                 {
                     ["kind"] = "batch_review_diff_failed",
                     ["error"] = ex.Message
-                }), ct).ConfigureAwait(false);
+                }, ct).ConfigureAwait(false);
             return new BatchReviewOutcome(false, VerdictKind.Fail,
                 $"diff failed: {ex.Message}", Array.Empty<string>());
         }
@@ -1738,18 +1649,16 @@ public class ChainPhase
         var primaryTicketId = batchTickets[0].Id;
         var reviewSessionId = _sessionIdGenerator();
 
-        await _events.EmitAsync(new WorkflowEvent(
-            SessionId: reviewSessionId,
-            Timestamp: DateTimeOffset.UtcNow,
-            Kind: EventKind.WorkerSpawn,
-            TicketId: primaryTicketId,
-            Phase: Phase.Review,
-            Data: new Dictionary<string, object>
+        await EventEmitter(reviewSessionId).EmitAsync(
+            EventKind.WorkerSpawn,
+            primaryTicketId,
+            Phase.Review,
+            new Dictionary<string, object>
             {
                 ["worker"] = _batchWorker!.Name,
                 ["role"] = "batch_verifier",
                 ["pass"] = pass
-            }), ct).ConfigureAwait(false);
+            }, ct).ConfigureAwait(false);
 
         var reviewBrief = BatchReviewBriefBuilder.Build(
             _batchWorker!.Name,
@@ -1776,17 +1685,15 @@ public class ChainPhase
             .ExecuteAsync(reviewBrief, sharedWorktreePath, workerOptions, ct)
             .ConfigureAwait(false);
 
-        await _events.EmitAsync(new WorkflowEvent(
-            SessionId: reviewSessionId,
-            Timestamp: DateTimeOffset.UtcNow,
-            Kind: EventKind.VerifierVerdict,
-            TicketId: primaryTicketId,
-            Phase: Phase.Review,
-            Data: new Dictionary<string, object>
+        await EventEmitter(reviewSessionId).EmitAsync(
+            EventKind.VerifierVerdict,
+            primaryTicketId,
+            Phase.Review,
+            new Dictionary<string, object>
             {
                 ["worker_status"] = workerResult.Status.ToString(),
                 ["pass"] = pass
-            }), ct).ConfigureAwait(false);
+            }, ct).ConfigureAwait(false);
 
         if (workerResult.Status != Status.Ok)
         {
@@ -1831,8 +1738,11 @@ public class ChainPhase
         var commentHtml =
             $"<p>[batch_review{passNote}: {verdict}]{checksNote}</p>" +
             $"<p>{System.Net.WebUtility.HtmlEncode(rationale)}</p>";
-        await BestEffortTicketWriteAsync(_sessionIdGenerator(), ticketId, "batch_review_comment",
-            () => _ticketing.CreateCommentAsync(ticketId, commentHtml, ct), ct).ConfigureAwait(false);
+        await EventEmitter(_sessionIdGenerator()).BestEffortTicketWriteAsync(
+            ticketId,
+            "batch_review_comment",
+            ticketing => ticketing.CreateCommentAsync(ticketId, commentHtml, ct),
+            ct).ConfigureAwait(false);
     }
 
     private static string? TryGetBatchReviewMetadataString(
@@ -2221,19 +2131,17 @@ public class ChainPhase
                 Console.Error.WriteLine(
                     $"[{parentTicket.Id}] integration worktree unavailable " +
                     $"({createResult.FailureReason}); cannot safely accumulate nested chain branches.");
-                await _events.EmitAsync(new WorkflowEvent(
-                    SessionId: _sessionIdGenerator(),
-                    Timestamp: DateTimeOffset.UtcNow,
-                    Kind: EventKind.GateFailure,
-                    TicketId: parentTicket.Id,
-                    Phase: Phase.Chain,
-                    Data: new Dictionary<string, object>
+                await EventEmitter(_sessionIdGenerator()).EmitAsync(
+                    EventKind.GateFailure,
+                    parentTicket.Id,
+                    Phase.Chain,
+                    new Dictionary<string, object>
                     {
                         ["kind"] = "integration_worktree_unavailable",
                         ["detail"] = createResult.FailureReason ?? "unknown",
                         ["branch"] = integrationBranch,
                         ["path"] = integrationWorktreePath
-                    }), ct).ConfigureAwait(false);
+                    }, ct).ConfigureAwait(false);
                 totalSw.Stop();
                 return new ChainResult(
                     options.TicketId,
@@ -2307,17 +2215,15 @@ public class ChainPhase
                         Console.Error.WriteLine(
                             $"[{parentTicket.Id}] batch-implement: skipping {candidate.Id} - it is an " +
                             "internal node (has non-terminal children); chaining it as a parent instead.");
-                        await _events.EmitAsync(new WorkflowEvent(
-                            SessionId: _sessionIdGenerator(),
-                            Timestamp: DateTimeOffset.UtcNow,
-                            Kind: EventKind.GateFailure,
-                            TicketId: parentTicket.Id,
-                            Phase: Phase.Chain,
-                            Data: new Dictionary<string, object>
+                        await EventEmitter(_sessionIdGenerator()).EmitAsync(
+                            EventKind.GateFailure,
+                            parentTicket.Id,
+                            Phase.Chain,
+                            new Dictionary<string, object>
                             {
                                 ["kind"] = "batch_skip_internal_node",
                                 ["ticket"] = candidate.Id
-                            }), ct).ConfigureAwait(false);
+                            }, ct).ConfigureAwait(false);
                         continue;
                     }
                     leafCandidates.Add(candidate);
@@ -2361,18 +2267,16 @@ public class ChainPhase
                         Console.Error.WriteLine(
                             $"[{parentTicket.Id}] batch-size-fallback: cap exceeded ({capViolation}); " +
                             $"running per-ticket chain for all {batchTickets.Count} ticket(s) instead.");
-                        await _events.EmitAsync(new WorkflowEvent(
-                            SessionId: _sessionIdGenerator(),
-                            Timestamp: DateTimeOffset.UtcNow,
-                            Kind: EventKind.GateFailure,
-                            TicketId: parentTicket.Id,
-                            Phase: Phase.Chain,
-                            Data: new Dictionary<string, object>
+                        await EventEmitter(_sessionIdGenerator()).EmitAsync(
+                            EventKind.GateFailure,
+                            parentTicket.Id,
+                            Phase.Chain,
+                            new Dictionary<string, object>
                             {
                                 ["kind"] = "batch_size_cap_exceeded",
                                 ["cap"] = capViolation,
                                 ["ticket_count"] = batchTickets.Count
-                            }), ct).ConfigureAwait(false);
+                            }, ct).ConfigureAwait(false);
                         // batchedTicketIds stays null: the now-Ready planned tickets fall through to
                         // the per-ticket level loop and resume at implement (no re-plan).
                     }
@@ -2435,7 +2339,7 @@ public class ChainPhase
                             }
                             catch (BatchTicketingUnavailableException ex)
                             {
-                                RecordBatchTicketingUnavailable(
+                                ChainEventEmitter.RecordBatchTicketingUnavailable(
                                     allChildResults, batchTickets, ex.TicketId, ex.TicketingException);
                                 anyStoppedEarly = true;
                                 environmentFailureDetected = true;
@@ -2462,18 +2366,16 @@ public class ChainPhase
             Console.Error.WriteLine(
                 $"[{parentTicket.Id}] batch-implement requested but {downgradeReason}; " +
                 "running per-ticket chain instead.");
-            await _events.EmitAsync(new WorkflowEvent(
-                SessionId: _sessionIdGenerator(),
-                Timestamp: DateTimeOffset.UtcNow,
-                Kind: EventKind.GateFailure,
-                TicketId: parentTicket.Id,
-                Phase: Phase.Chain,
-                Data: new Dictionary<string, object>
+            await EventEmitter(_sessionIdGenerator()).EmitAsync(
+                EventKind.GateFailure,
+                parentTicket.Id,
+                Phase.Chain,
+                new Dictionary<string, object>
                 {
                     ["kind"] = "batch_implement_unavailable",
                     ["reason"] = downgradeReason,
                     ["ticket_count"] = eligible.Count
-                }), ct).ConfigureAwait(false);
+                }, ct).ConfigureAwait(false);
         }
 
         // Accumulated provides from all previously shipped children. Each child's gate
@@ -2672,7 +2574,7 @@ public class ChainPhase
         var sessionId = _sessionIdGenerator();
         var buildOpts = BuildPhaseOptions(sessionId, ticketId, "plan", targetBranch: options.ChainTargetBranch);
         var childOptions = options with { TicketId = ticketId };
-        EmitPhaseStart(childOptions, "plan", -1, sessionId);
+        EventEmitter(sessionId).EmitPhaseStart(childOptions, "plan", -1, sessionId);
         var sw = Stopwatch.StartNew();
         var planResult = await _planFactory(buildOpts).RunAsync(ticketId, _workingDirectory, ct).ConfigureAwait(false);
         sw.Stop();
@@ -2706,7 +2608,7 @@ public class ChainPhase
             .ConfigureAwait(false);
         if (!switchResult.Success)
         {
-            await EmitChainGateFailureAsync(batchTickets[0].Id, "batch_ship_switch_failed", new Dictionary<string, object>
+            await EventEmitter(_sessionIdGenerator()).EmitChainGateFailureAsync(batchTickets[0].Id, "batch_ship_switch_failed", new Dictionary<string, object>
             {
                 ["integration_branch"] = integrationBranch,
                 ["batch_branch"] = batchBranch,
@@ -2720,7 +2622,7 @@ public class ChainPhase
             .ConfigureAwait(false);
         if (!ffResult.Success)
         {
-            await EmitChainGateFailureAsync(batchTickets[0].Id, "batch_ship_merge_failed", new Dictionary<string, object>
+            await EventEmitter(_sessionIdGenerator()).EmitChainGateFailureAsync(batchTickets[0].Id, "batch_ship_merge_failed", new Dictionary<string, object>
             {
                 ["integration_branch"] = integrationBranch,
                 ["batch_branch"] = batchBranch,
@@ -2743,18 +2645,16 @@ public class ChainPhase
                     $"<p>[shipped_at: {shippedSha}] (batch into {integrationBranch})</p>", ct)).ConfigureAwait(false);
             await RunBatchStateWriteAsync(ticket.Id,
                 () => _ticketing.TransitionAsync(ticket.Id, TicketState.Done, ct)).ConfigureAwait(false);
-            await _events.EmitAsync(new WorkflowEvent(
-                SessionId: _sessionIdGenerator(),
-                Timestamp: DateTimeOffset.UtcNow,
-                Kind: EventKind.StateTransition,
-                TicketId: ticket.Id,
-                Phase: Phase.Chain,
-                Data: new Dictionary<string, object>
+            await EventEmitter(_sessionIdGenerator()).EmitAsync(
+                EventKind.StateTransition,
+                ticket.Id,
+                Phase.Chain,
+                new Dictionary<string, object>
                 {
                     ["from"] = "InReview",
                     ["to"] = "Done",
                     ["reason"] = "batch_ship"
-                }), ct).ConfigureAwait(false);
+                }, ct).ConfigureAwait(false);
         }
         return null;
     }
@@ -2778,7 +2678,7 @@ public class ChainPhase
         var mainBranch = await _git.CurrentBranchAsync(_workingDirectory, ct).ConfigureAwait(false);
         if (!string.Equals(mainBranch, _baseOptions.TargetBranch, StringComparison.Ordinal))
         {
-            await EmitChainGateFailureAsync(ticketId, "chain_landing_wrong_branch", new Dictionary<string, object>
+            await EventEmitter(_sessionIdGenerator()).EmitChainGateFailureAsync(ticketId, "chain_landing_wrong_branch", new Dictionary<string, object>
             {
                 ["expected"] = _baseOptions.TargetBranch,
                 ["actual"] = mainBranch,
@@ -2812,19 +2712,17 @@ public class ChainPhase
                 .ConfigureAwait(false);
             if (!remoteConfigured)
             {
-                await _events.EmitAsync(new WorkflowEvent(
-                    SessionId: _sessionIdGenerator(),
-                    Timestamp: DateTimeOffset.UtcNow,
-                    Kind: EventKind.TicketWrite,
-                    TicketId: ticketId,
-                    Phase: Phase.Chain,
-                    Data: new Dictionary<string, object>
+                await EventEmitter(_sessionIdGenerator()).EmitAsync(
+                    EventKind.TicketWrite,
+                    ticketId,
+                    Phase.Chain,
+                    new Dictionary<string, object>
                     {
                         ["action"] = "chain_landing_push_skipped",
                         ["reason"] = "no_remote",
                         ["remote"] = _landingRemote!,
                         ["target_branch"] = _baseOptions.TargetBranch
-                    }), ct).ConfigureAwait(false);
+                    }, ct).ConfigureAwait(false);
                 Console.WriteLine(
                     $"[{ticketId}] chain landed {integrationBranch} onto {_baseOptions.TargetBranch} " +
                     $"locally; push skipped (no '{_landingRemote}' remote configured).");
@@ -2835,7 +2733,7 @@ public class ChainPhase
                 .ConfigureAwait(false);
             if (!pushResult.Success)
             {
-                await EmitChainGateFailureAsync(ticketId, "chain_landing_push_failed", new Dictionary<string, object>
+                await EventEmitter(_sessionIdGenerator()).EmitChainGateFailureAsync(ticketId, "chain_landing_push_failed", new Dictionary<string, object>
                 {
                     ["target_branch"] = _baseOptions.TargetBranch,
                     ["remote"] = _landingRemote!,
@@ -2876,7 +2774,7 @@ public class ChainPhase
         {
             await _git.RebaseAbortAsync(branchWorktreePath, ct).ConfigureAwait(false);
             var paths = string.Join(", ", rebase.ConflictingPaths);
-            await EmitChainGateFailureAsync(ticketId, $"{failureKindPrefix}_rebase_conflicts", new Dictionary<string, object>
+            await EventEmitter(_sessionIdGenerator()).EmitChainGateFailureAsync(ticketId, $"{failureKindPrefix}_rebase_conflicts", new Dictionary<string, object>
             {
                 ["integration_branch"] = branch,
                 ["target_branch"] = targetRef,
@@ -2887,7 +2785,7 @@ public class ChainPhase
         }
         if (!rebase.Success)
         {
-            await EmitChainGateFailureAsync(ticketId, $"{failureKindPrefix}_rebase_failed", new Dictionary<string, object>
+            await EventEmitter(_sessionIdGenerator()).EmitChainGateFailureAsync(ticketId, $"{failureKindPrefix}_rebase_failed", new Dictionary<string, object>
             {
                 ["integration_branch"] = branch,
                 ["target_branch"] = targetRef,
@@ -2900,7 +2798,7 @@ public class ChainPhase
         var ff = await _git.FastForwardMergeAsync(branch, mergeWorktreePath, ct).ConfigureAwait(false);
         if (!ff.Success)
         {
-            await EmitChainGateFailureAsync(ticketId, $"{failureKindPrefix}_merge_failed", new Dictionary<string, object>
+            await EventEmitter(_sessionIdGenerator()).EmitChainGateFailureAsync(ticketId, $"{failureKindPrefix}_merge_failed", new Dictionary<string, object>
             {
                 ["integration_branch"] = branch,
                 ["target_branch"] = targetRef,
@@ -2925,18 +2823,6 @@ public class ChainPhase
             w => string.Equals(w.Branch, branch, StringComparison.OrdinalIgnoreCase));
         return match?.Path
             ?? PhaseWorktreeLayout.Compute(ticket.Id, ticket.Title, _workingDirectory).WorktreePath;
-    }
-
-    private async Task EmitChainGateFailureAsync(string ticketId, string kind, Dictionary<string, object> data, CancellationToken ct)
-    {
-        data["kind"] = kind;
-        await _events.EmitAsync(new WorkflowEvent(
-            SessionId: _sessionIdGenerator(),
-            Timestamp: DateTimeOffset.UtcNow,
-            Kind: EventKind.GateFailure,
-            TicketId: ticketId,
-            Phase: Phase.Chain,
-            Data: data), ct).ConfigureAwait(false);
     }
 
     private static IReadOnlySet<string> AddVisited(IReadOnlySet<string>? visited, string uuid)
@@ -3033,7 +2919,7 @@ public class ChainPhase
         {
             await _git.RebaseAbortAsync(integrationWorktreePath, ct).ConfigureAwait(false);
             var paths = string.Join(", ", rebase.ConflictingPaths);
-            await EmitChainGateFailureAsync(ticketId, "chain_refresh_rebase_conflicts", new Dictionary<string, object>
+            await EventEmitter(_sessionIdGenerator()).EmitChainGateFailureAsync(ticketId, "chain_refresh_rebase_conflicts", new Dictionary<string, object>
             {
                 ["integration_branch"] = integrationBranch,
                 ["base_ref"] = baseRef,
@@ -3046,7 +2932,7 @@ public class ChainPhase
         }
         if (!rebase.Success)
         {
-            await EmitChainGateFailureAsync(ticketId, "chain_refresh_rebase_failed", new Dictionary<string, object>
+            await EventEmitter(_sessionIdGenerator()).EmitChainGateFailureAsync(ticketId, "chain_refresh_rebase_failed", new Dictionary<string, object>
             {
                 ["integration_branch"] = integrationBranch,
                 ["base_ref"] = baseRef,
@@ -3063,20 +2949,18 @@ public class ChainPhase
         Console.WriteLine(
             $"[{ticketId}] {integrationBranch} was behind {baseRef}; rebased onto the current tip " +
             "before dispatching children.");
-        await _events.EmitAsync(new WorkflowEvent(
-            SessionId: _sessionIdGenerator(),
-            Timestamp: DateTimeOffset.UtcNow,
-            Kind: EventKind.TicketWrite,
-            TicketId: ticketId,
-            Phase: Phase.Chain,
-            Data: new Dictionary<string, object>
+        await EventEmitter(_sessionIdGenerator()).EmitAsync(
+            EventKind.TicketWrite,
+            ticketId,
+            Phase.Chain,
+            new Dictionary<string, object>
             {
                 ["action"] = "chain_refresh_rebased",
                 ["integration_branch"] = integrationBranch,
                 ["base_ref"] = baseRef,
                 ["old_tip"] = chainSha,
                 ["new_tip"] = refreshedSha
-            }), ct).ConfigureAwait(false);
+            }, ct).ConfigureAwait(false);
 
         return null;
     }
@@ -3248,24 +3132,6 @@ public class ChainPhase
             or ChainOutcome.ParentCompleted
             or ChainOutcome.BatchImplemented;
 
-    private static void RecordBatchTicketingUnavailable(
-        List<ChainResult> results,
-        IReadOnlyList<Ticket> batchTickets,
-        string failedTicketId,
-        TicketingUnavailableException exception)
-    {
-        var batchIds = new HashSet<string>(batchTickets.Select(t => t.Id), StringComparer.Ordinal);
-        results.RemoveAll(r => batchIds.Contains(r.TicketId));
-        results.Add(new ChainResult(
-            failedTicketId, Array.Empty<ChainStep>(), ChainOutcome.TicketingUnavailable,
-            TimeSpan.Zero, exception.Message));
-        results.AddRange(batchTickets
-            .Where(t => !string.Equals(t.Id, failedTicketId, StringComparison.Ordinal))
-            .Select(t => new ChainResult(
-                t.Id, Array.Empty<ChainStep>(), ChainOutcome.Skipped, TimeSpan.Zero, null,
-                SkipReason: $"ticketing backend unreachable while updating {failedTicketId}; restore connectivity and re-run")));
-    }
-
     // Success-only sweep of this chain's worktrees. Reuses the stack-agnostic WorktreeDecrufter
     // (git + filesystem only). Branch-prefix filtering (ticket/, chain/) is safer than nuking
     // .worktrees/: it never removes the main worktree or an unrelated checkout. Dispatch is serial
@@ -3296,17 +3162,15 @@ public class ChainPhase
             }
             if (halted.Count > 0)
             {
-                await _events.EmitAsync(new WorkflowEvent(
-                    SessionId: sessionId,
-                    Timestamp: DateTimeOffset.UtcNow,
-                    Kind: EventKind.GateFailure,
-                    TicketId: ticketId,
-                    Phase: Phase.Chain,
-                    Data: new Dictionary<string, object>
+                await EventEmitter(sessionId).EmitAsync(
+                    EventKind.GateFailure,
+                    ticketId,
+                    Phase.Chain,
+                    new Dictionary<string, object>
                     {
                         ["kind"] = "worktree_sweep_incomplete",
                         ["halted"] = halted.ToArray()
-                    }), ct).ConfigureAwait(false);
+                    }, ct).ConfigureAwait(false);
             }
         }
         catch { /* cleanup must never fail a successful chain */ }
@@ -3410,18 +3274,16 @@ public class ChainPhase
 
     private async Task EmitResumeTransitionAsync(string chainSessionId, string ticketId, string from, string to, CancellationToken ct)
     {
-        await _events.EmitAsync(new WorkflowEvent(
-            SessionId: chainSessionId,
-            Timestamp: DateTimeOffset.UtcNow,
-            Kind: EventKind.StateTransition,
-            TicketId: ticketId,
-            Phase: Phase.Chain,
-            Data: new Dictionary<string, object>
+        await EventEmitter(chainSessionId).EmitAsync(
+            EventKind.StateTransition,
+            ticketId,
+            Phase.Chain,
+            new Dictionary<string, object>
             {
                 ["from"] = from,
                 ["to"] = to,
                 ["reason"] = "chain_resume"
-            }), ct).ConfigureAwait(false);
+            }, ct).ConfigureAwait(false);
     }
 
     private sealed record ChainEntry(StartPhase StartPhase, ReviewFeedback? ResumeFeedback, int ResumeStartRound);
