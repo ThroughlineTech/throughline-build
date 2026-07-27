@@ -150,19 +150,35 @@ public class ChainPhaseTests
                 processPathProvider: () => null);
 
         return new ChainPhase(
-            ticketing, events, baseOpts,
-            planFactory, implFactory, reviewFactory, shipFactory,
-            sessionIdGenerator: NextSessionId,
-            workingDirectory: WorkDir,
-            ratifierFactory: ratifierFactory,
-            chainShipFactory: chainShipFactory,
-            gitClient: git,
-            batchWorker: batchWorker,
-            landingRemote: "origin",
-            landingPushEnabled: true,
-            gateFactory: gateFactory,
-            reworkRecheckSpecs: reworkRecheckSpecs,
-            reworkRecheckRunner: reworkRecheckRunner);
+            new ChainPhaseCoreDependencies
+            {
+                Ticketing = ticketing,
+                Events = events,
+                BaseOptions = baseOpts,
+                Git = git,
+                SessionIdGenerator = NextSessionId,
+                WorkingDirectory = WorkDir
+            },
+            new ChainPhaseFactories
+            {
+                Plan = planFactory,
+                Implement = implFactory,
+                Review = reviewFactory,
+                Ship = shipFactory,
+                ChainShip = chainShipFactory,
+                Gate = gateFactory,
+                Ratifier = ratifierFactory
+            },
+            new ChainPhaseExecutionDependencies
+            {
+                FeedbackRetriever = null,
+                BatchWorker = batchWorker,
+                LandingRemote = "origin",
+                LandingPushEnabled = true,
+                ReworkRecheckSpecs = reworkRecheckSpecs,
+                ReworkRecheckRunner = reworkRecheckRunner,
+                Output = null
+            });
     }
 
     [Fact]
@@ -1101,10 +1117,35 @@ public class ChainPhaseTests
                 processPathProvider: () => null);
 
         var chain = new ChainPhase(
-            ticketing, events, MakeBaseOptions(),
-            planFactory, implFactory, reviewFactory, shipFactory,
-            sessionIdGenerator: NextSessionId,
-            workingDirectory: WorkDir);
+            new ChainPhaseCoreDependencies
+            {
+                Ticketing = ticketing,
+                Events = events,
+                BaseOptions = MakeBaseOptions(),
+                Git = git,
+                SessionIdGenerator = NextSessionId,
+                WorkingDirectory = WorkDir
+            },
+            new ChainPhaseFactories
+            {
+                Plan = planFactory,
+                Implement = implFactory,
+                Review = reviewFactory,
+                Ship = shipFactory,
+                ChainShip = null,
+                Gate = null,
+                Ratifier = null
+            },
+            new ChainPhaseExecutionDependencies
+            {
+                FeedbackRetriever = null,
+                BatchWorker = null,
+                LandingRemote = null,
+                LandingPushEnabled = false,
+                ReworkRecheckSpecs = null,
+                ReworkRecheckRunner = null,
+                Output = null
+            });
 
         var result = await chain.RunAsync(new ChainPhaseOptions(TicketId, false), CancellationToken.None);
 
@@ -3394,14 +3435,36 @@ public class ChainPhaseTests
             Func<BuildOptions, ShipPhase> shipFactory = _ => throw new InvalidOperationException("per-ticket ship not expected for batch");
 
             var chain = new ChainPhase(
-                ticketing, events, MakeBaseOptions(),
-                planFactory, implFactory, reviewFactory, shipFactory,
-                sessionIdGenerator: NextSessionId,
-                workingDirectory: repoDir,
-                gitClient: new ProcessGitClient(repoDir),
-                batchWorker: new RealCommitBatchWorker(new[] { "TLB-2", "TLB-3" }),
-                landingRemote: "origin",
-                landingPushEnabled: true);
+                new ChainPhaseCoreDependencies
+                {
+                    Ticketing = ticketing,
+                    Events = events,
+                    BaseOptions = MakeBaseOptions(),
+                    Git = new ProcessGitClient(repoDir),
+                    SessionIdGenerator = NextSessionId,
+                    WorkingDirectory = repoDir
+                },
+                new ChainPhaseFactories
+                {
+                    Plan = planFactory,
+                    Implement = implFactory,
+                    Review = reviewFactory,
+                    Ship = shipFactory,
+                    ChainShip = null,
+                    Gate = null,
+                    Ratifier = null
+                },
+                new ChainPhaseExecutionDependencies
+                {
+                    FeedbackRetriever = null,
+                    BatchWorker = new RealCommitBatchWorker(
+                        new[] { "TLB-2", "TLB-3" }),
+                    LandingRemote = "origin",
+                    LandingPushEnabled = true,
+                    ReworkRecheckSpecs = null,
+                    ReworkRecheckRunner = null,
+                    Output = null
+                });
 
             var batchGroup = new ChainBatchImplementGroup.ExplicitList(new[] { "TLB-2", "TLB-3" });
             var result = await chain.RunAsync(

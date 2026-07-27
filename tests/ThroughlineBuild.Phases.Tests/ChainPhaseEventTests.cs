@@ -109,12 +109,35 @@ public class ChainPhaseEventTests
                 processPathProvider: () => null);
 
         var chain = new ChainPhase(
-            ticketing, sink, baseOpts,
-            planFactory, implFactory, reviewFactory, shipFactory,
-            sessionIdGenerator: NextSessionId,
-            workingDirectory: WorkDir,
-            ratifierFactory: ratifierFactory,
-            gateFactory: gateFactory);
+            new ChainPhaseCoreDependencies
+            {
+                Ticketing = ticketing,
+                Events = sink,
+                BaseOptions = baseOpts,
+                Git = git,
+                SessionIdGenerator = NextSessionId,
+                WorkingDirectory = WorkDir
+            },
+            new ChainPhaseFactories
+            {
+                Plan = planFactory,
+                Implement = implFactory,
+                Review = reviewFactory,
+                Ship = shipFactory,
+                ChainShip = null,
+                Gate = gateFactory,
+                Ratifier = ratifierFactory
+            },
+            new ChainPhaseExecutionDependencies
+            {
+                FeedbackRetriever = null,
+                BatchWorker = null,
+                LandingRemote = null,
+                LandingPushEnabled = false,
+                ReworkRecheckSpecs = null,
+                ReworkRecheckRunner = null,
+                Output = null
+            });
 
         return (chain, sink);
     }

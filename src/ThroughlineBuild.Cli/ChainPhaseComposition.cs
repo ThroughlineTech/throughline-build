@@ -1,4 +1,5 @@
 using ThroughlineBuild.Contracts;
+using ThroughlineBuild.Git;
 using ThroughlineBuild.Phases;
 using ThroughlineBuild.Verification;
 
@@ -44,28 +45,39 @@ internal static class ChainPhaseComposition
         // the worker instead of burning a verifier call. Null disables the recheck.
         IReadOnlyList<CheckSpec>? reworkRecheckSpecs = null) =>
         new ChainPhase(
-            ticketing,
-            eventSink,
-            buildOptions,
-            planFactory,
-            implementFactory,
-            reviewFactory,
-            shipFactory,
-            workingDirectory: workingDirectory,
-            ratifierFactory: ratifierFactory,
-            chainShipFactory: chainShipFactory,
-            // Batch-implement worker: a declared batch group dispatches ONE warm implement session
-            // instead of a cold per-ticket implement for each group member. Reuse the same agent the
-            // per-ticket implement factory uses so batch and non-batch implement share a worker;
-            // without this the batch path in RunParentChainAsync is unreachable and --batch-implement
-            // silently degrades to per-ticket.
-            batchWorker: workerFactory.Create(effectiveAgentFor("implement")),
-            // Root-chain landing: the outermost chain fast-forwards its accumulated integration
-            // branch onto the configured target and pushes here (intermediate chain ships run
-            // NoPush). Push honors the same --no-push / [ship] push toggle the per-ticket ship uses.
-            landingRemote: landingRemote,
-            landingPushEnabled: landingPushEnabled,
-            gateFactory: gateFactory,
-            reworkRecheckSpecs: reworkRecheckSpecs,
-            reworkRecheckRunner: reworkRecheckSpecs is { Count: > 0 } ? new AutomatedChecksRunner() : null);
+            new ChainPhaseCoreDependencies
+            {
+                Ticketing = ticketing,
+                Events = eventSink,
+                BaseOptions = buildOptions,
+                Git = new ProcessGitClient(),
+                SessionIdGenerator = () => Guid.NewGuid().ToString("N"),
+                WorkingDirectory = workingDirectory
+            },
+            new ChainPhaseFactories
+            {
+                Plan = planFactory,
+                Implement = implementFactory,
+                Review = reviewFactory,
+                Ship = shipFactory,
+                ChainShip = chainShipFactory,
+                Gate = gateFactory,
+                Ratifier = ratifierFactory
+            },
+            new ChainPhaseExecutionDependencies
+            {
+                FeedbackRetriever = null,
+                // A declared batch group dispatches one warm implement session. Reuse the
+                // per-ticket implement agent so the batch path cannot silently disappear.
+                BatchWorker = workerFactory.Create(
+                    effectiveAgentFor("implement")),
+                LandingRemote = landingRemote,
+                LandingPushEnabled = landingPushEnabled,
+                ReworkRecheckSpecs = reworkRecheckSpecs,
+                ReworkRecheckRunner =
+                    reworkRecheckSpecs is { Count: > 0 }
+                        ? new AutomatedChecksRunner()
+                        : null,
+                Output = null
+            });
 }

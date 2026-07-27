@@ -149,13 +149,35 @@ public class SequenceContractChainTests
                 processPathProvider: () => null);
 
         return new ChainPhase(
-            ticketing, events, baseOpts,
-            planFactory, implFactory, reviewFactory, shipFactory,
-            sessionIdGenerator: NextSessionId,
-            workingDirectory: WorkDir,
-            ratifierFactory: null,
-            chainShipFactory: chainShipFactory,
-            gitClient: git);
+            new ChainPhaseCoreDependencies
+            {
+                Ticketing = ticketing,
+                Events = events,
+                BaseOptions = baseOpts,
+                Git = git,
+                SessionIdGenerator = NextSessionId,
+                WorkingDirectory = WorkDir
+            },
+            new ChainPhaseFactories
+            {
+                Plan = planFactory,
+                Implement = implFactory,
+                Review = reviewFactory,
+                Ship = shipFactory,
+                ChainShip = chainShipFactory,
+                Gate = null,
+                Ratifier = null
+            },
+            new ChainPhaseExecutionDependencies
+            {
+                FeedbackRetriever = null,
+                BatchWorker = null,
+                LandingRemote = null,
+                LandingPushEnabled = false,
+                ReworkRecheckSpecs = null,
+                ReworkRecheckRunner = null,
+                Output = null
+            });
     }
 
     // ==========================================================================

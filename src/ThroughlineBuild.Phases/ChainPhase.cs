@@ -85,44 +85,30 @@ public class ChainPhase
     private readonly TextWriter? _output;
 
     public ChainPhase(
-        ITicketing ticketing,
-        IEventSink events,
-        BuildOptions baseOptions,
-        Func<BuildOptions, PlanPhase> planFactory,
-        Func<BuildOptions, ImplementPhaseOptions, ImplementPhase> implementFactory,
-        Func<BuildOptions, GateOutcome?, ReviewPhase> reviewFactory,
-        Func<BuildOptions, ShipPhase> shipFactory,
-        Func<string>? sessionIdGenerator = null,
-        string? workingDirectory = null,
-        Func<BuildOptions, IObsoleteRatifier>? ratifierFactory = null,
-        Func<BuildOptions, ShipPhase>? chainShipFactory = null,
-        IGitClient? gitClient = null,
-        IReviewFeedbackRetriever? feedbackRetriever = null,
-        IWorkerAgent? batchWorker = null,
-        string? landingRemote = null,
-        bool landingPushEnabled = false,
-        Func<BuildOptions, GatePhase>? gateFactory = null,
-        IReadOnlyList<CheckSpec>? reworkRecheckSpecs = null,
-        AutomatedChecksRunner? reworkRecheckRunner = null,
-        TextWriter? output = null)
+        ChainPhaseCoreDependencies core,
+        ChainPhaseFactories factories,
+        ChainPhaseExecutionDependencies execution)
     {
-        _ticketing = ticketing;
-        _events = events;
-        _baseOptions = baseOptions;
-        _planFactory = planFactory;
-        _shipFactory = shipFactory;
-        _chainShipFactory = chainShipFactory;
-        _sessionIdGenerator = sessionIdGenerator ?? (() => Guid.NewGuid().ToString("N"));
-        _workingDirectory = workingDirectory ?? Directory.GetCurrentDirectory();
-        _ratifierFactory = ratifierFactory;
-        _git = gitClient ?? new ProcessGitClient();
+        _ticketing = core.Ticketing;
+        _events = core.Events;
+        _baseOptions = core.BaseOptions;
+        _planFactory = factories.Plan;
+        _shipFactory = factories.Ship;
+        _chainShipFactory = factories.ChainShip;
+        _sessionIdGenerator = core.SessionIdGenerator;
+        _workingDirectory = core.WorkingDirectory;
+        _ratifierFactory = factories.Ratifier;
+        _git = core.Git;
         _integrationBranch = new ChainIntegrationBranch(
-            _git, _workingDirectory, landingRemote, landingPushEnabled);
-        _feedbackRetriever = feedbackRetriever;
-        _batchWorker = batchWorker;
+            _git,
+            _workingDirectory,
+            execution.LandingRemote,
+            execution.LandingPushEnabled);
+        _feedbackRetriever = execution.FeedbackRetriever;
+        _batchWorker = execution.BatchWorker;
         _phaseOptionsBuilder = new PhaseOptionsBuilder(_baseOptions);
         _batchImplementRunner = new BatchImplementRunner(
-            batchWorker,
+            _batchWorker,
             _ticketing,
             _git,
             _baseOptions,
@@ -132,20 +118,20 @@ public class ChainPhase
             _planFactory,
             _phaseOptionsBuilder);
         _batchReviewRunner = new BatchReviewRunner(
-            batchWorker,
+            _batchWorker,
             _ticketing,
             _git,
             _baseOptions,
             _workingDirectory,
             _sessionIdGenerator,
             sessionId => EventEmitter(sessionId),
-            implementFactory,
+            factories.Implement,
             _phaseOptionsBuilder);
         _implementReviewLoop = new ImplementReviewLoop(
             _ticketing,
-            implementFactory,
-            reviewFactory,
-            gateFactory,
+            factories.Implement,
+            factories.Review,
+            factories.Gate,
             _ratifierFactory,
             _sessionIdGenerator,
             sessionId => EventEmitter(sessionId),
@@ -153,8 +139,8 @@ public class ChainPhase
             _baseOptions,
             _workingDirectory,
             _git,
-            reworkRecheckSpecs,
-            reworkRecheckRunner);
+            execution.ReworkRecheckSpecs,
+            execution.ReworkRecheckRunner);
         _parentChainRunner = new ParentChainRunner(
             _ticketing,
             _baseOptions,
@@ -167,8 +153,8 @@ public class ChainPhase
             sessionId => EventEmitter(sessionId),
             (childOptions, childCt) => RunAsync(childOptions, childCt),
             _workingDirectory,
-            output);
-        _output = output;
+            execution.Output);
+        _output = execution.Output;
     }
 
     // Inert read-only accessors over the wired collaborators, for composition-root tests that

@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using ThroughlineBuild.Cli;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
@@ -53,6 +54,15 @@ public class ChainPhaseCompositionTests
 
         // The chain ship factory (leaf ships into the integration branch) must also be wired.
         Assert.NotNull(chain.ChainShipFactory);
+
+        // Omitting either dependency from a direct ChainPhase construction must be a compile-time
+        // error, even though test-only callers may explicitly choose null to disable a capability.
+        Assert.True(typeof(ChainPhaseExecutionDependencies)
+            .GetProperty(nameof(ChainPhaseExecutionDependencies.BatchWorker))!
+            .IsDefined(typeof(RequiredMemberAttribute), inherit: false));
+        Assert.True(typeof(ChainPhaseFactories)
+            .GetProperty(nameof(ChainPhaseFactories.ChainShip))!
+            .IsDefined(typeof(RequiredMemberAttribute), inherit: false));
     }
 
     private sealed class RecordingWorkerFactory : IWorkerAgentFactory
