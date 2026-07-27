@@ -9,6 +9,116 @@ public static class CliArgParser
 {
     private const string BatchImplementFlag = "--batch-implement";
 
+    public sealed record BoolFlagResult(
+        bool Debug,
+        bool Quiet,
+        bool SummaryJson,
+        bool Json,
+        bool ErrorLocation,
+        bool NoAutoResolve,
+        bool NoAutoMerge,
+        bool NoPush,
+        bool ContinuePastFailure,
+        bool FromBrief,
+        bool SkipBaseline,
+        IReadOnlyList<string> Remaining);
+
+    public sealed record ChainTraversalFlagResult(
+        IReadOnlyList<string> Remaining,
+        string? Error,
+        bool DryRun,
+        string? MaxDepth);
+
+    /// <summary>
+    /// Extracts the global bare boolean flags before positional parsing.
+    /// </summary>
+    public static BoolFlagResult ExtractBoolFlags(IReadOnlyList<string> args)
+    {
+        bool debug = false;
+        bool quiet = false;
+        bool summaryJson = false;
+        bool json = false;
+        bool errorLocation = false;
+        bool noAutoResolve = false;
+        bool noAutoMerge = false;
+        bool noPush = false;
+        bool continuePastFailure = false;
+        bool fromBrief = false;
+        bool skipBaseline = false;
+        var remaining = new List<string>(args.Count);
+
+        foreach (var arg in args)
+        {
+            switch (arg)
+            {
+                case "--debug": debug = true; break;
+                case "--quiet": quiet = true; break;
+                case "--summary-json": summaryJson = true; break;
+                case "--json": json = true; break;
+                case "--error-location": errorLocation = true; break;
+                case "--no-auto-resolve": noAutoResolve = true; break;
+                case "--no-auto-merge": noAutoMerge = true; break;
+                case "--no-push": noPush = true; break;
+                case "--continue-past-failure": continuePastFailure = true; break;
+                case "--from-brief": fromBrief = true; break;
+                case "--skip-baseline": skipBaseline = true; break;
+                default: remaining.Add(arg); break;
+            }
+        }
+
+        return new BoolFlagResult(
+            debug,
+            quiet,
+            summaryJson,
+            json,
+            errorLocation,
+            noAutoResolve,
+            noAutoMerge,
+            noPush,
+            continuePastFailure,
+            fromBrief,
+            skipBaseline,
+            remaining);
+    }
+
+    /// <summary>
+    /// Extracts the chain-only traversal flags before positional parsing.
+    /// </summary>
+    public static ChainTraversalFlagResult ExtractChainTraversalFlags(IReadOnlyList<string> args)
+    {
+        var remaining = new List<string>(args.Count);
+        bool dryRun = false;
+        string? maxDepth = null;
+
+        for (int i = 0; i < args.Count; i++)
+        {
+            var arg = args[i];
+            if (arg == "--dry-run")
+            {
+                dryRun = true;
+            }
+            else if (arg == "--max-depth")
+            {
+                if (i + 1 >= args.Count || args[i + 1].StartsWith("--", StringComparison.Ordinal))
+                {
+                    return new ChainTraversalFlagResult(
+                        remaining,
+                        "Error: --max-depth requires a non-negative integer",
+                        dryRun,
+                        maxDepth);
+                }
+
+                maxDepth = args[++i];
+            }
+            else
+            {
+                remaining.Add(arg);
+            }
+        }
+
+        return new ChainTraversalFlagResult(remaining, null, dryRun, maxDepth);
+    }
+
     /// <summary>
     /// Scans <paramref name="args"/> for agent-override flags and returns the
     /// extracted values together with the remaining args (with the matched tokens
