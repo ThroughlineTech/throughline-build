@@ -28,16 +28,16 @@ Orientation, in the order worth reading:
 
 | Where | What it gives you |
 | --- | --- |
-| [docs/state-of-the-system/00-index.md](docs/state-of-the-system/00-index.md) | Code-true map of the whole system - architecture diagram, per-doc index, status tags. Start here. |
-| [docs/state-of-the-system/01-inventory.md](docs/state-of-the-system/01-inventory.md) | Every CLI verb, library project, tool, and workflow. |
+| [docs/README.md](docs/README.md) | Reading map that separates current references from point-in-time material. Start here. |
+| [docs/throughline-build-architecture.md](docs/throughline-build-architecture.md) | Current as-built architecture and invariants. |
 | [docs/throughline_build_userguide.md](docs/throughline_build_userguide.md) | Operator-facing guide to the verbs. |
-| [docs/throughline-build-architecture.md](docs/throughline-build-architecture.md) | Statement of architectural intent. Forward-looking - where it disagrees with the source, the source wins. |
+| [docs/state-of-the-system/00-index.md](docs/state-of-the-system/00-index.md) | Detailed historical snapshot, stamped with the commit it describes. |
 | `build --help`, `build help <topic>` | Authoritative verb list and reference docs, generated from the binary you built. |
 
-Docs are point-in-time; each state-of-the-system doc stamps a `Last refreshed` header
-with the HEAD it was written against. Trust the code over the docs. If you land a change
-that alters a documented surface (a verb, a config key, a contract, a status tag),
-updating the affected section and bumping that header is part of your change.
+The source and generated help are authoritative. Current references describe HEAD;
+historical sets stamp the commit they describe. If you land a change that alters a
+documented surface (a verb, a config key, a contract, or a status tag), updating the
+affected current reference is part of your change.
 
 ## Build and test
 

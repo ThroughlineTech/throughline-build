@@ -1,8 +1,8 @@
 # src/ - library + CLI orientation
 
-19 projects (18 libraries + Cli) compiled AOT into the `build` binary. Full
-per-project index: [docs/state-of-the-system/01-inventory.md](../docs/state-of-the-system/01-inventory.md).
-Architecture overview: [docs/state-of-the-system/00-index.md](../docs/state-of-the-system/00-index.md).
+20 projects (19 libraries + Cli) compile into the Native AOT `build` binary.
+Architecture overview:
+[docs/throughline-build-architecture.md](../docs/throughline-build-architecture.md).
 
 Dependency order (leaf -> root):
 `Contracts`, `ModelClient` (leaves) -> `Git`, `Helpers`, `EventLog`, `Plane`,
@@ -18,5 +18,5 @@ AOT discipline: `Cli` sets `PublishAot=true`. Use source-generated
 `JsonSerializerContext` for anything serialized; do not rely on reflection-based
 serialization. Keep `Contracts` I/O-free.
 
-Trust the code over the docs: state-of-the-system was written at an older commit
-and flags its own drift. Where a doc disagrees with HEAD, the code wins.
+Trust the code over the docs. The state-of-the-system set is a historical
+snapshot; the architecture document describes the current tree.

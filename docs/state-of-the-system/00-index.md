@@ -2,9 +2,19 @@
 
 Last refreshed: 2026-06-11 (HEAD 3a73eb9)
 
-This doc set is a code-true map of the `latticeflow` repository as it exists at the HEAD stamped above (refresh history in [PROMPT.md](PROMPT.md)).
+This doc set is a detailed historical snapshot of the `latticeflow` repository
+at the HEAD stamped above (refresh history in [PROMPT.md](PROMPT.md)). It is not
+the authority for the current tree. Start with the current
+[documentation map](../README.md) and
+[architecture](../throughline-build-architecture.md), then use this set for
+point-in-time implementation detail.
 
-The repository is **Throughline Build** - a `.NET 10` native-AOT CLI named `build` that orchestrates an Agile ticket workflow against a Plane backend by spawning an external coding-agent CLI as a worker subprocess for the LLM-bearing phases and running everything else as deterministic C# code. The worker subprocess is multi-vendor: four agents (`claude-code`, `codex`, `gemini`, `copilot`) are implemented and selectable by config or `--agent` flag; `default_agent` is required config with no hardcoded C# fallback, and both the shipped template and the checked-in operator `.build/config.toml` now set `claude-code` (the earlier template-vs-live drift is resolved). The architecture is described in [docs/throughline-build-architecture.md](../throughline-build-architecture.md); that document is a forward-looking proposal and disagrees with the tree in several places - this doc set documents what is actually in the source, and calls out the disagreements as loose ends.
+At that commit, the repository was **Throughline Build** - a `.NET 10`
+native-AOT CLI named `build` that orchestrated an Agile ticket workflow against
+a Plane backend by spawning an external coding-agent CLI for LLM-bearing phases
+and running everything else as deterministic C# code. The snapshot documents
+four selectable workers (`claude-code`, `codex`, `gemini`, and `copilot`) and
+the configuration and architecture that existed at that point.
 
 Voice: technical, `file:line` references throughout, status-tagged. The reader is expected to have all sets open side-by-side.
 

@@ -5,16 +5,16 @@
 Today latticeflow runs the **whole test suite** on every ticket and every rework round.
 Tests are not special-cased anywhere in the code - they are ordinary `CheckSpec` entries
 (a `name`, an `executable`, a static `arguments[]` array, a timeout) defined in
-[.build/config.toml](../.build/config.toml) and executed by
-[AutomatedChecksRunner.RunSingleAsync](../src/ThroughlineBuild.Verification/AutomatedChecksRunner.cs#L59),
+the local `.build/config.toml` and executed by
+[AutomatedChecksRunner.RunSingleAsync](../../src/ThroughlineBuild.Verification/AutomatedChecksRunner.cs#L59),
 which shells the command out as a subprocess and grades it by exit code (0 = pass).
 
 There are two check arrays:
 
 - `[[review.checks]]` - run during the review phase; failures are *surfaced* to the verifier
-  but are **non-blocking** ([config.toml:94-104](../.build/config.toml#L94-L104)).
+  but are **non-blocking** (the local `.build/config.toml` review section).
 - `[[ship.regression_checks]]` - run post-rebase, pre-merge; a **hard** gate with main-branch
-  baseline comparison ([config.toml:117-127](../.build/config.toml#L117-L127)).
+  baseline comparison (the local `.build/config.toml` ship section).
 
 Both currently say the same thing - `dotnet test --no-build -c Release` - i.e. the full suite,
 every time, for every ticket and every rework round.
@@ -35,9 +35,9 @@ No code has been written. This doc is investigation plus a design recommendation
 Two deterministic change-signals are computed today:
 
 1. **Agent-reported** - `WorkerResult.FilesChanged`, parsed from the `WORKER_RESULT` envelope by
-   [WorkerResultParser.cs](../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs#L27).
+   [WorkerResultParser.cs](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs#L27).
 2. **Git-truth** - `DiffAsync` -> `DiffEntry { Path, DiffKind Added/Modified/Deleted/Renamed }`,
-   computed in [ReviewPhase.cs:183](../src/ThroughlineBuild.Phases/ReviewPhase.cs#L183) (with full
+   computed in [ReviewPhase.cs:183](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L183) (with full
    patch content) and again in ship. `PhaseSummaryBuilder` already walks this diff, **classifies
    test files by path** (`tests/` prefix) and counts `TestsAddedCount`.
 
@@ -49,7 +49,7 @@ The `WORKER_RESULT` envelope is also cheaply extensible: `metadata` is an AOT-sa
 already supported. Adding a typed field follows the existing `files_changed` pattern.
 
 Briefs already hand the agent `project_test_command` as informational context
-([ImplementBriefBuilder.cs:81](../src/ThroughlineBuild.Briefs/ImplementBriefBuilder.cs#L81)).
+([ImplementBriefBuilder.cs:81](../../src/ThroughlineBuild.Briefs/ImplementBriefBuilder.cs#L81)).
 
 ## The genuinely hard part
 
@@ -172,16 +172,16 @@ fallback is safe (full), so a missing or garbled selector degrades to today's be
 
 ## Where it plugs in
 
-- Envelope field: [WorkerResultParser.cs](../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs)
+- Envelope field: [WorkerResultParser.cs](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs)
   plus the `WorkerResult` contract.
 - Check spec + template parsing: `CheckSpec` and `ReadReviewSection` in
-  [Config.cs](../src/ThroughlineBuild.Cli/Config.cs).
+  [Config.cs](../../src/ThroughlineBuild.Cli/Config.cs).
 - Substitution + selection: a new resolver feeding
-  [AutomatedChecksRunner.RunAsync](../src/ThroughlineBuild.Verification/AutomatedChecksRunner.cs#L16);
+  [AutomatedChecksRunner.RunAsync](../../src/ThroughlineBuild.Verification/AutomatedChecksRunner.cs#L16);
   the diff it needs is already computed at
-  [ReviewPhase.cs:183](../src/ThroughlineBuild.Phases/ReviewPhase.cs#L183).
+  [ReviewPhase.cs:183](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L183).
 - Brief ask: add the selector instruction to the implement template that already carries
-  `project_test_command` ([ImplementBriefBuilder.cs:81](../src/ThroughlineBuild.Briefs/ImplementBriefBuilder.cs#L81)).
+  `project_test_command` ([ImplementBriefBuilder.cs:81](../../src/ThroughlineBuild.Briefs/ImplementBriefBuilder.cs#L81)).
 
 ## Open questions
 

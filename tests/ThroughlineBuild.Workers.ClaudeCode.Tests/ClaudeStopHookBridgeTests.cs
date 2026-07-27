@@ -6,7 +6,7 @@ namespace ThroughlineBuild.Workers.ClaudeCode.Tests;
 
 public sealed class ClaudeStopHookBridgeTests : IDisposable
 {
-    private readonly string root = Path.Combine(Path.GetTempPath(), $"lattice hook tests α {Guid.NewGuid():N}");
+    private readonly string root = Path.Combine(Path.GetTempPath(), $"lattice hook tests \u03B1 {Guid.NewGuid():N}");
 
     [Fact]
     public async Task WriteAndRead_RoundTripsVersionedRecordInUnicodePath()

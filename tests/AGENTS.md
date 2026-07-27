@@ -1,7 +1,7 @@
 # tests/ - xUnit test suites
 
-One test project mirrors each `src/` library (19 in the sln; ignore untracked
-local dirs), all net10.0, ~2200 `[Fact]`/`[Theory]` across ~200 files. Run
+One test project mirrors each `src/` project (20 in the solution), all net10.0,
+with about 2,450 `[Fact]`/`[Theory]` declarations across about 230 C# files. Run
 all: `dotnet test` (tests/Directory.Build.props defaults to test.runsettings:
 quiet on green, full output on failure).
 

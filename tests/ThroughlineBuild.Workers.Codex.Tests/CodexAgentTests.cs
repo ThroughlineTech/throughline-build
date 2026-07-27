@@ -284,9 +284,9 @@ public class CodexAgentTests
             var result = new WorkerResult(Status.Ok, "done", Array.Empty<string>(), null,
                 new Dictionary<string, object>());
 
-            CodexAgent.WriteDebugCapture(directory, "brief with unicode: café", "stdout", "stderr", result);
+            CodexAgent.WriteDebugCapture(directory, "brief with unicode: caf\u00E9", "stdout", "stderr", result);
 
-            Assert.Equal("brief with unicode: café", File.ReadAllText(Path.Combine(directory, "worker-stdin.txt")));
+            Assert.Equal("brief with unicode: caf\u00E9", File.ReadAllText(Path.Combine(directory, "worker-stdin.txt")));
         }
         finally
         {

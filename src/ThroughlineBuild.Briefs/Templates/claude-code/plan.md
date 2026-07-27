@@ -169,7 +169,7 @@ Document "Rubber-duck pass: clean" or list defects caught and fixed.
 
 Count Relevant files and Steps. Apply:
 
-- **S:** 1-2 files AND ≤4 steps AND no new files; localized additive change; no load-bearing interface modifications.
+- **S:** 1-2 files AND <=4 steps AND no new files; localized additive change; no load-bearing interface modifications.
 - **M:** 4-6 files OR 6-10 steps; moderate cross-cutting; or introduces new files.
 - **L:** 7+ files OR 11+ steps; architectural change; modifies load-bearing interfaces; or high blast radius.
 

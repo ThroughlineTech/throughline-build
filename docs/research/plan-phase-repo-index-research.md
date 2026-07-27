@@ -2,12 +2,12 @@
 
 ## Context
 
-latticeflow's plan phase ([PlanPhase.cs](../src/ThroughlineBuild.Phases/PlanPhase.cs)) does
+latticeflow's plan phase ([PlanPhase.cs](../../src/ThroughlineBuild.Phases/PlanPhase.cs)) does
 almost no codebase exploration itself. It enumerates only the **top-level** directory names
 (`Directory.EnumerateFileSystemEntries`, no recursion), bakes that list into the brief via
-[PlanBriefBuilder.cs](../src/ThroughlineBuild.Briefs/PlanBriefBuilder.cs), and hands the
+[PlanBriefBuilder.cs](../../src/ThroughlineBuild.Briefs/PlanBriefBuilder.cs), and hands the
 whole job to a spawned `claude` subprocess. The
-[plan.md template](../src/ThroughlineBuild.Briefs/Templates/claude-code/plan.md) tells the
+[plan.md template](../../src/ThroughlineBuild.Briefs/Templates/claude-code/plan.md) tells the
 agent to "use Grep, Glob, and Read aggressively." Result: **every ticket re-discovers the
 codebase from scratch** with a fresh tool-use loop. There is no index, symbol table, cache,
 or DB anywhere in the project, and the architecture deliberately avoids persistent state

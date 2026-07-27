@@ -28,8 +28,8 @@ public class DraftBriefBuilderTests
     {
         var result = DraftBriefBuilder.Build("claude-code", FixtureOperatorText);
 
-        Assert.DoesNotContain("—", result); // em-dash
-        Assert.DoesNotContain("–", result); // en-dash
+        Assert.DoesNotContain("\u2014", result); // em-dash
+        Assert.DoesNotContain("\u2013", result); // en-dash
     }
 
     [Fact]

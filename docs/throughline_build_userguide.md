@@ -5,8 +5,8 @@ cycle, using Plane as the ticketing backend. This guide covers installation, con
 running your first ticket end-to-end.
 
 > **Config reference:** run `build init --print-template` to print a fully-commented config with every
-> supported key to stdout. Binary downloads and release notes are on this repository's Releases
-> page.
+> supported key to stdout. This repository does not currently publish prebuilt binaries; see
+> [Building from source](build-command-setup.md).
 
 ## Prerequisites
 
