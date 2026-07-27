@@ -815,104 +815,6 @@ public class ChainPhaseTests
         Assert.Equal(Status.Failed, result.Steps[3].Status);
     }
 
-    // -------------------------------------------------------------------------
-    // Worktree sweep on successful chain completion (Defect 2): after a SUCCESSFUL
-    // chain, this chain's ticket/ and chain/ worktrees are pruned so a later
-    // glob-based runner does not collect stale worktree copies. Failure PRESERVES
-    // worktrees for debugging/resume. Stack-agnostic: pure git + filesystem.
-    // -------------------------------------------------------------------------
-
-    // Minimal ChainPhase for direct unit tests of SweepChainWorktreesAsync. The plan/implement/
-    // review/ship factories are never invoked by the sweep, so they are inert throwing stubs.
-    private ChainPhase BuildChainForSweep(FakeGitClientChain git, FakeEventSinkChain events, string workingDirectory)
-    {
-        var ticketing = new ChainFakeTicketing(MakeTicket(TicketState.Backlog));
-        Func<BuildOptions, PlanPhase> planFactory = _ => throw new InvalidOperationException("not used by sweep");
-        Func<BuildOptions, ImplementPhaseOptions, ImplementPhase> implFactory = (_, _) => throw new InvalidOperationException("not used by sweep");
-        Func<BuildOptions, GateOutcome?, ReviewPhase> reviewFactory = (_, _) => throw new InvalidOperationException("not used by sweep");
-        Func<BuildOptions, ShipPhase> shipFactory = _ => throw new InvalidOperationException("not used by sweep");
-
-        return new ChainPhase(
-            ticketing, events, MakeBaseOptions(),
-            planFactory, implFactory, reviewFactory, shipFactory,
-            sessionIdGenerator: NextSessionId,
-            workingDirectory: workingDirectory,
-            gitClient: git);
-    }
-
-    [Fact]
-    public async Task SweepChainWorktrees_RemovesTicketAndChainWorktrees_NotUnrelatedOrMain()
-    {
-        var git = new FakeGitClientChain();
-        git.SetWorktrees(
-            ("/wt/main", "main"),
-            ("/wt/ticket-1", "ticket/tlb-1"),
-            ("/wt/chain-9", "chain/tlb-9"),
-            ("/wt/feature-x", "feature/x"));
-        var events = new FakeEventSinkChain();
-        var chain = BuildChainForSweep(git, events, WorkDir);
-
-        await chain.SweepChainWorktreesAsync("TLB-1", "sess", CancellationToken.None);
-
-        Assert.Contains("/wt/ticket-1", git.RemovedWorktrees);
-        Assert.Contains("/wt/chain-9", git.RemovedWorktrees);
-        Assert.DoesNotContain("/wt/feature-x", git.RemovedWorktrees);
-        Assert.DoesNotContain("/wt/main", git.RemovedWorktrees);
-    }
-
-    [Fact]
-    public async Task SweepChainWorktrees_EmitsAdvisoryEvent_WhenDecruftHalts_DoesNotThrow()
-    {
-        // Drive the real WorktreeDecrufter past git-remove (both fail) and Directory.Delete
-        // (path absent -> no-op) into git worktree prune, which exits non-zero in a non-repo
-        // working directory -> DecruftResult.HaltedAt = GitWorktreePrune (deterministic, != WorktreeNotFound).
-        var workDir = WorkDir; // fresh temp dir, NOT a git repo
-        var git = new FakeGitClientChain { RemoveWorktreeFails = true };
-        git.SetWorktrees(("/wt/ticket-halt", "ticket/tlb-1"));
-        var events = new FakeEventSinkChain();
-        var chain = BuildChainForSweep(git, events, workDir);
-
-        // Must not throw.
-        await chain.SweepChainWorktreesAsync("TLB-1", "sess", CancellationToken.None);
-
-        var sweepEvents = events.Events
-            .Where(e => e.Kind == EventKind.GateFailure
-                && e.Data.TryGetValue("kind", out var k)
-                && (k as string) == "worktree_sweep_incomplete")
-            .ToList();
-        Assert.Single(sweepEvents);
-        Assert.Equal(Phase.Chain, sweepEvents[0].Phase);
-        Assert.Equal("TLB-1", sweepEvents[0].TicketId);
-    }
-
-    [Fact]
-    public async Task SweepChainWorktrees_NoAdvisoryEvent_WhenAllRemovesSucceed()
-    {
-        var git = new FakeGitClientChain();
-        git.SetWorktrees(("/wt/ticket-1", "ticket/tlb-1"));
-        var events = new FakeEventSinkChain();
-        var chain = BuildChainForSweep(git, events, WorkDir);
-
-        await chain.SweepChainWorktreesAsync("TLB-1", "sess", CancellationToken.None);
-
-        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.GateFailure
-            && e.Data.TryGetValue("kind", out var k) && (k as string) == "worktree_sweep_incomplete");
-    }
-
-    [Fact]
-    public async Task SweepChainWorktrees_NeverThrows_WhenListWorktreesThrows()
-    {
-        var git = new FakeGitClientChain { ListWorktreesThrows = true };
-        var events = new FakeEventSinkChain();
-        var chain = BuildChainForSweep(git, events, WorkDir);
-
-        // The swallow-everything guard means this completes normally despite the throw.
-        var ex = await Record.ExceptionAsync(() =>
-            chain.SweepChainWorktreesAsync("TLB-1", "sess", CancellationToken.None));
-        Assert.Null(ex);
-        Assert.Empty(git.RemovedWorktrees);
-    }
-
     [Fact]
     public async Task RunAsync_OutermostSuccess_SweepsTicketWorktree_NotUnrelated()
     {
@@ -3805,28 +3707,10 @@ public class ChainPhaseTests
         // Used to simulate a dirty shared worktree after a batch session.
         public IReadOnlyList<string>? BatchWorktreeDirtyFiles { get; set; }
 
-        // When true, ListWorktreesAsync throws. Used to prove SweepChainWorktreesAsync swallows
-        // a git failure and never lets cleanup fail an otherwise-successful chain.
-        public bool ListWorktreesThrows { get; set; }
-
-        // When true, RemoveWorktreeAsync reports failure (for both force=false and force=true),
-        // driving the real WorktreeDecrufter past git-remove into the filesystem-delete/prune
-        // fallback. Used to exercise the advisory "worktree_sweep_incomplete" halt path.
-        public bool RemoveWorktreeFails { get; set; }
-
         // Adds an extra worktree to the list ListWorktreesAsync reports. Additive on top of the
         // seeded default; lets a test inject ticket/, chain/, and unrelated worktrees.
         public void AddWorktree(string path, string branch) =>
             _worktrees.Add(new WorktreeInfo(path, branch, CommitSha, false, false));
-
-        // Replaces the entire worktree list (clears the seeded default). Used by direct unit
-        // tests of SweepChainWorktreesAsync that need an exact mixed list.
-        public void SetWorktrees(params (string Path, string Branch)[] entries)
-        {
-            _worktrees.Clear();
-            foreach (var e in entries)
-                _worktrees.Add(new WorktreeInfo(e.Path, e.Branch, CommitSha, false, false));
-        }
 
         public FakeGitClientChain(
             bool shipFails = false,
@@ -3867,8 +3751,6 @@ public class ChainPhaseTests
 
         public Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct)
         {
-            if (ListWorktreesThrows)
-                throw new InvalidOperationException("git worktree list failed for test");
             // Return a snapshot, not a live view: production ListWorktreesAsync re-parses git
             // output into a fresh list each call, so a caller enumerating one result while a
             // later RemoveWorktreeAsync mutates state never sees a concurrent-modification throw.
@@ -3878,8 +3760,6 @@ public class ChainPhaseTests
         public Task<WorktreeRemoveResult> RemoveWorktreeAsync(string path, bool force, CancellationToken ct)
         {
             RemovedWorktrees.Add(path);
-            if (RemoveWorktreeFails)
-                return Task.FromResult(new WorktreeRemoveResult(false, "remove failed for test"));
             _worktrees.RemoveAll(w => string.Equals(w.Path, path, StringComparison.OrdinalIgnoreCase));
             return Task.FromResult(new WorktreeRemoveResult(true, null));
         }

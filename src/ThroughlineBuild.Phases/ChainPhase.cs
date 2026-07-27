@@ -82,6 +82,7 @@ public class ChainPhase
     private readonly BuildOptions _baseOptions;
     private readonly Func<BuildOptions, IObsoleteRatifier>? _ratifierFactory;
     private readonly IGitClient _git;
+    private readonly ChainIntegrationBranch _integrationBranch;
     // Optional: recovers the latest Rework verdict from the event log so an in-progress ticket
     // that carries real work can be resumed with its prior feedback. Null falls back to a
     // synthesized resume note (e.g. an interrupted initial implement that was never reviewed).
@@ -89,12 +90,6 @@ public class ChainPhase
     // Optional: when set, batch implement groups in the parent chain dispatch one session here
     // instead of running a per-ticket implement+review+ship loop for each group member.
     private readonly IWorkerAgent? _batchWorker;
-    // Root-chain landing: the remote and push toggle used when the OUTERMOST chain
-    // fast-forwards its accumulated integration branch onto the configured target branch.
-    // A null remote or PushEnabled=false lands locally only (no push) - safe, but the
-    // operator must push the target manually.
-    private readonly string? _landingRemote;
-    private readonly bool _landingPushEnabled;
     // Optional: the configured check specs + runner for the post-rework deterministic re-run.
     // When either is null the recheck is skipped and rework rounds flow exactly as before.
     private readonly IReadOnlyList<CheckSpec>? _reworkRecheckSpecs;
@@ -136,10 +131,10 @@ public class ChainPhase
         _workingDirectory = workingDirectory ?? Directory.GetCurrentDirectory();
         _ratifierFactory = ratifierFactory;
         _git = gitClient ?? new ProcessGitClient();
+        _integrationBranch = new ChainIntegrationBranch(
+            _git, _workingDirectory, landingRemote, landingPushEnabled);
         _feedbackRetriever = feedbackRetriever;
         _batchWorker = batchWorker;
-        _landingRemote = landingRemote;
-        _landingPushEnabled = landingPushEnabled;
         _reworkRecheckSpecs = reworkRecheckSpecs;
         _reworkRecheckRunner = reworkRecheckRunner;
         _output = output;
@@ -456,7 +451,8 @@ public class ChainPhase
         var completed = new ChainResult(options.TicketId, steps, ChainOutcome.Completed, totalSw.Elapsed, null,
             ShippedProvides: shippedProvides);
         if (options.ChainTargetBranch is null)
-            await SweepChainWorktreesAsync(options.TicketId, chainSessionId, ct).ConfigureAwait(false);
+            await _integrationBranch.SweepChainWorktreesAsync(
+                options.TicketId, EventEmitter(chainSessionId), ct).ConfigureAwait(false);
         await EventEmitter(chainSessionId)
             .EmitChainEndAsync(completed, options.TicketId, ct).ConfigureAwait(false);
         return completed;
@@ -1157,13 +1153,6 @@ public class ChainPhase
         IReadOnlyList<BatchTicketResult>? ConfirmedTickets,
         string BranchName,
         string BaseRef);
-
-    private sealed class BatchTicketingUnavailableException(
-        string ticketId, TicketingUnavailableException innerException) : Exception(innerException.Message, innerException)
-    {
-        public string TicketId { get; } = ticketId;
-        public TicketingUnavailableException TicketingException { get; } = innerException;
-    }
 
     private static async Task RunBatchStateWriteAsync(string ticketId, Func<Task> write)
     {
@@ -2097,7 +2086,7 @@ public class ChainPhase
 
         var integrationBaseRef = options.ChainTargetBranch ?? _baseOptions.TargetBranch;
         var integrationNames = PhaseWorktreeLayout.Compute(parentTicket.Id, parentTicket.Title, _workingDirectory);
-        var integrationBranch = ChainIntegrationBranch(parentTicket);
+        var integrationBranch = ChainIntegrationBranch.BranchName(parentTicket);
         var integrationWorktreePath = integrationNames.WorktreePath;
 
         // Capture the target head SHA once at chain start so ChainCommitRangeHelper can
@@ -2112,7 +2101,7 @@ public class ChainPhase
         string? sharedWorktreePath = null;
         if (eligible.Count > 0)
         {
-            var createResult = await EnsureIntegrationWorktreeAsync(
+            var createResult = await _integrationBranch.EnsureIntegrationWorktreeAsync(
                 integrationBranch,
                 integrationBaseRef,
                 integrationWorktreePath,
@@ -2125,9 +2114,9 @@ public class ChainPhase
                 // base tip it forked from. Reconcile it with the CURRENT base before any child
                 // dispatches - otherwise every child implements against a stale snapshot and the
                 // divergence only surfaces at the root landing, after all the work is burned.
-                var refreshFailure = await RefreshIntegrationBranchAsync(
+                var refreshFailure = await _integrationBranch.RefreshIntegrationBranchAsync(
                     parentTicket.Id, integrationBranch, sharedWorktreePath,
-                    integrationBaseRef, ct).ConfigureAwait(false);
+                    integrationBaseRef, () => EventEmitter(_sessionIdGenerator()), ct).ConfigureAwait(false);
                 if (refreshFailure is not null)
                 {
                     totalSw.Stop();
@@ -2341,9 +2330,10 @@ public class ChainPhase
                                     // Ship the reviewed batch stack into the integration branch: advance
                                     // chain/<parent> to the batch tip and mark each ticket Done. The root
                                     // landing then carries it to the target, exactly like a leaf ship.
-                                    var shipReason = await ShipBatchStackAsync(
+                                    var shipReason = await _integrationBranch.ShipBatchStackAsync(
                                         batchTickets, batchOutcome.BranchName, integrationBranch,
-                                        sharedWorktreePath, ct).ConfigureAwait(false);
+                                        sharedWorktreePath, _ticketing,
+                                        () => EventEmitter(_sessionIdGenerator()), ct).ConfigureAwait(false);
                                     if (shipReason is not null)
                                     {
                                         Console.Error.WriteLine($"[{parentTicket.Id}] batch ship failed: {shipReason}");
@@ -2494,13 +2484,14 @@ public class ChainPhase
                     // reused sub-chain branch from a prior run can have diverged. Rebasing first
                     // makes the ff valid again; a conflict stops the chain with the work left safe
                     // on the sub-chain branch.
-                    var childIntegrationBranch = ChainIntegrationBranch(child);
-                    var childWorktreePath = await ResolveWorktreePathAsync(childIntegrationBranch, child, ct)
+                    var childIntegrationBranch = ChainIntegrationBranch.BranchName(child);
+                    var childWorktreePath = await _integrationBranch.ResolveWorktreePathAsync(
+                            childIntegrationBranch, child, ct)
                         .ConfigureAwait(false);
-                    var accumulateFailure = await RebaseThenFastForwardAsync(
+                    var accumulateFailure = await _integrationBranch.RebaseThenFastForwardAsync(
                         child.Id, childIntegrationBranch, childWorktreePath,
                         integrationBranch, sharedWorktreePath ?? integrationWorktreePath,
-                        "chain_accumulate", ct).ConfigureAwait(false);
+                        "chain_accumulate", () => EventEmitter(_sessionIdGenerator()), ct).ConfigureAwait(false);
                     if (accumulateFailure is not null)
                     {
                         allChildResults[^1] = childResult with
@@ -2544,8 +2535,9 @@ public class ChainPhase
             && options.ChainTargetBranch is null
             && sharedWorktreePath is not null)
         {
-            landingRationale = await LandRootIntegrationBranchAsync(
-                options.TicketId, integrationBranch, sharedWorktreePath, ct).ConfigureAwait(false);
+            landingRationale = await _integrationBranch.LandRootIntegrationBranchAsync(
+                options.TicketId, integrationBranch, sharedWorktreePath,
+                _baseOptions.TargetBranch, () => EventEmitter(_sessionIdGenerator()), ct).ConfigureAwait(false);
             if (landingRationale is not null)
                 anyStoppedEarly = true;
         }
@@ -2566,7 +2558,8 @@ public class ChainPhase
                     : $"All {eligible.Count} eligible children completed.");
 
         if (options.ChainTargetBranch is null && IsChainSuccess(outcome))
-            await SweepChainWorktreesAsync(options.TicketId, _sessionIdGenerator(), ct).ConfigureAwait(false);
+            await _integrationBranch.SweepChainWorktreesAsync(
+                options.TicketId, EventEmitter(_sessionIdGenerator()), ct).ConfigureAwait(false);
 
         return new ChainResult(
             TicketId: options.TicketId,
@@ -2603,242 +2596,6 @@ public class ChainPhase
         return planResult.Success ? null : (planResult.FailureReason ?? "planning failed");
     }
 
-    /// <summary>
-    /// Ships a reviewed batch stack into the parent integration branch. The warm batch session left
-    /// the integration worktree checked out on the batch branch, so this switches it back to the
-    /// integration branch and fast-forwards that branch onto the batch stack tip (the leaf-ship
-    /// equivalent for the whole stack), then marks each batched ticket Done with a shipped_at marker
-    /// so downstream state matches a per-ticket ship. Returns null on success, or a human-readable
-    /// reason on failure (the batch work stays safe on the batch branch for a re-run).
-    /// </summary>
-    private async Task<string?> ShipBatchStackAsync(
-        IReadOnlyList<Ticket> batchTickets,
-        string batchBranch,
-        string integrationBranch,
-        string integrationWorktreePath,
-        CancellationToken ct)
-    {
-        var switchResult = await _git.SwitchBranchAsync(integrationBranch, integrationWorktreePath, ct)
-            .ConfigureAwait(false);
-        if (!switchResult.Success)
-        {
-            await EventEmitter(_sessionIdGenerator()).EmitChainGateFailureAsync(batchTickets[0].Id, "batch_ship_switch_failed", new Dictionary<string, object>
-            {
-                ["integration_branch"] = integrationBranch,
-                ["batch_branch"] = batchBranch,
-                ["detail"] = switchResult.FailureReason ?? "unknown"
-            }, ct).ConfigureAwait(false);
-            return $"batch implemented and reviewed but could not switch the integration worktree onto " +
-                $"{integrationBranch} to ship: {switchResult.FailureReason}. The work is safe on {batchBranch}.";
-        }
-
-        var ffResult = await _git.FastForwardMergeAsync(batchBranch, integrationWorktreePath, ct)
-            .ConfigureAwait(false);
-        if (!ffResult.Success)
-        {
-            await EventEmitter(_sessionIdGenerator()).EmitChainGateFailureAsync(batchTickets[0].Id, "batch_ship_merge_failed", new Dictionary<string, object>
-            {
-                ["integration_branch"] = integrationBranch,
-                ["batch_branch"] = batchBranch,
-                ["detail"] = ffResult.FailureReason ?? "unknown"
-            }, ct).ConfigureAwait(false);
-            return $"batch implemented and reviewed but fast-forwarding {integrationBranch} onto " +
-                $"{batchBranch} failed: {ffResult.FailureReason}. The work is safe on {batchBranch}.";
-        }
-
-        string shippedSha;
-        try { shippedSha = await _git.HeadShaAsync(integrationWorktreePath, ct).ConfigureAwait(false); }
-        catch { shippedSha = "(unknown)"; }
-
-        foreach (var ticket in batchTickets)
-        {
-            // The merge is already committed, so these hard writes are safely resumable. Do not
-            // report a shipped ticket while its marker or Done state is missing.
-            await RunBatchStateWriteAsync(ticket.Id,
-                () => _ticketing.CreateCommentAsync(ticket.Id,
-                    $"<p>[shipped_at: {shippedSha}] (batch into {integrationBranch})</p>", ct)).ConfigureAwait(false);
-            await RunBatchStateWriteAsync(ticket.Id,
-                () => _ticketing.TransitionAsync(ticket.Id, TicketState.Done, ct)).ConfigureAwait(false);
-            await EventEmitter(_sessionIdGenerator()).EmitAsync(
-                EventKind.StateTransition,
-                ticket.Id,
-                Phase.Chain,
-                new Dictionary<string, object>
-                {
-                    ["from"] = "InReview",
-                    ["to"] = "Done",
-                    ["reason"] = "batch_ship"
-                }, ct).ConfigureAwait(false);
-        }
-        return null;
-    }
-
-    /// <summary>
-    /// Lands the outermost chain's accumulated integration branch onto the configured target
-    /// branch in the main worktree and pushes (when a remote and push are configured). Returns
-    /// null on success, or a human-readable rationale describing why the landing stopped. The
-    /// accumulated work is never lost on failure - it remains on the integration branch (and,
-    /// for a push failure, on the local target) for the operator to reconcile.
-    /// </summary>
-    private async Task<string?> LandRootIntegrationBranchAsync(
-        string ticketId,
-        string integrationBranch,
-        string integrationWorktreePath,
-        CancellationToken ct)
-    {
-        // The landing fast-forwards whatever HEAD the main worktree points at, so refuse if it
-        // is not on the target - mirrors ShipPhase's pre-merge guard and prevents advancing the
-        // wrong branch if the preflight invariant was somehow broken mid-run.
-        var mainBranch = await _git.CurrentBranchAsync(_workingDirectory, ct).ConfigureAwait(false);
-        if (!string.Equals(mainBranch, _baseOptions.TargetBranch, StringComparison.Ordinal))
-        {
-            await EventEmitter(_sessionIdGenerator()).EmitChainGateFailureAsync(ticketId, "chain_landing_wrong_branch", new Dictionary<string, object>
-            {
-                ["expected"] = _baseOptions.TargetBranch,
-                ["actual"] = mainBranch,
-                ["integration_branch"] = integrationBranch
-            }, ct).ConfigureAwait(false);
-            return $"chain accumulated onto {integrationBranch} but the main worktree is on " +
-                $"'{mainBranch}', not '{_baseOptions.TargetBranch}'; could not land. The work is " +
-                $"safe on {integrationBranch}; switch to {_baseOptions.TargetBranch} and merge it manually.";
-        }
-
-        // Rebase the integration branch onto the current target before the fast-forward, then
-        // fast-forward the target up to it. The integration branch forks from the target at chain
-        // start; if the target then advances - a long chain racing a concurrent push, or a reused
-        // integration branch from a prior run after the target moved - the branches diverge and a
-        // plain fast-forward is impossible. Replaying onto the current tip makes the target an
-        // ancestor again. Shared with the intermediate accumulation merge so the two never diverge.
-        var landFailure = await RebaseThenFastForwardAsync(
-            ticketId, integrationBranch, integrationWorktreePath,
-            _baseOptions.TargetBranch, _workingDirectory, "chain_landing", ct).ConfigureAwait(false);
-        if (landFailure is not null)
-            return landFailure;
-
-        if (_landingPushEnabled && !string.IsNullOrEmpty(_landingRemote))
-        {
-            // No-remote guard, symmetric with the per-ticket ShipPhase (which skips fetch/push and
-            // emits a no_remote marker when the remote is absent). The local fast-forward above
-            // already advanced the target branch, so a missing remote is a clean local land - not a
-            // landing failure. Pushing unconditionally would hard-fail a remote-less repo (a fresh
-            // `git init`, a smoke-test fixture) even though every child's work is fully integrated.
-            var remoteConfigured = await _git.RemoteExistsAsync(_landingRemote!, _workingDirectory, ct)
-                .ConfigureAwait(false);
-            if (!remoteConfigured)
-            {
-                await EventEmitter(_sessionIdGenerator()).EmitAsync(
-                    EventKind.TicketWrite,
-                    ticketId,
-                    Phase.Chain,
-                    new Dictionary<string, object>
-                    {
-                        ["action"] = "chain_landing_push_skipped",
-                        ["reason"] = "no_remote",
-                        ["remote"] = _landingRemote!,
-                        ["target_branch"] = _baseOptions.TargetBranch
-                    }, ct).ConfigureAwait(false);
-                Console.WriteLine(
-                    $"[{ticketId}] chain landed {integrationBranch} onto {_baseOptions.TargetBranch} " +
-                    $"locally; push skipped (no '{_landingRemote}' remote configured).");
-                return null;
-            }
-
-            var pushResult = await _git.PushAsync(_landingRemote!, _baseOptions.TargetBranch, _workingDirectory, ct)
-                .ConfigureAwait(false);
-            if (!pushResult.Success)
-            {
-                await EventEmitter(_sessionIdGenerator()).EmitChainGateFailureAsync(ticketId, "chain_landing_push_failed", new Dictionary<string, object>
-                {
-                    ["target_branch"] = _baseOptions.TargetBranch,
-                    ["remote"] = _landingRemote!,
-                    ["detail"] = pushResult.FailureReason ?? "unknown"
-                }, ct).ConfigureAwait(false);
-                return $"landed {integrationBranch} onto {_baseOptions.TargetBranch} locally but push " +
-                    $"to {_landingRemote} failed: {pushResult.FailureReason}. Reconcile and push " +
-                    $"{_baseOptions.TargetBranch} manually.";
-            }
-        }
-
-        // Landed cleanly. The chain/{...} integration branches and the per-leaf ticket/{...}
-        // branches/worktrees are intentionally retained (not torn down) so a failed or retried
-        // chain can resume from the accumulated topology - see SequentialChainTests
-        // ParentChain_RetainsIntegrationBranch_AtChainEnd.
-        return null;
-    }
-
-    /// <summary>
-    /// Rebases <paramref name="branch"/> (checked out at <paramref name="branchWorktreePath"/>) onto
-    /// <paramref name="targetRef"/>, then fast-forwards <paramref name="targetRef"/> (checked out at
-    /// <paramref name="mergeWorktreePath"/>) up to it. Returns null on success, or a human-readable
-    /// rationale on failure - the rebase is aborted on conflict and the accumulated work is left
-    /// intact on <paramref name="branch"/>. Shared by the intermediate sub-chain accumulation merge
-    /// and the root landing so neither breaks when the target advanced after the branch forked.
-    /// </summary>
-    private async Task<string?> RebaseThenFastForwardAsync(
-        string ticketId,
-        string branch,
-        string branchWorktreePath,
-        string targetRef,
-        string mergeWorktreePath,
-        string failureKindPrefix,
-        CancellationToken ct)
-    {
-        var rebase = await _git.RebaseAsync(targetRef, branchWorktreePath, ct).ConfigureAwait(false);
-        if (rebase.HadConflicts)
-        {
-            await _git.RebaseAbortAsync(branchWorktreePath, ct).ConfigureAwait(false);
-            var paths = string.Join(", ", rebase.ConflictingPaths);
-            await EventEmitter(_sessionIdGenerator()).EmitChainGateFailureAsync(ticketId, $"{failureKindPrefix}_rebase_conflicts", new Dictionary<string, object>
-            {
-                ["integration_branch"] = branch,
-                ["target_branch"] = targetRef,
-                ["conflicting_paths"] = rebase.ConflictingPaths
-            }, ct).ConfigureAwait(false);
-            return $"rebasing {branch} onto {targetRef} hit conflicts in: {paths}. The work is safe on " +
-                $"{branch}; rebase it onto {targetRef} and resolve, then re-run.";
-        }
-        if (!rebase.Success)
-        {
-            await EventEmitter(_sessionIdGenerator()).EmitChainGateFailureAsync(ticketId, $"{failureKindPrefix}_rebase_failed", new Dictionary<string, object>
-            {
-                ["integration_branch"] = branch,
-                ["target_branch"] = targetRef,
-                ["detail"] = rebase.FailureReason ?? "unknown"
-            }, ct).ConfigureAwait(false);
-            return $"rebasing {branch} onto {targetRef} failed: {rebase.FailureReason}. The work is safe " +
-                $"on {branch}; rebase it onto {targetRef} manually, then re-run.";
-        }
-
-        var ff = await _git.FastForwardMergeAsync(branch, mergeWorktreePath, ct).ConfigureAwait(false);
-        if (!ff.Success)
-        {
-            await EventEmitter(_sessionIdGenerator()).EmitChainGateFailureAsync(ticketId, $"{failureKindPrefix}_merge_failed", new Dictionary<string, object>
-            {
-                ["integration_branch"] = branch,
-                ["target_branch"] = targetRef,
-                ["detail"] = ff.FailureReason ?? "unknown"
-            }, ct).ConfigureAwait(false);
-            return $"landing {branch} onto {targetRef} failed: {ff.FailureReason}. The work is safe on " +
-                $"{branch}; merge it manually.";
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// Resolves the worktree path that has <paramref name="branch"/> checked out, falling back to
-    /// the computed integration worktree path for <paramref name="ticket"/> when git reports no
-    /// matching worktree.
-    /// </summary>
-    private async Task<string> ResolveWorktreePathAsync(string branch, Ticket ticket, CancellationToken ct)
-    {
-        var worktrees = await _git.ListWorktreesAsync(ct).ConfigureAwait(false);
-        var match = worktrees.FirstOrDefault(
-            w => string.Equals(w.Branch, branch, StringComparison.OrdinalIgnoreCase));
-        return match?.Path
-            ?? PhaseWorktreeLayout.Compute(ticket.Id, ticket.Title, _workingDirectory).WorktreePath;
-    }
-
     private static IReadOnlySet<string> AddVisited(IReadOnlySet<string>? visited, string uuid)
     {
         var next = visited is null
@@ -2846,137 +2603,6 @@ public class ChainPhase
             : new HashSet<string>(visited, StringComparer.Ordinal);
         next.Add(uuid);
         return next;
-    }
-
-    private static string ChainIntegrationBranch(Ticket ticket) => ChainIntegrationBranchFromId(ticket.Id);
-
-    private static string ChainIntegrationBranchFromId(string ticketId) => $"chain/{SlugBuilder.BuildTicketSlug(ticketId)}";
-
-    private async Task<WorktreeCreateResult> EnsureIntegrationWorktreeAsync(
-        string branch,
-        string fromRef,
-        string worktreePath,
-        CancellationToken ct)
-    {
-        var existingWorktrees = await _git.ListWorktreesAsync(ct).ConfigureAwait(false);
-        var existingWorktree = existingWorktrees.FirstOrDefault(
-            w => string.Equals(w.Branch, branch, StringComparison.OrdinalIgnoreCase));
-        if (existingWorktree is not null)
-            return new WorktreeCreateResult(true, null, existingWorktree.Path);
-
-        var existingBranches = await _git.ListLocalBranchesAsync(branch, _workingDirectory, ct).ConfigureAwait(false);
-        if (existingBranches.Any(b => string.Equals(b, branch, StringComparison.OrdinalIgnoreCase)))
-            return await _git.CheckoutWorktreeAsync(worktreePath, branch, _workingDirectory, ct).ConfigureAwait(false);
-
-        var createResult = await _git.CreateWorktreeAsync(
-            worktreePath,
-            branch,
-            fromRef,
-            _workingDirectory,
-            ct).ConfigureAwait(false);
-        if (createResult.Success)
-            return createResult;
-
-        existingBranches = await _git.ListLocalBranchesAsync(branch, _workingDirectory, ct).ConfigureAwait(false);
-        if (existingBranches.Any(b => string.Equals(b, branch, StringComparison.OrdinalIgnoreCase)))
-            return await _git.CheckoutWorktreeAsync(worktreePath, branch, _workingDirectory, ct).ConfigureAwait(false);
-
-        return createResult;
-    }
-
-    /// <summary>
-    /// Reconciles a (possibly reused) integration branch with the current tip of its base ref
-    /// BEFORE any child dispatches (TLB-546). Integration branches are intentionally retained
-    /// across runs so a failed or interrupted chain can resume its accumulated topology - but a
-    /// retained branch stays frozen at the base tip it forked from, while the base keeps moving
-    /// (other chains landing, tickets shipping directly). Reusing it verbatim makes every child
-    /// implement, gate, and review against a stale snapshot; the divergence then surfaces only
-    /// at the root landing, after all the work is done, where a semantic collision between the
-    /// chain's work and what landed on the base in the meantime cannot be resolved automatically.
-    /// Rebases - never resets - so commits accumulated by already-shipped children survive; a
-    /// branch with no commits of its own just fast-forwards to the base tip. Returns null when
-    /// the branch is fresh or successfully refreshed, or a human-readable rationale when the
-    /// refresh hit conflicts and the chain must stop before dispatching anything.
-    /// </summary>
-    private async Task<string?> RefreshIntegrationBranchAsync(
-        string ticketId,
-        string integrationBranch,
-        string integrationWorktreePath,
-        string baseRef,
-        CancellationToken ct)
-    {
-        string chainSha;
-        string baseSha;
-        try
-        {
-            chainSha = await _git.RevParseAsync(integrationBranch, _workingDirectory, ct).ConfigureAwait(false);
-            baseSha = await _git.RevParseAsync(baseRef, _workingDirectory, ct).ConfigureAwait(false);
-        }
-        catch
-        {
-            // Probe failure (e.g. an unborn base in a fixture repo) is not staleness evidence.
-            // Proceed exactly as the chain did before this guard existed.
-            return null;
-        }
-
-        if (string.Equals(chainSha, baseSha, StringComparison.Ordinal))
-            return null; // freshly created, or already at the base tip
-
-        var baseIsAncestor = await _git.IsAncestorAsync(baseSha, chainSha, _workingDirectory, ct).ConfigureAwait(false);
-        if (baseIsAncestor)
-            return null; // chain is strictly ahead (accumulated child work); base unmoved
-
-        // The base advanced after this branch forked. Replay the chain's commits onto the
-        // current tip so children build on reality instead of the fork-time snapshot.
-        var rebase = await _git.RebaseAsync(baseRef, integrationWorktreePath, ct).ConfigureAwait(false);
-        if (rebase.HadConflicts)
-        {
-            await _git.RebaseAbortAsync(integrationWorktreePath, ct).ConfigureAwait(false);
-            var paths = string.Join(", ", rebase.ConflictingPaths);
-            await EventEmitter(_sessionIdGenerator()).EmitChainGateFailureAsync(ticketId, "chain_refresh_rebase_conflicts", new Dictionary<string, object>
-            {
-                ["integration_branch"] = integrationBranch,
-                ["base_ref"] = baseRef,
-                ["conflicting_paths"] = rebase.ConflictingPaths
-            }, ct).ConfigureAwait(false);
-            return $"{integrationBranch} forked from an older {baseRef} and rebasing it onto the " +
-                $"current tip hit conflicts in: {paths}. No child was dispatched. Resolve the rebase " +
-                $"manually (the accumulated work is safe on {integrationBranch}), or delete the " +
-                $"branch to restart the chain from the current {baseRef}, then re-run.";
-        }
-        if (!rebase.Success)
-        {
-            await EventEmitter(_sessionIdGenerator()).EmitChainGateFailureAsync(ticketId, "chain_refresh_rebase_failed", new Dictionary<string, object>
-            {
-                ["integration_branch"] = integrationBranch,
-                ["base_ref"] = baseRef,
-                ["detail"] = rebase.FailureReason ?? "unknown"
-            }, ct).ConfigureAwait(false);
-            return $"refreshing {integrationBranch} onto {baseRef} failed: {rebase.FailureReason}. " +
-                $"No child was dispatched; the accumulated work is safe on {integrationBranch}.";
-        }
-
-        string refreshedSha;
-        try { refreshedSha = await _git.HeadShaAsync(integrationWorktreePath, ct).ConfigureAwait(false); }
-        catch { refreshedSha = "(unknown)"; }
-
-        Console.WriteLine(
-            $"[{ticketId}] {integrationBranch} was behind {baseRef}; rebased onto the current tip " +
-            "before dispatching children.");
-        await EventEmitter(_sessionIdGenerator()).EmitAsync(
-            EventKind.TicketWrite,
-            ticketId,
-            Phase.Chain,
-            new Dictionary<string, object>
-            {
-                ["action"] = "chain_refresh_rebased",
-                ["integration_branch"] = integrationBranch,
-                ["base_ref"] = baseRef,
-                ["old_tip"] = chainSha,
-                ["new_tip"] = refreshedSha
-            }, ct).ConfigureAwait(false);
-
-        return null;
     }
 
     private async Task<TicketGraph> BuildSiblingGraphAsync(IReadOnlyList<Ticket> eligible, CancellationToken ct)
@@ -3009,49 +2635,5 @@ public class ChainPhase
             or ChainOutcome.RatifiedObsolete
             or ChainOutcome.ParentCompleted
             or ChainOutcome.BatchImplemented;
-
-    // Success-only sweep of this chain's worktrees. Reuses the stack-agnostic WorktreeDecrufter
-    // (git + filesystem only). Branch-prefix filtering (ticket/, chain/) is safer than nuking
-    // .worktrees/: it never removes the main worktree or an unrelated checkout. Dispatch is serial
-    // (concurrency pinned to 1), so no concurrent chain owns a ticket/ or chain/ worktree here.
-    // A cleanup miss must NEVER fail an otherwise-successful chain - it is swallowed/advisory only.
-    //
-    // This removes WORKTREES only and deliberately leaves the ticket/ and chain/ BRANCHES in place:
-    // the integration branch is the accumulated subtree and an interrupted/retried chain resumes by
-    // checking it out (see SequentialChainTests.ParentChain_LeftoverChainBranch_*). Tearing the
-    // branches down is the operator's explicit call once the operation is truly finished - that is
-    // what `build sweep` (ChainWorktreeSweeper) does, merged-gated so it never drops resumable work.
-    internal async Task SweepChainWorktreesAsync(string ticketId, string sessionId, CancellationToken ct)
-    {
-        try
-        {
-            var worktrees = await _git.ListWorktreesAsync(ct).ConfigureAwait(false);
-            var decrufter = new WorktreeDecrufter(_git);
-            var halted = new List<string>();
-            foreach (var w in worktrees)
-            {
-                if (string.IsNullOrEmpty(w.Branch)) continue;
-                if (!(w.Branch.StartsWith("ticket/", StringComparison.Ordinal)
-                      || w.Branch.StartsWith("chain/", StringComparison.Ordinal)))
-                    continue;
-                var result = await decrufter.DecruftAsync(w.Path, _workingDirectory, ct).ConfigureAwait(false);
-                if (result.HaltedAt is not null && result.HaltedAt != DecruftStep.WorktreeNotFound)
-                    halted.Add($"{w.Path} (halted at {result.HaltedAt})");
-            }
-            if (halted.Count > 0)
-            {
-                await EventEmitter(sessionId).EmitAsync(
-                    EventKind.GateFailure,
-                    ticketId,
-                    Phase.Chain,
-                    new Dictionary<string, object>
-                    {
-                        ["kind"] = "worktree_sweep_incomplete",
-                        ["halted"] = halted.ToArray()
-                    }, ct).ConfigureAwait(false);
-            }
-        }
-        catch { /* cleanup must never fail a successful chain */ }
-    }
 
 }
