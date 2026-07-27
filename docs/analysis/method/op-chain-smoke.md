@@ -6,7 +6,7 @@ Build a trivially small, self-contained demo - a tiny color palette split into d
 
 The chain orchestrator has two execution shapes for a cohesive group of sibling briefs: a per-ticket run that cold-boots one implement worker per brief, and a batch run (--batch-implement) that hands the whole group to one warm implement session with a single combined review. Validating that both shapes work end to end, and seeing the concrete difference between them, needs a target small enough to run in seconds yet structured enough to exercise parent recursion, sibling dependencies, and the batch grouping.
 
-This op-doc is that target. It is a deliberately trivial, hermetic operation - three tiny files, no build toolchain, no external services - whose only purpose is to drive the chain machinery so an operator can run `build chain 1` and `build chain 1 --batch-implement` against the same tree and compare. It writes real files and real commits so ship and the event log behave exactly as they would for real work, while keeping the per-brief work small enough that review never thrashes.
+This op-doc is that target. It is a deliberately trivial, hermetic operation - three tiny files, no build toolchain, no external services - whose only purpose is to drive the chain machinery so an operator can run `build chain 1` and `build chain 1 --batch-implement` against the same tree and compare. It writes real files and real commits so ship and the event log behave exactly as they would for real work, while keeping the per-brief work small enough to avoid excessive review churn.
 
 ## Dispatch order
 
@@ -47,7 +47,7 @@ Acceptance:
 - [ ] it has at least five entries, each with a non-empty `name` and a `#RRGGBB` `hex`
 - [ ] `demo/palette-schema.md` exists and documents the `name` and `hex` fields
 
-Notes: The dataset is deliberately tiny and self-contained so the chain exercises implement, review, and ship without any build toolchain. JSON is chosen over prose so the summary brief's job is mechanical and unambiguous, which keeps review from having anything to thrash on.
+Notes: The dataset is deliberately tiny and self-contained so the chain exercises implement, review, and ship without any build toolchain. JSON is chosen over prose so the summary brief's job is mechanical and unambiguous, which avoids unnecessary review churn.
 
 OOS:
 - Any rendering or transformation of the palette (Brief 02 owns the summary)

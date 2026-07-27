@@ -293,7 +293,7 @@ L briefs legitimately need to plan; stripping them backfires - see s6). The phas
 ## 6. The kill condition (not a footnote)
 
 `cache_read = context_per_turn x turns`. Every lever cuts the first term; the danger is inflating the second.
-Strip a worker's todo list / Task tool and it may flail - re-deriving state, taking more turns, possibly more
+Strip a worker's todo list / Task tool and it may need to re-derive state, take more turns, and possibly use more
 rework - trading a context win for a turn loss and netting negative. Mitigations are baked in: S-only scope,
 telemetry-measured, opt-in flag. **KILL exp-4 (abandon the L2 branch, keep telemetry) if, on any brief, the
 treatment arm shows:** turn count per brief rises, any `rework_rounds > 0` appears, or review quality drops -

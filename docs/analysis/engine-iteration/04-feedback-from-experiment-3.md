@@ -58,7 +58,7 @@ collapses to prompt-side only (L2's instruction half) - say so and stop, rather 
   drop superseded results). If reachable, it cuts a chunk of the Todo/Task slice and some Read slice with no
   behavioral risk.
 - **L2 - planning-overhead constraint, scoped to focused briefs.** For S-effort, single-area briefs, an
-  elaborate todo list and subagent Task are overkill. Lever = (a) a prompt instruction to keep planning
+  elaborate todo list and subagent Task add unnecessary overhead. Lever = (a) a prompt instruction to keep planning
   lightweight for focused briefs, and (b) if section 1 allows, restrict TodoWrite/Task in the spawn for S briefs.
   Keyed on the op-doc's existing S/M/L effort sizing - derived, not a new field. **Do NOT apply to L briefs**
   (B08 is the one that legitimately needs to plan; stripping it will backfire - see section 5).
@@ -116,7 +116,7 @@ understand, code to write - and they keep full planning). Report per-brief, not 
 ## 5. The backfire risk (this is the kill condition, not a footnote)
 
 `cache_read = context_per_turn x turns`. Every lever here cuts the first term; the danger is it inflates the
-second. Strip a worker's todo list or a tool and it may flail - re-deriving state it would have tracked,
+second. Strip a worker's todo list or a tool and it may re-derive state it would have tracked,
 re-running to re-see output a cap hid, taking more turns and possibly more rework. That trades a context
 win for a turn loss and can net negative, exactly the trap to avoid. Mitigations baked in: scope lean-mode
 to S briefs only (never the complex ones that need to plan); failure-preserving caps (never blind tail);

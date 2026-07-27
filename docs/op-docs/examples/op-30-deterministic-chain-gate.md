@@ -191,7 +191,7 @@ Acceptance:
 - [ ] Existing implement behavior is unchanged when a valid claim is present
 - [ ] AOT publish succeeds with no new trim or AOT warnings
 
-Notes: Schema validity is the cheapest deterministic check in the system, but hard-failing it outright would be exactly the asymmetric false-fail this operation forbids - JSON-shape flakiness over correct code. The re-ask keeps the anti-lazy-worker property without burning an implement-axis loop. Populating provides/consumes and ac_bindings is allowed but not required here; their resolution is deferred.
+Notes: Schema validity is the cheapest deterministic check in the system, but hard-failing it outright would be exactly the asymmetric false-fail this operation forbids - JSON-shape flakiness over correct code. The re-ask enforces a complete claim without burning an implement-axis loop. Populating provides/consumes and ac_bindings is allowed but not required here; their resolution is deferred.
 
 OOS:
 - Running any verifier or gate (brief 06)

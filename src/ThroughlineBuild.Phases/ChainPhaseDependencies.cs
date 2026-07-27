@@ -23,20 +23,12 @@ public sealed record ChainPhaseCoreDependencies
 public sealed record ChainPhaseFactories
 {
     public required Func<BuildOptions, PlanPhase> Plan { get; init; }
-    public required Func<
-        BuildOptions,
-        ImplementPhaseOptions,
-        ImplementPhase> Implement { get; init; }
-    public required Func<
-        BuildOptions,
-        GateOutcome?,
-        ReviewPhase> Review { get; init; }
+    public required Func<BuildOptions, ImplementPhaseOptions, ImplementPhase> Implement { get; init; }
+    public required Func<BuildOptions, GateOutcome?, ReviewPhase> Review { get; init; }
     public required Func<BuildOptions, ShipPhase> Ship { get; init; }
     public required Func<BuildOptions, ShipPhase>? ChainShip { get; init; }
     public required Func<BuildOptions, GatePhase>? Gate { get; init; }
-    public required Func<
-        BuildOptions,
-        IObsoleteRatifier>? Ratifier { get; init; }
+    public required Func<BuildOptions, IObsoleteRatifier>? Ratifier { get; init; }
 }
 
 /// <summary>

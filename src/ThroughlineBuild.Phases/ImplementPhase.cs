@@ -487,7 +487,7 @@ public class ImplementPhase : IWorkflowPhase
         // Step 15c: Resolve COMPLETION_CLAIM if worker opted in via completion_claim_ref metadata key.
         // Workers that omit this key are treated as pre-claim format (null claim, proceed normally).
         // Workers that include the key but produce an invalid or missing block get one targeted re-ask
-        // before a hard failure, keeping the anti-lazy-worker property without burning a rework round.
+        // before a hard failure, enforcing a complete claim without burning a rework round.
         CompletionClaim? completionClaim = null;
         if (workerResult.Metadata.ContainsKey("completion_claim_ref"))
         {

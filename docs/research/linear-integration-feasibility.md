@@ -144,7 +144,7 @@ Cleanest options, simplest first:
 1. **Dedicated service-account user + its API key** (recommended for a CLI) - mirrors
    today's `X-API-Key` model exactly, bot activity is attributable, zero OAuth code.
 2. **OAuth `actor=app`** - gives the agent its own first-class identity/avatar in the
-   workspace. More setup (OAuth flow, token storage); overkill for a deterministic CLI but
+   workspace. More setup (OAuth flow, token storage); unnecessary for this deterministic CLI but
    worth noting if you want "build bot" to appear as itself. The full Agents/AgentSession
    webhook machinery is for assignment-driven interactive agents - **not** relevant here.
 

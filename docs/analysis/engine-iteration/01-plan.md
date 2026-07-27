@@ -240,7 +240,7 @@ and runs a command. Each stack's canary is declared by the deriver (which alread
 THE SELF-CORRECTING PROPERTY (why this is robust without the engine knowing the stack): if the deriver
 declares a canary path the vacuous check cannot see (e.g. a `.ts` outside the referenced set under a
 `files: []` root), the check still passes with the canary present -> the prover flags the gate vacuous
--> the chain hard-fails. So a mis-declared canary surfaces the same defect; the engine mechanism stays dumb and
+-> the chain hard-fails. So a mis-declared canary surfaces the same defect; the engine mechanism remains generic and
 the proof is what carries the guarantee. The "inject into a referenced project, not the empty root"
 subtlety from the TS case becomes the deriver's concern, and a wrong choice is caught, not silently
 accepted.
