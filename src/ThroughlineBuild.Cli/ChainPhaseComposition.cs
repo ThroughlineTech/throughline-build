@@ -16,11 +16,6 @@ namespace ThroughlineBuild.Cli;
 /// </summary>
 internal static class ChainPhaseComposition
 {
-    internal static TextWriter SelectHumanOutput(
-        bool summaryJson,
-        TextWriter standardOutput) =>
-        summaryJson ? TextWriter.Null : standardOutput;
-
     /// <summary>
     /// Builds the ChainPhase used by the chain verb from resolved dependencies. The batch-implement
     /// worker is created here from the same implement agent the per-ticket implement factory uses;

@@ -2140,7 +2140,7 @@ static async Task<(int code, int action)> RunTicketVerbBodyAsync(
         var (chainCode, chainDirect) = await RunChainVerbAsync(
             ticketId, args, cwd, ticketing, eventSink, buildOptions, config,
             workerFactory, debugMode, debugCaptureDir, enableDigest,
-            noAutoMerge, noAutoResolve, continuePastFailure, fromBrief, noPush, skipBaseline, chainDryRun, chainMaxDepth, summaryJson, effectiveAgentFor,
+            noAutoMerge, noAutoResolve, continuePastFailure, fromBrief, noPush, skipBaseline, chainDryRun, chainMaxDepth, effectiveAgentFor,
             batchImplementTicketIds, batchImplementAllChildren);
         // chainDirect=true means return from RunAsync; false means set dispatchExitCode + break
         return (chainCode, chainDirect ? 2 : 1);
@@ -2169,14 +2169,17 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
     bool skipBaseline,
     bool chainDryRun,
     string? chainMaxDepth,
-    bool summaryJson,
     Func<string, string> effectiveAgentFor,
     IReadOnlyList<string>? batchImplementTicketIds,
     bool batchImplementAllChildren = false)
 {
     var parsedMaxDepth = 16;
-    var chainHumanOutput =
-        ChainPhaseComposition.SelectHumanOutput(summaryJson, Console.Out);
+    // The chain verb emits no --summary-json envelope: WriteSummary/WriteSummaryLocal are called
+    // only from the decompose/plan/implement/review/ship branches, never from here. Suppressing
+    // the human writer under that flag would therefore silence the verb with nothing to replace
+    // it (a silent `chain --dry-run --summary-json` in particular). Chain human output stays on
+    // stdout unconditionally; there is no envelope on this path for it to contaminate.
+    TextWriter chainHumanOutput = Console.Out;
     if (!string.IsNullOrWhiteSpace(chainMaxDepth) &&
         (!int.TryParse(chainMaxDepth, out parsedMaxDepth) || parsedMaxDepth < 0))
     {

@@ -1,6 +1,6 @@
 # 06 - Public Surfaces
 
-Last refreshed: 2026-07-26 (HEAD 00dc074)
+Last refreshed: 2026-07-27 (TLB-580)
 
 The CLI surface, the exported library interfaces, and the inter-project contracts that anything outside this repo (or any unfamiliar reader inside it) might depend on. Status for each.
 
@@ -89,7 +89,7 @@ These are not just convenience flags - downstream tooling (CI, the operator's ot
 | **`--summary-json`** emits a structured JSON object on stdout - the schema is the `PhaseSummary` records ([PhaseSummary.cs](../../src/ThroughlineBuild.Helpers/PhaseSummary.cs)) rendered by `PhaseSummaryRenderer` ([PhaseSummaryRenderer.cs](../../src/ThroughlineBuild.Helpers/PhaseSummaryRenderer.cs)). | Functional |
 | **Default summary text block** is stable per-phase; operators redirect it (`build plan TLB-N 2>/dev/null > summary.txt`). | Functional |
 | **`--debug`** captures worker stdio to `.build/sessions/<stem>/` with a stable layout: `worker-stdin.txt`, `worker-stdout.txt`, `worker-stderr.txt`, `envelope-result.txt` (or `parse-error.txt`), `worker-result.json`, plus a structured per-turn `transcript.jsonl` side channel keyed by `DebugTranscriptContext` (build version, session id, rework round - see [build-debug-transcript-format.md](../build-debug-transcript-format.md)). `--debug` is a no-op for `ship` (no worker subprocess). | Functional |
-| **Progress digest** (default, `[m:ss] kind <payload>`) auto-suppresses when stderr is redirected unless `BUILD_PROGRESS=1`. Produced per-agent by `IWorkerProgressDigester` (null for Copilot). Under a multi-ticket `chain` each ticket's lines are prefixed `[{ticketId}] ` by a `PrefixedTextWriter` wrapping the digest sink ([ChainPhase.cs:1175](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1175)). The Claude digester now filters system stream events by subtype and throttles the thinking-tokens ticker. | Functional |
+| **Progress digest** (default, `[m:ss] kind <payload>`) auto-suppresses when stderr is redirected unless `BUILD_PROGRESS=1`. Produced per-agent by `IWorkerProgressDigester` (null for Copilot). Under a multi-ticket `chain` each ticket's lines are prefixed `[{ticketId}] ` by a `PrefixedTextWriter` wrapping the digest sink ([PhaseOptionsBuilder.cs:47](../../src/ThroughlineBuild.Phases/PhaseOptionsBuilder.cs#L47)). The Claude digester now filters system stream events by subtype and throttles the thinking-tokens ticker. | Functional |
 | **Plane comment markers** `[planned_at: <sha>]`, `[implemented_at: <sha>]`, `[decomposed_at: <sha>]`, `[shipped_at: <sha>]`, `<strong>wontfix:</strong>`, `<strong>deferred:</strong>`, `<strong>reopened:</strong>` are load-bearing - downstream phases parse them. The gate also posts advisory `[gate: hard-fail]` comments, which nothing parses back. See the marker call-out below. | Functional |
 
 ### Exit codes (full enumeration)
@@ -241,7 +241,7 @@ Each line is a serialized `EventLineDto` wrapping a `WorkflowEvent` ([WorkflowEv
 | 12 | `DispatchEnd` |
 | 13 | `CostLedger` (new, TLB-510) |
 
-`CostLedger` (13) is the cost/telemetry workhorse and, like `GateFailure`, carries a `kind` discriminator in `Data`: the per-ticket gate ledger emitted by `ChainPhase.EmitCostLedgerAsync` ([ChainPhase.cs:1024](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L1024) - `gate_wall_ms`, gate-attributable rework rounds/tokens, `false_fails`, with `Phase: Phase.Gate`), `context_attribution` (per-turn context telemetry from claude-code workers, emitted in `ImplementPhase` at [ImplementPhase.cs:383-401](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L383-L401)), and `preload_summary` (pre-load telemetry from `ImplementPhase.BuildAndReportPreloadAsync` at [ImplementPhase.cs:644](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L644)).
+`CostLedger` (13) is the cost/telemetry workhorse and, like `GateFailure`, carries a `kind` discriminator in `Data`: the per-ticket gate ledger emitted by `ChainEventEmitter.EmitCostLedgerAsync` ([ChainEventEmitter.cs:102](../../src/ThroughlineBuild.Phases/ChainEventEmitter.cs#L102), driven from `ImplementReviewLoop` at [ImplementReviewLoop.cs:90](../../src/ThroughlineBuild.Phases/ImplementReviewLoop.cs#L90) - `gate_wall_ms`, gate-attributable rework rounds/tokens, `false_fails`, with `Phase: Phase.Gate`), `context_attribution` (per-turn context telemetry from claude-code workers, emitted in `ImplementPhase` at [ImplementPhase.cs:383-401](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L383-L401)), and `preload_summary` (pre-load telemetry from `ImplementPhase.BuildAndReportPreloadAsync` at [ImplementPhase.cs:644](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L644)).
 
 The `GateFailure` (4) discriminator set keeps growing; new values since the last refresh include `claim_schema_invalid`, `setup_failed`, `gate_control_run` (all `GatePhase`), `preload_file_not_found`, `preload_empty` (`ImplementPhase`), alongside the existing hygiene/worktree kinds. Anything reading the discriminator must tolerate new `kind` values.
 

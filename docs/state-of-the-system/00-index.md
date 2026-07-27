@@ -1,6 +1,6 @@
 # 00 - State of the System: Throughline Build
 
-Last refreshed: 2026-07-26 (HEAD 00dc074)
+Last refreshed: 2026-07-27 (TLB-580)
 
 This doc set is a detailed historical snapshot of the Throughline Build repository
 at the HEAD stamped above (refresh history in [PROMPT.md](PROMPT.md)). It is not
@@ -88,7 +88,7 @@ The CLI dispatches one of twenty-six action verbs (`init`, `settarget`, `user-gu
 Coordination between phases happens through three persistent channels:
 
 - **Plane**: ticket state, labels, description, comments (with markers like `[planned_at: <sha>]`), and parent/child sub-issue links. `build setup` provisions the canonical state/label set from `WorkspaceSchema` (Contracts).
-- **Git**: the feature branch `ticket/<id>` and its worktree under `.worktrees/`; a chain runs its subtree inside one shared worktree on a `chain/<slug>` **integration branch** (built by `ChainIntegrationBranchFromId`, [src/ThroughlineBuild.Phases/ChainPhase.cs:2966](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L2966)) that accumulates child ships and is landed onto the resolved target branch at the root (rebase, fast-forward merge, push unless `--no-push`/`[ship].push=false`). Chain sweeps its worktrees on success and preserves them on failure; `build sweep` is the standalone recovery verb.
+- **Git**: the feature branch `ticket/<id>` and its worktree under `.worktrees/`; a chain runs its subtree inside one shared worktree on a `chain/<slug>` **integration branch** (built by `ChainIntegrationBranch.BranchNameFromId`, [src/ThroughlineBuild.Phases/ChainIntegrationBranch.cs:36](../../src/ThroughlineBuild.Phases/ChainIntegrationBranch.cs#L36)) that accumulates child ships and is landed onto the resolved target branch at the root (rebase, fast-forward merge, push unless `--no-push`/`[ship].push=false`). Chain sweeps its worktrees on success and preserves them on failure; `build sweep` is the standalone recovery verb.
 - **`.build/events/<stem>.jsonl`**: the append-only event log (`EventKind` now has 14 values including `CostLedger`; `Phase` has 11 including `Gate`).
 
 LLM contact splits into three tiers (architecture Section 3), but at two different maturity levels - see [11-llm-architecture.md](11-llm-architecture.md):
