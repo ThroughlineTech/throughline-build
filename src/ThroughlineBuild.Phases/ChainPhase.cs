@@ -99,6 +99,7 @@ public class ChainPhase
     // When either is null the recheck is skipped and rework rounds flow exactly as before.
     private readonly IReadOnlyList<CheckSpec>? _reworkRecheckSpecs;
     private readonly AutomatedChecksRunner? _reworkRecheckRunner;
+    private readonly TextWriter? _output;
 
     public ChainPhase(
         ITicketing ticketing,
@@ -119,7 +120,8 @@ public class ChainPhase
         bool landingPushEnabled = false,
         Func<BuildOptions, GatePhase>? gateFactory = null,
         IReadOnlyList<CheckSpec>? reworkRecheckSpecs = null,
-        AutomatedChecksRunner? reworkRecheckRunner = null)
+        AutomatedChecksRunner? reworkRecheckRunner = null,
+        TextWriter? output = null)
     {
         _ticketing = ticketing;
         _events = events;
@@ -140,6 +142,7 @@ public class ChainPhase
         _landingPushEnabled = landingPushEnabled;
         _reworkRecheckSpecs = reworkRecheckSpecs;
         _reworkRecheckRunner = reworkRecheckRunner;
+        _output = output;
     }
 
     // Inert read-only accessors over the wired collaborators, for composition-root tests that
@@ -151,6 +154,8 @@ public class ChainPhase
 
     private ChainEventEmitter EventEmitter(string sessionId) =>
         new(_events, _ticketing, sessionId);
+
+    private TextWriter Output => _output ?? Console.Out;
 
     public async Task<ChainResult> RunAsync(ChainPhaseOptions options, CancellationToken ct)
     {
@@ -209,8 +214,11 @@ public class ChainPhase
 
         if (options.DryRun)
         {
-            var plan = await BuildDryRunPlanAsync(ticket, options.MaxDepth, ct).ConfigureAwait(false);
-            PrintDryRunPlan(plan, options.MaxDepth);
+            var planner = new ChainDryRunPlanner(_ticketing, Output);
+            var plan = await planner
+                .BuildAsync(ticket, _baseOptions.TargetBranch, options.MaxDepth, ct)
+                .ConfigureAwait(false);
+            planner.Print(plan, options.MaxDepth);
             totalSw.Stop();
             return new ChainResult(
                 options.TicketId,
@@ -2067,7 +2075,7 @@ public class ChainPhase
         var eligible = children
             .Where(c => c.State != TicketState.Done && c.State != TicketState.Cancelled)
             .Where(c => !string.Equals(c.Uuid, parentTicket.Uuid, StringComparison.Ordinal))
-            .OrderBy(c => TicketNumber(c.Id))
+            .OrderBy(c => TicketIdOrdering.Number(c.Id))
             .ThenBy(c => c.Id, StringComparer.Ordinal)
             .ToList();
 
@@ -2079,7 +2087,7 @@ public class ChainPhase
         // Print the dependency order derived from Plane before any phase runs so a wrong
         // or missing edge is visible up front. Tickets in the same level have no blocked_by
         // edge between them and are unordered relative to each other (Brief 17).
-        PrintDispatchOrder(options.TicketId, levels);
+        new ChainDryRunPlanner(_ticketing, Output).PrintDispatchOrder(options.TicketId, levels);
 
         var integrationBaseRef = options.ChainTargetBranch ?? _baseOptions.TargetBranch;
         var integrationNames = PhaseWorktreeLayout.Compute(parentTicket.Id, parentTicket.Title, _workingDirectory);
@@ -2963,142 +2971,6 @@ public class ChainPhase
             }, ct).ConfigureAwait(false);
 
         return null;
-    }
-
-    private sealed record DryRunItem(
-        Ticket Ticket,
-        int Depth,
-        bool HasLiveChildren,
-        string IntegrationBranch,
-        string BaseBranch);
-
-    private sealed record DryRunPlan(
-        Ticket Root,
-        IReadOnlyList<DryRunItem> PostOrder,
-        IReadOnlyList<string> Warnings);
-
-    private async Task<DryRunPlan> BuildDryRunPlanAsync(Ticket root, int maxDepth, CancellationToken ct)
-    {
-        var items = new List<DryRunItem>();
-        var warnings = new List<string>();
-        var visited = new HashSet<string>(StringComparer.Ordinal);
-
-        await VisitDryRunAsync(root, depth: 0, parentIntegrationBranch: _baseOptions.TargetBranch, maxDepth, visited, items, warnings, ct)
-            .ConfigureAwait(false);
-
-        return new DryRunPlan(root, items.AsReadOnly(), warnings.AsReadOnly());
-    }
-
-    private async Task VisitDryRunAsync(
-        Ticket ticket,
-        int depth,
-        string parentIntegrationBranch,
-        int maxDepth,
-        HashSet<string> visited,
-        List<DryRunItem> items,
-        List<string> warnings,
-        CancellationToken ct)
-    {
-        if (!visited.Add(ticket.Uuid))
-        {
-            warnings.Add($"cycle detected at {ticket.Id}; subtree omitted");
-            return;
-        }
-
-        var children = await _ticketing.QueryAsync(new TicketQuery(ParentId: ticket.Uuid), ct).ConfigureAwait(false);
-        var eligible = children
-            .Where(c => c.State != TicketState.Done && c.State != TicketState.Cancelled)
-            .Where(c => !string.Equals(c.Uuid, ticket.Uuid, StringComparison.Ordinal))
-            .OrderBy(c => TicketNumber(c.Id))
-            .ThenBy(c => c.Id, StringComparer.Ordinal)
-            .ToList();
-
-        var integrationBranch = eligible.Count > 0
-            ? ChainIntegrationBranch(ticket)
-            : PhaseWorktreeLayout.BranchName(ticket.Id);
-
-        if (eligible.Count > 0)
-        {
-            if (depth >= maxDepth)
-            {
-                warnings.Add($"depth cap {maxDepth} reached at {ticket.Id}; subtree omitted");
-            }
-            else
-            {
-                var graph = await BuildSiblingGraphAsync(eligible, ct).ConfigureAwait(false);
-                var levels = TopologicalSorter.ComputeLevels(graph);
-                foreach (var childId in levels.SelectMany(level => level))
-                {
-                    var child = eligible.First(c => string.Equals(c.Id, childId, StringComparison.Ordinal));
-                    await VisitDryRunAsync(child, depth + 1, integrationBranch, maxDepth, visited, items, warnings, ct)
-                        .ConfigureAwait(false);
-                }
-            }
-        }
-
-        items.Add(new DryRunItem(ticket, depth, eligible.Count > 0, integrationBranch, parentIntegrationBranch));
-        visited.Remove(ticket.Uuid);
-    }
-
-    private static void PrintDryRunPlan(DryRunPlan plan, int maxDepth)
-    {
-        Console.WriteLine($"[{plan.Root.Id}] dry-run chain plan (max depth {maxDepth}):");
-        Console.WriteLine("post-order schedule:");
-        for (int i = 0; i < plan.PostOrder.Count; i++)
-        {
-            var item = plan.PostOrder[i];
-            var action = item.HasLiveChildren
-                ? $"roll up internal node on {item.IntegrationBranch}"
-                : "run plan/implement/review/ship";
-            Console.WriteLine($"  {i + 1}. {new string(' ', item.Depth * 2)}{item.Ticket.Id} - {action}");
-        }
-
-        Console.WriteLine("branch topology:");
-        foreach (var item in plan.PostOrder.Where(i => i.HasLiveChildren).OrderBy(i => i.Depth).ThenBy(i => TicketNumber(i.Ticket.Id)))
-            Console.WriteLine($"  {item.IntegrationBranch} from {item.BaseBranch} integrates subtree for {item.Ticket.Id}");
-        foreach (var item in plan.PostOrder.Where(i => !i.HasLiveChildren))
-            Console.WriteLine($"  {PhaseWorktreeLayout.BranchName(item.Ticket.Id)} from {item.BaseBranch} before {item.Ticket.Id}");
-
-        if (plan.Warnings.Count > 0)
-        {
-            Console.WriteLine("warnings:");
-            foreach (var warning in plan.Warnings)
-                Console.WriteLine($"  {warning}");
-        }
-    }
-
-    /// <summary>
-    /// Prints the dependency-ordered dispatch sequence before the first phase runs.
-    /// Each level is a set of tickets with no blocked_by edge between them; within a
-    /// level they are unordered relative to each other, making a missing edge obvious.
-    /// </summary>
-    // Extracts the trailing integer from a ticket id like "TLB-369" -> 369 for numeric ordering.
-    // Returns int.MaxValue when there is no parseable trailing number so malformed ids sort last
-    // (after which ThenBy on the full id keeps ordering deterministic).
-    private static int TicketNumber(string id)
-    {
-        var dash = id.LastIndexOf('-');
-        if (dash >= 0 && dash < id.Length - 1 && int.TryParse(id.AsSpan(dash + 1), out var n))
-            return n;
-        // No project-identifier prefix (identifier not configured): the whole id is a
-        // bare number (e.g. "10"). Parse it directly so unordered siblings still sort
-        // numerically instead of falling through to a lexicographic id tiebreaker
-        // (where "10" < "8"). See TLB-496 for the negative-id sibling of this bug.
-        if (dash < 0 && int.TryParse(id, out var bare))
-            return bare;
-        return int.MaxValue;
-    }
-
-    private static void PrintDispatchOrder(string parentId, IReadOnlyList<IReadOnlyList<string>> levels)
-    {
-        Console.WriteLine($"[{parentId}] dispatch order ({levels.Count} level{(levels.Count == 1 ? "" : "s")}):");
-        for (int i = 0; i < levels.Count; i++)
-        {
-            var level = levels[i];
-            var ticketList = string.Join(", ", level);
-            var unorderedNote = level.Count > 1 ? " (unordered)" : "";
-            Console.WriteLine($"  level {i + 1}: {ticketList}{unorderedNote}");
-        }
     }
 
     private async Task<TicketGraph> BuildSiblingGraphAsync(IReadOnlyList<Ticket> eligible, CancellationToken ct)
