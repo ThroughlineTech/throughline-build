@@ -37,9 +37,9 @@ public class BatchReworkRoutingTests
     {
         var rationale = "TLB-20 has a missing null check in Foo.cs.";
 
-        var route = ChainPhase.ClassifyBatchRework(ThreeTickets, rationale);
+        var route = BatchReviewRunner.ClassifyBatchRework(ThreeTickets, rationale);
 
-        Assert.Equal(ChainPhase.BatchReworkRoute.Localized, route);
+        Assert.Equal(BatchReviewRunner.BatchReworkRoute.Localized, route);
     }
 
     [Fact]
@@ -47,9 +47,9 @@ public class BatchReworkRoutingTests
     {
         var rationale = "TLB-10 needs the interface updated to match the spec.";
 
-        var route = ChainPhase.ClassifyBatchRework(ThreeTickets, rationale);
+        var route = BatchReviewRunner.ClassifyBatchRework(ThreeTickets, rationale);
 
-        Assert.Equal(ChainPhase.BatchReworkRoute.Localized, route);
+        Assert.Equal(BatchReviewRunner.BatchReworkRoute.Localized, route);
     }
 
     [Fact]
@@ -57,9 +57,9 @@ public class BatchReworkRoutingTests
     {
         var rationale = "The test in TLB-30 is failing due to a bad assertion.";
 
-        var route = ChainPhase.ClassifyBatchRework(ThreeTickets, rationale);
+        var route = BatchReviewRunner.ClassifyBatchRework(ThreeTickets, rationale);
 
-        Assert.Equal(ChainPhase.BatchReworkRoute.Localized, route);
+        Assert.Equal(BatchReviewRunner.BatchReworkRoute.Localized, route);
     }
 
     // --- ClassifyBatchRework: cross-ticket cases ---
@@ -69,9 +69,9 @@ public class BatchReworkRoutingTests
     {
         var rationale = "The interface between the commits is broken; the seam is wrong.";
 
-        var route = ChainPhase.ClassifyBatchRework(ThreeTickets, rationale);
+        var route = BatchReviewRunner.ClassifyBatchRework(ThreeTickets, rationale);
 
-        Assert.Equal(ChainPhase.BatchReworkRoute.CrossTicket, route);
+        Assert.Equal(BatchReviewRunner.BatchReworkRoute.CrossTicket, route);
     }
 
     [Fact]
@@ -79,9 +79,9 @@ public class BatchReworkRoutingTests
     {
         var rationale = "TLB-10 and TLB-20 share a broken interface contract.";
 
-        var route = ChainPhase.ClassifyBatchRework(ThreeTickets, rationale);
+        var route = BatchReviewRunner.ClassifyBatchRework(ThreeTickets, rationale);
 
-        Assert.Equal(ChainPhase.BatchReworkRoute.CrossTicket, route);
+        Assert.Equal(BatchReviewRunner.BatchReworkRoute.CrossTicket, route);
     }
 
     [Fact]
@@ -89,17 +89,17 @@ public class BatchReworkRoutingTests
     {
         var rationale = "TLB-10, TLB-20, and TLB-30 all need adjustments.";
 
-        var route = ChainPhase.ClassifyBatchRework(ThreeTickets, rationale);
+        var route = BatchReviewRunner.ClassifyBatchRework(ThreeTickets, rationale);
 
-        Assert.Equal(ChainPhase.BatchReworkRoute.CrossTicket, route);
+        Assert.Equal(BatchReviewRunner.BatchReworkRoute.CrossTicket, route);
     }
 
     [Fact]
     public void ClassifyBatchRework_EmptyRationale_ReturnsCrossTicket()
     {
-        var route = ChainPhase.ClassifyBatchRework(ThreeTickets, string.Empty);
+        var route = BatchReviewRunner.ClassifyBatchRework(ThreeTickets, string.Empty);
 
-        Assert.Equal(ChainPhase.BatchReworkRoute.CrossTicket, route);
+        Assert.Equal(BatchReviewRunner.BatchReworkRoute.CrossTicket, route);
     }
 
     [Fact]
@@ -108,9 +108,9 @@ public class BatchReworkRoutingTests
         var singleTicket = new[] { MakeTicket("TLB-99") };
         var rationale = "TLB-99 is missing tests.";
 
-        var route = ChainPhase.ClassifyBatchRework(singleTicket, rationale);
+        var route = BatchReviewRunner.ClassifyBatchRework(singleTicket, rationale);
 
-        Assert.Equal(ChainPhase.BatchReworkRoute.Localized, route);
+        Assert.Equal(BatchReviewRunner.BatchReworkRoute.Localized, route);
     }
 
     [Fact]
@@ -119,9 +119,9 @@ public class BatchReworkRoutingTests
         var singleTicket = new[] { MakeTicket("TLB-99") };
         var rationale = "The overall architecture needs a rethink.";
 
-        var route = ChainPhase.ClassifyBatchRework(singleTicket, rationale);
+        var route = BatchReviewRunner.ClassifyBatchRework(singleTicket, rationale);
 
-        Assert.Equal(ChainPhase.BatchReworkRoute.CrossTicket, route);
+        Assert.Equal(BatchReviewRunner.BatchReworkRoute.CrossTicket, route);
     }
 
     [Fact]
@@ -136,8 +136,8 @@ public class BatchReworkRoutingTests
         // Rationale contains "TLB-10" and "TLB-20" - two tickets = CrossTicket
         var rationale = "Issues found in TLB-10 and TLB-20.";
 
-        var route = ChainPhase.ClassifyBatchRework(tickets, rationale);
+        var route = BatchReviewRunner.ClassifyBatchRework(tickets, rationale);
 
-        Assert.Equal(ChainPhase.BatchReworkRoute.CrossTicket, route);
+        Assert.Equal(BatchReviewRunner.BatchReworkRoute.CrossTicket, route);
     }
 }
