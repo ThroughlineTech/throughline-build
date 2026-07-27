@@ -9,7 +9,7 @@ public class HtmlToTextTests
     [Fact]
     public void Paragraph_BecomesPlainText()
     {
-        Assert.Equal("developer", HtmlToText.Render("<p>developer</p>"));
+        Assert.Equal("sample", HtmlToText.Render("<p>sample</p>"));
     }
 
     [Fact]

@@ -1,5 +1,5 @@
-using Xunit;
 using ThroughlineBuild.Contracts.Models;
+using Xunit;
 
 namespace ThroughlineBuild.Contracts.Tests;
 

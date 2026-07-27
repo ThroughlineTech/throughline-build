@@ -134,7 +134,7 @@ internal sealed class InteractiveClaudeWorktreeLock : IDisposable
         // same worktree map to the same lock.
         var key = OperatingSystem.IsWindows() ? full.ToLowerInvariant() : full;
         var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(key)));
-        var directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "latticeflow-claude-locks");
+        var directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "throughline-build-claude-locks");
         Directory.CreateDirectory(directory);
         return System.IO.Path.Combine(directory, hash + ".lock");
     }

@@ -25,7 +25,7 @@ The default directory is `.build/events/`, configurable with
 For example:
 
 ```text
-latticeflow-TLB-169-implement-2026-07-26-143052.jsonl
+throughline-build-TLB-169-implement-2026-07-26-143052.jsonl
 ```
 
 The project component is lower-case. A ticket ID preserves its canonical case.
@@ -156,7 +156,7 @@ exhaustive payload schema from examples.
 A state transition with full session context:
 
 ```json
-{"SessionId":"06e46b9c08d74e13bd1815300c0b7e83","Timestamp":"2026-07-26T21:30:52.1200000+00:00","Kind":0,"TicketId":"TLB-169","Phase":1,"Data":{"from":"Ready","to":"InProgress"},"project_id":"c605c531-39de-4bc1-834e-86ecaece87a4","project_name":"LatticeFlow","workspace_slug":"example","build_version":"1.0.0"}
+{"SessionId":"session-0001","Timestamp":"2026-07-26T21:30:52.1200000+00:00","Kind":0,"TicketId":"TLB-169","Phase":1,"Data":{"from":"Ready","to":"InProgress"},"project_id":"project-0001","project_name":"Sample Project","workspace_slug":"example","build_version":"1.0.0"}
 ```
 
 A dispatch-wide record uses an empty ticket ID:

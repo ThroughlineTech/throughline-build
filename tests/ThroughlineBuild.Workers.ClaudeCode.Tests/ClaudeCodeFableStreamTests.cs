@@ -1,17 +1,16 @@
-using Xunit;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Workers.ClaudeCode;
+using Xunit;
 
 namespace ThroughlineBuild.Workers.ClaudeCode.Tests;
 
 // Regression coverage for Fable-style stream shapes. Claude Code's terminal result
 // envelope carries ONLY the final assistant message text in its `result` field; Fable
 // splits output across messages far more often than Opus/Sonnet, so parsing `result`
-// alone nondeterministically loses fenced blocks (observed: scaffold profile derivation
-// returning "worker did not emit a <<<PROJECT_PROFILE_START fenced block" while the
-// envelope parsed clean). The agent now reconstructs the full assistant transcript from
+// alone nondeterministically loses fenced blocks. The agent now reconstructs the full
+// assistant transcript from
 // the NDJSON stream and parses that, falling back to `result` for the legacy single-blob
-// shape. These tests pin every observed shape.
+// shape. These synthetic fixtures pin each supported wire shape.
 public class ClaudeCodeFableStreamTests
 {
     private static string FixturePath(string name) => Path.Combine(
@@ -24,9 +23,8 @@ public class ClaudeCodeFableStreamTests
         return File.ReadAllText(path);
     }
 
-    // The sample-run-14 failure shape: fenced block in one assistant message, WORKER_RESULT
-    // envelope in a later one. The result field carries only the envelope; the block
-    // must still be captured from the transcript.
+    // A fenced block appears in one assistant message and the WORKER_RESULT envelope
+    // in a later one. The block must still be captured from the transcript.
     [Fact]
     public void ParseStdoutEnvelope_SplitBlockAndEnvelope_BlockCaptured()
     {
@@ -57,12 +55,9 @@ public class ClaudeCodeFableStreamTests
         Assert.True(result.Blocks.ContainsKey("PROJECT_PROFILE"));
     }
 
-    // Verbatim capture of a real `claude --model claude-fable-5` derivation run
-    // (2026-06-10, the sample-run-14 op-doc). Single-message shape: block + envelope in one
-    // assistant message, plus an interleaved rate_limit_event and an empty thinking
-    // block. Pins the happy path against the genuine wire format.
+    // Single-message shape: block and envelope in one assistant message.
     [Fact]
-    public void ParseStdoutEnvelope_RealFableCapture_ParsesBlockAndEnvelope()
+    public void ParseStdoutEnvelope_SyntheticFableStream_ParsesBlockAndEnvelope()
     {
         var stdout = ReadFixture("stream-json-fable-single-message.ndjson");
 
@@ -76,7 +71,7 @@ public class ClaudeCodeFableStreamTests
     }
 
     [Fact]
-    public void ParseStdoutEnvelope_RealFableCapture_ModelExtractedFromSystemEvent()
+    public void ParseStdoutEnvelope_SyntheticFableStream_ModelExtractedFromSystemEvent()
     {
         var stdout = ReadFixture("stream-json-fable-single-message.ndjson");
 

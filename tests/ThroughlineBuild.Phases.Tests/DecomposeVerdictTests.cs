@@ -243,8 +243,8 @@ public class DecomposeVerdictTests
         var failures = DecomposeVerdict.Check(specs);
 
         Assert.Equal(2, failures.Count);
-        Assert.Single(failures.Where(f => f.Contains("coverage_check")));
-        Assert.Single(failures.Where(f => f.Contains("uniqueness_check")));
+        Assert.Single(failures, f => f.Contains("coverage_check"));
+        Assert.Single(failures, f => f.Contains("uniqueness_check"));
     }
 
     [Fact]
@@ -260,9 +260,9 @@ public class DecomposeVerdictTests
 
         // Should report: coverage_check, uniqueness_check, size_check
         Assert.Equal(3, failures.Count);
-        Assert.Single(failures.Where(f => f.Contains("coverage_check")));
-        Assert.Single(failures.Where(f => f.Contains("uniqueness_check")));
-        Assert.Single(failures.Where(f => f.Contains("size_check")));
+        Assert.Single(failures, f => f.Contains("coverage_check"));
+        Assert.Single(failures, f => f.Contains("uniqueness_check"));
+        Assert.Single(failures, f => f.Contains("size_check"));
     }
 
     // ------------------------------------------------------------------

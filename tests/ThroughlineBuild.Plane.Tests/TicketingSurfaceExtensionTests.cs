@@ -12,7 +12,7 @@ namespace ThroughlineBuild.Plane.Tests;
 internal static class SurfaceTestData
 {
     public const string CancelledStateUuid = "bbbbbbbb-0000-0000-0000-000000000099";
-    public const string BacklogStateUuid   = TestData.StateUuid; // "bbbbbbbb-0000-0000-0000-000000000001"
+    public const string BacklogStateUuid = TestData.StateUuid; // "bbbbbbbb-0000-0000-0000-000000000001"
 
     /// <summary>State list that includes Backlog, In Progress, Done, Cancelled.</summary>
     public static string StateListWithCancelledJson() =>

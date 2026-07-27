@@ -128,9 +128,9 @@ public static partial class OpDocSkeletonGenerator
         var notesBlock = string.IsNullOrWhiteSpace(brief.Notes)
             ? string.Empty
             : Fill(OpDocSkeletonTemplateLoader.Load("op-doc-skeleton-notes.md"), new Dictionary<string, string>
-              {
-                  ["notes"] = brief.Notes!,
-              }) + "\n";
+            {
+                ["notes"] = brief.Notes!,
+            }) + "\n";
 
         return Fill(OpDocSkeletonTemplateLoader.Load("op-doc-skeleton-brief-detail.md"), new Dictionary<string, string>
         {

@@ -325,7 +325,7 @@ All components implemented and tested.
         var result = OpDocValidator.Validate(opDoc);
 
         Assert.True(result.IsValid);
-        Assert.Empty(result.Errors.Where(e => e.Code == "BRIEF_DEP_INVALID"));
+        Assert.DoesNotContain(result.Errors, e => e.Code == "BRIEF_DEP_INVALID");
     }
 
     // ==========================================================================

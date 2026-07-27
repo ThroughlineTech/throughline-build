@@ -1,7 +1,7 @@
 # Linear Integration Feasibility Report
 
 **Date:** 2026-06-04
-**Scope:** Adding Linear as a ticket backend for the `build` CLI (latticeflow)
+**Scope:** Adding Linear as a ticket backend for the `build` CLI (Throughline Build)
 
 ## TL;DR / Verdict
 
@@ -55,7 +55,7 @@ ITicketing` + a factory + config. No phase/command code changes.
 | Protocol | **GraphQL only**, single endpoint `https://api.linear.app/graphql` | Plane is REST with many endpoints |
 | Auth | API key in `Authorization: <key>` header (no `Bearer`); or OAuth `Bearer <token>` | Plane uses `X-API-Key` header - similar simplicity |
 | Identifiers | Team key + number, e.g. `ENG-123`; **accepts UUID *or* shorthand interchangeably** in queries/mutations | Plane needs UUID for writes, seq for humans - Linear is friendlier here |
-| Project mapping | latticeflow "project" = a Linear **Team** (has the `key` like `TLB`) | Plane project_id/identifier -> Linear team id/key |
+| Project mapping | Throughline Build "project" = a Linear **Team** (has the `key` like `TLB`) | Plane project_id/identifier -> Linear team id/key |
 | Content format | **Markdown** for `description` and comment `body` | Plane uses `description_html` - **mismatch** |
 | Rate limit | **5,000 req/hr** per user (~83/min) + complexity budget (3M points/hr, **10k max per single query**); leaky-bucket | Plane 60/min, throttled to 40/min - Linear is more generous on count, but adds query-complexity ceiling |
 | Errors | Rate-limit = HTTP **400** w/ `RATELIMITED` code; GraphQL errors arrive inside **HTTP 200** with an `errors[]` array | Plane is status-code driven (429/5xx) - **different retry logic** |

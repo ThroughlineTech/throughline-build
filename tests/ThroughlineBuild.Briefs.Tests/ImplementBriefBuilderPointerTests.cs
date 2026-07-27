@@ -36,7 +36,7 @@ public class ImplementBriefBuilderPointerTests
     private const string Worktree = "/repo/.worktrees/ticket-tlb-2-second-ticket";
 
     private const string StartSha = "1111111111111111111111111111111111111111";
-    private const string EndSha   = "2222222222222222222222222222222222222222";
+    private const string EndSha = "2222222222222222222222222222222222222222";
 
     // -----------------------------------------------------------------------
     // Acceptance: non-empty range - touched-files in RelevantFiles and pointer in Context

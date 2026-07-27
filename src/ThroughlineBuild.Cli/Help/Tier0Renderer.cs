@@ -29,10 +29,10 @@ public static class Tier0Renderer
 
     private static string GroupLabel(CommandGroup group) => group switch
     {
-        CommandGroup.Pipeline  => "Pipeline",
+        CommandGroup.Pipeline => "Pipeline",
         CommandGroup.WorkItems => "Work items",
         CommandGroup.Configure => "Configure",
-        _                      => group.ToString(),
+        _ => group.ToString(),
     };
 
     /// <summary>

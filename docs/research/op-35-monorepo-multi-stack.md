@@ -1,12 +1,12 @@
 # Operation: monorepo-multi-stack
 
-Make "stack" a plan-level attribute so a single latticeflow operation can span a monorepo with more than one toolchain - for example a native iOS app and a web app in the same repo, each with its own build/test commands, convention bundle, review/ship check suite, and working directory. The engine stays stack-agnostic: it routes toolchain, convention, and check selection by a stack id that lives in derived data, and never hardcodes iOS or web.
+Make "stack" a plan-level attribute so a single Throughline Build operation can span a monorepo with more than one toolchain - for example a native iOS app and a web app in the same repo, each with its own build/test commands, convention bundle, review/ship check suite, and working directory. The engine stays stack-agnostic: it routes toolchain, convention, and check selection by a stack id that lives in derived data, and never hardcodes iOS or web.
 
 This is a stashed plan. The work is sequenced so Plan A lands the data model the engine reads at runtime, and Plan B wires stacks through scaffold-time attribution and the phases. Nothing here is required to run a single-stack operation, and the single-stack path must stay byte-for-byte unchanged.
 
 ## Why this exists
 
-latticeflow assumes one toolchain per operation. There is one `ProjectContext` (one language, one build command, one test command), one `convention_files` bundle inlined into every implement brief, and one review/ship check suite that runs from a single working directory against every brief's branch. That is correct for a single-stack repo and wrong for a monorepo: a native iOS app and a web app have two of each, rooted in different subdirectories, driven by completely different tools (`xcodebuild` / `swift test` / SwiftLint vs `npm run build` / `vitest` / `tsc`).
+Throughline Build assumes one toolchain per operation. There is one `ProjectContext` (one language, one build command, one test command), one `convention_files` bundle inlined into every implement brief, and one review/ship check suite that runs from a single working directory against every brief's branch. That is correct for a single-stack repo and wrong for a monorepo: a native iOS app and a web app have two of each, rooted in different subdirectories, driven by completely different tools (`xcodebuild` / `swift test` / SwiftLint vs `npm run build` / `vitest` / `tsc`).
 
 Today the only way to model a two-stack repo is two separate operations with no shared dispatch graph - so you cannot express "a shared-contract brief, then an iOS brief and a web brief that both depend on it" in one operation, and you maintain two op-docs and two configs by hand.
 

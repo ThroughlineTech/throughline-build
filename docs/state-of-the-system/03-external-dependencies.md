@@ -246,7 +246,7 @@ Direct dependencies only (verify by grepping `PackageReference` across the `.csp
 
 ### Cli project ([src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj))
 
-- **`Tomlyn 0.16.0`** - TOML parser for `.build/config.toml`. Selected because it is AOT-friendly (architecture Appendix item 2). This is the only third-party package the AOT binary links ([src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj:46](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L46)). Its reflection-based trim warning (`IL2104`) is suppressed via `NoWarn` because only the dynamic-model API is reachable ([src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj:14-23](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L14-L23)).
+- **`Tomlyn 0.16.0`** - TOML parser for `.build/config.toml`. Selected because it is AOT-friendly (architecture Appendix item 2). It is one of two direct third-party packages linked into the AOT binary; Polly is pulled in through the Plane and Anthropic projects below ([src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj:46](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L46)). Its reflection-based trim warning (`IL2104`) is suppressed via `NoWarn` because only the dynamic-model API is reachable ([src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj:14-23](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L14-L23)).
 
 ### Plane and Anthropic clients
 

@@ -49,8 +49,8 @@ public static class ClaudeCodePreflight
     //      dialog on a fresh worktree;
     //   3. settings.json skipDangerousModePermissionPrompt is honored (with --dangerously-skip-permissions)
     //      to skip the one-time Bypass-Permissions acceptance dialog.
-    // All three were confirmed by live probe against claude 2.1.177 across Windows, macOS, and Linux
-    // (the cross-platform live gate; docs/heartbeat/HANDOFF.md). They are NOT an Anthropic-published
+    // All three were confirmed by live probe against claude 2.1.177 across Windows, macOS, and Linux.
+    // They are NOT an Anthropic-published
     // contract, and at least one (skipDangerousModePermissionPrompt, TLB-550) is recent - so 2.1.177
     // is the lowest version with positive evidence that all three hold. A lower floor may work but is
     // unvalidated and therefore unsupported: the preflight fails clearly below it rather than risk a

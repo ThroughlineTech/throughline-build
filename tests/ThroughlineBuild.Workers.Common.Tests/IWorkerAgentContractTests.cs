@@ -1,6 +1,6 @@
-using Xunit;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
+using Xunit;
 
 namespace ThroughlineBuild.Workers.Common.Tests;
 

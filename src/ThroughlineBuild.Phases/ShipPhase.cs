@@ -324,76 +324,91 @@ public class ShipPhase : IWorkflowPhase
             else
             {
 
-            // Step 4a: Determine rebase base by ancestry check
-            var localRef = targetBranch;
-            var remoteRef = $"{remote}/{targetBranch}";
+                // Step 4a: Determine rebase base by ancestry check
+                var localRef = targetBranch;
+                var remoteRef = $"{remote}/{targetBranch}";
 
-            // Check if local is ancestor of remote (remote is ahead or equal)
-            var localIsAncestorOfRemote = await _git.IsAncestorAsync(localRef, remoteRef, workingDirectory, ct).ConfigureAwait(false);
-            // Check if remote is ancestor of local (local is ahead or equal)
-            var remoteIsAncestorOfLocal = await _git.IsAncestorAsync(remoteRef, localRef, workingDirectory, ct).ConfigureAwait(false);
+                // Check if local is ancestor of remote (remote is ahead or equal)
+                var localIsAncestorOfRemote = await _git.IsAncestorAsync(localRef, remoteRef, workingDirectory, ct).ConfigureAwait(false);
+                // Check if remote is ancestor of local (local is ahead or equal)
+                var remoteIsAncestorOfLocal = await _git.IsAncestorAsync(remoteRef, localRef, workingDirectory, ct).ConfigureAwait(false);
 
-            if (localIsAncestorOfRemote && !remoteIsAncestorOfLocal)
-            {
-                // Remote is ahead of local
-                ontoRef = remoteRef;
-                baseRefReason = "origin_target_ahead";
-            }
-            else if (remoteIsAncestorOfLocal && !localIsAncestorOfRemote)
-            {
-                // Local is ahead of remote
-                ontoRef = localRef;
-                baseRefReason = "local_target_ahead";
-            }
-            else if (localIsAncestorOfRemote && remoteIsAncestorOfLocal)
-            {
-                // Both are ancestors of each other -> same commit
-                ontoRef = remoteRef;
-                baseRefReason = "same_commit";
-            }
-            else
-            {
-                // Diverged - probe for conflict subspecies before deciding
-                var divergenceState = await _git.ProbeDivergenceAsync(workingDirectory, targetBranch, remote, ct).ConfigureAwait(false);
-
-                if (divergenceState == DivergenceState.DivergedNoConflict && !_shipOptions.NoAutoMerge)
+                if (localIsAncestorOfRemote && !remoteIsAncestorOfLocal)
                 {
-                    // B02 path: auto-rebase local target branch onto origin/target branch
-                    var fromSha = await _git.HeadShaAsync(workingDirectory, ct).ConfigureAwait(false);
-                    var ontoSha = await _git.RevParseAsync(remoteRef, workingDirectory, ct).ConfigureAwait(false);
-                    var replayedShas = await _git.LogShasAsync($"{remoteRef}..{localRef}", 0, workingDirectory, ct).ConfigureAwait(false);
+                    // Remote is ahead of local
+                    ontoRef = remoteRef;
+                    baseRefReason = "origin_target_ahead";
+                }
+                else if (remoteIsAncestorOfLocal && !localIsAncestorOfRemote)
+                {
+                    // Local is ahead of remote
+                    ontoRef = localRef;
+                    baseRefReason = "local_target_ahead";
+                }
+                else if (localIsAncestorOfRemote && remoteIsAncestorOfLocal)
+                {
+                    // Both are ancestors of each other -> same commit
+                    ontoRef = remoteRef;
+                    baseRefReason = "same_commit";
+                }
+                else
+                {
+                    // Diverged - probe for conflict subspecies before deciding
+                    var divergenceState = await _git.ProbeDivergenceAsync(workingDirectory, targetBranch, remote, ct).ConfigureAwait(false);
 
-                    RebaseResult? mainRebaseResult = null;
-                    await MainWorktreeLock.WithLockAsync(workingDirectory, async ct =>
+                    if (divergenceState == DivergenceState.DivergedNoConflict && !_shipOptions.NoAutoMerge)
                     {
-                        mainRebaseResult = await _git.RebaseAsync(remoteRef, workingDirectory, ct).ConfigureAwait(false);
-                    }, ct).ConfigureAwait(false);
+                        // B02 path: auto-rebase local target branch onto origin/target branch
+                        var fromSha = await _git.HeadShaAsync(workingDirectory, ct).ConfigureAwait(false);
+                        var ontoSha = await _git.RevParseAsync(remoteRef, workingDirectory, ct).ConfigureAwait(false);
+                        var replayedShas = await _git.LogShasAsync($"{remoteRef}..{localRef}", 0, workingDirectory, ct).ConfigureAwait(false);
 
-                    if (mainRebaseResult!.Success)
-                    {
-                        await EmitAsync(EventKind.TargetAutoRebased, ticketId, new Dictionary<string, object>
+                        RebaseResult? mainRebaseResult = null;
+                        await MainWorktreeLock.WithLockAsync(workingDirectory, async ct =>
                         {
-                            ["from_sha"] = fromSha,
-                            ["onto_sha"] = ontoSha,
-                            ["local_commits_replayed"] = replayedShas,
-                            ["outcome"] = "clean"
+                            mainRebaseResult = await _git.RebaseAsync(remoteRef, workingDirectory, ct).ConfigureAwait(false);
                         }, ct).ConfigureAwait(false);
-                        ontoRef = localRef;
-                        baseRefReason = "auto_rebased_target";
+
+                        if (mainRebaseResult!.Success)
+                        {
+                            await EmitAsync(EventKind.TargetAutoRebased, ticketId, new Dictionary<string, object>
+                            {
+                                ["from_sha"] = fromSha,
+                                ["onto_sha"] = ontoSha,
+                                ["local_commits_replayed"] = replayedShas,
+                                ["outcome"] = "clean"
+                            }, ct).ConfigureAwait(false);
+                            ontoRef = localRef;
+                            baseRefReason = "auto_rebased_target";
+                        }
+                        else
+                        {
+                            // Abort unconditionally: any non-success exit from git rebase may
+                            // leave HEAD detached regardless of whether conflict files were staged.
+                            // RebaseAbortAsync handles the "no rebase in progress" case safely.
+                            await _git.RebaseAbortAsync(workingDirectory, ct).ConfigureAwait(false);
+                            await EmitAsync(EventKind.TargetAutoRebased, ticketId, new Dictionary<string, object>
+                            {
+                                ["from_sha"] = fromSha,
+                                ["onto_sha"] = ontoSha,
+                                ["local_commits_replayed"] = replayedShas,
+                                ["outcome"] = "raced_to_conflict"
+                            }, ct).ConfigureAwait(false);
+                            await PostInformationalCommentAsync(ticketId, "ship_divergence_blocked_comment",
+                                $"<p><strong>ship_blocked:</strong> local {localRef} and {remoteRef} have diverged; manual resolution required</p>", ct).ConfigureAwait(false);
+                            await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
+                            {
+                                ["kind"] = "diverged_bases",
+                                ["local_ref"] = localRef,
+                                ["remote_ref"] = remoteRef
+                            }, ct).ConfigureAwait(false);
+                            return (new ShipResult(false, ticketId, null,
+                                $"local {localRef} and {remoteRef} have diverged; manual resolution required",
+                                ShipFailureStage.Fetch), worktreeNames, null);
+                        }
                     }
                     else
                     {
-                        // Abort unconditionally: any non-success exit from git rebase may
-                        // leave HEAD detached regardless of whether conflict files were staged.
-                        // RebaseAbortAsync handles the "no rebase in progress" case safely.
-                        await _git.RebaseAbortAsync(workingDirectory, ct).ConfigureAwait(false);
-                        await EmitAsync(EventKind.TargetAutoRebased, ticketId, new Dictionary<string, object>
-                        {
-                            ["from_sha"] = fromSha,
-                            ["onto_sha"] = ontoSha,
-                            ["local_commits_replayed"] = replayedShas,
-                            ["outcome"] = "raced_to_conflict"
-                        }, ct).ConfigureAwait(false);
                         await PostInformationalCommentAsync(ticketId, "ship_divergence_blocked_comment",
                             $"<p><strong>ship_blocked:</strong> local {localRef} and {remoteRef} have diverged; manual resolution required</p>", ct).ConfigureAwait(false);
                         await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
@@ -407,21 +422,6 @@ public class ShipPhase : IWorkflowPhase
                             ShipFailureStage.Fetch), worktreeNames, null);
                     }
                 }
-                else
-                {
-                    await PostInformationalCommentAsync(ticketId, "ship_divergence_blocked_comment",
-                        $"<p><strong>ship_blocked:</strong> local {localRef} and {remoteRef} have diverged; manual resolution required</p>", ct).ConfigureAwait(false);
-                    await EmitAsync(EventKind.GateFailure, ticketId, new Dictionary<string, object>
-                    {
-                        ["kind"] = "diverged_bases",
-                        ["local_ref"] = localRef,
-                        ["remote_ref"] = remoteRef
-                    }, ct).ConfigureAwait(false);
-                    return (new ShipResult(false, ticketId, null,
-                        $"local {localRef} and {remoteRef} have diverged; manual resolution required",
-                        ShipFailureStage.Fetch), worktreeNames, null);
-                }
-            }
             }
         }
 

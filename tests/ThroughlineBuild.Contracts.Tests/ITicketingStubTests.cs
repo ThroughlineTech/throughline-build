@@ -1,6 +1,6 @@
-using Xunit;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
+using Xunit;
 
 namespace ThroughlineBuild.Contracts.Tests;
 
@@ -129,15 +129,15 @@ public class ITicketingStubTests
 
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             Task.CompletedTask;
-    
+
         public Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct) =>
             Task.CompletedTask;
 
-    public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
-            string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
-            Task.FromResult(new CreateChildTicketsResult(
-                children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
-                Array.Empty<string>()));
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+                string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+                Task.FromResult(new CreateChildTicketsResult(
+                    children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
+                    Array.Empty<string>()));
     }
 
     [Fact]

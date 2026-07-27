@@ -1,8 +1,8 @@
-# 00 - State of the System: latticeflow
+# 00 - State of the System: Throughline Build
 
 Last refreshed: 2026-07-26 (HEAD 00dc074)
 
-This doc set is a detailed historical snapshot of the `latticeflow` repository
+This doc set is a detailed historical snapshot of the Throughline Build repository
 at the HEAD stamped above (refresh history in [PROMPT.md](PROMPT.md)). It is not
 the authority for the current tree. Start with the current
 [documentation map](../README.md) and

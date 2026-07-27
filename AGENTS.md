@@ -1,4 +1,4 @@
-# AGENTS.md - latticeflow (Throughline Build)
+# AGENTS.md - Throughline Build
 
 Read this before you touch anything. It is the tool-agnostic contract for working in
 this repo: any coding agent (Claude Code, Codex, Gemini, Copilot, Cursor, a `build`

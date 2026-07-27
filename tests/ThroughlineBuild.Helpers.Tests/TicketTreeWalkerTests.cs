@@ -109,10 +109,10 @@ public class TicketTreeWalkerTests
         public Task SetParentAsync(string childUuid, string parentUuid, CancellationToken ct) => throw new NotImplementedException();
         public Task TransitionLifecycleAsync(string id, LifecycleTransition transition, string? reason, CancellationToken ct) => throw new NotImplementedException();
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) => throw new NotImplementedException();
-    
+
         public Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct) =>
             Task.CompletedTask;
 
-    public Task<CreateChildTicketsResult> CreateChildTicketsAsync(string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) => throw new NotImplementedException();
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) => throw new NotImplementedException();
     }
 }

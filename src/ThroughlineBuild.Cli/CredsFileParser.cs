@@ -66,7 +66,7 @@ public static class CredsFileParser
                 case "plane_project_name":
                     projectName = value;
                     break;
-                // Unknown keys are silently ignored.
+                    // Unknown keys are silently ignored.
             }
         }
 

@@ -8,7 +8,7 @@ namespace ThroughlineBuild.EventLog;
 // single CLI run line up under a shared prefix when sorted by name.
 //
 // Shape: "{project}-{ticket-or-slug}-{verb}-{yyyy-MM-dd}-{HHmmss}"
-// Example: "latticeflow-TLB-169-implement-2026-05-28-143052"
+// Example: "throughline-build-TLB-169-implement-2026-05-28-143052"
 //
 // - Project is lowercased; ticket id keeps its canonical case (TLB-169) so it
 //   matches Plane and the user's mental model.

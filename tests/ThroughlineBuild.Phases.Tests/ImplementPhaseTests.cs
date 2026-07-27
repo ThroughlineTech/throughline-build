@@ -241,8 +241,8 @@ public class ImplementPhaseTests
         Assert.Empty(ticketing.Comments);
         Assert.Single(ticketing.Transitions);
         Assert.Equal(TicketState.InProgress, ticketing.Transitions[0].state);
-        Assert.Empty(events.Events.Where(e =>
-            e.Kind == EventKind.GateFailure && e.Data["kind"].ToString() == "implement_envelope_recovered"));
+        Assert.DoesNotContain(events.Events, e =>
+            e.Kind == EventKind.GateFailure && e.Data["kind"].ToString() == "implement_envelope_recovered");
     }
 
     [Fact]
@@ -378,7 +378,7 @@ public class ImplementPhaseTests
         var result = await phase.RunAsync("TLB-1", Directory.GetCurrentDirectory(), CancellationToken.None);
 
         Assert.True(result.Success);
-        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.GateFailure));
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.GateFailure);
     }
 
     [Fact]
@@ -824,15 +824,15 @@ public class ImplementPhaseTests
 
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             Task.CompletedTask;
-    
+
         public Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct) =>
             Task.CompletedTask;
 
-    public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
-            string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
-            Task.FromResult(new CreateChildTicketsResult(
-                children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
-                Array.Empty<string>()));
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+                string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+                Task.FromResult(new CreateChildTicketsResult(
+                    children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
+                    Array.Empty<string>()));
     }
 
     private sealed class FakeWorkerAgent : IWorkerAgent
@@ -1284,15 +1284,15 @@ public class ImplementPhaseDebugCaptureTests
 
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             Task.CompletedTask;
-    
+
         public Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct) =>
             Task.CompletedTask;
 
-    public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
-            string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
-            Task.FromResult(new CreateChildTicketsResult(
-                children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
-                Array.Empty<string>()));
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+                string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+                Task.FromResult(new CreateChildTicketsResult(
+                    children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
+                    Array.Empty<string>()));
     }
 
     private sealed class FakeEventSink : IEventSink

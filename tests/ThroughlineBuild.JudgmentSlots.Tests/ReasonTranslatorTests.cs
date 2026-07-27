@@ -1,6 +1,6 @@
-using Xunit;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.JudgmentSlots;
+using Xunit;
 
 namespace ThroughlineBuild.JudgmentSlots.Tests;
 

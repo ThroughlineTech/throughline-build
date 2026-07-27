@@ -7,8 +7,8 @@ with the source, the source wins. For current behavior see
 [throughline_build_userguide.md](throughline_build_userguide.md).
 
 A note on names: the product is **Throughline Build**, the binary on disk is `build`, the
-C# namespace root is `ThroughlineBuild.*`, and the repository is `latticeflow`. All four
-refer to the same thing.
+C# namespace root is `ThroughlineBuild.*`, and the repository is `throughline-build`.
+Early historical material may use the retired codename `latticeflow`.
 
 ---
 

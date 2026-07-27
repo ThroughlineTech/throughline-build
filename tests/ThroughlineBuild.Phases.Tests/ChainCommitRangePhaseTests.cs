@@ -14,9 +14,9 @@ namespace ThroughlineBuild.Phases.Tests;
 public class ChainCommitRangePhaseTests
 {
     private const string StartSha = "1111111111111111111111111111111111111111";
-    private const string MidSha   = "2222222222222222222222222222222222222222";
-    private const string EndSha   = "3333333333333333333333333333333333333333";
-    private const string WorkDir  = "/fake/chain/workdir";
+    private const string MidSha = "2222222222222222222222222222222222222222";
+    private const string EndSha = "3333333333333333333333333333333333333333";
+    private const string WorkDir = "/fake/chain/workdir";
 
     // -----------------------------------------------------------------------
     // Acceptance: at the first ticket of a chain the range and touched-files are empty

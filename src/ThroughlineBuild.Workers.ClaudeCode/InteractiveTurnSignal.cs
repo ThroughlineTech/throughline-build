@@ -8,8 +8,7 @@ namespace ThroughlineBuild.Workers.ClaudeCode;
 /// Stop hook in interactive mode (Linux's O_NOCTTY/sdk-cli launch never fires it, even
 /// on exit), so the transport tails the persisted transcript for an <c>end_turn</c>
 /// assistant message and SYNTHESIZES the completion from that located transcript - it
-/// no longer waits for the Stop hook to write completion.json. See
-/// docs/heartbeat/evidence/stage-06-process-hardening.md.
+/// no longer waits for the Stop hook to write completion.json.
 /// </summary>
 internal interface IInteractiveTurnSignal
 {

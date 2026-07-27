@@ -1193,7 +1193,7 @@ public class InitCommandTests
                 planeUrl: "https://api.plane.so",
                 workspace: "acme",
                 token: "tok"
-                // No projectName - must stay offline
+            // No projectName - must stay offline
             );
 
             Assert.Equal(0, result);

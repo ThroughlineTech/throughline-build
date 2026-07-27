@@ -738,8 +738,8 @@ public class AmendMetadataAsyncTests
         Assert.Equal("{\"name\":\"New title\"}", handler.Requests[1].Body);
         Assert.Equal(HttpMethod.Patch, handler.Requests[1].Method);
         Assert.Equal("New title", after.Title);
-        Assert.Single(handler.Requests.Where(r => r.Method == HttpMethod.Get
-            && r.RequestUri!.ToString().Contains("per_page=100")));
+        Assert.Single(handler.Requests, r => r.Method == HttpMethod.Get
+            && r.RequestUri!.ToString().Contains("per_page=100"));
     }
 
     [Fact]
@@ -1262,7 +1262,7 @@ public class RollupParentAsyncTests
         Assert.Equal("Done", result.NewParentState);
         Assert.Null(result.FailureReason);
 
-        var patchReq = Assert.Single(handler.Requests.Where(r => r.Method == HttpMethod.Patch));
+        var patchReq = Assert.Single(handler.Requests, r => r.Method == HttpMethod.Patch);
         Assert.Contains(RollupTestData.DoneStateUuid, patchReq.Body);
     }
 
@@ -1284,7 +1284,7 @@ public class RollupParentAsyncTests
         Assert.True(result.ParentTransitioned);
         Assert.Equal("In Review", result.NewParentState);
 
-        var patchReq = Assert.Single(handler.Requests.Where(r => r.Method == HttpMethod.Patch));
+        var patchReq = Assert.Single(handler.Requests, r => r.Method == HttpMethod.Patch);
         Assert.DoesNotContain(RollupTestData.DoneStateUuid, patchReq.Body);
     }
 
@@ -1941,7 +1941,7 @@ public class RelationManagementTests
         var request = handler.Requests[^1];
         Assert.Equal(HttpMethod.Post, request.Method);
         Assert.Contains("\"relation_type\":\"finish_before\"", request.Body);
-        Assert.Single(handler.Requests.Where(r => r.Method == HttpMethod.Post));
+        Assert.Single(handler.Requests, r => r.Method == HttpMethod.Post);
     }
 
     [Fact]

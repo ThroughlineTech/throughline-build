@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-RTK fits Latticeflow well, but it should integrate inside each spawned agent's command-execution path, not around the `claude` or `codex` processes themselves.
+RTK fits Throughline Build well, but it should integrate inside each spawned agent's command-execution path, not around the `claude` or `codex` processes themselves.
 
 Wrapping an agent invocation as `rtk claude` or `rtk codex` would not provide the intended benefit. RTK needs to intercept commands that the agent subsequently runs, such as `git`, `dotnet test`, `rg`, and file-reading commands.
 
@@ -10,13 +10,13 @@ The recommended initial integration is:
 
 - Claude Code only.
 - Transparent `PreToolUse` command rewriting.
-- A Latticeflow-controlled `--rtk` / `--no-rtk` flag.
+- A Throughline Build-controlled `--rtk` / `--no-rtk` flag.
 - No changes to worker prompts.
 - Session-level metadata and paired A/B measurement.
 
 ## Current Architecture Fit
 
-Latticeflow already contains most of the infrastructure needed for a credible RTK experiment:
+Throughline Build already contains most of the infrastructure needed for a credible RTK experiment:
 
 - Workers receive briefs over stdin, preserving prompt identity.
 - `WorkerOptions` supports environment-variable injection.
@@ -53,7 +53,7 @@ The current RTK source uses the native hook command:
 rtk hook claude
 ```
 
-This is preferable to the older shell-script hook. Some RTK documentation still describes native Windows as requiring instruction fallback, while the current source contains a native binary hook. Latticeflow should therefore pin and verify a minimum supported RTK version rather than infer behavior from older documentation.
+This is preferable to the older shell-script hook. Some RTK documentation still describes native Windows as requiring instruction fallback, while the current source contains a native binary hook. Throughline Build should therefore pin and verify a minimum supported RTK version rather than infer behavior from older documentation.
 
 ## Proposed Configuration
 
@@ -114,11 +114,11 @@ For Claude Code, the worker adapter should:
 1. Verify `rtk --version`.
 2. Enable the `rtk hook claude` `PreToolUse` hook.
 3. Set `RTK_TELEMETRY_DISABLED=1`.
-4. Set a Latticeflow run identifier.
+4. Set a Throughline Build run identifier.
 5. Spawn Claude normally.
 6. Fail open if RTK is unavailable, unless strict mode was explicitly requested.
 
-Latticeflow should not modify the user's global `~/.claude/settings.json` during every run. Prefer a generated session settings overlay or an RTK-supported environment toggle.
+Throughline Build should not modify the user's global `~/.claude/settings.json` during every run. Prefer a generated session settings overlay or an RTK-supported environment toggle.
 
 ## Recommended RTK Extensions
 
@@ -128,14 +128,14 @@ The following RTK environment variables would make integration substantially cle
 
 ```text
 RTK_DISABLED=1
-RTK_RUN_ID=<latticeflow-session-id>
+RTK_RUN_ID=<Throughline Build-session-id>
 RTK_AUDIT_DIR=<session-artifact-directory>
 RTK_TRACKING_DB=<session-specific-database>
 ```
 
 The hook should immediately pass through when `RTK_DISABLED=1` is present.
 
-`RTK_RUN_ID` should be stored on tracking records so commands can be attributed to an exact Latticeflow worker. This is especially important because Latticeflow supports parallel workers.
+`RTK_RUN_ID` should be stored on tracking records so commands can be attributed to an exact Throughline Build worker. This is especially important because Throughline Build supports parallel workers.
 
 A session-specific tracking database would prevent concurrent runs from being mixed in RTK's global SQLite history. RTK already enables SQLite WAL mode, but WAL only addresses concurrent access; it does not provide reliable experiment attribution.
 
@@ -192,7 +192,7 @@ Measure:
 - Unnecessary file reads.
 - Raw-output fallback frequency.
 
-RTK's estimated token savings should be treated as supporting evidence. Latticeflow's provider-reported usage should remain the authoritative measurement.
+RTK's estimated token savings should be treated as supporting evidence. Throughline Build's provider-reported usage should remain the authoritative measurement.
 
 ## A/B Methodology
 
@@ -295,7 +295,7 @@ In strict mode, failure to activate RTK should stop before the worker is spawned
 
 ## Conclusion
 
-RTK should remain an observable worker-runtime treatment rather than becoming part of Latticeflow's prompts or workflow semantics.
+RTK should remain an observable worker-runtime treatment rather than becoming part of Throughline Build's prompts or workflow semantics.
 
 Keeping the integration at the worker launch boundary makes it:
 

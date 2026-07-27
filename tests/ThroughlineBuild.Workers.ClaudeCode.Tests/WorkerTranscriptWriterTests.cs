@@ -1,12 +1,12 @@
 using System.Text.Json;
-using Xunit;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Workers.ClaudeCode;
+using Xunit;
 
 namespace ThroughlineBuild.Workers.ClaudeCode.Tests;
 
-// Exercises the structured --debug transcript writer against the real captured NDJSON
-// fixtures. The writer is AOT-safe by construction: it parses with JsonDocument and re-emits
+// Exercises the structured --debug transcript writer against synthetic NDJSON fixtures.
+// The writer is AOT-safe by construction: it parses with JsonDocument and re-emits
 // with Utf8JsonWriter, never touching reflection-based JsonSerializer - so the
 // IsReflectionEnabledByDefault switch is irrelevant here and is deliberately NOT flipped (this
 // assembly's envelope-parser test helpers use reflection-based JsonSerializer.Serialize, and
@@ -108,13 +108,13 @@ public class WorkerTranscriptWriterTests
         Assert.Equal(1, turns[1].GetProperty("i").GetInt32());
         Assert.Equal(2, turns[2].GetProperty("i").GetInt32());
 
-        // Turn 0 == msg_01789..., one Read tool_use + a thinking block -> discovery.
+        // Turn 0 has one Read tool_use plus a thinking block -> discovery.
         Assert.Equal("discovery", turns[0].GetProperty("class").GetString());
         Assert.Equal(1, turns[0].GetProperty("tool_count").GetInt32());
         Assert.Equal("Read", turns[0].GetProperty("tools")[0].GetProperty("name").GetString());
         Assert.True(turns[0].GetProperty("thinking_chars").GetInt32() > 0);
 
-        // Turn 2 == msg_01Saj..., text only, no tools -> respond.
+        // Turn 2 is text only with no tools -> respond.
         Assert.Equal("respond", turns[2].GetProperty("class").GetString());
         Assert.Equal(0, turns[2].GetProperty("tool_count").GetInt32());
         Assert.True(turns[2].GetProperty("text_chars").GetInt32() > 0);
@@ -171,7 +171,7 @@ public class WorkerTranscriptWriterTests
 
         // First Read failed (file does not exist) -> is_error true.
         Assert.True(results[0].GetProperty("is_error").GetBoolean());
-        Assert.Equal("toolu_0167M6ntP6q8CvT5ABi2ozFi", results[0].GetProperty("for").GetString());
+        Assert.Equal("tool-read-missing", results[0].GetProperty("for").GetString());
         Assert.True(results[0].GetProperty("bytes").GetInt32() > 0);
 
         // Second Read succeeded -> is_error false, has lines.
@@ -201,8 +201,8 @@ public class WorkerTranscriptWriterTests
 
         // Two distinct Read targets become files_read; the worker self-report becomes files_changed.
         var read = result.GetProperty("files_read").EnumerateArray().Select(e => e.GetString()).ToArray();
-        Assert.Contains("/tmp/test-file-for-fixture.txt", read);
-        Assert.Contains("C:/Users/developer/AppData/Local/Temp/test-file-for-fixture.txt", read);
+        Assert.Contains("/work/missing.txt", read);
+        Assert.Contains("C:/work/sample/example.txt", read);
         Assert.Equal(new[] { "touched.cs" },
             result.GetProperty("files_changed").EnumerateArray().Select(e => e.GetString()).ToArray());
         Assert.Empty(result.GetProperty("files_written").EnumerateArray());

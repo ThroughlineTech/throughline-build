@@ -1,5 +1,5 @@
-using Xunit;
 using ThroughlineBuild.Scaffold;
+using Xunit;
 
 namespace ThroughlineBuild.Scaffold.Tests;
 
@@ -352,8 +352,8 @@ public class OpDocValidatorTests
         var result = OpDocValidator.Validate(opDoc);
 
         Assert.True(result.IsValid);
-        Assert.Empty(result.Errors.Where(e => e.Code == "BRIEF_NUMBER_GAP"));
-        Assert.Empty(result.Warnings.Where(w => w.Code == "BRIEF_PLAN_GAP"));
+        Assert.DoesNotContain(result.Errors, e => e.Code == "BRIEF_NUMBER_GAP");
+        Assert.DoesNotContain(result.Warnings, w => w.Code == "BRIEF_PLAN_GAP");
     }
 
     [Fact]

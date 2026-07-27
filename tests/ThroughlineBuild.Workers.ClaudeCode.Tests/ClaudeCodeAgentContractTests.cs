@@ -1,7 +1,7 @@
-using Xunit;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Workers.Common.Tests;
+using Xunit;
 
 namespace ThroughlineBuild.Workers.ClaudeCode.Tests;
 

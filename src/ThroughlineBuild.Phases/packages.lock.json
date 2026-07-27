@@ -1,0 +1,43 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net10.0": {
+      "throughlinebuild.briefs": {
+        "type": "Project",
+        "dependencies": {
+          "ThroughlineBuild.Contracts": "[1.0.0, )",
+          "ThroughlineBuild.Helpers": "[1.0.0, )"
+        }
+      },
+      "throughlinebuild.contracts": {
+        "type": "Project"
+      },
+      "throughlinebuild.git": {
+        "type": "Project",
+        "dependencies": {
+          "ThroughlineBuild.Contracts": "[1.0.0, )"
+        }
+      },
+      "throughlinebuild.helpers": {
+        "type": "Project",
+        "dependencies": {
+          "ThroughlineBuild.Contracts": "[1.0.0, )"
+        }
+      },
+      "throughlinebuild.verification": {
+        "type": "Project",
+        "dependencies": {
+          "ThroughlineBuild.Briefs": "[1.0.0, )",
+          "ThroughlineBuild.Contracts": "[1.0.0, )",
+          "ThroughlineBuild.Workers.Common": "[1.0.0, )"
+        }
+      },
+      "throughlinebuild.workers.common": {
+        "type": "Project",
+        "dependencies": {
+          "ThroughlineBuild.Contracts": "[1.0.0, )"
+        }
+      }
+    }
+  }
+}

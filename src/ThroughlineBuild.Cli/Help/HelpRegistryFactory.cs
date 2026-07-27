@@ -10,12 +10,12 @@ public static class HelpRegistryFactory
     // Shared exit-code entries used across multiple commands.
     // ------------------------------------------------------------------
 
-    private static readonly ExitCodeEntry s_exit0  = new(0, "Success");
-    private static readonly ExitCodeEntry s_exit1  = new(1, "Phase or command failure");
-    private static readonly ExitCodeEntry s_exit2  = new(2, "Config error or bad arguments");
-    private static readonly ExitCodeEntry s_exit3  = new(3, "Missing secret (env var not set)");
-    private static readonly ExitCodeEntry s_exit4  = new(4, "Phase infrastructure failure");
-    private static readonly ExitCodeEntry s_exit5  = new(5, "Operator aborted (typed 'q' at a prompt)");
+    private static readonly ExitCodeEntry s_exit0 = new(0, "Success");
+    private static readonly ExitCodeEntry s_exit1 = new(1, "Phase or command failure");
+    private static readonly ExitCodeEntry s_exit2 = new(2, "Config error or bad arguments");
+    private static readonly ExitCodeEntry s_exit3 = new(3, "Missing secret (env var not set)");
+    private static readonly ExitCodeEntry s_exit4 = new(4, "Phase infrastructure failure");
+    private static readonly ExitCodeEntry s_exit5 = new(5, "Operator aborted (typed 'q' at a prompt)");
 
     // ------------------------------------------------------------------
     // Public factory entry point.
@@ -64,10 +64,10 @@ public static class HelpRegistryFactory
     // ------------------------------------------------------------------
 
     private static CommandHelp Plan() => new(
-        Name:    "plan",
-        Group:   CommandGroup.Pipeline,
+        Name: "plan",
+        Group: CommandGroup.Pipeline,
         Summary: "Run the plan phase for one or more tickets",
-        Usage:   "plan <ticket-id> [ticket-id ...] [--agent <name>] [--from-brief] [--debug|--quiet] [--summary-json]",
+        Usage: "plan <ticket-id> [ticket-id ...] [--agent <name>] [--from-brief] [--debug|--quiet] [--summary-json]",
         Options:
         [
             new("--agent <name>", "Worker agent override (must match a [workers.<name>] key in config)", false),
@@ -85,10 +85,10 @@ public static class HelpRegistryFactory
     );
 
     private static CommandHelp Implement() => new(
-        Name:    "implement",
-        Group:   CommandGroup.Pipeline,
+        Name: "implement",
+        Group: CommandGroup.Pipeline,
         Summary: "Run the implement phase for one or more tickets",
-        Usage:   "implement <ticket-id> [ticket-id ...] [--agent <name>] [--debug|--quiet] [--summary-json]",
+        Usage: "implement <ticket-id> [ticket-id ...] [--agent <name>] [--debug|--quiet] [--summary-json]",
         Options:
         [
             new("--agent <name>", "Worker agent override", false),
@@ -105,10 +105,10 @@ public static class HelpRegistryFactory
     );
 
     private static CommandHelp Review() => new(
-        Name:    "review",
-        Group:   CommandGroup.Pipeline,
+        Name: "review",
+        Group: CommandGroup.Pipeline,
         Summary: "Run the review phase for one or more tickets",
-        Usage:   "review <ticket-id> [ticket-id ...] [--agent <name>] [--debug|--quiet] [--summary-json]",
+        Usage: "review <ticket-id> [ticket-id ...] [--agent <name>] [--debug|--quiet] [--summary-json]",
         Options:
         [
             new("--agent <name>", "Worker agent override", false),
@@ -125,10 +125,10 @@ public static class HelpRegistryFactory
     );
 
     private static CommandHelp Ship() => new(
-        Name:    "ship",
-        Group:   CommandGroup.Pipeline,
+        Name: "ship",
+        Group: CommandGroup.Pipeline,
         Summary: "Ship one or more reviewed tickets",
-        Usage:   "ship <ticket-id> [ticket-id ...] [--no-auto-merge] [--no-push] [--debug] [--summary-json]",
+        Usage: "ship <ticket-id> [ticket-id ...] [--no-auto-merge] [--no-push] [--debug] [--summary-json]",
         Options:
         [
             new("--no-auto-merge", "Skip the automatic fast-forward merge after rebasing", false),
@@ -152,10 +152,10 @@ public static class HelpRegistryFactory
     );
 
     private static CommandHelp Chain() => new(
-        Name:    "chain",
-        Group:   CommandGroup.Pipeline,
+        Name: "chain",
+        Group: CommandGroup.Pipeline,
         Summary: "Run the full chain for one or more tickets",
-        Usage:   "chain <ticket-id> [ticket-id ...] [--batch-implement <ticket-id,...>] [--dry-run] [--max-depth <n>] [--agent <name>] [--agent-plan <name>] [--agent-implement <name>] [--agent-review <name>] [--from-brief] [--no-auto-resolve] [--no-auto-merge] [--continue-past-failure] [--debug] [--summary-json]",
+        Usage: "chain <ticket-id> [ticket-id ...] [--batch-implement <ticket-id,...>] [--dry-run] [--max-depth <n>] [--agent <name>] [--agent-plan <name>] [--agent-implement <name>] [--agent-review <name>] [--from-brief] [--no-auto-resolve] [--no-auto-merge] [--continue-past-failure] [--debug] [--summary-json]",
         Options:
         [
             new("--agent <name>",           "Worker agent override for all phases; per-phase flags beat --agent, which beats config", false),
@@ -192,10 +192,10 @@ public static class HelpRegistryFactory
     );
 
     private static CommandHelp Rework() => new(
-        Name:    "rework",
-        Group:   CommandGroup.Pipeline,
+        Name: "rework",
+        Group: CommandGroup.Pipeline,
         Summary: "Re-implement a Rework-verdict ticket",
-        Usage:   "rework <ticket-id> [--feedback \"...\"] [--debug]",
+        Usage: "rework <ticket-id> [--feedback \"...\"] [--debug]",
         Options:
         [
             new("--feedback \"...\"", "Supply reviewer feedback on the command line (overrides event-log lookup)", false),
@@ -216,10 +216,10 @@ public static class HelpRegistryFactory
     );
 
     private static CommandHelp Decompose() => new(
-        Name:    "decompose",
-        Group:   CommandGroup.Pipeline,
+        Name: "decompose",
+        Group: CommandGroup.Pipeline,
         Summary: "Decompose a ticket into shippable sub-tickets",
-        Usage:   "decompose <ticket-id> [--agent <name>] [--debug|--quiet] [--summary-json]",
+        Usage: "decompose <ticket-id> [--agent <name>] [--debug|--quiet] [--summary-json]",
         Options:
         [
             new("--agent <name>", "Worker agent override", false),
@@ -228,7 +228,7 @@ public static class HelpRegistryFactory
             new("--summary-json", "Emit phase completion summary as JSON", false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2, s_exit3, s_exit4],
-        Examples:  []
+        Examples: []
     );
 
     // ------------------------------------------------------------------
@@ -236,8 +236,8 @@ public static class HelpRegistryFactory
     // ------------------------------------------------------------------
 
     private static CommandHelp New() => new(
-        Name:    "new",
-        Group:   CommandGroup.WorkItems,
+        Name: "new",
+        Group: CommandGroup.WorkItems,
         Summary: "Create a new ticket",
         Usage:
             "new <body-path> [--title \"...\"] [--type \"...\"] [--label \"...\"]* [--debug]\n" +
@@ -268,10 +268,10 @@ public static class HelpRegistryFactory
     );
 
     private static CommandHelp List() => new(
-        Name:    "list",
-        Group:   CommandGroup.WorkItems,
+        Name: "list",
+        Group: CommandGroup.WorkItems,
         Summary: "List tickets with optional filters",
-        Usage:   "list [--state <name>] [--parent <id>] [--type <name>] [--json]",
+        Usage: "list [--state <name>] [--parent <id>] [--type <name>] [--json]",
         Options:
         [
             new("--state <name>",  "Filter by state name",                  false),
@@ -280,14 +280,14 @@ public static class HelpRegistryFactory
             new("--json",          "Emit the rows as a versioned JSON envelope instead of a table", false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2],
-        Examples:  []
+        Examples: []
     );
 
     private static CommandHelp Get() => new(
-        Name:    "get",
-        Group:   CommandGroup.WorkItems,
+        Name: "get",
+        Group: CommandGroup.WorkItems,
         Summary: "Read a single ticket",
-        Usage:   "get <ticket-id> [--json]",
+        Usage: "get <ticket-id> [--json]",
         Options:
         [
             new("--json", "Emit the ticket as a versioned JSON envelope on stdout instead of text", false),
@@ -301,10 +301,10 @@ public static class HelpRegistryFactory
     );
 
     private static CommandHelp Comments() => new(
-        Name:    "comments",
-        Group:   CommandGroup.WorkItems,
+        Name: "comments",
+        Group: CommandGroup.WorkItems,
         Summary: "List a ticket's comments",
-        Usage:   "comments <ticket-id> [--json]",
+        Usage: "comments <ticket-id> [--json]",
         Options:
         [
             new("--json", "Emit the comments as a versioned JSON envelope instead of text", false),
@@ -317,10 +317,10 @@ public static class HelpRegistryFactory
     );
 
     private static CommandHelp Comment() => new(
-        Name:    "comment",
-        Group:   CommandGroup.WorkItems,
+        Name: "comment",
+        Group: CommandGroup.WorkItems,
         Summary: "Post a comment on a ticket",
-        Usage:   "comment <ticket-id> <body|-> [--json]",
+        Usage: "comment <ticket-id> <body|-> [--json]",
         Options:
         [
             new("<body|->", "Comment body as markdown, or '-' to read it from stdin", false),
@@ -335,10 +335,10 @@ public static class HelpRegistryFactory
     );
 
     private static CommandHelp Transition() => new(
-        Name:    "transition",
-        Group:   CommandGroup.WorkItems,
+        Name: "transition",
+        Group: CommandGroup.WorkItems,
         Summary: "Move a ticket to a new state",
-        Usage:   "transition <ticket-id> <state> [--json]",
+        Usage: "transition <ticket-id> <state> [--json]",
         Options:
         [
             new("<state>", "Target state: Backlog, Planning, Ready, InProgress, InReview, Done, Cancelled (space/hyphen tolerant)", false),
@@ -353,10 +353,10 @@ public static class HelpRegistryFactory
     );
 
     private static CommandHelp Amend() => new(
-        Name:    "amend",
-        Group:   CommandGroup.WorkItems,
+        Name: "amend",
+        Group: CommandGroup.WorkItems,
         Summary: "Amend an existing ticket",
-        Usage:   "amend <ticket-id> <option> [<option> ...] [--json]",
+        Usage: "amend <ticket-id> <option> [<option> ...] [--json]",
         Options:
         [
             new("--title \"...\"",      "Replace the ticket title",                              false),
@@ -381,8 +381,8 @@ public static class HelpRegistryFactory
     );
 
     private static CommandHelp Relate() => new(
-        Name:    "relate",
-        Group:   CommandGroup.WorkItems,
+        Name: "relate",
+        Group: CommandGroup.WorkItems,
         Summary: "Create, list, or remove ticket relations",
         Usage:
             "relate <ticket-id> <relation-type> <target-id> [--json]\n" +
@@ -405,44 +405,44 @@ public static class HelpRegistryFactory
     );
 
     private static CommandHelp Close() => new(
-        Name:    "close",
-        Group:   CommandGroup.WorkItems,
+        Name: "close",
+        Group: CommandGroup.WorkItems,
         Summary: "Close a ticket",
-        Usage:   "close <ticket-id> <reason> [--no-cascade] [--json]",
+        Usage: "close <ticket-id> <reason> [--no-cascade] [--json]",
         Options:
         [
             new("--no-cascade", "Do not close non-terminal child tickets", false),
             new("--json",       "Emit the result as a JSON envelope instead of text", false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2],
-        Examples:  []
+        Examples: []
     );
 
     private static CommandHelp Defer() => new(
-        Name:    "defer",
-        Group:   CommandGroup.WorkItems,
+        Name: "defer",
+        Group: CommandGroup.WorkItems,
         Summary: "Defer a ticket",
-        Usage:   "defer <ticket-id> <reason> [--no-cascade] [--json]",
+        Usage: "defer <ticket-id> <reason> [--no-cascade] [--json]",
         Options:
         [
             new("--no-cascade", "Do not defer non-terminal child tickets", false),
             new("--json",       "Emit the result as a JSON envelope instead of text", false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2],
-        Examples:  []
+        Examples: []
     );
 
     private static CommandHelp Reopen() => new(
-        Name:    "reopen",
-        Group:   CommandGroup.WorkItems,
+        Name: "reopen",
+        Group: CommandGroup.WorkItems,
         Summary: "Reopen a closed or deferred ticket",
-        Usage:   "reopen <ticket-id> [reason] [--json]",
+        Usage: "reopen <ticket-id> [reason] [--json]",
         Options:
         [
             new("--json", "Emit the result as a JSON envelope instead of text", false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2],
-        Examples:  []
+        Examples: []
     );
 
     // ------------------------------------------------------------------
@@ -450,10 +450,10 @@ public static class HelpRegistryFactory
     // ------------------------------------------------------------------
 
     private static CommandHelp Init() => new(
-        Name:    "init",
-        Group:   CommandGroup.Configure,
+        Name: "init",
+        Group: CommandGroup.Configure,
         Summary: "Write .build/config.toml; at a TTY, interactively create or pick a Plane project (no UUID to paste)",
-        Usage:   "init [--force] [--print-template] [--no-interactive] [--from FILE] [--plane-url URL] [--workspace SLUG] [--project-id UUID] [--project-name NAME] [--token TOKEN | --token-env VAR]",
+        Usage: "init [--force] [--print-template] [--no-interactive] [--from FILE] [--plane-url URL] [--workspace SLUG] [--project-id UUID] [--project-name NAME] [--token TOKEN | --token-env VAR]",
         Options:
         [
             new("--force",            "Overwrite an existing config file",                               false),
@@ -480,8 +480,8 @@ public static class HelpRegistryFactory
     );
 
     private static CommandHelp SetTarget() => new(
-        Name:    "settarget",
-        Group:   CommandGroup.Configure,
+        Name: "settarget",
+        Group: CommandGroup.Configure,
         Summary: "Set or display the resolved target branch",
         Usage:
             "settarget <branch>\n" +
@@ -492,14 +492,14 @@ public static class HelpRegistryFactory
             new("--unset", "Remove the target_branch override from config", false),
         ],
         ExitCodes: [s_exit0, s_exit2],
-        Examples:  []
+        Examples: []
     );
 
     private static CommandHelp Setup() => new(
-        Name:    "setup",
-        Group:   CommandGroup.Configure,
+        Name: "setup",
+        Group: CommandGroup.Configure,
         Summary: "Make a project workflow-ready: git init + .gitignore, and provision the Plane project (states + labels)",
-        Usage:   "setup [--check]",
+        Usage: "setup [--check]",
         Options:
         [
             new("--check", "Verify only: report any missing git repo, .gitignore entries, or Plane states/labels and exit 1; mutate nothing", false),
@@ -513,24 +513,24 @@ public static class HelpRegistryFactory
     );
 
     private static CommandHelp UserGuide() => new(
-        Name:    "user-guide",
-        Group:   CommandGroup.Configure,
+        Name: "user-guide",
+        Group: CommandGroup.Configure,
         Summary: "Write the operator user guide",
-        Usage:   "user-guide [--force] [--print-template]",
+        Usage: "user-guide [--force] [--print-template]",
         Options:
         [
             new("--force",          "Overwrite an existing guide file",              false),
             new("--print-template", "Print the guide to stdout without writing a file", false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2],
-        Examples:  []
+        Examples: []
     );
 
     private static CommandHelp OpDoc() => new(
-        Name:    "op-doc",
-        Group:   CommandGroup.Configure,
+        Name: "op-doc",
+        Group: CommandGroup.Configure,
         Summary: "Print/write the op-doc spec, or generate a new op-doc skeleton",
-        Usage:   "op-doc spec [--print] [--write] [--force]",
+        Usage: "op-doc spec [--print] [--write] [--force]",
         Options:
         [
             new("--print", "Print the embedded op-doc spec to stdout (default)", false),
@@ -548,10 +548,10 @@ public static class HelpRegistryFactory
     );
 
     private static CommandHelp Scaffold() => new(
-        Name:    "scaffold",
-        Group:   CommandGroup.Configure,
+        Name: "scaffold",
+        Group: CommandGroup.Configure,
         Summary: "Scaffold an op-doc into Plane",
-        Usage:   "scaffold <op-doc-path> [--validate-only] [--dry-run] [--accept-warnings] [--no-profile] [--force-profile] [--debug]",
+        Usage: "scaffold <op-doc-path> [--validate-only] [--dry-run] [--accept-warnings] [--no-profile] [--force-profile] [--debug]",
         Options:
         [
             new("--validate-only",    "Parse and validate the op-doc without creating any tickets",          false),
@@ -568,6 +568,6 @@ public static class HelpRegistryFactory
             new(2, "Validation error (parse error, structural error, or missing required arg)"),
             new(3, "Partial creation (some tickets created, some failed; operator must inspect)"),
         ],
-        Examples:  []
+        Examples: []
     );
 }

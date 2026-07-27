@@ -1,0 +1,11 @@
+title = "Throughline Build secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic credential used to test transcript redaction"
+regexTarget = "match"
+regexes = [
+  '''sk-ant-LEAKEDvalue1234567''',
+]

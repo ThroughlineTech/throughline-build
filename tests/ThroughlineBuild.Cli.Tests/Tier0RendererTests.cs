@@ -19,27 +19,27 @@ public class Tier0RendererTests
         var r = HelpRegistry.CreateEmpty();
 
         // Pipeline (registered in pipeline order; renderer will sort alphabetically)
-        r.Register(new CommandHelp("plan",      CommandGroup.Pipeline,  "Run the plan phase for one or more tickets",           "", [], [], []));
-        r.Register(new CommandHelp("implement", CommandGroup.Pipeline,  "Run the implement phase for one or more tickets",       "", [], [], []));
-        r.Register(new CommandHelp("review",    CommandGroup.Pipeline,  "Run the review phase for one or more tickets",          "", [], [], []));
-        r.Register(new CommandHelp("ship",      CommandGroup.Pipeline,  "Ship one or more reviewed tickets",                    "", [], [], []));
-        r.Register(new CommandHelp("chain",     CommandGroup.Pipeline,  "Run the full chain for one or more tickets",            "", [], [], []));
-        r.Register(new CommandHelp("rework",    CommandGroup.Pipeline,  "Re-implement a Rework-verdict ticket",                  "", [], [], []));
-        r.Register(new CommandHelp("decompose", CommandGroup.Pipeline,  "Decompose a ticket into shippable sub-tickets",         "", [], [], []));
+        r.Register(new CommandHelp("plan", CommandGroup.Pipeline, "Run the plan phase for one or more tickets", "", [], [], []));
+        r.Register(new CommandHelp("implement", CommandGroup.Pipeline, "Run the implement phase for one or more tickets", "", [], [], []));
+        r.Register(new CommandHelp("review", CommandGroup.Pipeline, "Run the review phase for one or more tickets", "", [], [], []));
+        r.Register(new CommandHelp("ship", CommandGroup.Pipeline, "Ship one or more reviewed tickets", "", [], [], []));
+        r.Register(new CommandHelp("chain", CommandGroup.Pipeline, "Run the full chain for one or more tickets", "", [], [], []));
+        r.Register(new CommandHelp("rework", CommandGroup.Pipeline, "Re-implement a Rework-verdict ticket", "", [], [], []));
+        r.Register(new CommandHelp("decompose", CommandGroup.Pipeline, "Decompose a ticket into shippable sub-tickets", "", [], [], []));
 
         // WorkItems
-        r.Register(new CommandHelp("new",    CommandGroup.WorkItems, "Create a new ticket",                    "", [], [], []));
-        r.Register(new CommandHelp("list",   CommandGroup.WorkItems, "List tickets with optional filters",     "", [], [], []));
-        r.Register(new CommandHelp("amend",  CommandGroup.WorkItems, "Amend an existing ticket",              "", [], [], []));
-        r.Register(new CommandHelp("close",  CommandGroup.WorkItems, "Close a ticket",                        "", [], [], []));
-        r.Register(new CommandHelp("defer",  CommandGroup.WorkItems, "Defer a ticket",                        "", [], [], []));
-        r.Register(new CommandHelp("reopen", CommandGroup.WorkItems, "Reopen a closed or deferred ticket",    "", [], [], []));
+        r.Register(new CommandHelp("new", CommandGroup.WorkItems, "Create a new ticket", "", [], [], []));
+        r.Register(new CommandHelp("list", CommandGroup.WorkItems, "List tickets with optional filters", "", [], [], []));
+        r.Register(new CommandHelp("amend", CommandGroup.WorkItems, "Amend an existing ticket", "", [], [], []));
+        r.Register(new CommandHelp("close", CommandGroup.WorkItems, "Close a ticket", "", [], [], []));
+        r.Register(new CommandHelp("defer", CommandGroup.WorkItems, "Defer a ticket", "", [], [], []));
+        r.Register(new CommandHelp("reopen", CommandGroup.WorkItems, "Reopen a closed or deferred ticket", "", [], [], []));
 
         // Configure
-        r.Register(new CommandHelp("init",       CommandGroup.Configure, "Write .build/config.toml from the built-in template", "", [], [], []));
-        r.Register(new CommandHelp("settarget",  CommandGroup.Configure, "Set or display the resolved target branch",            "", [], [], []));
-        r.Register(new CommandHelp("user-guide", CommandGroup.Configure, "Write the operator user guide",                       "", [], [], []));
-        r.Register(new CommandHelp("scaffold",   CommandGroup.Configure, "Scaffold an op-doc into Plane",                       "", [], [], []));
+        r.Register(new CommandHelp("init", CommandGroup.Configure, "Write .build/config.toml from the built-in template", "", [], [], []));
+        r.Register(new CommandHelp("settarget", CommandGroup.Configure, "Set or display the resolved target branch", "", [], [], []));
+        r.Register(new CommandHelp("user-guide", CommandGroup.Configure, "Write the operator user guide", "", [], [], []));
+        r.Register(new CommandHelp("scaffold", CommandGroup.Configure, "Scaffold an op-doc into Plane", "", [], [], []));
 
         return r;
     }
@@ -125,15 +125,15 @@ public class Tier0RendererTests
     {
         var r = HelpRegistry.CreateEmpty();
         // Register in reverse alphabetical order
-        r.Register(new CommandHelp("ship",    CommandGroup.Pipeline, "Ship", "", [], [], []));
-        r.Register(new CommandHelp("plan",    CommandGroup.Pipeline, "Plan", "", [], [], []));
-        r.Register(new CommandHelp("review",  CommandGroup.Pipeline, "Review", "", [], [], []));
+        r.Register(new CommandHelp("ship", CommandGroup.Pipeline, "Ship", "", [], [], []));
+        r.Register(new CommandHelp("plan", CommandGroup.Pipeline, "Plan", "", [], [], []));
+        r.Register(new CommandHelp("review", CommandGroup.Pipeline, "Review", "", [], [], []));
 
         var output = Tier0Renderer.Render(r);
 
-        var planPos   = output.IndexOf("  plan  ", StringComparison.Ordinal);
+        var planPos = output.IndexOf("  plan  ", StringComparison.Ordinal);
         var reviewPos = output.IndexOf("  review", StringComparison.Ordinal);
-        var shipPos   = output.IndexOf("  ship  ", StringComparison.Ordinal);
+        var shipPos = output.IndexOf("  ship  ", StringComparison.Ordinal);
 
         Assert.True(planPos < reviewPos, "plan should appear before review");
         Assert.True(reviewPos < shipPos, "review should appear before ship");

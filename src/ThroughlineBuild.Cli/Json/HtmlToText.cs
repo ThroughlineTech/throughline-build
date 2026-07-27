@@ -5,7 +5,7 @@ namespace ThroughlineBuild.Cli.Json;
 /// <summary>
 /// Renders Plane's stored comment HTML back to readable plain text for display (build comments,
 /// text and --json). We store HTML so the Plane web UI renders comments richly, but the terminal
-/// and an agent reading the envelope want text, not <c>&lt;p&gt;developer&lt;/p&gt;</c> (TLB-541).
+/// and an agent reading the envelope want text, not <c>&lt;p&gt;sample&lt;/p&gt;</c>.
 /// Hand-rolled char scan + WebUtility entity decode - no regex, no reflection, AOT-safe.
 /// Block elements become line breaks and list items get a "- " marker; inline tags are dropped.
 /// This is lossy by design (bold/links/code markers are not recovered) - fine for a discussion log.

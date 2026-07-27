@@ -1,6 +1,6 @@
 using System.Net;
-using System.Text.RegularExpressions;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using ThroughlineBuild.Briefs;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;

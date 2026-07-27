@@ -1,9 +1,9 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using Xunit;
 using ThroughlineBuild.Briefs;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Workers.Common;
+using Xunit;
 
 namespace ThroughlineBuild.Workers.Common.Tests;
 

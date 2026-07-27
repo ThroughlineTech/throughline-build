@@ -1,8 +1,8 @@
 using System.Text;
-using Tomlyn;
-using Tomlyn.Model;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Scaffold;
+using Tomlyn;
+using Tomlyn.Model;
 
 namespace ThroughlineBuild.Cli;
 
@@ -80,7 +80,13 @@ public static class ConfigProfileWriter
     private static (bool Customized, string? Why) LooksCustomized(string configText)
     {
         TomlTable root;
-        try { root = Toml.ToModel(configText); }
+        try
+        {
+            root = TomlSerializer.Deserialize(
+                configText,
+                BuildTomlSerializerContext.Default.TomlTable)
+                ?? throw new InvalidOperationException("TOML document produced no root table");
+        }
         catch (Exception ex)
         {
             return (true, $"could not parse existing config to check for customization ({ex.Message}); leaving it untouched");

@@ -1,5 +1,5 @@
-using Xunit;
 using ThroughlineBuild.Scaffold;
+using Xunit;
 
 namespace ThroughlineBuild.Scaffold.Tests;
 

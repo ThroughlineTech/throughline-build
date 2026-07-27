@@ -1,8 +1,8 @@
 using System.Text.Json;
-using Xunit;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Phases;
+using Xunit;
 
 namespace ThroughlineBuild.Phases.Tests;
 

@@ -11,21 +11,21 @@ public class SessionFileNameBuilderTests
     public void Build_PhaseVerb_WithTicket_Shape()
     {
         var stem = SessionFileNameBuilder.Build(
-            projectName: "LatticeFlow",
+            projectName: "Throughline Build",
             projectIdentifier: "TLB",
             verb: "implement",
             ticketId: "TLB-169",
             extraSlug: null,
             timestamp: FixedTs);
 
-        Assert.Equal("latticeflow-TLB-169-implement-2026-05-28-143052", stem);
+        Assert.Equal("throughline-build-TLB-169-implement-2026-05-28-143052", stem);
     }
 
     [Fact]
     public void Build_PreservesTicketIdCase()
     {
         var stem = SessionFileNameBuilder.Build(
-            projectName: "LatticeFlow",
+            projectName: "Throughline Build",
             projectIdentifier: null,
             verb: "plan",
             ticketId: "TLB-42",
@@ -67,35 +67,35 @@ public class SessionFileNameBuilderTests
     public void Build_NewVerb_NoTicket_UsesProjectVerbDateTime()
     {
         var stem = SessionFileNameBuilder.Build(
-            projectName: "LatticeFlow",
+            projectName: "Throughline Build",
             projectIdentifier: "TLB",
             verb: "new",
             ticketId: null,
             extraSlug: null,
             timestamp: FixedTs);
 
-        Assert.Equal("latticeflow-new-2026-05-28-143052", stem);
+        Assert.Equal("throughline-build-new-2026-05-28-143052", stem);
     }
 
     [Fact]
     public void Build_ScaffoldVerb_UsesExtraSlugWhenNoTicket()
     {
         var stem = SessionFileNameBuilder.Build(
-            projectName: "LatticeFlow",
+            projectName: "Throughline Build",
             projectIdentifier: "TLB",
             verb: "scaffold",
             ticketId: null,
             extraSlug: "op-13-build-rework",
             timestamp: FixedTs);
 
-        Assert.Equal("latticeflow-op-13-build-rework-scaffold-2026-05-28-143052", stem);
+        Assert.Equal("throughline-build-op-13-build-rework-scaffold-2026-05-28-143052", stem);
     }
 
     [Fact]
     public void Build_TicketWins_WhenBothTicketAndExtraSlugSet()
     {
         var stem = SessionFileNameBuilder.Build(
-            projectName: "LatticeFlow",
+            projectName: "Throughline Build",
             projectIdentifier: "TLB",
             verb: "amend",
             ticketId: "TLB-77",
@@ -130,11 +130,11 @@ public class SessionFileNameBuilderTests
     }
 
     [Theory]
-    [InlineData("LatticeFlow", "latticeflow")]
-    [InlineData("Lattice Flow", "lattice-flow")]
-    [InlineData("Lattice  Flow", "lattice-flow")]
-    [InlineData("Lattice/Flow!", "lattice-flow")]
-    [InlineData("  Lattice  ", "lattice")]
+    [InlineData("SampleProject", "sampleproject")]
+    [InlineData("Sample Project", "sample-project")]
+    [InlineData("Sample  Project", "sample-project")]
+    [InlineData("Sample/Project!", "sample-project")]
+    [InlineData("  Sample  ", "sample")]
     [InlineData("", "")]
     [InlineData(null, "")]
     public void SlugifyLower_Cases(string? input, string expected)

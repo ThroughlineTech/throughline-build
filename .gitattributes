@@ -1,9 +1,26 @@
+* text=auto
+.gitattributes text eol=lf
+.editorconfig text eol=lf
+*.cs text eol=lf
+*.csproj text eol=lf
+*.props text eol=lf
+*.targets text eol=lf
+*.json text eol=lf
+*.jsonl text eol=lf
+*.ndjson text eol=lf
+*.md text eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+*.svg text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
 src/ThroughlineBuild.Briefs/Templates/**/*.md text eol=lf
 src/ThroughlineBuild.JudgmentSlots/Templates/**/*.md text eol=lf
 src/ThroughlineBuild.Scaffold/Templates/**/*.md text eol=lf
 src/ThroughlineBuild.Verification/Templates/**/*.md text eol=lf
 src/ThroughlineBuild.Commands/Templates/*.md text eol=lf
 src/ThroughlineBuild.Commands/Templates/*.template text eol=lf
-docs/heartbeat/evidence/*.sh text eol=lf
 tests/ThroughlineBuild.Briefs.Tests/Templates/*.md text eol=lf
 tests/ThroughlineBuild.Briefs.Tests/Snapshots/*.txt text eol=lf

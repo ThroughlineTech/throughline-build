@@ -1,5 +1,5 @@
-using Xunit;
 using ThroughlineBuild.Workers.Common;
+using Xunit;
 
 namespace ThroughlineBuild.Workers.Common.Tests;
 

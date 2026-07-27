@@ -248,7 +248,7 @@ public sealed class TranscriptTurnSignalTests : IDisposable
     private static string UserLine(string cwd, string nonce) =>
         "{\"type\":\"user\",\"cwd\":" + Json(cwd) +
         ",\"message\":{\"role\":\"user\",\"content\":" +
-        Json("Read .build/brief.md, execute it completely.\n(latticeflow run token, ignore: " + nonce + ")") + "}}";
+        Json("Read .build/brief.md, execute it completely.\n(throughline-build run token, ignore: " + nonce + ")") + "}}";
 
     // Built by concatenation rather than a raw interpolated string so the trailing
     // JSON object braces never collide with the interpolation's closing braces.

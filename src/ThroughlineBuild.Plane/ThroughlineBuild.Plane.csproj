@@ -7,7 +7,7 @@
     <LangVersion>14</LangVersion>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Polly" Version="8.*" />
+    <PackageReference Include="Polly" />
     <ProjectReference Include="..\ThroughlineBuild.Contracts\ThroughlineBuild.Contracts.csproj" />
   </ItemGroup>
   <ItemGroup>

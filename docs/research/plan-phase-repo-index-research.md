@@ -2,7 +2,7 @@
 
 ## Context
 
-latticeflow's plan phase ([PlanPhase.cs](../../src/ThroughlineBuild.Phases/PlanPhase.cs)) does
+Throughline Build's plan phase ([PlanPhase.cs](../../src/ThroughlineBuild.Phases/PlanPhase.cs)) does
 almost no codebase exploration itself. It enumerates only the **top-level** directory names
 (`Directory.EnumerateFileSystemEntries`, no recursion), bakes that list into the brief via
 [PlanBriefBuilder.cs](../../src/ThroughlineBuild.Briefs/PlanBriefBuilder.cs), and hands the
@@ -62,7 +62,7 @@ secondary, because plan-phase cost is reasoning-dominated, not IO-dominated.
 - Stateless orchestrator: single binary, invoked per-ticket, exits. Any index must persist
   to disk and self-validate against the current git SHA - no daemon assumed (though the
   research may argue for an optional one if the win is large).
-- Primary language is **C#/.NET** (the latticeflow repo itself), but the tool is run against
+- Primary language is **C#/.NET** (the Throughline Build repo itself), but the tool is run against
   *other* repos too, so language-agnostic options stay relevant.
 - Worker is Claude Code spawned as a subprocess; brief is delivered over stdin; results come
   back as an NDJSON envelope. Any "query tool" must be reachable from inside that subprocess
@@ -74,7 +74,7 @@ secondary, because plan-phase cost is reasoning-dominated, not IO-dominated.
 ## Research prompt (paste into claude-web)
 
 > I'm designing a codebase-index feature for an agentic ticket-automation tool. The tool
-> ("latticeflow") is a deterministic C#/.NET orchestrator that, for each ticket, spawns a
+> ("Throughline Build") is a deterministic C#/.NET orchestrator that, for each ticket, spawns a
 > Claude Code subprocess to write an implementation plan. Today that subprocess explores the
 > repo from scratch every time using Grep/Glob/Read - there is no index, symbol table, or
 > cache. I want to add a repo index so planning is faster, cheaper, and more reliable. The

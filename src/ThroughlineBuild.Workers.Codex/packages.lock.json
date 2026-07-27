@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net10.0": {
+      "throughlinebuild.contracts": {
+        "type": "Project"
+      },
+      "throughlinebuild.workers.common": {
+        "type": "Project",
+        "dependencies": {
+          "ThroughlineBuild.Contracts": "[1.0.0, )"
+        }
+      }
+    }
+  }
+}

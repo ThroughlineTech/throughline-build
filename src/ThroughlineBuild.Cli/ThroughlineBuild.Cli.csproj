@@ -12,11 +12,9 @@
     <IlcOptimizationPreference>Size</IlcOptimizationPreference>
     <IlcMaxParallelism>1</IlcMaxParallelism>
     <!--
-      IL2104: Tomlyn rolls up trim-analysis warnings from its reflection-based ToModel<T>
-      path. We only call the dynamic-model API (Toml.ToModel(string) -> TomlTable with
-      TryGetValue/pattern-matching; see Config.cs / SetTargetCommand.cs), never the generic
-      reflection path, so that code is unreachable at runtime and safe to trim. Suppress the
-      assembly-level rollup so the AOT publish stays warning-clean.
+      Tomlyn's untyped TomlTable serializer is NativeAOT-compatible. Keep the historical
+      IL2104 suppression until the AOT publish gate verifies whether the new major version
+      has eliminated its assembly-level reflection warning.
     -->
     <NoWarn>$(NoWarn);IL2104</NoWarn>
     <GeneratedBuildVersionFile>$(BaseIntermediateOutputPath)$(Configuration)\$(TargetFramework)\Generated\BuildVersion.g.cs</GeneratedBuildVersionFile>
@@ -43,7 +41,7 @@
     <ProjectReference Include="..\ThroughlineBuild.Scaffold\ThroughlineBuild.Scaffold.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="Tomlyn" Version="0.16.0" />
+    <PackageReference Include="Tomlyn" />
   </ItemGroup>
   <ItemGroup>
     <!-- Let the test project call internal composition helpers (e.g. ChainPhaseComposition). -->

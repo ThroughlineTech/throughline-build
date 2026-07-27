@@ -6,7 +6,7 @@ using ClaudeInteractiveProbe;
 
 internal static class Program
 {
-    private const string OptInVariable = "LATTICEFLOW_RUN_CLAUDE_INTERACTIVE_PROBE";
+    private const string OptInVariable = "THROUGHLINE_BUILD_RUN_CLAUDE_INTERACTIVE_PROBE";
     private static readonly TimeSpan HookTimeout = TimeSpan.FromMinutes(2);
 
     public static async Task<int> Main(string[] args)
@@ -66,7 +66,7 @@ internal static class Program
         Directory.CreateDirectory(repository);
         await RunAndCaptureAsync("git", ["init", "--quiet"], repository);
 
-        var sentinel = $"LATTICEFLOW_INTERACTIVE_SENTINEL_{Guid.NewGuid():N}";
+        var sentinel = $"THROUGHLINE_BUILD_INTERACTIVE_SENTINEL_{Guid.NewGuid():N}";
         var hookCommand = $"{hookCommandPrefix} capture-hook {ProbeContract.QuoteCommandArgument(ProbeContract.NormalizeHookPath(payloadPath))}";
         await File.WriteAllTextAsync(settingsPath, ProbeContract.BuildSettingsJson(hookCommand));
 
@@ -222,10 +222,10 @@ internal static class Program
         else if (mode == "windows-terminal")
         {
             psi.ArgumentList.Add("-w");
-            psi.ArgumentList.Add($"latticeflow-probe-{Guid.NewGuid():N}");
+            psi.ArgumentList.Add($"throughline-build-probe-{Guid.NewGuid():N}");
             psi.ArgumentList.Add("new-tab");
             psi.ArgumentList.Add("--title");
-            psi.ArgumentList.Add("Latticeflow interactive contract probe");
+            psi.ArgumentList.Add("Throughline Build interactive contract probe");
             psi.ArgumentList.Add("claude.exe");
         }
         foreach (var argument in claudeArgs) psi.ArgumentList.Add(argument);
@@ -309,7 +309,7 @@ internal static class Program
 
     private static async Task<List<int>> FindProbeProcessIdsAsync()
     {
-        const string script = "Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('claude.exe', 'winpty.exe', 'winpty-agent.exe', 'WindowsTerminal.exe') -and $_.CommandLine -like '*LATTICEFLOW_INTERACTIVE_SENTINEL_*' } | Select-Object -ExpandProperty ProcessId";
+        const string script = "Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('claude.exe', 'winpty.exe', 'winpty-agent.exe', 'WindowsTerminal.exe') -and $_.CommandLine -like '*THROUGHLINE_BUILD_INTERACTIVE_SENTINEL_*' } | Select-Object -ExpandProperty ProcessId";
         var output = await RunAndCaptureAsync("powershell.exe", ["-NoProfile", "-Command", script], Environment.CurrentDirectory);
         return output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Select(value => int.TryParse(value.Trim(), out var processId) ? processId : 0)
@@ -340,7 +340,7 @@ internal static class Program
     {
         var current = new DirectoryInfo(Environment.CurrentDirectory);
         while (current is not null && !Directory.Exists(Path.Combine(current.FullName, ".git"))) current = current.Parent;
-        return current?.FullName ?? throw new InvalidOperationException("Run the probe from the Latticeflow repository.");
+        return current?.FullName ?? throw new InvalidOperationException("Run the probe from the Throughline Build repository.");
     }
 
     private static string? GetString(JsonElement root, string name) =>

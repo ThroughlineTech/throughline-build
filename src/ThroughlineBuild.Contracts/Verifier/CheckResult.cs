@@ -34,8 +34,8 @@ public record CheckResult(
     TimeSpan Elapsed,
     CheckRole Role = CheckRole.Gating,
     bool Skipped = false,  // true when the check is absent from config; never counts as a failure
-    // The exact command line that was executed ("executable arg1 arg2 ..."). Carried so a rework
-    // brief can tell the worker to re-run the failing check verbatim and confirm exit 0 before
-    // committing - the check is the oracle, not anyone's interpretation of its rules. Empty when
-    // the result was synthesized rather than executed.
+                           // The exact command line that was executed ("executable arg1 arg2 ..."). Carried so a rework
+                           // brief can tell the worker to re-run the failing check verbatim and confirm exit 0 before
+                           // committing - the check is the oracle, not anyone's interpretation of its rules. Empty when
+                           // the result was synthesized rather than executed.
     string CommandLine = "");

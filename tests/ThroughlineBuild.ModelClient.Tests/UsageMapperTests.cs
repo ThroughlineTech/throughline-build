@@ -1,5 +1,5 @@
-using Xunit;
 using ThroughlineBuild.ModelClient;
+using Xunit;
 
 namespace ThroughlineBuild.ModelClient.Tests;
 

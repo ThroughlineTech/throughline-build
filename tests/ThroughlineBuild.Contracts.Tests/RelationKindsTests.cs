@@ -9,9 +9,15 @@ public class RelationKindsTests
     {
         foreach (var canonical in RelationKinds.Allowed)
         {
-            yield return new object[] { canonical, canonical };
-            yield return new object[] { canonical.Replace('_', ' '), canonical };
-            yield return new object[] { canonical.Replace('_', '-'), canonical };
+            var variants = new[]
+            {
+                canonical,
+                canonical.Replace('_', ' '),
+                canonical.Replace('_', '-'),
+            };
+
+            foreach (var variant in variants.Distinct(StringComparer.Ordinal))
+                yield return new object[] { variant, canonical };
         }
     }
 

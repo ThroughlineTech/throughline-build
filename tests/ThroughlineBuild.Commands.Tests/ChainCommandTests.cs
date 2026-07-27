@@ -92,23 +92,23 @@ public class ChainCommandTests
         // Step lines are emitted by the onStep callback BEFORE RunAsync returns.
         // The final "chain complete" line is printed after RunAsync returns.
         var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        var planIdx    = Array.FindIndex(lines, l => l.Contains("[TLB-1] plan"));
-        var implIdx    = Array.FindIndex(lines, l => l.Contains("[TLB-1] implement"));
-        var reviewIdx  = Array.FindIndex(lines, l => l.Contains("[TLB-1] review"));
-        var shipIdx    = Array.FindIndex(lines, l => l.Contains("[TLB-1] ship") && !l.Contains("chain"));
+        var planIdx = Array.FindIndex(lines, l => l.Contains("[TLB-1] plan"));
+        var implIdx = Array.FindIndex(lines, l => l.Contains("[TLB-1] implement"));
+        var reviewIdx = Array.FindIndex(lines, l => l.Contains("[TLB-1] review"));
+        var shipIdx = Array.FindIndex(lines, l => l.Contains("[TLB-1] ship") && !l.Contains("chain"));
         var completeIdx = Array.FindIndex(lines, l => l.Contains("chain complete"));
 
-        Assert.True(planIdx >= 0,    "expected plan step line");
-        Assert.True(implIdx >= 0,    "expected implement step line");
-        Assert.True(reviewIdx >= 0,  "expected review step line");
-        Assert.True(shipIdx >= 0,    "expected ship step line");
+        Assert.True(planIdx >= 0, "expected plan step line");
+        Assert.True(implIdx >= 0, "expected implement step line");
+        Assert.True(reviewIdx >= 0, "expected review step line");
+        Assert.True(shipIdx >= 0, "expected ship step line");
         Assert.True(completeIdx >= 0, "expected chain complete line");
 
         // All step lines must appear before the final line.
-        Assert.True(planIdx    < completeIdx);
-        Assert.True(implIdx    < completeIdx);
-        Assert.True(reviewIdx  < completeIdx);
-        Assert.True(shipIdx    < completeIdx);
+        Assert.True(planIdx < completeIdx);
+        Assert.True(implIdx < completeIdx);
+        Assert.True(reviewIdx < completeIdx);
+        Assert.True(shipIdx < completeIdx);
     }
 
     [Fact]

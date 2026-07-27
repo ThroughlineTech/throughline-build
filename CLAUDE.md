@@ -1,4 +1,4 @@
-# CLAUDE.md - latticeflow (Throughline Build)
+# CLAUDE.md - Throughline Build
 
 The canonical, tool-agnostic repo contract is [AGENTS.md](AGENTS.md), read by every agent
 tool (Claude Code, Codex, Gemini, Copilot, Cursor). It covers what this repo is, the build

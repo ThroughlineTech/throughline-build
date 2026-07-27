@@ -449,7 +449,7 @@ public class DecomposePhaseTests
         Assert.False(result.Success);
         Assert.NotNull(result.VerdictFailures);
         Assert.NotEmpty(result.VerdictFailures!);
-        Assert.Single(result.VerdictFailures.Where(f => f.Contains("coverage_check")));
+        Assert.Single(result.VerdictFailures, f => f.Contains("coverage_check"));
         Assert.NotNull(result.FailureReason);
         Assert.Contains("coverage_check", result.FailureReason);
         // No child tickets created on verdict failure
@@ -492,7 +492,7 @@ public class DecomposePhaseTests
 
         Assert.False(result.Success);
         Assert.NotNull(result.VerdictFailures);
-        Assert.Single(result.VerdictFailures.Where(f => f.Contains("uniqueness_check")));
+        Assert.Single(result.VerdictFailures, f => f.Contains("uniqueness_check"));
         Assert.Empty(ticketing.CreateChildTicketsCalls);
     }
 
@@ -532,7 +532,7 @@ public class DecomposePhaseTests
 
         Assert.False(result.Success);
         Assert.NotNull(result.VerdictFailures);
-        Assert.Single(result.VerdictFailures.Where(f => f.Contains("size_check")));
+        Assert.Single(result.VerdictFailures, f => f.Contains("size_check"));
         Assert.Empty(ticketing.CreateChildTicketsCalls);
     }
 
@@ -676,12 +676,12 @@ public class DecomposePhaseTests
             Task.CompletedTask;
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             Task.CompletedTask;
-    
+
         public Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct) =>
             Task.CompletedTask;
 
-    public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
-            string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct)
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+                string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct)
         {
             CreateChildTicketsCalls.Add((parentUuid, children));
             var created = children

@@ -179,7 +179,7 @@ public class AnthropicModelClientTests
             Model: "claude-opus-4-5",
             Messages: new[] { new ModelMessage("user", new[] { new TextContent("hi") }) },
             MaxTokens: 10
-            // No Temperature set
+        // No Temperature set
         );
 
         await client.SendAsync(request);

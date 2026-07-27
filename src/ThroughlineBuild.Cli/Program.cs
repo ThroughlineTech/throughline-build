@@ -13,9 +13,9 @@ using ThroughlineBuild.Phases;
 using ThroughlineBuild.Plane;
 using ThroughlineBuild.Scaffold;
 using ThroughlineBuild.Verification;
-using ThroughlineBuild.Workers.Common;
 using ThroughlineBuild.Workers.ClaudeCode;
 using ThroughlineBuild.Workers.Codex;
+using ThroughlineBuild.Workers.Common;
 using ThroughlineBuild.Workers.Copilot;
 using ThroughlineBuild.Workers.Gemini;
 
@@ -260,13 +260,13 @@ static async Task<int> RunAsync(string[] args)
         var force = filteredArgs.Contains("--force");
         var printTemplate = filteredArgs.Contains("--print-template");
         var noInteractive = filteredArgs.Contains("--no-interactive");
-        var initPlaneUrl    = CliArgParser.GetFlagValue(filteredArgs, "--plane-url");
-        var initWorkspace   = CliArgParser.GetFlagValue(filteredArgs, "--workspace");
-        var initProjectId   = CliArgParser.GetFlagValue(filteredArgs, "--project-id");
+        var initPlaneUrl = CliArgParser.GetFlagValue(filteredArgs, "--plane-url");
+        var initWorkspace = CliArgParser.GetFlagValue(filteredArgs, "--workspace");
+        var initProjectId = CliArgParser.GetFlagValue(filteredArgs, "--project-id");
         var initProjectName = CliArgParser.GetFlagValue(filteredArgs, "--project-name");
-        var initToken       = CliArgParser.GetFlagValue(filteredArgs, "--token");
-        var initTokenEnv    = CliArgParser.GetFlagValue(filteredArgs, "--token-env");
-        var initFromFile    = CliArgParser.GetFlagValue(filteredArgs, "--from");
+        var initToken = CliArgParser.GetFlagValue(filteredArgs, "--token");
+        var initTokenEnv = CliArgParser.GetFlagValue(filteredArgs, "--token-env");
+        var initFromFile = CliArgParser.GetFlagValue(filteredArgs, "--from");
         using var initCts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; initCts.Cancel(); };
         try
@@ -997,7 +997,7 @@ static async Task<int> RunAsync(string[] args)
         else
         {
             // Single-pass: bare bool flags consume 1 slot; key=value pairs consume 2.
-            for (int i = parseStart; i < args.Length; )
+            for (int i = parseStart; i < args.Length;)
             {
                 if (args[i] == "--no-cascade")
                 {
@@ -1599,9 +1599,9 @@ static async Task<int> RunAsync(string[] args)
     // Helper: apply CLI flag overrides on top of config. Per-phase flag wins over --agent,
     // which wins over config. Phases not listed here fall back to AgentFor(phase).
     string EffectiveAgentFor(string phase) =>
-        phase == "plan"      ? (agentPlanFlag ?? agentAll ?? AgentFor("plan")) :
+        phase == "plan" ? (agentPlanFlag ?? agentAll ?? AgentFor("plan")) :
         phase == "implement" ? (agentImplementFlag ?? agentAll ?? AgentFor("implement")) :
-        phase == "review"    ? (agentReviewFlag ?? agentAll ?? AgentFor("review")) :
+        phase == "review" ? (agentReviewFlag ?? agentAll ?? AgentFor("review")) :
         AgentFor(phase);
 
     // Capability check for the worker-spawning phase verbs: when the resolved agent uses the
@@ -1734,99 +1734,99 @@ static async Task<int> RunAsync(string[] args)
                 gitClient: new ThroughlineBuild.Git.ProcessGitClient(cwd),
                 project: config2.Project);
 
-        var reworkRunner = new DefaultReworkRunner(reworkPhase, cwd);
-        var reworkCommand = new ReworkCommand(reworkRunner, cwd);
+            var reworkRunner = new DefaultReworkRunner(reworkPhase, cwd);
+            var reworkCommand = new ReworkCommand(reworkRunner, cwd);
 
-        var reworkArgs = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["debug"] = debugMode ? "true" : "false"
-        };
-        if (feedbackText is not null)
-            reworkArgs["feedback"] = feedbackText;
-
-        var reworkCtx = new TicketCommandContext(singleTicketId, reworkArgs);
-
-        try
-        {
-            using var cts = new CancellationTokenSource();
-            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
-            var cmdResult = await reworkCommand.ExecuteAsync(reworkCtx, cts.Token).ConfigureAwait(false);
-
-            if (reworkCommand.LastReworkResult is not null)
+            var reworkArgs = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                return reworkCommand.LastReworkResult.Outcome switch
-                {
-                    ReworkOutcome.Implemented => 0,
-                    ReworkOutcome.TicketNotInProgress => 2,
-                    ReworkOutcome.NoFeedbackAvailable => 3,
-                    ReworkOutcome.ImplementFailed => 4,
-                    _ => 1
-                };
-            }
+                ["debug"] = debugMode ? "true" : "false"
+            };
+            if (feedbackText is not null)
+                reworkArgs["feedback"] = feedbackText;
 
-            return cmdResult.Success ? 0 : 1;
-        }
-        catch (OperationCanceledException)
-        {
-            Console.Error.WriteLine("Cancelled.");
-            return 1;
-        }
+            var reworkCtx = new TicketCommandContext(singleTicketId, reworkArgs);
+
+            try
+            {
+                using var cts = new CancellationTokenSource();
+                Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+                var cmdResult = await reworkCommand.ExecuteAsync(reworkCtx, cts.Token).ConfigureAwait(false);
+
+                if (reworkCommand.LastReworkResult is not null)
+                {
+                    return reworkCommand.LastReworkResult.Outcome switch
+                    {
+                        ReworkOutcome.Implemented => 0,
+                        ReworkOutcome.TicketNotInProgress => 2,
+                        ReworkOutcome.NoFeedbackAvailable => 3,
+                        ReworkOutcome.ImplementFailed => 4,
+                        _ => 1
+                    };
+                }
+
+                return cmdResult.Success ? 0 : 1;
+            }
+            catch (OperationCanceledException)
+            {
+                Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
         }
         else if (verb == "decompose")
         {
-        Ticket ticket;
-        try
-        {
-            ticket = await ticketing.GetAsync(singleTicketId, CancellationToken.None);
-        }
-        catch (KeyNotFoundException ex)
-        {
-            Console.Error.WriteLine($"Ticket not found: {ex.Message}");
-            if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
-            return 2;
-        }
+            Ticket ticket;
+            try
+            {
+                ticket = await ticketing.GetAsync(singleTicketId, CancellationToken.None);
+            }
+            catch (KeyNotFoundException ex)
+            {
+                Console.Error.WriteLine($"Ticket not found: {ex.Message}");
+                if (errorLocation) Console.Error.WriteLine(FirstExceptionFrame(ex));
+                return 2;
+            }
 
-        var phase = new DecomposePhase(ticketing, workerFactory.Create(EffectiveAgentFor("decompose")), eventSink, buildOptions);
-        DecomposeResult result;
-        try
-        {
-            using var cts = new CancellationTokenSource();
-            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
-            result = await phase.RunAsync(singleTicketId, cwd, cts.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            Console.Error.WriteLine("Cancelled.");
-            return 1;
-        }
+            var phase = new DecomposePhase(ticketing, workerFactory.Create(EffectiveAgentFor("decompose")), eventSink, buildOptions);
+            DecomposeResult result;
+            try
+            {
+                using var cts = new CancellationTokenSource();
+                Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+                result = await phase.RunAsync(singleTicketId, cwd, cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
 
-        var childSizes = result.ChildSpecs is not null
-            ? result.ChildSpecs.Select(cs => cs.Size).ToList()
-            : new List<string>();
-        var childSizesReadOnly = (IReadOnlyList<string>)childSizes;
+            var childSizes = result.ChildSpecs is not null
+                ? result.ChildSpecs.Select(cs => cs.Size).ToList()
+                : new List<string>();
+            var childSizesReadOnly = (IReadOnlyList<string>)childSizes;
 
-        var decomposeSummary = PhaseSummaryBuilder.BuildDecompose(
-            ticketId: result.TicketId,
-            success: result.Success,
-            failureReason: result.FailureReason,
-            createdIds: result.CreatedIds ?? Array.Empty<string>(),
-            childSizes: childSizesReadOnly,
-            events: eventSink.Snapshot(),
-            planeUrl: PlaneUrl(),
-            sessionArtifactsPath: ArtifactsPath());
-        WriteSummary(decomposeSummary);
+            var decomposeSummary = PhaseSummaryBuilder.BuildDecompose(
+                ticketId: result.TicketId,
+                success: result.Success,
+                failureReason: result.FailureReason,
+                createdIds: result.CreatedIds ?? Array.Empty<string>(),
+                childSizes: childSizesReadOnly,
+                events: eventSink.Snapshot(),
+                planeUrl: PlaneUrl(),
+                sessionArtifactsPath: ArtifactsPath());
+            WriteSummary(decomposeSummary);
 
-        if (!result.Success)
-        {
-            Console.Error.WriteLine($"Decompose phase failed: {result.FailureReason}");
+            if (!result.Success)
+            {
+                Console.Error.WriteLine($"Decompose phase failed: {result.FailureReason}");
+                if (debugCaptureDir is not null)
+                    Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
+                return 1;
+            }
+
             if (debugCaptureDir is not null)
                 Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
-            return 1;
-        }
-
-        if (debugCaptureDir is not null)
-            Console.WriteLine($"Debug capture: .build/sessions/{fileStem}/");
-        return 0;
+            return 0;
         }
     }
 
@@ -2560,7 +2560,8 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
                         ["no-auto-resolve"] = noAutoResolve ? "true" : "false",
                         ["dry-run"] = chainDryRun ? "true" : "false",
                         ["max-depth"] = chainMaxDepth ?? "",
-                        ["batch-implement"] = batchImplementGroup switch {
+                        ["batch-implement"] = batchImplementGroup switch
+                        {
                             null => "",
                             ChainBatchImplementGroup.AllEligibleChildren => "*",
                             ChainBatchImplementGroup.ExplicitList e => string.Join(",", e.TicketIds),
@@ -2598,7 +2599,8 @@ static async Task<(int code, bool direct)> RunChainVerbAsync(
             ["no-auto-resolve"] = noAutoResolve ? "true" : "false",
             ["dry-run"] = chainDryRun ? "true" : "false",
             ["max-depth"] = chainMaxDepth ?? "",
-            ["batch-implement"] = batchImplementGroup switch {
+            ["batch-implement"] = batchImplementGroup switch
+            {
                 null => "",
                 ChainBatchImplementGroup.AllEligibleChildren => "*",
                 ChainBatchImplementGroup.ExplicitList e => string.Join(",", e.TicketIds),

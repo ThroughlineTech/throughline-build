@@ -11,12 +11,12 @@ namespace ThroughlineBuild.Workers.ClaudeCode;
 /// <c>--dangerously-skip-permissions</c> / <c>--permission-mode bypassPermissions</c>
 /// do NOT bypass that dialog (trust is skipped only in <c>-p</c>/print mode), so the
 /// interactive transport marks the worktree trusted in <c>~/.claude.json</c> before
-/// launching. See docs/heartbeat/evidence/stage-06-process-hardening.md.
+/// launching. This behavior is covered by the cross-platform interactive transport tests.
 ///
 /// The read-modify-write is non-destructive AND concurrency-safe:
 /// - It parses the operator-owned file with JsonNode (AOT-safe and reflection-free
 ///   for arbitrary JSON) and preserves every other key.
-/// - Latticeflow writers are SERIALIZED by a cross-process lock keyed on the config
+/// - Throughline Build writers are SERIALIZED by a cross-process lock keyed on the config
 ///   path, so two concurrent runs in different worktrees never interleave their
 ///   read-modify-write and lose each other's trust entry. If the lock cannot be
 ///   acquired within the bound, seeding is SKIPPED (never performed unserialized).
@@ -90,7 +90,7 @@ internal static class ClaudeWorkspaceTrust
     {
         var worktreePath = ProjectKeyFor(workingDirectory);
 
-        // Serialize Latticeflow writers: hold a cross-process lock for the whole
+        // Serialize Throughline Build writers: hold a cross-process lock for the whole
         // read-modify-write so two of our runs cannot interleave and drop one another's
         // trust entry. If the lock cannot be acquired within the bound, SKIP trust seeding
         // entirely rather than perform the unserialized RMW the lock exists to prevent.
@@ -305,7 +305,7 @@ internal static class ClaudeWorkspaceTrust
     }
 
     /// <summary>
-    /// Cross-process lock that serializes Latticeflow trust writers for one config file.
+    /// Cross-process lock that serializes Throughline Build trust writers for one config file.
     /// Modeled on <see cref="InteractiveClaudeWorktreeLock"/>: a temp-keyed
     /// <see cref="FileShare.None"/> handle, so the operator's home directory is never
     /// polluted with a lock file and two spellings of the same config map to one lock.
@@ -353,7 +353,7 @@ internal static class ClaudeWorkspaceTrust
             var full = Path.GetFullPath(configFilePath);
             var key = OperatingSystem.IsWindows() ? full.ToLowerInvariant() : full;
             var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(key)));
-            var directory = Path.Combine(Path.GetTempPath(), "latticeflow-claude-locks");
+            var directory = Path.Combine(Path.GetTempPath(), "throughline-build-claude-locks");
             Directory.CreateDirectory(directory);
             return Path.Combine(directory, "trust-" + hash + ".lock");
         }

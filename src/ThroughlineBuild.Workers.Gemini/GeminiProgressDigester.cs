@@ -45,10 +45,10 @@ public sealed class GeminiProgressDigester : IWorkerProgressDigester
 
         return kind switch
         {
-            "response"      => FormatResponse(el, offset),
-            "tool_call"     => FormatToolCall(el, offset),
+            "response" => FormatResponse(el, offset),
+            "tool_call" => FormatToolCall(el, offset),
             "tool_response" => FormatToolResponse(el, offset),
-            _               => null
+            _ => null
         };
     }
 
@@ -64,10 +64,10 @@ public sealed class GeminiProgressDigester : IWorkerProgressDigester
 
         return kind switch
         {
-            "response"      => FormatResponse(el, offsetStr),
-            "tool_call"     => FormatToolCall(el, offsetStr),
+            "response" => FormatResponse(el, offsetStr),
+            "tool_call" => FormatToolCall(el, offsetStr),
             "tool_response" => FormatToolResponse(el, offsetStr),
-            _               => null
+            _ => null
         };
     }
 

@@ -1,7 +1,7 @@
 using System.Text.Json;
-using Xunit;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Workers.Common;
+using Xunit;
 
 namespace ThroughlineBuild.Workers.Common.Tests;
 

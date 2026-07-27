@@ -117,7 +117,7 @@ public class HelpRegistryFactoryTests
     {
         var help = Registry.TryGet(verb)!;
         Assert.False(string.IsNullOrWhiteSpace(help.Summary), $"{verb}: Summary must not be empty");
-        Assert.False(string.IsNullOrWhiteSpace(help.Usage),   $"{verb}: Usage must not be empty");
+        Assert.False(string.IsNullOrWhiteSpace(help.Usage), $"{verb}: Usage must not be empty");
     }
 
     // ------------------------------------------------------------------
@@ -144,7 +144,7 @@ public class HelpRegistryFactoryTests
     public void Chain_HasContinuePastFailureOption()
     {
         var help = Registry.TryGet("chain")!;
-        Assert.Contains(help.Options, o => o.Flag == "--continue-past-failure"  && !o.IsGlobal);
+        Assert.Contains(help.Options, o => o.Flag == "--continue-past-failure" && !o.IsGlobal);
         Assert.DoesNotContain(help.Options, o => o.Flag == "--sequential");
     }
 
@@ -163,9 +163,9 @@ public class HelpRegistryFactoryTests
     {
         var help = Registry.TryGet("chain")!;
         Assert.Contains(help.Options, o => o.Flag == "--agent <name>" && o.Description.Contains("per-phase flags beat --agent", StringComparison.Ordinal));
-        Assert.Contains(help.Options, o => o.Flag == "--agent-plan <name>"      && !o.IsGlobal);
+        Assert.Contains(help.Options, o => o.Flag == "--agent-plan <name>" && !o.IsGlobal);
         Assert.Contains(help.Options, o => o.Flag == "--agent-implement <name>" && !o.IsGlobal);
-        Assert.Contains(help.Options, o => o.Flag == "--agent-review <name>"    && !o.IsGlobal);
+        Assert.Contains(help.Options, o => o.Flag == "--agent-review <name>" && !o.IsGlobal);
     }
 
     [Fact]
@@ -215,7 +215,7 @@ public class HelpRegistryFactoryTests
     {
         var help = Registry.TryGet("scaffold")!;
         Assert.Contains(help.Options, o => o.Flag == "--validate-only" && !o.IsGlobal);
-        Assert.Contains(help.Options, o => o.Flag == "--dry-run"       && !o.IsGlobal);
+        Assert.Contains(help.Options, o => o.Flag == "--dry-run" && !o.IsGlobal);
     }
 
     [Fact]

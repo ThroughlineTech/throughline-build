@@ -160,9 +160,9 @@ public class AgentFlagParsingTests
     {
         // This mirrors the EffectiveAgentFor lambda in Program.cs.
         string AgentFor(string p) => configuredAgent;
-        return phase == "plan"      ? (agentPlanFlag ?? agentAll ?? AgentFor("plan")) :
+        return phase == "plan" ? (agentPlanFlag ?? agentAll ?? AgentFor("plan")) :
                phase == "implement" ? (agentImplementFlag ?? agentAll ?? AgentFor("implement")) :
-               phase == "review"    ? (agentReviewFlag ?? agentAll ?? AgentFor("review")) :
+               phase == "review" ? (agentReviewFlag ?? agentAll ?? AgentFor("review")) :
                AgentFor(phase);
     }
 

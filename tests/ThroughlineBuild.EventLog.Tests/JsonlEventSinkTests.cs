@@ -435,7 +435,7 @@ public class JsonlEventSinkSessionContextTests
     {
         var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         var sid = Guid.NewGuid().ToString("N");
-        var stem = "latticeflow-TLB-169-implement-2026-05-28-143052";
+        var stem = "throughline-build-TLB-169-implement-2026-05-28-143052";
         var options = new EventLogOptions { BaseDirectory = tempDir, SessionId = sid, FileNameStem = stem };
 
         try

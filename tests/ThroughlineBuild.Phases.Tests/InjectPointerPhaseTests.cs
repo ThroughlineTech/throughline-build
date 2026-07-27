@@ -18,10 +18,10 @@ namespace ThroughlineBuild.Phases.Tests;
 /// </summary>
 public class InjectPointerPhaseTests
 {
-    private const string MainSha  = "0123456789abcdef0123456789abcdef01234567";
+    private const string MainSha = "0123456789abcdef0123456789abcdef01234567";
     private const string CommitSha = "ffffffffffffffffffffffffffffffffffffffff";
     private const string StartSha = "1111111111111111111111111111111111111111";
-    private const string EndSha   = "2222222222222222222222222222222222222222";
+    private const string EndSha = "2222222222222222222222222222222222222222";
 
     private static Ticket MakeTicket(TicketState state = TicketState.Ready) => new Ticket(
         Id: "TLB-2",
@@ -241,15 +241,15 @@ public class InjectPointerPhaseTests
             Task.CompletedTask;
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             Task.CompletedTask;
-    
+
         public Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct) =>
             Task.CompletedTask;
 
-    public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
-            string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
-            Task.FromResult(new CreateChildTicketsResult(
-                children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
-                Array.Empty<string>()));
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+                string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+                Task.FromResult(new CreateChildTicketsResult(
+                    children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
+                    Array.Empty<string>()));
     }
 
     private sealed class IpFakeEventSink : IEventSink

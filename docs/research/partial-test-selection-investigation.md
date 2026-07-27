@@ -2,7 +2,7 @@
 
 ## Context
 
-Today latticeflow runs the **whole test suite** on every ticket and every rework round.
+Today Throughline Build runs the **whole test suite** on every ticket and every rework round.
 Tests are not special-cased anywhere in the code - they are ordinary `CheckSpec` entries
 (a `name`, an `executable`, a static `arguments[]` array, a timeout) defined in
 the local `.build/config.toml` and executed by
@@ -23,7 +23,7 @@ every time, for every ticket and every rework round.
 created plus the tests that exercise the changed code - and reserve the full suite for chains
 and for ship. The hard constraints from the requester:
 
-1. **Language- and machine-agnostic.** latticeflow feeds work to agents across any language and
+1. **Language- and machine-agnostic.** Throughline Build feeds work to agents across any language and
    toolchain. We cannot bake `dotnet`/`pytest`/`jest`/`go` test-discovery logic into the C# core.
 2. **Deterministic, OR cheap agent judgment.** Either the selection is computed deterministically,
    or the agent - which already holds the full context - decides it without churning extra tokens.
@@ -81,7 +81,7 @@ There is no language-neutral, deterministic primitive for it. Every option is co
 There is a **second wall** even once you know *which* tests to run: translating a file set into a
 runner invocation is itself toolchain-specific. pytest/jest/go accept file *paths* as positional
 args; `dotnet test` does **not** - it is project/solution-oriented and needs
-`--filter FullyQualifiedName~X`. No single substitution mechanism baked into latticeflow works
+`--filter FullyQualifiedName~X`. No single substitution mechanism baked into Throughline Build works
 everywhere. That fact alone is the argument that selection logic cannot live in the C# core.
 
 ## Mechanisms (ranked)
@@ -99,7 +99,7 @@ about one line of output - no extra churn. Extend the `WORKER_RESULT` envelope:
 }
 ```
 
-latticeflow runs it verbatim as the review-phase `test` check.
+Throughline Build runs it verbatim as the review-phase `test` check.
 
 - **Agnostic by construction** - the agent forms the invocation, not C# code.
 - **Cheap** - context is already paid for.
@@ -109,7 +109,7 @@ latticeflow runs it verbatim as the review-phase `test` check.
 
 ### 2. Config-driven substitution template (deterministic fallback)
 
-Add an optional selective variant to the check spec that latticeflow fills from the git diff using
+Add an optional selective variant to the check spec that Throughline Build fills from the git diff using
 tokens it can compute deterministically:
 
 ```toml
@@ -124,7 +124,7 @@ arg_template = ["--filter", "{changed_test_classes}"]
 on_empty = "skip"                     # no relevant tests changed -> skip, or "full"
 ```
 
-latticeflow exposes tokens like `{changed_files}`, `{added_test_files}`, `{changed_test_classes}`
+Throughline Build exposes tokens like `{changed_files}`, `{added_test_files}`, `{changed_test_classes}`
 (basename-derived). The *mapping policy* lives in config, authored by whoever owns the project, so
 the C# core stays agnostic. This is the deterministic path when you do not trust the agent or want
 reproducibility. It nails sub-problem (A) cleanly; for (B) it is only as good as the configured
@@ -157,7 +157,7 @@ fallback is safe (full), so a missing or garbled selector degrades to today's be
 ## Determinism and safety notes
 
 - **Determinism.** Mechanism 2 is fully deterministic (same diff -> same command). Mechanism 1 is
-  deterministic in *execution* (latticeflow runs the exact string) but the *selection* is model
+  deterministic in *execution* (Throughline Build runs the exact string) but the *selection* is model
   judgment - acceptable because ship is the deterministic gate. If bit-reproducible review is
   required, make mechanism 2 the default and mechanism 1 opt-in.
 - **The empty-set trap.** If no test files changed and no source maps to tests, "run nothing" must
@@ -191,7 +191,7 @@ fallback is safe (full), so a missing or garbled selector degrades to today's be
 2. **Scope of the win.** Is the goal mainly to speed up the *rework loop* (where the same suite runs
    2-3x per ticket), or also the first review pass? The rework loop is where partial testing pays
    off most.
-3. **This repo's reality.** latticeflow itself is one `dotnet test` over a single solution, so
+3. **This repo's reality.** Throughline Build itself is one `dotnet test` over a single solution, so
    file-path selection does not help it - only `--filter` does. Should the first implementation
    target path-oriented runners (pytest/jest/go, where `{changed_test_files}` is trivial) and treat
    filter-based runners as a second step?

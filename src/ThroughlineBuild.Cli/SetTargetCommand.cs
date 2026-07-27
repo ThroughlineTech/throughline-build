@@ -68,7 +68,13 @@ public static class SetTargetCommand
         }
 
         TomlTable root;
-        try { root = Toml.ToModel(content); }
+        try
+        {
+            root = TomlSerializer.Deserialize(
+                content,
+                BuildTomlSerializerContext.Default.TomlTable)
+                ?? throw new InvalidOperationException("TOML document produced no root table");
+        }
         catch (Exception ex)
         {
             console.ErrorWriteLine($"Error: failed to parse config: {ex.Message}");

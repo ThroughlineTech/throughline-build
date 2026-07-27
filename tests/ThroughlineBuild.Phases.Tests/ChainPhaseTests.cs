@@ -1,5 +1,5 @@
-using System.Text.Json;
 using System.Diagnostics;
+using System.Text.Json;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Git;
@@ -1353,15 +1353,15 @@ public class ChainPhaseTests
 
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             Task.CompletedTask;
-    
+
         public Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct) =>
             Task.CompletedTask;
 
-    public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
-            string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
-            Task.FromResult(new CreateChildTicketsResult(
-                children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
-                Array.Empty<string>()));
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+                string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+                Task.FromResult(new CreateChildTicketsResult(
+                    children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
+                    Array.Empty<string>()));
     }
 
     private sealed class FakeWorkerAgent : IWorkerAgent
@@ -2447,7 +2447,7 @@ public class ChainPhaseTests
         Assert.Empty(ticketing.Transitions);
         Assert.Empty(planWorker.SeenOptions);
 
-        var gate = Assert.Single(events.Events.Where(e => e.Kind == EventKind.GateFailure));
+        var gate = Assert.Single(events.Events, e => e.Kind == EventKind.GateFailure);
         Assert.Equal(Phase.Chain, gate.Phase);
         Assert.Equal("chain_preflight_dirty", gate.Data["kind"].ToString());
         Assert.Equal(2, Convert.ToInt32(gate.Data["dirty_count"]));
@@ -2488,7 +2488,7 @@ public class ChainPhaseTests
         Assert.Empty(ticketing.Transitions);
         Assert.Empty(planWorker.SeenOptions);
 
-        var gate = Assert.Single(events.Events.Where(e => e.Kind == EventKind.GateFailure));
+        var gate = Assert.Single(events.Events, e => e.Kind == EventKind.GateFailure);
         Assert.Equal(Phase.Chain, gate.Phase);
         Assert.Equal("chain_preflight_wrong_branch", gate.Data["kind"].ToString());
         Assert.Equal("main", gate.Data["expected"].ToString());
@@ -2815,7 +2815,7 @@ public class ChainPhaseTests
         Assert.Equal(0, batchWorker.CallCount);
         Assert.Contains(("TLB-2", TicketState.InProgress), ticketing.Transitions);
         Assert.DoesNotContain(ticketing.Transitions, t => t.state == TicketState.InReview);
-        Assert.Empty(ticketing.PostedComments.Where(c => c.html.Contains("[implemented_at:", StringComparison.Ordinal)));
+        Assert.DoesNotContain(ticketing.PostedComments, c => c.html.Contains("[implemented_at:", StringComparison.Ordinal));
         Assert.NotNull(result.ChildResults);
         var unavailable = Assert.Single(result.ChildResults!, r => r.Outcome == ChainOutcome.TicketingUnavailable);
         Assert.Equal("TLB-2", unavailable.TicketId);

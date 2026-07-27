@@ -856,13 +856,13 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
             // Resolve state name -> uuid
             var stateName = newState switch
             {
-                TicketState.Backlog     => "Backlog",
-                TicketState.Planning    => "Planning",
-                TicketState.Ready       => "Ready",
-                TicketState.InProgress  => "In Progress",
-                TicketState.InReview    => "In Review",
-                TicketState.Done        => "Done",
-                TicketState.Cancelled   => "Cancelled",
+                TicketState.Backlog => "Backlog",
+                TicketState.Planning => "Planning",
+                TicketState.Ready => "Ready",
+                TicketState.InProgress => "In Progress",
+                TicketState.InReview => "In Review",
+                TicketState.Done => "Done",
+                TicketState.Cancelled => "Cancelled",
                 _ => throw new ArgumentOutOfRangeException(nameof(newState))
             };
 
@@ -1250,13 +1250,13 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
             {
                 var stateName = query.State.Value switch
                 {
-                    TicketState.Backlog     => "Backlog",
-                    TicketState.Planning    => "Planning",
-                    TicketState.Ready       => "Ready",
-                    TicketState.InProgress  => "In Progress",
-                    TicketState.InReview    => "In Review",
-                    TicketState.Done        => "Done",
-                    TicketState.Cancelled   => "Cancelled",
+                    TicketState.Backlog => "Backlog",
+                    TicketState.Planning => "Planning",
+                    TicketState.Ready => "Ready",
+                    TicketState.InProgress => "In Progress",
+                    TicketState.InReview => "In Review",
+                    TicketState.Done => "Done",
+                    TicketState.Cancelled => "Cancelled",
                     _ => throw new ArgumentOutOfRangeException(nameof(query))
                 };
                 var statesByName = await GetStatesByNameAsync(token).ConfigureAwait(false);
@@ -1363,9 +1363,9 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
         {
             var (targetState, commentMarker) = transition switch
             {
-                LifecycleTransition.Close  => (TicketState.Cancelled, "<strong>wontfix:</strong>"),
-                LifecycleTransition.Defer  => (TicketState.Cancelled, "<strong>deferred:</strong>"),
-                LifecycleTransition.Reopen => (TicketState.Backlog,   "<strong>reopened:</strong>"),
+                LifecycleTransition.Close => (TicketState.Cancelled, "<strong>wontfix:</strong>"),
+                LifecycleTransition.Defer => (TicketState.Cancelled, "<strong>deferred:</strong>"),
+                LifecycleTransition.Reopen => (TicketState.Backlog, "<strong>reopened:</strong>"),
                 _ => throw new ArgumentOutOfRangeException(nameof(transition))
             };
 
@@ -1386,13 +1386,13 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
             // Resolve state UUID and patch
             var stateName = targetState switch
             {
-                TicketState.Backlog     => "Backlog",
-                TicketState.Planning    => "Planning",
-                TicketState.Ready       => "Ready",
-                TicketState.InProgress  => "In Progress",
-                TicketState.InReview    => "In Review",
-                TicketState.Done        => "Done",
-                TicketState.Cancelled   => "Cancelled",
+                TicketState.Backlog => "Backlog",
+                TicketState.Planning => "Planning",
+                TicketState.Ready => "Ready",
+                TicketState.InProgress => "In Progress",
+                TicketState.InReview => "In Review",
+                TicketState.Done => "Done",
+                TicketState.Cancelled => "Cancelled",
                 _ => throw new ArgumentOutOfRangeException(nameof(targetState))
             };
             var statesByName = await GetStatesByNameAsync(token).ConfigureAwait(false);
@@ -1631,13 +1631,13 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
     private static int StateRank(string stateName) =>
         stateName switch
         {
-            "Backlog"     => 0,
-            "Ready"       => 1,
+            "Backlog" => 0,
+            "Ready" => 1,
             "In Progress" => 2,
-            "In Review"   => 3,
-            "Done"        => 4,
-            "Cancelled"   => 5,
-            _             => -1
+            "In Review" => 3,
+            "Done" => 4,
+            "Cancelled" => 5,
+            _ => -1
         };
 
     private static string? ApplyRollupRules(List<PlaneIssueExpanded> siblings)

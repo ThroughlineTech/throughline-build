@@ -1,6 +1,6 @@
 using System.Text.Json;
-using Xunit;
 using ThroughlineBuild.Workers.Gemini;
+using Xunit;
 
 namespace ThroughlineBuild.Workers.Gemini.Tests;
 

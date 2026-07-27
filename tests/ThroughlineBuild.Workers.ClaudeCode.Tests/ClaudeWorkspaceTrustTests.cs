@@ -139,7 +139,7 @@ public sealed class ClaudeWorkspaceTrustTests : IDisposable
     [Fact]
     public async Task EnsureTrusted_ConcurrentWritersForDifferentWorktrees_AllEntriesSurvive()
     {
-        // Finding 3: concurrent Latticeflow runs in different worktrees both
+        // Finding 3: concurrent Throughline Build runs in different worktrees both
         // read-modify-write the SAME global ~/.claude.json. Without serialization their
         // writes clobber each other and entries are lost. The cross-process writer lock
         // must serialize them so EVERY worktree ends up trusted.

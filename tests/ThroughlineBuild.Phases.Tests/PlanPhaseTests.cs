@@ -329,15 +329,15 @@ public class PlanPhaseTests
 
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             Task.CompletedTask;
-    
+
         public Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct) =>
             Task.CompletedTask;
 
-    public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
-            string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
-            Task.FromResult(new CreateChildTicketsResult(
-                children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
-                Array.Empty<string>()));
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+                string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+                Task.FromResult(new CreateChildTicketsResult(
+                    children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
+                    Array.Empty<string>()));
     }
 
     private sealed class FakeWorkerAgent : IWorkerAgent
@@ -416,7 +416,10 @@ public class PlanPhaseDebugCaptureTests
 
     private static IReadOnlyDictionary<string, object> ValidMetadata() => new Dictionary<string, object>
     {
-        ["plan_body_ref"] = "PLAN_BODY", ["risk_label"] = "low", ["size_label"] = "S", ["planned_at_sha"] = "abc123"
+        ["plan_body_ref"] = "PLAN_BODY",
+        ["risk_label"] = "low",
+        ["size_label"] = "S",
+        ["planned_at_sha"] = "abc123"
     };
 
     private static IReadOnlyDictionary<string, string> ValidBlocks() => new Dictionary<string, string>
@@ -510,15 +513,15 @@ public class PlanPhaseDebugCaptureTests
 
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             Task.CompletedTask;
-    
+
         public Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct) =>
             Task.CompletedTask;
 
-    public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
-            string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
-            Task.FromResult(new CreateChildTicketsResult(
-                children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
-                Array.Empty<string>()));
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+                string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+                Task.FromResult(new CreateChildTicketsResult(
+                    children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
+                    Array.Empty<string>()));
     }
 
     private sealed class FakeEventSink : IEventSink

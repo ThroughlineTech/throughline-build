@@ -33,7 +33,7 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
     // always finds it. Kept on its own clearly-ignorable line so it never perturbs the
     // brief's instructions or output contract.
     internal static string BuildInitialPrompt(string runNonce) =>
-        $"{InitialPrompt}\n(latticeflow run token, ignore: {runNonce})";
+        $"{InitialPrompt}\n(throughline-build run token, ignore: {runNonce})";
 
     // A run directory with no live lock is reclaimed regardless of age; this bound
     // only governs legacy/partial directories that predate the lock file.
@@ -69,7 +69,8 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
 
     internal ClaudeCodeInteractiveTransport(ClaudeCodeOptions options)
         : this(options, InteractiveClaudeProcessLauncherFactory.Create(), new ClaudeCompletionWaiter(),
-            new TranscriptTurnSignal(), hookCommandPrefix: null, preflight: DefaultPreflightAsync) { }
+            new TranscriptTurnSignal(), hookCommandPrefix: null, preflight: DefaultPreflightAsync)
+    { }
 
     internal ClaudeCodeInteractiveTransport(
         ClaudeCodeOptions options,
@@ -133,7 +134,7 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
         var preserveRun = options.DebugCaptureDirectory is not null;
         var runParent = preserveRun
             ? Path.Combine(options.DebugCaptureDirectory!, "claude-interactive-runs")
-            : Path.Combine(Path.GetTempPath(), "latticeflow-claude-runs");
+            : Path.Combine(Path.GetTempPath(), "throughline-build-claude-runs");
         // Reclaim run directories orphaned by a crashed parent before adding ours.
         // Preserved debug runs are intentionally retained and never swept.
         if (!preserveRun)

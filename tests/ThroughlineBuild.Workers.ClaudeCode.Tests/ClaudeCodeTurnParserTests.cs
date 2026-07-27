@@ -1,5 +1,5 @@
-using Xunit;
 using ThroughlineBuild.Workers.ClaudeCode;
+using Xunit;
 
 namespace ThroughlineBuild.Workers.ClaudeCode.Tests;
 

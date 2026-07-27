@@ -79,7 +79,7 @@ public class ReviewPhaseTests
         Assert.Single(writeEvents);
         Assert.Equal("create_comment", writeEvents[0].Data["action"].ToString());
 
-        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.StateTransition));
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.StateTransition);
     }
 
     [Fact]
@@ -220,7 +220,7 @@ public class ReviewPhaseTests
         Assert.Contains("fail", ticketing.Comments[0].html);
 
         Assert.Empty(ticketing.Transitions);
-        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.StateTransition));
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.StateTransition);
     }
 
     [Fact]
@@ -742,15 +742,15 @@ public class ReviewPhaseTests
 
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             Task.CompletedTask;
-    
+
         public Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct) =>
             Task.CompletedTask;
 
-    public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
-            string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
-            Task.FromResult(new CreateChildTicketsResult(
-                children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
-                Array.Empty<string>()));
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+                string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+                Task.FromResult(new CreateChildTicketsResult(
+                    children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
+                    Array.Empty<string>()));
     }
 
     private sealed class FakeWorkerAgent : IWorkerAgent
@@ -1067,7 +1067,7 @@ public class ReviewPhaseTests
         Assert.Equal(1, git.StashDropCount);
         Assert.Empty(git.StashEntries);
         // Verdict surfaced first, then a GateFailure carrying the delta/dropped counts.
-        Assert.Single(events.Events.Where(e => e.Kind == EventKind.VerifierVerdict));
+        Assert.Single(events.Events, e => e.Kind == EventKind.VerifierVerdict);
         var gate = events.Events.Single(e => e.Kind == EventKind.GateFailure
             && e.Data.TryGetValue("kind", out var k) && k?.ToString() == "shared_git_state_mutated_after_review");
         Assert.Equal(1, Convert.ToInt32(gate.Data["stash_delta"]));
@@ -1232,15 +1232,15 @@ public class ReviewPhaseDebugCaptureTests
 
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             Task.CompletedTask;
-    
+
         public Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct) =>
             Task.CompletedTask;
 
-    public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
-            string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
-            Task.FromResult(new CreateChildTicketsResult(
-                children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
-                Array.Empty<string>()));
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+                string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+                Task.FromResult(new CreateChildTicketsResult(
+                    children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
+                    Array.Empty<string>()));
     }
 
     private sealed class FakeEventSink : IEventSink

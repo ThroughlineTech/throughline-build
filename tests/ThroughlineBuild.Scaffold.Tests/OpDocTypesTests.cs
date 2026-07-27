@@ -1,6 +1,6 @@
-using Xunit;
 using System.Text.Json;
 using ThroughlineBuild.Scaffold;
+using Xunit;
 
 namespace ThroughlineBuild.Scaffold.Tests;
 

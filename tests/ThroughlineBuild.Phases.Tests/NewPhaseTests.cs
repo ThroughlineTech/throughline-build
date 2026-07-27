@@ -390,7 +390,8 @@ Content with acceptance.
     private sealed class FakeTicketing : ITicketing
     {
         public List<(string title, string? type, string descriptionHtml, IReadOnlyList<string>? initialLabelNames)>
-            CreatedTickets { get; } = new();
+            CreatedTickets
+        { get; } = new();
 
         public BackendCapabilities Capabilities =>
             new BackendCapabilities(true, true, true, false);
@@ -444,15 +445,15 @@ Content with acceptance.
 
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             Task.CompletedTask;
-    
+
         public Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct) =>
             Task.CompletedTask;
 
-    public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
-            string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
-            Task.FromResult(new CreateChildTicketsResult(
-                children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
-                Array.Empty<string>()));
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+                string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+                Task.FromResult(new CreateChildTicketsResult(
+                    children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
+                    Array.Empty<string>()));
     }
 
     private sealed class FakeEventSink : IEventSink

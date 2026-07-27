@@ -1,10 +1,10 @@
-using Tomlyn;
-using Tomlyn.Model;
 using ThroughlineBuild.Briefs;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Plane;
 using ThroughlineBuild.Workers.ClaudeCode;
+using Tomlyn;
+using Tomlyn.Model;
 
 namespace ThroughlineBuild.Cli;
 
@@ -141,7 +141,10 @@ public static class BuildConfigLoader
         TomlTable root;
         try
         {
-            root = Toml.ToModel(content);
+            root = TomlSerializer.Deserialize(
+                content,
+                BuildTomlSerializerContext.Default.TomlTable)
+                ?? throw new ConfigException("TOML document produced no root table");
         }
         catch (Exception ex)
         {
@@ -478,9 +481,9 @@ public static class BuildConfigLoader
         var raw = OptionalString(entry, "role", "gating");
         return raw.ToLowerInvariant() switch
         {
-            "gating"   => CheckRole.Gating,
+            "gating" => CheckRole.Gating,
             "advisory" => CheckRole.Advisory,
-            "setup"    => CheckRole.Setup,
+            "setup" => CheckRole.Setup,
             _ => throw new ConfigException(
                 $"key 'role' in [{context}] must be \"gating\", \"advisory\", or \"setup\", got \"{raw}\"")
         };
@@ -683,9 +686,8 @@ public static class BuildConfigLoader
             if (subTable.TryGetValue("bypass_permissions", out var bpVal) && bpVal is bool bp)
                 bypassPermissions = bp;
 
-            // Omitted-value default for a Claude-family agent's transport. The Stage 07 cutover flipped
-            // it to interactive-hook after operator dogfood (the npt5 clean interactive chain;
-            // docs/heartbeat/evidence/stage-07-dogfood.md). This is the load-bearing default: a Claude
+            // Omitted-value default for a Claude-family agent's transport. Cross-platform operator
+            // validation established interactive-hook as the load-bearing default: a Claude
             // block with no transport key now runs interactive-hook (requires Claude Code >= 2.1.177,
             // gated by ClaudeCodePreflight). Roll back to the legacy headless path with
             // transport = "print". Transport is honored for any agent name that maps to ClaudeCodeAgent

@@ -18,7 +18,7 @@ public sealed record ClaudeRunOwner(
 
 /// <summary>
 /// Holds an exclusive lock on a run directory for the lifetime of one interactive
-/// invocation. While the lease is open no other Latticeflow process can open
+/// invocation. While the lease is open no other Throughline Build process can open
 /// <c>run.lock</c> with <see cref="FileShare.None"/>, so the sweeper treats the
 /// run as live. Disposing the lease releases the lock; the directory then looks
 /// stale and is reclaimed on a later sweep (or by the owning invocation's cleanup).

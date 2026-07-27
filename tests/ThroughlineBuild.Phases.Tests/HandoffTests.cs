@@ -26,16 +26,16 @@ public class HandoffTests
     // Shared constants
     // -----------------------------------------------------------------------
 
-    private const string ParentId   = "TLB-10";
+    private const string ParentId = "TLB-10";
     private const string ParentUuid = "parent-uuid-10";
-    private const string Child1Id   = "TLB-11";
+    private const string Child1Id = "TLB-11";
     private const string Child1Uuid = "child-uuid-11";
-    private const string Child2Id   = "TLB-12";
+    private const string Child2Id = "TLB-12";
     private const string Child2Uuid = "child-uuid-12";
 
     private const string ChainStartSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private const string AfterChild1Sha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    private const string CommitSha       = "cccccccccccccccccccccccccccccccccccccccc";
+    private const string CommitSha = "cccccccccccccccccccccccccccccccccccccccc";
 
     private static string WorkDir
     {
@@ -66,12 +66,12 @@ public class HandoffTests
     private static IReadOnlyDictionary<string, object> OkWorkerMeta() =>
         new Dictionary<string, object>
         {
-            ["commit_sha"]      = CommitSha,
-            ["plan_body_ref"]   = "PLAN_BODY",
-            ["risk_label"]      = "low",
-            ["size_label"]      = "s",
-            ["planned_at_sha"]  = ChainStartSha,
-            ["files_changed"]   = Array.Empty<string>()
+            ["commit_sha"] = CommitSha,
+            ["plan_body_ref"] = "PLAN_BODY",
+            ["risk_label"] = "low",
+            ["size_label"] = "s",
+            ["planned_at_sha"] = ChainStartSha,
+            ["files_changed"] = Array.Empty<string>()
         };
 
     private static IReadOnlyDictionary<string, string> OkWorkerBlocks() =>
@@ -148,7 +148,7 @@ public class HandoffTests
         var events = new HoFakeEventSink();
         var baseOpts = MakeBaseOptions();
 
-        var planWorker   = new HoOkWorker(OkWorkerMeta(), OkWorkerBlocks());
+        var planWorker = new HoOkWorker(OkWorkerMeta(), OkWorkerBlocks());
         var reviewWorker = new HoOkWorker(null, null);
 
         Func<BuildOptions, PlanPhase> planFactory = opts =>
@@ -489,8 +489,8 @@ public class HandoffTests
             IReadOnlyDictionary<string, object>? metadata,
             IReadOnlyDictionary<string, string>? blocks)
         {
-            _metadata  = metadata;
-            _blocks    = blocks;
+            _metadata = metadata;
+            _blocks = blocks;
         }
 
         public string Name => "claude-code";
@@ -515,7 +515,7 @@ public class HandoffTests
             IReadOnlyDictionary<string, string>? blocks)
         {
             _metadata = metadata;
-            _blocks   = blocks;
+            _blocks = blocks;
         }
 
         public string Name => "claude-code";
@@ -627,15 +627,15 @@ public class HandoffTests
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             Task.CompletedTask;
 
-    
+
         public Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct) =>
             Task.CompletedTask;
 
-    public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
-            string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
-            Task.FromResult(new CreateChildTicketsResult(
-                children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
-                Array.Empty<string>()));
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+                string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+                Task.FromResult(new CreateChildTicketsResult(
+                    children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
+                    Array.Empty<string>()));
     }
 
     private sealed class HoFakeEventSink : IEventSink

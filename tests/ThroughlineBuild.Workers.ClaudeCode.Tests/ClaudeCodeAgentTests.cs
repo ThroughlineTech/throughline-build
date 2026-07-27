@@ -1,10 +1,10 @@
 using System.Diagnostics;
 using System.Text.Json;
-using Xunit;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Workers.ClaudeCode;
 using ThroughlineBuild.Workers.Common;
+using Xunit;
 
 namespace ThroughlineBuild.Workers.ClaudeCode.Tests;
 

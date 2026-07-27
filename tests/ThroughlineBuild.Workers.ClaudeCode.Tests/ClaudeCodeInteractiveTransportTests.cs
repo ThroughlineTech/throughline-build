@@ -299,7 +299,7 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
     private static string UserLineWithNonce(string cwd, string nonce) =>
         "{\"type\":\"user\",\"cwd\":" + Json(cwd) +
         ",\"message\":{\"role\":\"user\",\"content\":" +
-        Json("Read .build/brief.md (latticeflow run token, ignore: " + nonce + ")") + "}}";
+        Json("Read .build/brief.md (throughline-build run token, ignore: " + nonce + ")") + "}}";
 
     [Fact]
     public async Task TurnDone_ConsumesExactLocatedTranscript_IgnoringNewerSameCwdTranscript()
@@ -938,8 +938,8 @@ public sealed class ClaudeInteractiveLiveFactAttribute : FactAttribute
 {
     public ClaudeInteractiveLiveFactAttribute()
     {
-        if (Environment.GetEnvironmentVariable("LATTICEFLOW_RUN_CLAUDE_INTERACTIVE_LIVE") != "1")
-            Skip = "Set LATTICEFLOW_RUN_CLAUDE_INTERACTIVE_LIVE=1 to consume Claude usage.";
+        if (Environment.GetEnvironmentVariable("THROUGHLINE_BUILD_RUN_CLAUDE_INTERACTIVE_LIVE") != "1")
+            Skip = "Set THROUGHLINE_BUILD_RUN_CLAUDE_INTERACTIVE_LIVE=1 to consume Claude usage.";
     }
 }
 

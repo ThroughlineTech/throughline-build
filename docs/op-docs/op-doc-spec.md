@@ -1,6 +1,6 @@
 # Op-Doc Format Spec
 
-An op-doc is a planning artifact that drives agent orchestration in the latticeflow ticket workflow. When told "turn this into an op-doc," produce a document that matches this spec exactly. Op-docs live in `docs/op-docs/` and are fed to the scaffold and chain workflows. This guide is the single source for the format, chain execution contract, and canonical example.
+An op-doc is a planning artifact that drives agent orchestration in the Throughline Build ticket workflow. When told "turn this into an op-doc," produce a document that matches this spec exactly. Op-docs live in `docs/op-docs/` and are fed to the scaffold and chain workflows. This guide is the single source for the format, chain execution contract, and canonical example.
 
 **Op-doc vs. runbook:** A runbook is reusable reference for a recurring procedure ("how to rotate the certs"). An op-doc is a one-time, bounded operation with a defined done state ("migrate X to Y - here is what done looks like, here are the briefs"). If you find yourself writing a reusable step-by-step procedure, stop - that is a runbook, not an op-doc.
 
@@ -112,7 +112,7 @@ Each implement brief receives carried-forward context from prior tickets, includ
 - Briefs-table Deps column: `-` for no intra-plan deps or brief number(s) for intra-plan deps. Declare cross-plan dependencies with plan letters in the Dispatch order table.
 - Brief slugs: lowercase kebab-case, 3-6 words.
 - Plan letters: A, B, C. Brief numbers: 01, 02, 03 (continuous across plans).
-- Project release gate: most stacks have a verification step that a passing local test suite does not catch - the build/compile/type-check/bundle/package step that only fails outside the unit run. Name that gate once for the target project, then add a `<gate> succeeds` checkbox to Acceptance for any brief that could break it. The gate is stack-specific, not universal: a C# Native AOT project (such as the latticeflow repo this spec lives in) uses `AOT publish succeeds` for any brief that registers new types in a source-gen JSON context; a TypeScript project might use `tsc --noEmit passes` or `production build succeeds`; a Python project `the packaged entrypoint imports cleanly`. Pick the gate that matches the stack, or omit this checkbox entirely if the project has no gate beyond its tests.
+- Project release gate: most stacks have a verification step that a passing local test suite does not catch - the build/compile/type-check/bundle/package step that only fails outside the unit run. Name that gate once for the target project, then add a `<gate> succeeds` checkbox to Acceptance for any brief that could break it. The gate is stack-specific, not universal: a C# Native AOT project (such as the Throughline Build repo this spec lives in) uses `AOT publish succeeds` for any brief that registers new types in a source-gen JSON context; a TypeScript project might use `tsc --noEmit passes` or `production build succeeds`; a Python project `the packaged entrypoint imports cleanly`. Pick the gate that matches the stack, or omit this checkbox entirely if the project has no gate beyond its tests.
 - The lead paragraph is complete prose, not a sentence fragment.
 - "Why this exists" and "What done looks like" are prose paragraphs, not bullets.
 - Goal sections (plan-level and brief-level) are one paragraph each.

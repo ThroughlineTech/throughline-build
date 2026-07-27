@@ -16,8 +16,8 @@ namespace ThroughlineBuild.Helpers.Tests;
 public class ChainCommitRangeTests
 {
     private const string StartSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    private const string EndSha   = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    private const string WorkDir  = "/fake/workdir";
+    private const string EndSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    private const string WorkDir = "/fake/workdir";
 
     // -----------------------------------------------------------------------
     // Empty-range (first ticket): anchors equal

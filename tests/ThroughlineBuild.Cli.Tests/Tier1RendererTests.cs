@@ -14,10 +14,10 @@ public class Tier1RendererTests
     // ------------------------------------------------------------------
 
     private static CommandHelp BuildChainHelp() => new CommandHelp(
-        Name:    "chain",
-        Group:   CommandGroup.Pipeline,
+        Name: "chain",
+        Group: CommandGroup.Pipeline,
         Summary: "Run the full chain for one or more tickets",
-        Usage:   "chain <ticket-id> [<ticket-id> ...] [options]",
+        Usage: "chain <ticket-id> [<ticket-id> ...] [options]",
         Options:
         [
             new OptionDescription("--sequential", "Process tickets one at a time", false),
@@ -80,17 +80,17 @@ public class Tier1RendererTests
     public void Render_GlobalOptionsFiltered_OnlyCommandSpecificOptionsShown()
     {
         var help = new CommandHelp(
-            Name:    "plan",
-            Group:   CommandGroup.Pipeline,
+            Name: "plan",
+            Group: CommandGroup.Pipeline,
             Summary: "Run the plan phase",
-            Usage:   "plan <ticket-id>",
+            Usage: "plan <ticket-id>",
             Options:
             [
                 new OptionDescription("--agent", "Agent profile override", false),
                 new OptionDescription("--debug", "Stream worker output",   true),
             ],
             ExitCodes: [],
-            Examples:  []
+            Examples: []
         );
 
         var output = Tier1Renderer.Render(help);
@@ -103,16 +103,16 @@ public class Tier1RendererTests
     public void Render_AllOptionsGlobal_OmitsOptionsSection()
     {
         var help = new CommandHelp(
-            Name:    "plan",
-            Group:   CommandGroup.Pipeline,
+            Name: "plan",
+            Group: CommandGroup.Pipeline,
             Summary: "Run the plan phase",
-            Usage:   "plan <ticket-id>",
+            Usage: "plan <ticket-id>",
             Options:
             [
                 new OptionDescription("--debug", "Stream worker output", true),
             ],
             ExitCodes: [],
-            Examples:  []
+            Examples: []
         );
 
         var output = Tier1Renderer.Render(help);
@@ -124,13 +124,13 @@ public class Tier1RendererTests
     public void Render_EmptyExitCodes_OmitsExitCodesSection()
     {
         var help = new CommandHelp(
-            Name:      "plan",
-            Group:     CommandGroup.Pipeline,
-            Summary:   "Run the plan phase",
-            Usage:     "plan <ticket-id>",
-            Options:   [],
+            Name: "plan",
+            Group: CommandGroup.Pipeline,
+            Summary: "Run the plan phase",
+            Usage: "plan <ticket-id>",
+            Options: [],
             ExitCodes: [],
-            Examples:  []
+            Examples: []
         );
 
         var output = Tier1Renderer.Render(help);
@@ -142,13 +142,13 @@ public class Tier1RendererTests
     public void Render_EmptyExamples_OmitsExamplesSection()
     {
         var help = new CommandHelp(
-            Name:      "plan",
-            Group:     CommandGroup.Pipeline,
-            Summary:   "Run the plan phase",
-            Usage:     "plan <ticket-id>",
-            Options:   [],
+            Name: "plan",
+            Group: CommandGroup.Pipeline,
+            Summary: "Run the plan phase",
+            Usage: "plan <ticket-id>",
+            Options: [],
             ExitCodes: [],
-            Examples:  []
+            Examples: []
         );
 
         var output = Tier1Renderer.Render(help);
@@ -160,11 +160,11 @@ public class Tier1RendererTests
     public void Render_ExamplesWithoutAnnotations_SingleColumnFormat()
     {
         var help = new CommandHelp(
-            Name:      "plan",
-            Group:     CommandGroup.Pipeline,
-            Summary:   "Run the plan phase",
-            Usage:     "plan <ticket-id>",
-            Options:   [],
+            Name: "plan",
+            Group: CommandGroup.Pipeline,
+            Summary: "Run the plan phase",
+            Usage: "plan <ticket-id>",
+            Options: [],
             ExitCodes: [],
             Examples:
             [

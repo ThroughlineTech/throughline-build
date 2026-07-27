@@ -111,10 +111,10 @@ public class ProjectResolverTests
         var discovery = new StubProjectDiscovery { Projects = [] };
         var resolver = new ProjectResolver(discovery);
 
-        await resolver.ResolveAsync("LatticeFlow", CancellationToken.None);
+        await resolver.ResolveAsync("SampleProject", CancellationToken.None);
 
         // First 6 letters of the single word, uppercased
-        Assert.Equal("LATTIC", discovery.LastCreatedIdentifier);
+        Assert.Equal("SAMPLE", discovery.LastCreatedIdentifier);
     }
 
     // ---- raw-credentials constructor (covers the acceptance criterion that the resolver
@@ -124,10 +124,10 @@ public class ProjectResolverTests
     public async Task ResolveAsync_ViaRawCredentials_FindsExistingProject()
     {
         const string projectId = "eeeeeeee-1234-0000-0000-000000000001";
-        const string projectName = "LatticeFlow";
+        const string projectName = "Sample Project";
 
         var projectListJson = $$"""
-            {"results":[{"id":"{{projectId}}","name":"{{projectName}}","identifier":"LF"}]}
+            {"results":[{"id":"{{projectId}}","name":"{{projectName}}","identifier":"SP"}]}
             """;
 
         var handler = new FakeMessageHandler();

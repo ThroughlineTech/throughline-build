@@ -1,0 +1,176 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net10.0": {
+      "Microsoft.DotNet.ILCompiler": {
+        "type": "Direct",
+        "requested": "[10.0.8, )",
+        "resolved": "10.0.8",
+        "contentHash": "RJxitcN5CCyZDcPNXKLsecwKvACzmy8C1z8hGM9+hFcnPhv1jDysJFFIeUHIPWaZ6wDAfYtZcgKEtegvL2Nz8A=="
+      },
+      "Microsoft.NET.ILLink.Tasks": {
+        "type": "Direct",
+        "requested": "[10.0.8, )",
+        "resolved": "10.0.8",
+        "contentHash": "dVbSXGIFNR5nZcv2tOLoWI+a9T4jtFd77IYjuND+QVe360qWgAF7H0WtoopYhRw/+SgpGUTyrkrh+65+ClNnfw=="
+      },
+      "Tomlyn": {
+        "type": "Direct",
+        "requested": "[2.10.1, )",
+        "resolved": "2.10.1",
+        "contentHash": "ykjOY3IpYmC4SpPcAZRTl/w2jTmhPMDydHq8xcV7tTBAQ22nKBsOkPqauIrZlMjHm03cmKfV23UOPscKp+J4Og=="
+      },
+      "Polly.Core": {
+        "type": "Transitive",
+        "resolved": "8.7.0",
+        "contentHash": "BS2t+nsBer16PIebCEPNBK5fgMisADQyRCd7K+BgkMWpFmSaiYE+rVVNpFhGRqUkJmNSLmw0uCNzHHWfgml28Q=="
+      },
+      "throughlinebuild.anthropic": {
+        "type": "Project",
+        "dependencies": {
+          "Polly": "[8.7.0, )",
+          "ThroughlineBuild.Contracts": "[1.0.0, )",
+          "ThroughlineBuild.ModelClient": "[1.0.0, )"
+        }
+      },
+      "throughlinebuild.briefs": {
+        "type": "Project",
+        "dependencies": {
+          "ThroughlineBuild.Contracts": "[1.0.0, )",
+          "ThroughlineBuild.Helpers": "[1.0.0, )"
+        }
+      },
+      "throughlinebuild.commands": {
+        "type": "Project",
+        "dependencies": {
+          "ThroughlineBuild.Contracts": "[1.0.0, )",
+          "ThroughlineBuild.Helpers": "[1.0.0, )",
+          "ThroughlineBuild.JudgmentSlots": "[1.0.0, )",
+          "ThroughlineBuild.Phases": "[1.0.0, )",
+          "ThroughlineBuild.Scaffold": "[1.0.0, )"
+        }
+      },
+      "throughlinebuild.contracts": {
+        "type": "Project"
+      },
+      "throughlinebuild.eventlog": {
+        "type": "Project",
+        "dependencies": {
+          "ThroughlineBuild.Contracts": "[1.0.0, )"
+        }
+      },
+      "throughlinebuild.git": {
+        "type": "Project",
+        "dependencies": {
+          "ThroughlineBuild.Contracts": "[1.0.0, )"
+        }
+      },
+      "throughlinebuild.helpers": {
+        "type": "Project",
+        "dependencies": {
+          "ThroughlineBuild.Contracts": "[1.0.0, )"
+        }
+      },
+      "throughlinebuild.judgmentslots": {
+        "type": "Project",
+        "dependencies": {
+          "ThroughlineBuild.Contracts": "[1.0.0, )"
+        }
+      },
+      "throughlinebuild.modelclient": {
+        "type": "Project"
+      },
+      "throughlinebuild.phases": {
+        "type": "Project",
+        "dependencies": {
+          "ThroughlineBuild.Briefs": "[1.0.0, )",
+          "ThroughlineBuild.Contracts": "[1.0.0, )",
+          "ThroughlineBuild.Git": "[1.0.0, )",
+          "ThroughlineBuild.Helpers": "[1.0.0, )",
+          "ThroughlineBuild.Verification": "[1.0.0, )",
+          "ThroughlineBuild.Workers.Common": "[1.0.0, )"
+        }
+      },
+      "throughlinebuild.plane": {
+        "type": "Project",
+        "dependencies": {
+          "Polly": "[8.7.0, )",
+          "ThroughlineBuild.Contracts": "[1.0.0, )"
+        }
+      },
+      "throughlinebuild.scaffold": {
+        "type": "Project",
+        "dependencies": {
+          "ThroughlineBuild.Contracts": "[1.0.0, )"
+        }
+      },
+      "throughlinebuild.verification": {
+        "type": "Project",
+        "dependencies": {
+          "ThroughlineBuild.Briefs": "[1.0.0, )",
+          "ThroughlineBuild.Contracts": "[1.0.0, )",
+          "ThroughlineBuild.Workers.Common": "[1.0.0, )"
+        }
+      },
+      "throughlinebuild.workers.claudecode": {
+        "type": "Project",
+        "dependencies": {
+          "ThroughlineBuild.Contracts": "[1.0.0, )",
+          "ThroughlineBuild.Workers.Common": "[1.0.0, )"
+        }
+      },
+      "throughlinebuild.workers.codex": {
+        "type": "Project",
+        "dependencies": {
+          "ThroughlineBuild.Contracts": "[1.0.0, )",
+          "ThroughlineBuild.Workers.Common": "[1.0.0, )"
+        }
+      },
+      "throughlinebuild.workers.common": {
+        "type": "Project",
+        "dependencies": {
+          "ThroughlineBuild.Contracts": "[1.0.0, )"
+        }
+      },
+      "throughlinebuild.workers.copilot": {
+        "type": "Project",
+        "dependencies": {
+          "ThroughlineBuild.Contracts": "[1.0.0, )",
+          "ThroughlineBuild.Workers.Common": "[1.0.0, )"
+        }
+      },
+      "throughlinebuild.workers.gemini": {
+        "type": "Project",
+        "dependencies": {
+          "ThroughlineBuild.Contracts": "[1.0.0, )",
+          "ThroughlineBuild.Workers.Common": "[1.0.0, )"
+        }
+      },
+      "Polly": {
+        "type": "CentralTransitive",
+        "requested": "[8.7.0, )",
+        "resolved": "8.7.0",
+        "contentHash": "0qR4f0OR8FeCAfLWcfwzAM7w6EmpUgwa22PgxKjcL25dEAto7sKpQQXbtxp38vVvK+V3RFkh/TeI7g/iUdoYIQ==",
+        "dependencies": {
+          "Polly.Core": "8.7.0"
+        }
+      }
+    },
+    "net10.0/win-x64": {
+      "Microsoft.DotNet.ILCompiler": {
+        "type": "Direct",
+        "requested": "[10.0.8, )",
+        "resolved": "10.0.8",
+        "contentHash": "RJxitcN5CCyZDcPNXKLsecwKvACzmy8C1z8hGM9+hFcnPhv1jDysJFFIeUHIPWaZ6wDAfYtZcgKEtegvL2Nz8A==",
+        "dependencies": {
+          "runtime.win-x64.Microsoft.DotNet.ILCompiler": "10.0.8"
+        }
+      },
+      "runtime.win-x64.Microsoft.DotNet.ILCompiler": {
+        "type": "Transitive",
+        "resolved": "10.0.8",
+        "contentHash": "S+9omeowlFjRReD0VB/Q4u3DcN7+vueJSF37saFj0U2OSJIkfI7gGKQRsDxGIf0MwLha14qGrjRC3bDGhvF0Gg=="
+      }
+    }
+  }
+}

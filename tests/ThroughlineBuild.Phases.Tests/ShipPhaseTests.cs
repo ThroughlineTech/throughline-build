@@ -243,7 +243,7 @@ public class ShipPhaseTests
         Assert.Contains("src/A.cs", paths);
         Assert.Contains("src/B.cs", paths);
 
-        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.StateTransition));
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.StateTransition);
     }
 
     [Fact]
@@ -300,7 +300,7 @@ public class ShipPhaseTests
         Assert.Contains("/abs/src/A.cs", markerFiles);
         Assert.Contains("/abs/src/B.cs", markerFiles);
 
-        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.StateTransition));
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.StateTransition);
     }
 
     [Fact]
@@ -335,7 +335,7 @@ public class ShipPhaseTests
         var checksFailed = (IReadOnlyList<string>)gates[0].Data["checks_failed"];
         Assert.Equal(new[] { "test", "lint" }, checksFailed);
 
-        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.StateTransition));
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.StateTransition);
     }
 
     [Fact]
@@ -358,7 +358,7 @@ public class ShipPhaseTests
         Assert.Equal(ShipFailureStage.FastForwardMerge, result.FailedAt);
         Assert.Contains("feature/xyz", result.FailureReason ?? "");
         Assert.Empty(ticketing.Transitions);
-        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.StateTransition));
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.StateTransition);
     }
 
     [Fact]
@@ -934,7 +934,7 @@ public class ShipPhaseTests
         Assert.Equal(0, git.RebaseCallCount);
 
         // No MainAutoRebased event (no attempt was made)
-        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.TargetAutoRebased));
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.TargetAutoRebased);
 
         // GateFailure with kind=diverged_bases emitted
         var gateFailures = events.Events.Where(e => e.Kind == EventKind.GateFailure).ToList();
@@ -1077,7 +1077,7 @@ public class ShipPhaseTests
         // ticket must remain InReview - no Done transition, no shipped_at comment
         Assert.Empty(ticketing.Transitions);
         Assert.Empty(ticketing.Comments);
-        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.StateTransition));
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.StateTransition);
 
         // FF merge must have succeeded (push comes after)
         Assert.Equal(1, git.FastForwardCallCount);
@@ -1309,15 +1309,15 @@ public class ShipPhaseTests
 
         public Task UpdateDescriptionAsync(string id, string html, CancellationToken ct) =>
             Task.CompletedTask;
-    
+
         public Task AddRelationAsync(string blockedId, string blockerId, CancellationToken ct) =>
             Task.CompletedTask;
 
-    public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
-            string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
-            Task.FromResult(new CreateChildTicketsResult(
-                children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
-                Array.Empty<string>()));
+        public Task<CreateChildTicketsResult> CreateChildTicketsAsync(
+                string parentUuid, IReadOnlyList<ChildTicketSpec> children, CancellationToken ct) =>
+                Task.FromResult(new CreateChildTicketsResult(
+                    children.Select((c, i) => new CreatedChild($"fake-id-{i}", $"fake-uuid-{i}")).ToList().AsReadOnly(),
+                    Array.Empty<string>()));
     }
 
     private sealed class FakeEventSink : IEventSink
@@ -1713,7 +1713,7 @@ public class ShipPhaseTests
         Assert.Contains("check-a", names);
 
         // No gate failure
-        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.GateFailure));
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.GateFailure);
 
         // Done transition
         Assert.Single(ticketing.Transitions);
@@ -1751,7 +1751,7 @@ public class ShipPhaseTests
         Assert.Contains("check-a", names);
 
         // No gate failure
-        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.GateFailure));
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.GateFailure);
 
         // Done transition
         Assert.Single(ticketing.Transitions);
@@ -1855,7 +1855,7 @@ public class ShipPhaseTests
         var names = (IReadOnlyList<string>)advisoryEvent.Data["names"];
         Assert.Contains("lint", names);
 
-        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.GateFailure));
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.GateFailure);
         Assert.Single(ticketing.Transitions);
         Assert.Equal(TicketState.Done, ticketing.Transitions[0].state);
     }
@@ -1921,7 +1921,7 @@ public class ShipPhaseTests
             .Where(e => e.Kind == EventKind.TicketWrite)
             .FirstOrDefault(e => e.Data.TryGetValue("action", out var a) && a.ToString() == "advisory_failures_noted");
         Assert.NotNull(advisoryEvent);
-        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.GateFailure));
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.GateFailure);
         Assert.Single(ticketing.Transitions);
         Assert.Equal(TicketState.Done, ticketing.Transitions[0].state);
     }
@@ -1971,7 +1971,7 @@ public class ShipPhaseTests
 
         Assert.True(result.Success);
         Assert.Null(result.FailedAt);
-        Assert.Empty(events.Events.Where(e => e.Kind == EventKind.GateFailure));
+        Assert.DoesNotContain(events.Events, e => e.Kind == EventKind.GateFailure);
 
         // The probe re-ran only the regressed check plus Setup prerequisites.
         Assert.Equal(1, prober.ProbeCallCount);

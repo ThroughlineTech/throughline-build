@@ -290,7 +290,7 @@ public class ConfigProfileWriterTests
         var rendered = outcome.NewText!;
 
         // Sanity: the rendered TOML re-parses cleanly via Tomlyn (no raw control chars).
-        var model = Toml.ToModel(rendered);
+        var model = TomlSerializer.Deserialize<TomlTable>(rendered);
         Assert.NotNull(model);
         Assert.Contains("required_paths = [\"package.json\", \"src\"]", rendered);
 
@@ -344,7 +344,7 @@ public class ConfigProfileWriterTests
         Assert.Contains("convention_files = [", rendered);
 
         // Sanity: the rendered TOML re-parses cleanly via Tomlyn (escaping is valid).
-        Assert.NotNull(Toml.ToModel(rendered));
+        Assert.NotNull(TomlSerializer.Deserialize<TomlTable>(rendered));
 
         var tmpDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(tmpDir);
@@ -379,7 +379,7 @@ public class ConfigProfileWriterTests
         var rendered = ConfigProfileWriter.Apply(noProject, profile, force: false).NewText!;
         Assert.Contains("[project]", rendered);
         Assert.Contains("convention_files = [\"conftest.py\"]", rendered);
-        Assert.NotNull(Toml.ToModel(rendered));
+        Assert.NotNull(TomlSerializer.Deserialize<TomlTable>(rendered));
     }
 
     // Empty bundle writes no convention_files line (no `convention_files = []` noise).
@@ -413,7 +413,7 @@ public class ConfigProfileWriterTests
 
         Assert.Contains("role = \"gating\"", rendered);
         Assert.Contains("role = \"advisory\"", rendered);
-        Assert.NotNull(Toml.ToModel(rendered));
+        Assert.NotNull(TomlSerializer.Deserialize<TomlTable>(rendered));
 
         var tmpDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(tmpDir);
@@ -458,7 +458,7 @@ public class ConfigProfileWriterTests
         Assert.True(outcome.Changed, outcome.SkipReason);
         var rendered = outcome.NewText!;
         Assert.Contains("role = \"setup\"", rendered);
-        Assert.NotNull(Toml.ToModel(rendered));
+        Assert.NotNull(TomlSerializer.Deserialize<TomlTable>(rendered));
 
         var tmpDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(tmpDir);
