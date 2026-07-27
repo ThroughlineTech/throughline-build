@@ -6,7 +6,7 @@
 This is the de-facto architecture reference for the current source tree. Public
 wire formats have their own stable specifications:
 
-- [event log](event-log-format.md)
+- [event log](build-event-log-format.md)
 - [worker debug transcript](debug-transcript-format.md)
 - [WORKER_RESULT envelope](worker-result-envelope.md)
 

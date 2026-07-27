@@ -16,7 +16,7 @@ namespace ThroughlineBuild.Scaffold.Tests;
 public class ExperimentThreeOpDocDriftTests
 {
     private static readonly string[] OpDocRelParts =
-        { "docs", "analysis", "experiment 3", "01-survey-experiment-3.md" };
+        { "docs", "analysis", "workloads", "survey-experiment-3-and-4.md" };
 
     private static string FindOpDocPath()
     {
