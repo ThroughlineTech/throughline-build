@@ -1,6 +1,6 @@
 # 06 - Public Surfaces
 
-Last refreshed: 2026-06-11 (HEAD 3a73eb9); `build setup` entry updated 2026-06-14 (`heartbeat-stage-07-cutover`: setup now also runs the Claude transport preflight)
+Last refreshed: 2026-07-26 (HEAD 00dc074)
 
 The CLI surface, the exported library interfaces, and the inter-project contracts that anything outside this repo (or any unfamiliar reader inside it) might depend on. Status for each.
 
@@ -13,7 +13,7 @@ For inter-project contracts (records and interfaces) in detail, see [07-contract
 The whole user-facing API of this repository.
 
 ```
-build <verb> [args] [--debug | --quiet] [--summary-json] [--error-location]
+build <verb> [args] [--debug | --quiet] [--summary-json] [--json] [--error-location]
 
   plan <id> [id ...]      [--agent <name>] [--from-brief]
   implement <id> [id ...] [--agent <name>]
@@ -48,7 +48,7 @@ build <verb> [args] [--debug | --quiet] [--summary-json] [--error-location]
   --version | -V
 ```
 
-There are **21 dispatchable verbs**: `plan`, `implement`, `review`, `ship`, `chain`, `rework`, `decompose`, `new`, `scaffold`, `init`, `setup`, `user-guide`, `op-doc`, `models`, `settarget`, `sweep`, `list`, `amend`, `close`, `defer`, `reopen` - plus `help`, `--help`, and `--version`, which short-circuit before verb dispatch. Dispatch is still an `if (verb == ...)` chain in [Program.cs](../../src/ThroughlineBuild.Cli/Program.cs), not a switch/registry. Five verbs run *before* config load because they bootstrap or edit config / write docs: the `init` branch ([Program.cs:231](../../src/ThroughlineBuild.Cli/Program.cs#L231)), `settarget` ([Program.cs:294](../../src/ThroughlineBuild.Cli/Program.cs#L294)), `user-guide` ([Program.cs:304](../../src/ThroughlineBuild.Cli/Program.cs#L304)), `op-doc` ([Program.cs:313](../../src/ThroughlineBuild.Cli/Program.cs#L313)), and `models` ([Program.cs:403](../../src/ThroughlineBuild.Cli/Program.cs#L403)).
+There are **26 dispatchable action verbs**: `init`, `settarget`, `user-guide`, `op-doc`, `models`, `sweep`, `list`, `get`, `comments`, `comment`, `transition`, `relate`, `setup`, `amend`, `close`, `defer`, `reopen`, `new`, `scaffold`, `rework`, `decompose`, `plan`, `implement`, `review`, `ship`, and `chain`. Help and version are meta-surfaces. Dispatch remains an `if (verb == ...)` chain in `RunAsync` ([Program.cs:23](../../src/ThroughlineBuild.Cli/Program.cs#L23)). Five verbs run before config load because they bootstrap or edit config/write docs: `init`, `settarget`, `user-guide`, `op-doc`, and `models refresh`.
 
 New or changed since the last refresh:
 
@@ -71,7 +71,13 @@ Help is no longer one usage dump. Three tiers, all AOT-safe and I/O-free:
 - **Tier 1**: `build <verb> --help` (any position) renders that verb's options/exit-codes/examples via the `Tier1Renderer` class ([Tier1Renderer.cs](../../src/ThroughlineBuild.Cli/Help/Tier1Renderer.cs)).
 - **Topics**: `build help <topic>` renders one of four prose topics - `config`, `digest`, `exit-codes`, `summary` - registered in `HelpTopicRegistry.Build` ([HelpTopicRegistry.cs:32-35](../../src/ThroughlineBuild.Cli/Help/Topics/HelpTopicRegistry.cs#L32-L35)); an unknown topic lists the valid names and exits 2.
 
-The model behind tiers 0/1 is the `HelpRegistry` populated by `HelpRegistryFactory.Build` ([HelpRegistryFactory.cs:24](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs#L24)), which registers **19** commands in three groups (Pipeline / Work items / Configure). Status: Functional, with a gap: `models` and `sweep` are dispatchable but NOT registered in the help registry, so `build models --help` falls back to the Tier 0 index.
+The model behind tiers 0/1 is the `HelpRegistry` populated by `HelpRegistryFactory.Build` ([HelpRegistryFactory.cs:7](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs#L7)), which registers **24** commands in three groups. Status: Functional, with a gap: `models` and `sweep` are dispatchable but not registered.
+
+### Versioned JSON ticket contract
+
+The global `--json` flag is handled before positional parsing. Supported ticket operations are `list`, `get`, `comments`, `comment`, `transition`, `relate`, structured `new -`, `close`, `defer`, `reopen`, and `amend`. Every successful response is `{schemaVersion:1, ok:true, data:...}`; every failure is `{schemaVersion:1, ok:false, error:{code,message}}`. `CliEnvelopeWriter.SchemaVersion` and `CliErrorCodes` are the registries of record ([CliEnvelopeWriter.cs:15](../../src/ThroughlineBuild.Cli/Json/CliEnvelopeWriter.cs#L15), [CliEnvelope.cs:16](../../src/ThroughlineBuild.Cli/Json/CliEnvelope.cs#L16)). Error codes are `usage`, `config_error`, `missing_secret`, `not_found`, and `failure`; the process exit code remains 0/1/2/3 and diagnostics stay on stderr. Status: Functional.
+
+`TicketDraft` is the strict structured-new schema: title, type, description, acceptance criteria, labels, optional parent, and typed relations. Unknown fields fail parsing through the source-generated `CliJsonContext`; relation kinds point to `RelationKinds.Allowed` rather than being duplicated here. The command resolves the parent and all relation targets before creating the issue, but relation POSTs occur after creation and are not transactional. Status: Functional with non-atomic relation attachment.
 
 ### Stable contracts on the CLI
 
@@ -118,7 +124,7 @@ The four codes new since the last refresh classify *environmental* stops that mu
 
 ### Loose ends (CLI surface)
 
-- `models` and `sweep` are missing from the tiered help registry (`HelpRegistryFactory.Build` registers 19 of the 21 verbs).
+- `models` and `sweep` are missing from the tiered help registry (`HelpRegistryFactory.Build` registers 24 of the 26 action verbs).
 - `CliUsage.UsageText` lags `ChainExitCodeMapper` on chain exit codes 10/11.
 - The `decompose` verb is dispatched directly to `DecomposePhase`, not through an `ITicketCommand`.
 - `--agent` selection names are validated at construction; an unknown name surfaces as a `ConfigException` from `WorkerAgentFactory.Create` - and a `[workers] default_agent` naming an undefined worker is now a clear Config error (TLB-512).
@@ -127,7 +133,11 @@ The four codes new since the last refresh classify *environmental* stops that mu
 
 ## Exported library surfaces
 
-Each `ThroughlineBuild.X.csproj` library is technically public if referenced by another project. In practice only `ThroughlineBuild.Cli` is consumed by anything outside the solution (it produces the binary). Library projects are private to the solution today. (An empty `src/ThroughlineBuild.Linear/` directory holds only stale build artifacts - there is no `.csproj` and it is not in the solution.)
+Most libraries are internal implementation packages by convention. `ThroughlineBuild.ClaudeCode` is the exception: it is an intentional reusable public facade and contains NuGet package metadata. The solution builds and tests it, but the repository has no pack/publish pipeline.
+
+### `ThroughlineBuild.ClaudeCode`
+
+`ClaudeCodeClient` exposes `CheckAsync`, `RunAsync(string, workingDirectory, options)`, and an advanced `RunAsync(Brief, ...)` overload ([ClaudeCodeClient.cs:9](../../src/ThroughlineBuild.ClaudeCode/ClaudeCodeClient.cs#L9)). `ClaudeCodeClientOptions` selects executable, transport, permissions, output limits, and hook behavior; `ClaudeCodeRunOptions` selects timeout, tools, environment, debug sinks, worker size, transcript context, and whether the public helper appends the `WORKER_RESULT` contract. `ClaudeCodeWorkerResultContract.EnsurePresent` makes that append idempotent. Runtime status: Functional. Distribution status: Partial.
 
 Below: the interfaces and record types with the most consumer surface area.
 
@@ -135,7 +145,7 @@ Below: the interfaces and record types with the most consumer surface area.
 
 The leaf of the dependency graph. Pure interfaces, records, enums - no I/O, no static state. 07-contracts.md tabulates the types file-by-file; the summary:
 
-- **Ticketing**: `ITicketing` (~13 methods), plus four bootstrap-era additions since the last refresh: `ITicketingConnectivity` (connectivity probe, declared alongside `ITicketing` at [ITicketing.cs:127](../../src/ThroughlineBuild.Contracts/ITicketing.cs#L127)), `IProjectDiscovery` (workspace-level list/find/create, [IProjectDiscovery.cs:15](../../src/ThroughlineBuild.Contracts/IProjectDiscovery.cs#L15)), `IProjectResolver` (name -> project id, found-or-created, [IProjectResolver.cs:28](../../src/ThroughlineBuild.Contracts/IProjectResolver.cs#L28)), `ITicketingProvisioner` (read/create states + labels, [ITicketingProvisioner.cs:14](../../src/ThroughlineBuild.Contracts/ITicketingProvisioner.cs#L14)). `TicketingUnavailableException` ([TicketingUnavailableException.cs:11](../../src/ThroughlineBuild.Contracts/TicketingUnavailableException.cs#L11)) is the typed transport-outage signal (TLB-545).
+- **Ticketing**: `ITicketing` covers reads, comments, transitions, mutation, and typed relation management (`ListRelationsAsync`, `GetRelationTicketAsync`, `CreateRelationAsync`, `RemoveRelationAsync`) in [ITicketing.cs](../../src/ThroughlineBuild.Contracts/ITicketing.cs). Bootstrap is split into `ITicketingConnectivity`, `IProjectDiscovery`, `IProjectResolver`, and `ITicketingProvisioner`. `TicketingUnavailableException` is the typed transport-outage signal.
 - **`WorkspaceSchema`** ([WorkspaceSchema.cs:13](../../src/ThroughlineBuild.Contracts/WorkspaceSchema.cs#L13)): the canonical 7 states (with Plane state-groups) and 9 labels the workflow assumes; single source of truth shared by the Plane client's runtime state map and `build setup` provisioning. A shared artifact with Plane - see 07-contracts.
 - **Workers**: `IWorkerAgent`, `IWorkerAgentFactory`, `IWorkerProgressDigester`, `WorkerOptions` - `WorkerOptions` ([IWorkerAgent.cs:51](../../src/ThroughlineBuild.Contracts/IWorkerAgent.cs#L51)) gained `DebugTranscript` (a `DebugTranscriptContext`) and `LeanPlanning` (effort-gated hygiene, exp-4) on top of `Size`.
 - **Gate contract types** (op TLB-500..510, new): `CompletionClaim` + `AcBinding` + `VerifierKind` ([CompletionClaim.cs](../../src/ThroughlineBuild.Contracts/Models/CompletionClaim.cs) - the `CompletionClaim` record at `#L18` carries `Provides`/`Consumes`/`AcBindings`/`TestsAdded` plus three explicitly UNENFORCED hook fields), `SmokeSignal` + `SmokeSignalKind` ([SmokeSignal.cs:10](../../src/ThroughlineBuild.Contracts/Models/SmokeSignal.cs#L10)). `CheckSpec`/`CheckResult` grew `CheckRole` (`Gating`/`Advisory`/`Setup`, [CheckResult.cs:8](../../src/ThroughlineBuild.Contracts/Verifier/CheckResult.cs#L8)), per-check `CanaryFile` lists, and a `CommandLine` echo on results so rework briefs can carry the oracle verbatim.
@@ -148,7 +158,7 @@ Enums: `TicketState` (7), `Size` (3), `Risk` (3), `Phase` (**11** - `Gate` added
 
 ### `ThroughlineBuild.Phases`
 
-The phase classes are the next-most-public surface. Eleven phase/orchestration classes: `PlanPhase`, `ImplementPhase`, `ReviewPhase`, `ShipPhase`, `ChainPhase`, `ReworkPhase`, `NewPhase`, `DraftPhase`, `DecomposePhase`, and - new - the `GatePhase` class ([GatePhase.cs:34](../../src/ThroughlineBuild.Phases/GatePhase.cs#L34)), which runs between implement and review in the chain loop: validates the `CompletionClaim`, runs the configured checks once against the warm worktree, collects `SmokeSignal`s, runs the consumes-provides preflight, and classifies hard-fails as code vs environment via `GateControlProber`. Its `GateOutcome` record ([GatePhase.cs:12-27](../../src/ThroughlineBuild.Phases/GatePhase.cs#L12-L27)) carries `Vacuous` and `EnvironmentFailure` flags that drive the no-rework chain stops. Each phase takes its dependencies via constructor (no DI container) and returns a typed result record declared next to it; each also implements `IWorkflowPhase`. The parallel/dependency-ordered chain machinery (`ParallelDispatcher`, `AncestorSkipFilter`, `EarlyExitManifest`, `TicketGraph`, `BatchCommitVerifier`, `ReworkRoundManifest`, `WorkingTreeHygieneGate`) is also public here. The Cli-side `ChainPhaseComposition` ([ChainPhaseComposition.cs](../../src/ThroughlineBuild.Cli/ChainPhaseComposition.cs)) is the extracted, testable composition root for chain wiring. Status: Functional.
+The phase classes are the next-most-public surface. Ten phase/orchestration classes: `PlanPhase`, `ImplementPhase`, `ReviewPhase`, `ShipPhase`, `ChainPhase`, `ReworkPhase`, `NewPhase`, `DraftPhase`, `DecomposePhase`, and `GatePhase`. `GatePhase` runs between implement and review, validates `CompletionClaim`, runs configured checks, collects `SmokeSignal` values, and classifies code versus environment failures through `GateControlProber` ([GatePhase.cs:34](../../src/ThroughlineBuild.Phases/GatePhase.cs#L34)). The dependency/order machinery (`ParallelDispatcher`, `AncestorSkipFilter`, `TicketGraph`, `ChainDependencyGraph`, `BatchCommitVerifier`, and hygiene/rework helpers) is also public. `ChainPhaseComposition` is the CLI's testable composition root. Status: Functional.
 
 ### `ThroughlineBuild.Briefs`
 

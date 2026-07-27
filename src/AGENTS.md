@@ -7,7 +7,8 @@ Architecture overview:
 Dependency order (leaf -> root):
 `Contracts`, `ModelClient` (leaves) -> `Git`, `Helpers`, `EventLog`, `Plane`,
 `JudgmentSlots`, `Scaffold`, `Workers.Common` -> `Briefs`, `Anthropic`,
-`Workers.{ClaudeCode,Codex,Gemini,Copilot}` -> `Verification` -> `Phases` ->
+`Workers.{ClaudeCode,Codex,Gemini,Copilot}` -> `ThroughlineBuild.ClaudeCode`
+(public facade), `Verification` -> `Phases` ->
 `Commands` -> `Cli`.
 
 The sln (`throughline-build.sln`) is the source of truth for what is a project:

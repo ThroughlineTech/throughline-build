@@ -1,6 +1,6 @@
 # 02 - Install, Build, Run
 
-Last refreshed: 2026-06-11 (HEAD 3a73eb9)
+Last refreshed: 2026-07-26 (HEAD 00dc074)
 
 How the repository gets onto a machine, what the build produces, what running it requires from the host, and what changes vs. cleans up on disk.
 
@@ -10,7 +10,7 @@ For runtime state details see [05-state-and-persistence.md](05-state-and-persist
 
 ## Toolchain prerequisites
 
-The repository is a `.NET 10` solution with native AOT publication. All 19 production csproj under `src/` target `net10.0` (a 20th directory, `src/ThroughlineBuild.Linear/`, holds only untracked build leftovers and has no csproj).
+The repository is a `.NET 10` solution with native AOT publication. All 20 production projects under `src/` target `net10.0`; `throughline-build.sln` is the membership source of truth.
 
 - **`.NET 10 SDK`** - required for `dotnet build`, `dotnet test`, `dotnet publish`. Verified in CI via `actions/setup-dotnet@v4` with `dotnet-version: '10.x'` ([.github/workflows/build.yml:27-29](../../.github/workflows/build.yml#L27-L29)).
 - **A native toolchain** for AOT publication on the target RID: MSVC on Windows, Xcode CLT on macOS, gcc/clang + system libc on Linux. This is implicit in `dotnet publish -r <rid>` and is not enforced by the scripts.
@@ -49,7 +49,7 @@ Per [README.md:4-9](../../README.md#L4-L9). Produces `src/ThroughlineBuild.Cli/b
 
 Cross-platform RIDs are noted in the README: `osx-arm64`, `linux-x64`.
 
-**Version stamping (TLB-459).** The Cli csproj sets `<VersionPrefix>0.1.0</VersionPrefix>` and a `GenerateBuildVersionSource` MSBuild target that emits a generated partial class setting the compile-time const `BuildVersion.Current` to `{VersionPrefix}+{shortSha}` (e.g. `0.1.0+09172e5`); when `SourceRevisionId` is empty (non-git build) the const degrades to the bare version ([src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj:54-84](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L54-L84)). The hand-written half of the partial is [src/ThroughlineBuild.Cli/BuildVersion.cs](../../src/ThroughlineBuild.Cli/BuildVersion.cs). `build -V` / `build --version` prints it ([src/ThroughlineBuild.Cli/Program.cs:27-31](../../src/ThroughlineBuild.Cli/Program.cs#L27-L31)), and the same value flows into the event-log `build_version` field via `SessionContext.BuildVersion` ([src/ThroughlineBuild.Cli/Program.cs:468-472](../../src/ThroughlineBuild.Cli/Program.cs#L468-L472)). Staying a const keeps the AOT publish reflection-free.
+**Version stamping (TLB-459).** The Cli csproj's `GenerateBuildVersionSource` target emits a partial class setting `BuildVersion.Current` to `{VersionPrefix}+{shortSha}` and falls back to the bare version without a source revision ([ThroughlineBuild.Cli.csproj:54](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L54)). `build -V` / `build --version` prints it, and the value also reaches the event-log session context. Staying a const keeps the AOT publish reflection-free.
 
 **AOT code-gen memory mitigation.** The Cli csproj sets `<IlcOptimizationPreference>Size</IlcOptimizationPreference>` and `<IlcMaxParallelism>1</IlcMaxParallelism>` ([src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj:12-13](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L12-L13)) to keep the ILC/LLVM backend from OOM-ing during publish (the crash surfaced as ILC exit `-1073740791`). Single-threaded code-gen trades publish wall-time for a bounded memory footprint. The same fix split the oversized `RunAsync` in `Program.cs` into `RunTicketVerbBodyAsync` / `RunChainVerbAsync` so no single method blew up the code generator (commit `dd7d781`).
 
@@ -62,13 +62,13 @@ Cross-platform RIDs are noted in the README: `osx-arm64`, `linux-x64`.
 RID=osx-arm64 ./build.sh   # cross-target
 ```
 
-[build.sh](../../build.sh) selects the RID from `uname -s`/`uname -m` (`linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64`, otherwise `win-x64`), creating `bin/` and publishing three AOT binaries into it ([build.sh:6-30](../../build.sh#L6-L30)):
+[build.sh](../../build.sh) selects the RID from `uname -s`/`uname -m` (`linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64`, otherwise `win-x64`), creates `bin/` plus `INSTALL_DIR` (default `$HOME/.local/bin`), and publishes three AOT binaries ([build.sh:6](../../build.sh#L6), [build.sh:23](../../build.sh#L23), [build.sh:33](../../build.sh#L33)):
 
 - `build` from `src/ThroughlineBuild.Cli`, copied from `src/ThroughlineBuild.Cli/bin/Release/net10.0/$RID/publish/` to `bin/build$EXT` ([build.sh:20-22](../../build.sh#L20-L22)).
 - `token-audit` from the single-file source `src/tools/token-audit.cs`, copied from `src/tools/artifacts/token-audit/` to `bin/token-audit$EXT` ([build.sh:24-26](../../build.sh#L24-L26)).
 - `analyze-event-log` from `src/tools/analyze-event-log.cs`, copied from `src/tools/artifacts/analyze-event-log/` to `bin/analyze-event-log$EXT` ([build.sh:28-30](../../build.sh#L28-L30)).
 
-`EXT` is `.exe` only when `RID` starts with `win-` ([build.sh:15-16](../../build.sh#L15-L16)); the RID fallback to `win-x64` for unrecognized `uname` output is the `*)` case arm ([build.sh:12](../../build.sh#L12)). Publishes run quiet (`--nologo -v q`) and the script ends by listing the three copied binaries ([build.sh:32-34](../../build.sh#L32-L34)). The two tools are project-less C# sources that `dotnet publish` compiles individually; their artifacts land under `src/tools/artifacts/` (gitignored, [.gitignore:16](../../.gitignore#L16)). `analyze-event-log` carries its own pricing table including `claude-fable-5` and treats the bare alias `fable` as that slug ([src/tools/analyze-event-log.cs:41](../../src/tools/analyze-event-log.cs#L41), [src/tools/analyze-event-log.cs:402](../../src/tools/analyze-event-log.cs#L402)).
+`install_atomic` copies each output to a temporary sibling and renames it into place, avoiding in-place executable replacement problems on macOS ([build.sh:23](../../build.sh#L23)). The three binaries are installed into repository `bin/` and `INSTALL_DIR`; the final PATH check warns if that directory is not searchable ([build.sh:50](../../build.sh#L50)). `EXT` is `.exe` only when `RID` starts with `win-`. The two tools are project-less C# sources that `dotnet publish` compiles individually; their artifacts land under `src/tools/artifacts/`.
 
 ### CI build matrix
 
@@ -78,6 +78,7 @@ RID=osx-arm64 ./build.sh   # cross-target
 
 - **`build.sh` does not chain to test** - operators publishing locally must run `dotnet test` separately. Only CI runs both.
 - **No release pipeline** in `.github/`. The published artifacts uploaded by CI are not promoted, signed, or tagged.
+- **The reusable `ThroughlineBuild.ClaudeCode` library is not packed.** Its project contains package metadata, but `build.sh` and CI only publish executables; there is no NuGet publish/signing path.
 - **AOT trim warnings** are not gated by CI; reflection-using DTOs that slip past source-gen would produce a runtime `NotSupportedException` only on the published binary (architecture Section 11). The reference regression test exists, but it is the only AOT-aware test.
 - **The machine-local root `Directory.Build.props` is invisible to a fresh clone** - an operator whose MSVC install also defeats `vswhere.exe` discovery must reconstruct the override file themselves; nothing in the repo documents its required shape except `tests/Directory.Build.props`'s comment.
 
@@ -121,7 +122,7 @@ The orchestrator constructs one agent per name referenced by `default_agent`, th
 
 | Agent name | Implementation | External CLI | Auth posture | Status |
 |---|---|---|---|---|
-| `claude-code` (or any other name) | `ClaudeCodeAgent` (fallback) | `claude` | Strips `ANTHROPIC_API_KEY` from the child env to force Claude Code OAuth ([src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs:620](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L620)). | Functional |
+| `claude-code` (or a custom Claude-family name) | `ClaudeCodeAgent` | `claude` | Product config defaults to the interactive PTY/ConPTY transport; `transport = "print"` is the rollback. Strips `ANTHROPIC_API_KEY` from the child environment to force Claude Code subscription auth. | Functional |
 | `codex` | `CodexAgent` | `codex` | Strips `CODEX_API_KEY` and `OPENAI_API_KEY` to force subscription auth ([src/ThroughlineBuild.Workers.Codex/CodexAgent.cs:338-339](../../src/ThroughlineBuild.Workers.Codex/CodexAgent.cs#L338-L339)). | Functional |
 | `gemini` | `GeminiAgent` | `gemini` | Strips `GEMINI_API_KEY` and `GOOGLE_API_KEY`, falling back to ADC / gcloud login ([src/ThroughlineBuild.Workers.Gemini/GeminiAgent.cs:285-286](../../src/ThroughlineBuild.Workers.Gemini/GeminiAgent.cs#L285-L286)). | Functional |
 | `copilot` | `CopilotAgent` | `copilot` | Additive, not subtractive: inherits the `gh` keyring credential, or the caller supplies `GH_TOKEN` via env ([src/ThroughlineBuild.Workers.Copilot/CopilotAgent.cs:192-200](../../src/ThroughlineBuild.Workers.Copilot/CopilotAgent.cs#L192-L200)). | Functional |
@@ -227,6 +228,7 @@ Removing the repo and its binaries:
 | Artifact | Location | Cleanup |
 |---|---|---|
 | AOT binaries | `bin/` (gitignored, [.gitignore:3](../../.gitignore#L3)) | Delete the directory. |
+| Installed binaries | `$INSTALL_DIR` or `$HOME/.local/bin` | Remove `build`, `token-audit`, and `analyze-event-log` (with `.exe` on Windows). |
 | Tool artifacts | `src/tools/artifacts/` (gitignored, [.gitignore:16](../../.gitignore#L16)) | Delete; regenerated by `build.sh`. |
 | Build output | each project's `bin/` and `obj/` | `dotnet clean` or delete. |
 | Config | `.build/config.toml` (gitignored, [.gitignore:14](../../.gitignore#L14)) | Delete. Removes the operator's secrets-in-clear from disk. |
@@ -238,7 +240,7 @@ Removing the repo and its binaries:
 | `secrets/` | gitignored top-level ([.gitignore:2](../../.gitignore#L2)) | Delete. |
 | Machine-local AOT overrides | `Directory.Build.props` / `.targets` at repo root (gitignored, [.gitignore:17-19](../../.gitignore#L17-L19)) | Delete; only affects native publishes on this machine. |
 
-The binary itself writes no state outside the repo. No global config, no per-user state. No service or daemon to stop - architecture Section 2 explicitly forbids a persistent server.
+There is no service or daemon to stop. The interactive Claude transport does use per-user and OS-temporary state: it pre-seeds workspace trust in the Claude configuration selected by `CLAUDE_CONFIG_DIR` or the home/profile directory, reads Claude's persisted project transcripts, and uses temporary lock/run directories. Non-debug run directories are cleaned after use; a crash can leave lock-free directories for the next sweeper pass.
 
 ### Loose ends
 

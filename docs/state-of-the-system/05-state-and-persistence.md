@@ -1,6 +1,6 @@
 # 05 - State and Persistence
 
-Last refreshed: 2026-06-11 (HEAD 3a73eb9)
+Last refreshed: 2026-07-26 (HEAD 00dc074)
 
 Everything `build` writes over the lifetime of a session: filesystem state, logs, scratch, Plane records, git refs. Where each lives and whether it is cleaned up.
 
@@ -12,7 +12,7 @@ For configuration files (read-only) see [04-configuration.md](04-configuration.m
 
 ### `.build/` (project-local runtime root)
 
-Gitignored fragments at [.gitignore:11-14](../../.gitignore#L11-L14): `.build/brief.md` (:11), `.build/events/` (:12), `.build/sessions/` (:13), `.build/config.toml` (:14). Note that in this repo `.build/config.toml` is nonetheless *tracked* (`git ls-files` lists it) - it was committed before the ignore entry, and gitignore does not untrack files. The other tracked file is `.build/_ticket-unknown-keys.md`.
+The repository ignores the whole `.build/` runtime root through the broad entry in `.gitignore`; `git ls-files .build` is empty at HEAD. Config, events, sessions, and transient briefs are operator-local state.
 
 | Path | Written by | Lifetime | Cleanup |
 |---|---|---|---|
@@ -40,17 +40,17 @@ Status: Functional.
 
 The `VerifierVerdict` event now also persists **failed-check evidence**: a `checks_failed_details` array (name, role, exit code, command, stdout/stderr tails capped at 2000 chars) so resumed rework briefs carry the check's own output, not a paraphrase ([src/ThroughlineBuild.Phases/ReviewPhase.cs:444-476](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L444-L476), TLB-509 / 7af36fb). `ReviewFeedbackRetriever` reads it back when a chain resumes an `InProgress` ticket.
 
-**`--debug` capture.** When `--debug` is passed to a worker-spawning verb, the orchestrator computes `.build/sessions/<stem>/` and creates it eagerly ([src/ThroughlineBuild.Cli/Program.cs:1201-1205](../../src/ThroughlineBuild.Cli/Program.cs#L1201-L1205); the `new` verb path at :739-743). The claude-code worker writes via `WriteDebugCapture` ([src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs:639-670](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L639-L670)):
+**`--debug` capture.** A worker-spawning verb computes `.build/sessions/<stem>/` and creates it eagerly. The Claude print transport writes its base files through `ClaudeCodeAgent.WriteDebugCapture` ([ClaudeCodeAgent.cs:486](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L486)):
 
 - `worker-stdin.txt` / `worker-stdout.txt` / `worker-stderr.txt` - brief and raw streams (UTF-8, no BOM)
 - `envelope-result.txt` - inner `result` field from the type=result envelope (when present)
 - `worker-result.json` - parsed `WorkerResult` (core fields only; metadata excluded for AOT-safe serialization)
 - `parse-error.txt` - failure reason when envelope absent / parse failed
-- `cancel-reason.txt` - present on timeout / Ctrl-C (`WriteCancellationCapture`, [src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs:690-712](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L690-L712))
+- `cancel-reason.txt` - present on timeout / Ctrl-C (`ClaudeCodeAgent.WriteCancellationCapture`, [ClaudeCodeAgent.cs:537](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L537))
 - `transcript.jsonl` (NEW, d651481) - structured per-turn transcript written by `WorkerTranscriptWriter` (`FileName` constant at [src/ThroughlineBuild.Workers.ClaudeCode/WorkerTranscriptWriter.cs:37](../../src/ThroughlineBuild.Workers.ClaudeCode/WorkerTranscriptWriter.cs#L37)): one `meta` record (build version, session id, rework round via `DebugTranscriptContext`), one `turn` record per assistant message (usage, latency, tool calls, a discovery/production/verification/respond/reason classification), `tool_result` records (bytes, error flag), and a terminal `result` record (synthesized if the worker died mid-session). Written on both the success path ([ClaudeCodeAgent.cs:185-190](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L185-L190)) and the cancellation path (:155-158). Best-effort; pure observation of the captured stream.
 - `rework-round.json` (NEW) - the rework-round side channel written by `ReworkRoundManifest.Write` from `ChainPhase` when a rework round re-dispatches the implementer ([src/ThroughlineBuild.Phases/ChainPhase.cs:685](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L685)): round number, trigger (`gate` or `review`), rationale, failed check names, before/after SHAs, and per-check gate evidence ([src/ThroughlineBuild.Phases/ReworkRoundManifest.cs:21-47](../../src/ThroughlineBuild.Phases/ReworkRoundManifest.cs#L21-L47)). No-op when `--debug` is off.
 
-The codex / gemini / copilot agents write the same base set except `worker-result-summary.txt` instead of `envelope-result.txt`; the per-turn transcript is claude-code-only. The scaffold profile-derivation worker is also debug-captured (52e1c3d) into its own `.build/sessions/scaffold-profile-<timestamp>/` directory ([src/ThroughlineBuild.Cli/Program.cs:1080](../../src/ThroughlineBuild.Cli/Program.cs#L1080)).
+The Claude print transport retains the stream-oriented files above. The interactive transport instead retains correlated evidence under `<capture>/claude-interactive-runs/<run-id>/`, including `worker-stdin.txt`, `hook-completion.json`, `assistant-transcript.txt`, `provider-transcript.jsonl`, `process-host.txt`, and `worker-result.json`. Non-debug interactive run directories live under the OS temp root and are deleted on normal completion. Codex, Gemini, and Copilot retain their own stream capture sets.
 
 `phase-status.json` is written by `EarlyExitManifest.Write` when a phase exits before the worker spawns (e.g. parent-ticket refusal, wrong state, hygiene gate; call sites at [src/ThroughlineBuild.Phases/ImplementPhase.cs:113-139](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L113-L139)).
 
@@ -91,6 +91,10 @@ Status: Functional.
 - `.tmp/`, `.scratch/`, `secrets/`: gitignored, reserved by convention, not written by `build`. The draft-mode `new` flow and `--review` editor loop use the OS temp dir, not `.tmp/`.
 - **`Directory.Build.props` is now gitignored** ([.gitignore:17-19](../../.gitignore#L17-L19)) - the machine-specific native-AOT linker overrides are kept local and never committed (see 08).
 
+### State outside the repository
+
+`build.sh` installs all three executables into `INSTALL_DIR` (default `$HOME/.local/bin`) through `install_atomic` ([build.sh:23](../../build.sh#L23), [build.sh:33](../../build.sh#L33)). The interactive Claude transport also pre-seeds workspace trust in the Claude user configuration, reads persisted Claude transcripts, and coordinates with per-worktree locks plus run directories under the OS temporary root. `ClaudeCodeInteractiveTransport.ExecuteAsync` owns this lifecycle ([ClaudeCodeInteractiveTransport.cs:97](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeInteractiveTransport.cs#L97)). Status: Functional; cleanup is automatic for normal non-debug runs and best effort after crashes.
+
 ### `build setup` writes (NEW)
 
 `build setup` provisions a fresh repo: `git init` when the directory is not a repository, then appends a managed block to `.gitignore` - `GitignoreManager.RequiredEntries` is a 12-entry language-neutral list (`.build/config.toml`, `.build/*.md`, `.build/events/`, `.build/sessions/`, `.worktrees/`, `secrets/`, `.tmp/`, plus OS/editor noise) merged idempotently under the `# Throughline Build (managed by 'build setup')` header ([src/ThroughlineBuild.Cli/LocalRepoSetup.cs:15-33](../../src/ThroughlineBuild.Cli/LocalRepoSetup.cs#L15-L33), merge at :60-78). On a commit-less repo it then makes the **welcome commit**: stages only `.gitignore` with message `welcome to throughline build` (`WelcomeCommit.EnsureInitialCommit`, [src/ThroughlineBuild.Cli/WelcomeCommit.cs:14-38](../../src/ThroughlineBuild.Cli/WelcomeCommit.cs#L14-L38)) so the first ship has a base ref; idempotent via the `HasAnyCommits` guard. `--check` mutates nothing. The same welcome-commit helper runs from connected `build init`. Setup also provisions Plane states/labels per `WorkspaceSchema` (remote writes, see below).
@@ -98,7 +102,7 @@ Status: Functional.
 ### Loose ends
 
 - **`.build/brief.md` and `transcript.jsonl` are claude-code-only.** Other workers leave no brief diagnostic or per-turn transcript.
-- **`.build/config.toml` is tracked in this repo** despite the gitignore entry; a careless `git add -A` in a fresh clone of another project would not have this problem, but here local config edits show up in `git status` history tooling that bypasses the ignore.
+- **All `.build/` state is ignored.** This prevents accidental commits but also means a fresh clone has no runnable backend configuration until `build init`.
 - **`MainWorktreeLock` is in-process only** - two separate `build` processes are not serialized.
 - **`.build/sessions/` and `.build/events/` never auto-rotate** (see Cleanup posture).
 - **`rework-round.json` is overwritten per round** within the same capture dir; only the last round's manifest survives a multi-round session.
@@ -120,6 +124,9 @@ Status: Functional. Every phase that writes to Plane does so via [src/Throughlin
 | `chain` (batch-implement path) | per confirmed batch ticket: `[implemented_at]` markers + transitions, exactly like per-ticket implement |
 | `rework` / `new` / `decompose` / `scaffold` / `amend` / `close` / `defer` / `reopen` | unchanged shapes: see `DecomposePhase` `[decomposed_at]` comment ([src/ThroughlineBuild.Phases/DecomposePhase.cs:143-147](../../src/ThroughlineBuild.Phases/DecomposePhase.cs#L143-L147)), `AmendCommand` append/rewrite ([src/ThroughlineBuild.Commands/AmendCommand.cs:66](../../src/ThroughlineBuild.Commands/AmendCommand.cs#L66), :101), close/defer cascade + decruft, reopen comment |
 | `setup` (NEW) | creates any missing Plane states/labels required by `WorkspaceSchema` (`ITicketingProvisioner`); `--check` reports gaps without mutating |
+| `relate` / structured `new` | creates or removes issue-relation edges; structured `new` may also set a parent and multiple typed relations after the issue itself is created |
+
+`TicketingWritePolicy.BestEffortAsync` ([TicketingWritePolicy.cs:15](../../src/ThroughlineBuild.Phases/TicketingWritePolicy.cs#L15)) distinguishes informational writes from state-bearing writes. Informational labels/comments in plan, gate, review, ship, and chain warn and continue during a Plane outage; lifecycle transitions, resume markers, and shipped markers remain hard requirements. A best-effort failure emits a local `ticketing_write_failed` event when possible.
 
 `AppendDescriptionAsync` ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:753](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L753)) does a read-modify-write append. Plane comments are HTML; `[name: value]` markers are parsed back by `MarkerParser` ([src/ThroughlineBuild.Helpers/MarkerParser.cs:5-42](../../src/ThroughlineBuild.Helpers/MarkerParser.cs#L5-L42)). `CommentMarkers.LatestValue` selects the freshest marker by comment `CreatedAt`, not list order ([src/ThroughlineBuild.Phases/CommentMarkers.cs:19-37](../../src/ThroughlineBuild.Phases/CommentMarkers.cs#L19-L37), TLB-412), so chain re-runs do not read stale prior-run SHAs.
 

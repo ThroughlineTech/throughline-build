@@ -1,6 +1,6 @@
 # 04 - Configuration and Environment
 
-Last refreshed: 2026-06-15 (`heartbeat-stage-07-finish-cutover`, Stage 07 cutover landed: the `[workers.claude-code].transport` default is now `interactive-hook` - both the config-loader omitted-value default and the generated `build init` template - validated by the npt5 operator dogfood; `print` is the documented rollback. The Claude transport capability preflight (`build setup` + pre-phase + transport-entry) gates it.); tracked-template and gitignored live-config distinction corrected 2026-07-26 (HEAD 5d7eb6d)
+Last refreshed: 2026-07-26 (HEAD 00dc074)
 
 Every config file the binary reads, every environment variable it consults, every secret it requires, and whether each is required or optional.
 
@@ -250,6 +250,8 @@ Read by `ReadProjectSection` into `ProjectContext` - context handed to brief bui
 | `ANTHROPIC_API_KEY` (or whatever `llm.anthropic_api_key_env` names) | `close` / `defer` / `reopen` (reason translation) | resolved as an optional secret at load; those three verbs do not hard-fail when it is absent - they fall back to `EchoLlmClient` and record the reason verbatim ([src/ThroughlineBuild.Cli/Program.cs:2252-2262](../../src/ThroughlineBuild.Cli/Program.cs#L2252-L2262)) |
 | `BUILD_PROGRESS` | optional - set to `1` to keep the progress digest on even when stderr is redirected | digest auto-suppresses when stderr is redirected and `BUILD_PROGRESS != 1`, to keep CI/script logs clean (checked wherever `enableDigest` is computed, e.g. [src/ThroughlineBuild.Cli/Program.cs:754-757](../../src/ThroughlineBuild.Cli/Program.cs#L754-L757), [:1213-1215](../../src/ThroughlineBuild.Cli/Program.cs#L1213-L1215), [:1414-1416](../../src/ThroughlineBuild.Cli/Program.cs#L1414-L1416)) |
 | `EDITOR` (via `ReviewLoop.DefaultEditorResolver`) | the interactive `e` (edit) action in `build new ... --review` | falls back to a platform candidate chain (`vim`, `nano`, `code --wait`; on Windows also `notepad.exe`) ([src/ThroughlineBuild.Cli/ReviewLoop.cs:259-268](../../src/ThroughlineBuild.Cli/ReviewLoop.cs#L259-L268)) |
+| `CLAUDE_CONFIG_DIR` | interactive Claude transport state and transcript lookup | when unset, the transport uses the normal Claude home/profile locations |
+| `HOME` / `USERPROFILE` | default Claude trust file and transcript root; `build.sh` install default | interactive Claude and local install paths cannot be resolved when the applicable home variable is absent |
 
 One more indirect read: `build init --token-env NAME` reads `NAME` from the environment to obtain an effective token for connected-mode API calls ([src/ThroughlineBuild.Cli/InitCommand.cs:140-142](../../src/ThroughlineBuild.Cli/InitCommand.cs#L140-L142)).
 
@@ -259,7 +261,7 @@ Each agent sanitizes its child environment to force subscription/OAuth auth rath
 
 | Agent | Action | Source |
 |---|---|---|
-| Claude Code | removes `ANTHROPIC_API_KEY`; sets `CLAUDE_CODE_MAX_OUTPUT_TOKENS` from `max_output_tokens` when set | `ClaudeCodeAgent` env sanitize ([src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs:620-624](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L620-L624)) |
+| Claude Code | removes `ANTHROPIC_API_KEY`; sets `CLAUDE_CODE_MAX_OUTPUT_TOKENS` from `max_output_tokens` when set | `ClaudeCodeAgent.ConfigureEnvironment` ([ClaudeCodeAgent.cs:463](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L463)) |
 | Codex | removes `CODEX_API_KEY`, `OPENAI_API_KEY` | `CodexAgent` env sanitize ([src/ThroughlineBuild.Workers.Codex/CodexAgent.cs:338-339](../../src/ThroughlineBuild.Workers.Codex/CodexAgent.cs#L338-L339)) |
 | Gemini | removes `GEMINI_API_KEY`, `GOOGLE_API_KEY` (falls back to ADC / gcloud); `max_output_tokens` reserved, no env equivalent applied | `GeminiAgent` env sanitize ([src/ThroughlineBuild.Workers.Gemini/GeminiAgent.cs:285-286](../../src/ThroughlineBuild.Workers.Gemini/GeminiAgent.cs#L285-L286)) |
 | Copilot | additive only - inherits the `gh` keyring credential; caller may pass `GH_TOKEN` via `EnvironmentVariables` | `CopilotAgent` auth comment ([src/ThroughlineBuild.Workers.Copilot/CopilotAgent.cs:192-200](../../src/ThroughlineBuild.Workers.Copilot/CopilotAgent.cs#L192-L200)) |
@@ -299,9 +301,9 @@ Reason translation is the only path in the deterministic CLI that constructs the
 
 ## Configuration sources outside `.build/`
 
-### `.claude/plane-config.md` and `.claude/ticket-config.md`
+### Global claude-config state
 
-Read by the Claude Code `/ticket-*` slash commands, not by `build`. They duplicate some of the same data (workspace slug, project UUID, state UUIDs, label UUIDs, test/build commands) in a markdown format the harness parses. These files exist because the older claude-config workflow runs in the same repo.
+No project-local `.claude/plane-config.md`, `.claude/ticket-config.md`, or `.claude/commands/` files are tracked at HEAD. Any older slash-command configuration is installed outside this repository and is not a Throughline Build configuration source.
 
 ### `AGENTS.md`
 
@@ -321,7 +323,7 @@ Solution membership only. Adding a new `ThroughlineBuild.X` project requires edi
 
 ### Loose ends
 
-- The two `.claude/*.md` files can drift from `.build/config.toml`; there is no enforced single-source-of-truth between the build CLI config and the slash-command config.
+- An external legacy slash-command installation can drift from `.build/config.toml`; this repository has no synchronization path.
 
 ---
 

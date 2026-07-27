@@ -1,6 +1,6 @@
 # 03 - External Dependencies
 
-Last refreshed: 2026-06-11 (HEAD 3a73eb9); untracked live-config references corrected 2026-07-26 (HEAD 5d7eb6d)
+Last refreshed: 2026-07-26 (HEAD 00dc074)
 
 Every service, API, CLI, and runtime library this repo depends on; what specific endpoints or tools it touches; what happens when the dependency is missing or unauthenticated.
 
@@ -34,7 +34,7 @@ Every HTTP send blocks on a shared `RequestThrottle` before it goes out, capped 
 
 ### Endpoints touched (ITicketing surface)
 
-The `ITicketing` members and the route each one hits are listed below; the implementations start at `GetAsync` ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:688](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L688)) and run through `CreateChildTicketsAsync` ([:1223](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L1223)) and `AddRelationAsync` ([:1306](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L1306)). Seq-id resolution goes through `FindIssueAsync` against the per-run snapshot ([:560](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L560)); the snapshot is loaded once by `EnsureSnapshotAsync` ([:575](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L575)).
+The `ITicketing` members and the route each one hits are listed below. Ticket reads begin at `PlaneTicketingClient.GetAsync` ([PlaneTicketingClient.cs:831](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L831)); relation operations use the native Plane issue-relation endpoint through `ListRelationsAsync`, `CreateRelationAsync`, and `RemoveRelationAsync` in the same client.
 
 | Method | HTTP | Path | Used by |
 |---|---|---|---|
@@ -45,7 +45,7 @@ The `ITicketing` members and the route each one hits are listed below; the imple
 | `UpdateDescriptionAsync(id, html)` | PATCH | `issues/{uuid}/` | description replace (TLB-251) |
 | `CreateCommentAsync(id, html)` | POST | `issues/{uuid}/comments/` | every phase posts at least one comment |
 | `ApplyLabelsAsync(id, labels)` | PATCH | `issues/{uuid}/` | `PlanPhase` (risk/size), `AmendCommand`, `ScaffoldPhase` |
-| `GetRelationsAsync(id)` | GET | `issues/{uuid}/relations/` | rollup / relation logic |
+| `GetRelationsAsync(id)` / `ListRelationsAsync(id)` | GET | `issues/{uuid}/issue-relation/` | chain dependency reads / explicit relation listing |
 | `GetCommentsAsync(id)` | GET | `issues/{uuid}/comments/` (404 -> empty) | marker parsing, reopen-marker detection |
 | `RollupParentAsync(id)` | GET (`?expand=state`) + PATCH + POST | mixed | `CloseCommand`, `DeferCommand`, auto parent completion |
 | `CreateTicketAsync(title, type, html, labels)` | POST | `issues/` | `NewPhase`, `ScaffoldPhase` |
@@ -53,7 +53,8 @@ The `ITicketing` members and the route each one hits are listed below; the imple
 | `QueryAsync(query)` | (in-memory after snapshot) | filters `_issueByUuid.Values` client-side | tree walk, child detection, chain (TLB-251) |
 | `TransitionLifecycleAsync(id, transition, reason)` | POST + PATCH | `issues/{uuid}/comments/` then `issues/{uuid}/` | `close` / `defer` / `reopen` (TLB-251) |
 | `CreateChildTicketsAsync(parent, children)` | POST (per child) | `issues/` with `parent` set | `ScaffoldPhase` / `DecomposePhase` (TLB-262) |
-| `AddRelationAsync(blocked, blocker)` | POST | `issues/{uuid}/relations/` | scaffold dependency edges |
+| `CreateRelationAsync(source, kind, target)` | POST | `issues/{uuid}/issue-relation/` | `build relate`, scaffold dependency edges |
+| `RemoveRelationAsync(source, relationId)` | DELETE | `issues/{uuid}/issue-relation/{relation-id}/` | `build relate --remove` |
 
 Notes on specific members:
 
@@ -115,7 +116,7 @@ The `Capabilities` property returns `BackendCapabilities(TypedRelations: true, T
 - **State names are hardcoded** - the reverse map `_stateNameMap` ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:440](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L440)) and the forward `switch` in each transition method pin the seven names (`Backlog`, `Planning`, `Ready`, `In Progress`, `In Review`, `Done`, `Cancelled`), now also canonized in `WorkspaceSchema.States`. A workspace with different names reads everything as `Backlog` and skips transitions with a stderr warning; `build setup` creates the standard names but does not rename non-standard ones.
 - **Rollup ranking** (`StateRank`, [src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:1336](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L1336)) and `ApplyRollupRules` ([:1348](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L1348)) hardcode priority ordering; no extensibility for custom state hierarchies.
 - **`[rollup]` comment marker** ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:924-925](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L924-L925)) is load-bearing for the rollup comment format - no versioning if the format changes.
-- **`Ticket.Risk`** is always returned as `Risk.Medium` from Plane reads; `Ticket.Size` IS extracted from a `size:s|m|l` label (both in `ToTicketAsync`, [src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:663-680](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L663-L680)).
+- **Ticket classification is label-derived.** `PlaneTicketingClient.ToTicketAsync` resolves `risk:low` and `risk:high`, defaults to Medium when neither is present, and resolves `size:s|m|l` ([PlaneTicketingClient.cs:780](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L780)). Plane issue type now reaches `Ticket.Type`; priority remains a Plane write surface rather than a field on the domain `Ticket`.
 - **Page cap of 50** (`MaxListPages`, 5000 issues, [src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:1082](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L1082)) bounds the snapshot load; truncation is loud (stderr warning that lookups beyond the cap will throw "not found", [:1117-1121](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L1117-L1121)) but very large projects must raise the cap or narrow the project. The project-list pagination shares the cap with its own warning.
 - **Snapshot staleness across processes:** the write-through snapshot only reflects mutations made by *this* client instance. A concurrent second `build` process mutating the same project will not be seen until the next run reloads.
 - **A non-retryable POST transport failure may leave Plane state unknown** - the funnel deliberately refuses to re-POST after a mid-flight failure, so a create that actually landed surfaces as `TicketingUnavailableException` and the operator must check Plane before retrying.
@@ -186,6 +187,8 @@ All four agents:
 
 ### Per-CLI subprocess contract
 
+Claude has two transport shapes. `ClaudeCodeInteractiveTransport.ExecuteAsync` ([ClaudeCodeInteractiveTransport.cs:97](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeInteractiveTransport.cs#L97)) is the product-config default: it launches a fresh interactive terminal session without `--print`, watches Claude's persisted transcript for turn completion, and contains the process tree with ConPTY plus a job object on Windows or a PTY plus process group on Unix. `ClaudeCodePrintTransport.ExecuteAsync` ([ClaudeCodeTransport.cs:31](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeTransport.cs#L31)) remains the explicit `transport = "print"` rollback and uses `claude --print --verbose --output-format stream-json`.
+
 The argument builders are `BuildArguments`/equivalent in each agent; the table cites the env-sanitize and arg-build sites in the notes below it.
 
 | Agent (`Name`) | Default exe | Brief delivery | Spawn flags | Stdout shape parsed | Auth env stripped |
@@ -197,7 +200,7 @@ The argument builders are `BuildArguments`/equivalent in each agent; the table c
 
 Notes on the flag variants:
 
-- Claude Code requires `--verbose` alongside `--print --output-format stream-json`; the bypass flag `--dangerously-skip-permissions` is emitted only when `ClaudeCodeOptions.BypassPermissions` is true (default true); the args builder is at [src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs:551-566](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L551-L566). `--disallowedTools TodoWrite,Task` is emitted only for context-hygiene-gated S briefs (exp-4 lever, `[project].context_hygiene`).
+- Claude Code print mode requires `--verbose` alongside `--print --output-format stream-json`; `ClaudeCodeAgent.BuildArgs` owns permission, tool, and model arguments ([ClaudeCodeAgent.cs:392](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L392)). Agent/Task sub-agent tools are always disallowed, and lean-planning briefs also disallow TodoWrite.
 - Codex runs `exec --json` (JSONL event stream) and appends `-c model_reasoning_effort=<effort>` when the resolved `ModelTier.Effort` is non-empty (op-33); args builder at [src/ThroughlineBuild.Workers.Codex/CodexAgent.cs:364-376](../../src/ThroughlineBuild.Workers.Codex/CodexAgent.cs#L364-L376), env sanitize at [:338-339](../../src/ThroughlineBuild.Workers.Codex/CodexAgent.cs#L338-L339).
 - The bypass flag is per-vendor: codex `--dangerously-bypass-approvals-and-sandbox`, gemini `--yolo` ([src/ThroughlineBuild.Workers.Gemini/GeminiAgent.cs:245-251](../../src/ThroughlineBuild.Workers.Gemini/GeminiAgent.cs#L245-L251)), copilot `-s --no-ask-user` (always emitted, [src/ThroughlineBuild.Workers.Copilot/CopilotAgent.cs:22-35](../../src/ThroughlineBuild.Workers.Copilot/CopilotAgent.cs#L22-L35)). Each agent's model prefix differs: `anthropic:` (claude-code), `openai:` (codex), `google:` (gemini), `github:` (copilot).
 - Copilot maps `AllowedTools` to repeated `--allow-tool <tool>` flags, not a comma list; it has no progress digester (`Digester => null`).
@@ -239,7 +242,7 @@ Two layers prevent an unresolvable Claude Code model from failing opaquely mid-c
 
 ## NuGet packages
 
-Direct dependencies only (verify by grepping `PackageReference` across the `.csproj` files). All 19 production projects target `net10.0` (`LangVersion 14`, `Nullable enable`); only `Cli` sets `PublishAot=true`.
+Direct dependencies only (verify by grepping `PackageReference` across the `.csproj` files). All 20 production projects target `net10.0` (`LangVersion 14`, `Nullable enable`); only `Cli` sets `PublishAot=true`.
 
 ### Cli project ([src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj))
 
@@ -248,6 +251,10 @@ Direct dependencies only (verify by grepping `PackageReference` across the `.csp
 ### Plane and Anthropic clients
 
 - **`Polly 8.*`** - retry resilience, referenced directly by `ThroughlineBuild.Plane` ([src/ThroughlineBuild.Plane/ThroughlineBuild.Plane.csproj:10](../../src/ThroughlineBuild.Plane/ThroughlineBuild.Plane.csproj#L10)) and `ThroughlineBuild.Anthropic` ([src/ThroughlineBuild.Anthropic/ThroughlineBuild.Anthropic.csproj:10](../../src/ThroughlineBuild.Anthropic/ThroughlineBuild.Anthropic.csproj#L10)). No other production project references it; `ThroughlineBuild.ModelClient` and `ThroughlineBuild.JudgmentSlots` have no package references.
+
+### Reusable Claude Code package
+
+`ThroughlineBuild.ClaudeCode.csproj` also declares package identity and a custom pack target that includes the facade's referenced implementation binaries while suppressing dependency metadata. This is packaging configuration, not a released dependency: the repository has no `dotnet pack`, NuGet push, signing, or release job. Status: Partial distribution.
 
 ### Test projects
 

@@ -1,6 +1,6 @@
 # 11 - LLM Architecture
 
-Last refreshed: 2026-06-15 (`heartbeat-stage-07-finish-cutover`, Stage 07 cutover landed; documents the `ClaudeCodePreflight` capability gate, on top of the Stage 05-06 process-hardening + completion-redesign code surface. The transport default is now `interactive-hook` - the config-loader omitted-value default and the generated template both resolve to it; `print` is the rollback. Validated by the npt5 operator dogfood.); product-default and gitignored live-config distinction corrected 2026-07-26 (HEAD 5d7eb6d)
+Last refreshed: 2026-07-26 (HEAD 00dc074)
 
 How `build` talks to LLMs today, the interfaces it uses, where vendor-specific code lives, and what it takes to add a new provider. The framing is unchanged since the last refresh: the **worker layer is genuinely multi-vendor and wired** (four agents selected at runtime), while the **model-client layer carries a richer abstraction that is built and tested but still not wired**. What changed inside the worker layer is substantial: tiered model selection (`ModelTier`), fail-fast model validation, full-transcript output parsing (driven by Fable's multi-message output), per-turn usage telemetry, provider-error classification, and a structured transcript side channel.
 
@@ -56,7 +56,7 @@ All four live in their own `ThroughlineBuild.Workers.<Vendor>` project and share
 | `GeminiAgent` | `gemini` / `google` | `gemini -p <brief> --output-format json [--yolo]` | removes `GEMINI_API_KEY`, `GOOGLE_API_KEY` | JSON envelope; `WORKER_RESULT` inside `.response`, raw-stdout fallback | `GeminiProgressDigester` |
 | `CopilotAgent` | `copilot` / `github` | `copilot -p <brief> -s --no-ask-user [--allow-tool <t>]*` | additive only - sets `GH_TOKEN` if passed, else inherits the gh keyring credential | plain stdout scanned directly | none (returns null) |
 
-Declaring sites for the argv shapes: the claude-code arg builder ([ClaudeCodeAgent.cs:551-566](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L551-L566)), the codex arg builder ([CodexAgent.cs:364-375](../../src/ThroughlineBuild.Workers.Codex/CodexAgent.cs#L364-L375)), the gemini arg builder ([GeminiAgent.cs:245-248](../../src/ThroughlineBuild.Workers.Gemini/GeminiAgent.cs#L245-L248)), the copilot arg builder ([CopilotAgent.cs:24-35](../../src/ThroughlineBuild.Workers.Copilot/CopilotAgent.cs#L24-L35)).
+Declaring sites for the argv shapes: `ClaudeCodeAgent.BuildArgs` ([ClaudeCodeAgent.cs:392](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L392)), plus each of the Codex, Gemini, and Copilot agent argument builders.
 
 Common across all four:
 
@@ -78,7 +78,7 @@ Status: **Functional**. The claude-code worker accumulated the most change this 
 - **Per-turn usage telemetry.** `ClaudeCodeTurnParser` ([src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeTurnParser.cs](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeTurnParser.cs)) post-parses the NDJSON for per-turn cache_read/cache_creation/output token series and buckets cache-creation bytes per tool class (write/task/todo/read/bash/other). `AttachContextTurns` ([ClaudeCodeAgent.cs:200](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L200)) stashes the flat dictionary on `Metadata["context_turns"]`; `ImplementPhase` re-emits it as the `context_attribution` `CostLedger` event. Best-effort, AOT-safe, behavior-inert.
 - **Structured transcript side channel.** Under `--debug`, `WorkerTranscriptWriter` writes `<captureDir>/transcript.jsonl` ([src/ThroughlineBuild.Workers.ClaudeCode/WorkerTranscriptWriter.cs:37](../../src/ThroughlineBuild.Workers.ClaudeCode/WorkerTranscriptWriter.cs#L37)) - one JSONL record per `meta`/`turn`/`tool_result`/`result`, with per-turn usage, verbatim tool calls, and a discovery/production/verification turn classification. Pure post-exit observation; a write failure never changes phase behavior.
 - **Digest changes.** The old free-standing `WorkerProgressDigest.cs` is deleted; `ClaudeCodeProgressDigester` ([src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeProgressDigester.cs](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeProgressDigester.cs)) is the instance-based survivor. It now filters `type=system` stream events by subtype (only `init` and `thinking_tokens` are digest-worthy) and throttles the `thinking_tokens` ticker to 5000-token boundaries so extended thinking does not flood the digest.
-- **Lean-planning mapping.** When `WorkerOptions.LeanPlanning` is set, the arg builder appends `--disallowedTools TodoWrite,Task` ([ClaudeCodeAgent.cs:559-562](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L559-L562)) - disallow removes the tools outright, where `--allowedTools` only auto-approves. The matching prompt line comes from `ImplementBriefBuilder.BuildContextHygieneSection`; both are gated behind `[project].context_hygiene` (default false) and S-size briefs.
+- **Lean-planning mapping.** `ClaudeCodeAgent.BuildArgs` always disallows nested Agent/Task tools and additionally disallows TodoWrite when `WorkerOptions.LeanPlanning` is set ([ClaudeCodeAgent.cs:392](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L392)). The matching prompt section is gated behind `[project].context_hygiene` and S-size briefs.
 
 ### Codex specifics
 
@@ -119,6 +119,12 @@ Two adjacent honesty/safety checks:
 - The scaffold profile deriver is a second production worker consumer: `ScaffoldProfileRunner` builds its read-only worker through the same `WorkerAgentBuilder` seam, and the derivation run is debug-captured under `--debug`.
 
 The product default is Claude Code: the embedded `build init` template ships `default_agent = "claude-code"` with tier-alias sizes (`small`/`medium`/`large` = `haiku`/`sonnet`/`opus`), while the `[workers.codex.sizes]` block remains configured as an alternate. The generated live `.build/config.toml` is gitignored, so the repository does not assert an operator's current default.
+
+### Reusable Claude Code facade - Functional runtime, Partial distribution
+
+`ThroughlineBuild.ClaudeCode` is a public consumer-facing facade over the same `Workers.ClaudeCode` implementation used by the CLI. `ClaudeCodeClient` exposes a capability check and two run shapes: a convenient string instruction API and an advanced `Brief` API ([ClaudeCodeClient.cs:9](../../src/ThroughlineBuild.ClaudeCode/ClaudeCodeClient.cs#L9)). The convenience overload can append `ClaudeCodeWorkerResultContract.Text`, while `EnsurePresent` avoids duplicating the marker. Options expose transport, executable, tools, timeout, environment, debug sinks, transcript context, and the existing worker size model. This is not another provider abstraction and the CLI does not route through it; it is a sibling facade over `ClaudeCodeAgent`.
+
+The project is AOT-compatible and tested. Its project file has NuGet identity and packs referenced worker binaries into the package while suppressing dependency metadata, but neither CI nor `build.sh` runs `dotnet pack` or publishes the result. Runtime status is Functional; distribution status is Partial.
 
 ### Loose ends (worker layer)
 
@@ -237,6 +243,6 @@ Unchanged, and untouched this cycle. Either implement `XClient : ILlmClient` nex
 - **`ReasonTranslator.ModelId` is a pinned `const`** naming a dated Haiku snapshot; no `[judgment_slots]` config exists.
 - **No MCP server adapter.** Architecture Appendix item 3 contemplates `build` as an MCP server; an MCP-server-as-worker would be a separate animal from one-shot `IWorkerAgent`.
 
-## Doc-set evolution note
+## Loose ends (doc-set evolution note)
 
 The previous revision introduced the two-layers framing (worker layer multi-vendor and wired; model-client layer single-vendor with an unwired `IModelClient`); that framing survives this refresh intact. What changed within it: sizes became `ModelTier` (model + Codex effort), agent construction moved from a `Program.cs` if-chain into `WorkerAgentBuilder`, claude-code parsing moved from envelope-only to full-transcript (Fable), and the worker layer grew a telemetry/validation/classification ring (`ClaudeCodeTurnParser`, `WorkerTranscriptWriter`, `ClaudeCodeModelValidator`, `CodexModelProbe`/`CodexTierMapper`, `ProviderErrorClassifier`, `ProcessStreamEncoding`, `WorkerDiagnostics`, `CompletionClaimParser`). The op-docs and tickets that drove this cycle are the gate/claim series (TLB-500..TLB-512, TLB-527, TLB-538, TLB-544..TLB-547) and the exp-1..exp-4 experiment branches.

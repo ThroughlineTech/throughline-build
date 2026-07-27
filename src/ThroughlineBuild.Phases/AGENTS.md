@@ -9,6 +9,8 @@ pinned to 1), `TicketGraph` (+ `TopologicalSorter` in the same file),
 `AncestorSkipFilter`, `EarlyExitManifest`, `ReworkRoundManifest` (--debug
 side-channel), `BatchCommitVerifier` (re-derives batch commit attribution
 from git state - never trust worker-reported SHAs).
+Explicit multi-ticket chains use `ChainDependencyGraph` to normalize bare and
+project-prefixed IDs and order typed relation edges.
 
 Things that bite:
 - Everything is SERIAL. Parent chains run children level-by-level in
@@ -23,5 +25,7 @@ Things that bite:
 - `ShipPhase` mutates and PUSHES the target branch in the main worktree, with
   `WorkingTreeHygieneGate` preflights (also pre-implement and chain preflight).
 - `ChainPhase` construction lives in Cli's `ChainPhaseComposition`.
+- Informational Plane writes go through `TicketingWritePolicy`; lifecycle
+  transitions and resume markers remain hard writes.
 
 Lifecycle detail: [../../docs/state-of-the-system/10-lifecycle-orchestration.md](../../docs/state-of-the-system/10-lifecycle-orchestration.md).

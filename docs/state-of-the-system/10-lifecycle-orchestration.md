@@ -1,6 +1,6 @@
 # 10 - Lifecycle and Orchestration
 
-Last refreshed: 2026-06-11 (HEAD 3a73eb9)
+Last refreshed: 2026-07-26 (HEAD 00dc074)
 
 The Agile phase state machine implemented by `build` - what each phase does, how the chain orchestrator transitions between them, the gate, the integration-branch tree dispatch, and the rework loop bounded by `MaxReworkRounds`.
 
@@ -359,6 +359,8 @@ If batching was requested but the batch worker or integration worktree is unavai
 
 ## Multi-ticket dispatch
 
+For an explicit multi-ticket `build chain A B ...`, `ChainDependencyGraph.Build` ([ChainDependencyGraph.cs:14](../../src/ThroughlineBuild.Phases/ChainDependencyGraph.cs#L14)) constructs the ordering graph from each ticket's live typed relations. It normalizes bare IDs and configured-project-prefixed IDs by numeric sequence, and directs each blocker to the ticket it blocks. Relation enumeration comes from `ListRelationsAsync`; a cross-project prefix or unavailable relation endpoint fails before dispatch rather than silently guessing. Parent/sibling orchestration still uses its separate `TicketGraph` path.
+
 Status: **Functional**, serial (the "parallel" name is historical).
 
 `build chain TLB-A TLB-B ...` with multiple ids takes the dispatcher path: fetch all tickets, build a `ThroughlineBuild.Phases.TicketGraph` from `blocked_by` relations within the dispatched set, hand it to `ParallelDispatcher`.
@@ -393,6 +395,8 @@ Status: **Functional** (TLB-290/291/293/296/297/298).
 ---
 
 ## Coordination protocol
+
+Plane coordination now distinguishes durable workflow state from commentary. `TicketingWritePolicy.BestEffortAsync` makes designated informational comments and label writes warning-only during an outage, while state transitions, `[planned_at]`/`[implemented_at]`/`[shipped_at]` resume markers, and parent completion transitions remain hard. This lets an otherwise valid git/verification operation survive a lost diagnostic comment without claiming a state change that Plane never recorded.
 
 How phases communicate without a persistent process:
 

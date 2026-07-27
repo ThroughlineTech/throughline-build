@@ -1,6 +1,6 @@
 # 09 - Failure Modes and Idempotency
 
-Last refreshed: 2026-06-11 (HEAD 3a73eb9)
+Last refreshed: 2026-07-26 (HEAD 00dc074)
 
 For each major operation, how it fails and whether re-running is safe. Exit codes summarized in [06-public-surfaces.md](06-public-surfaces.md); chain/dispatch outcomes in [10-lifecycle-orchestration.md](10-lifecycle-orchestration.md).
 
@@ -163,6 +163,8 @@ Shapes unchanged: `ReworkOutcome` enum (`Implemented` / `NoFeedbackAvailable` / 
 
 ### Plane unreachable / throttled (layered, TLB-545)
 
+Ticketing failures are no longer uniformly fatal inside phases. `TicketingWritePolicy.BestEffortAsync` ([TicketingWritePolicy.cs:15](../../src/ThroughlineBuild.Phases/TicketingWritePolicy.cs#L15)) catches non-cancellation failures for explicitly informational comments/labels, warns on stderr, emits `ticketing_write_failed` locally when possible, and lets the phase continue. State transitions and workflow-resume markers remain hard writes. `ChainPhase.RunAsync` converts a hard `TicketingUnavailableException` into the resumable `TicketingUnavailable` outcome; the batch wrapper preserves the failing ticket identity and marks remaining siblings skipped.
+
 Three layers, innermost first:
 
 1. **Rate gate:** every call awaits `RequestThrottle.AcquireAsync` - at most `RequestsPerMinute` (default 40) per rolling minute ([src/ThroughlineBuild.Plane/RequestThrottle.cs:49](../../src/ThroughlineBuild.Plane/RequestThrottle.cs#L49), [src/ThroughlineBuild.Plane/PlaneClientOptions.cs:20](../../src/ThroughlineBuild.Plane/PlaneClientOptions.cs#L20)). This is a self-imposed budget, NOT a reading of the server's real limit: at budget the gate hard-waits and prints `[throttle] rate-limit budget full; waiting Ns` even against a self-hosted Plane that would have accepted the call. Tune per deployment via `ticketing.plane_requests_per_minute` (TLB-565).
@@ -194,6 +196,12 @@ Unchanged: in-process lock only (two `build` processes can still race); every ve
 ---
 
 ## Idempotency posture summary
+
+### JSON command failures and partial writes
+
+`--json` changes representation, not exit semantics: configuration/usage failures exit 2, missing secrets exit 3, not-found and operational failures exit 1, while stdout remains a single schema-versioned envelope. `PlaneCliError.Report` owns backend-error classification ([PlaneCliError.cs:16](../../src/ThroughlineBuild.Cli/PlaneCliError.cs#L16)).
+
+Structured `build new - --json` resolves all referenced tickets before creation, but issue creation and subsequent parent/relation writes are not atomic. A relation failure reports that the ticket already exists and that earlier edges may have landed. `build relate` create/remove operations are individually retryable by the operator; removal requires the exact stable edge ID returned by `--list`. `build amend` validates inputs before mutation but applies its fields sequentially, so a later Plane failure can preserve earlier changes.
 
 `build`'s rerun safety is **state-driven**: each phase enforces a ticket-state precondition, and SHA markers act as forward-progress guards rather than de-dup keys.
 

@@ -1,6 +1,6 @@
 # 07 - Contracts
 
-Last refreshed: 2026-06-11 (HEAD 3a73eb9); older claude-config workflow corrected 2026-07-26 (HEAD 5d7eb6d)
+Last refreshed: 2026-07-26 (HEAD 00dc074)
 
 The inter-project type contracts inside this repo, and the artifacts shared with sibling systems (Plane, Claude Code, the older claude-config slash commands).
 
@@ -26,6 +26,7 @@ Contracts (leaf, no project refs)
     +-- JudgmentSlots ....... refs Contracts
     +-- Workers.Common ...... refs Contracts (parsers; internals shared widely - see note)
     +-- Workers.ClaudeCode .. refs Contracts + Workers.Common
+    +-- ClaudeCode .......... reusable public facade over Workers.ClaudeCode
     +-- Workers.Codex ....... refs Contracts + Workers.Common
     +-- Workers.Gemini ...... refs Contracts + Workers.Common
     +-- Workers.Copilot ..... refs Contracts + Workers.Common
@@ -62,7 +63,7 @@ Verify by reading `<ProjectReference Include="..." />` lines in each `.csproj`. 
 | [src/ThroughlineBuild.Contracts/Models/ReviewFeedback.cs](../../src/ThroughlineBuild.Contracts/Models/ReviewFeedback.cs) | `ReviewFeedback(Rationale, ChecksFailed, ReworkRoundNumber, GateFailedChecks?, FailedCheckDetails?)` | Grew two evidence fields: `GateFailedChecks` (gate-originated rework) and `FailedCheckDetails` (7af36fb - raw `CheckResult`s for the cited checks, rendered verbatim into the rework brief so the check is the oracle). |
 | [src/ThroughlineBuild.Contracts/Models/DirtyTreeCause.cs](../../src/ThroughlineBuild.Contracts/Models/DirtyTreeCause.cs), [DebugTranscriptContext.cs](../../src/ThroughlineBuild.Contracts/Models/DebugTranscriptContext.cs) | `DirtyTreeCause`, `DebugTranscriptContext` | NEW. Structured dirty-refusal cause (TLB-462); debug-transcript keying metadata (build sha / session id / rework round). |
 | [src/ThroughlineBuild.Contracts/Verifier/CheckResult.cs](../../src/ThroughlineBuild.Contracts/Verifier/CheckResult.cs) | `CheckSpec`, `CheckResult`, `CheckRole` (3), `CanaryFile` | `CheckRole` (`Gating`/`Advisory`/`Setup`) is the cross-phase role contract; `CheckSpec.Canary` carries deliberately-broken files for the vacuity prover; `CheckResult.CommandLine` echoes the exact command for rework briefs. |
-| [src/ThroughlineBuild.Contracts/ITicketing.cs](../../src/ThroughlineBuild.Contracts/ITicketing.cs) | `ITicketing` (16 methods) + supporting records, and `ITicketingConnectivity` ([ITicketing.cs:127](../../src/ThroughlineBuild.Contracts/ITicketing.cs#L127)) | `ITicketingConnectivity.TestConnectivityAsync` is NEW (op-34 connected init / scaffold preflight). `BackendCapabilities` still advertised, still unread. |
+| [src/ThroughlineBuild.Contracts/ITicketing.cs](../../src/ThroughlineBuild.Contracts/ITicketing.cs) | `ITicketing` plus supporting records and `ITicketingConnectivity` | Relation-aware methods expose list, target lookup, create, and remove; relation IDs are backend edge IDs. `BackendCapabilities` is still advertised and unread. |
 | [src/ThroughlineBuild.Contracts/IProjectDiscovery.cs](../../src/ThroughlineBuild.Contracts/IProjectDiscovery.cs), [IProjectResolver.cs](../../src/ThroughlineBuild.Contracts/IProjectResolver.cs), [ITicketingProvisioner.cs](../../src/ThroughlineBuild.Contracts/ITicketingProvisioner.cs) | `IProjectDiscovery` + `ProjectInfo`; `IProjectResolver` + `ProjectResolveResult`; `ITicketingProvisioner` + `ExistingState` | NEW bootstrap-era interfaces (TLB-481/482, TLB-460). Discovery/resolution run on raw credentials BEFORE any config exists; provisioning diffs the live project against `WorkspaceSchema`. All implemented by the Plane backend. |
 | [src/ThroughlineBuild.Contracts/WorkspaceSchema.cs](../../src/ThroughlineBuild.Contracts/WorkspaceSchema.cs) | `WorkspaceSchema` (static) + `RequiredState` | NEW. The canonical 7 states (`WorkspaceSchema.States` at `#L23`, each with its Plane state-group) and 9 labels (`WorkspaceSchema.Labels` at `#L39`: `risk:*`, `size:*`, `plan-ticket`, `stub`, `delegated`). Single source of truth for both the runtime state map and `build setup`. |
 | [src/ThroughlineBuild.Contracts/TicketingUnavailableException.cs](../../src/ThroughlineBuild.Contracts/TicketingUnavailableException.cs) | `TicketingUnavailableException` | NEW (TLB-545). Thrown by a backend when transport retries are exhausted; orchestration catches it and stops with the resumable `ChainOutcome.TicketingUnavailable`. |
@@ -95,6 +96,16 @@ This repo is the successor to `claude-config` (the older slash-command workflow)
 - **The claude-config flow** (the `/ticket-*` skills, now served from the operator's global claude-config install, not from this repo) - still operates on the same Plane data.
 
 ### Plane (`PlaneTicketingClient` <-> Plane REST API)
+
+Typed relation vocabulary is centralized in `RelationKinds.Allowed` ([RelationKinds.cs:6](../../src/ThroughlineBuild.Contracts/RelationKinds.cs#L6)). The Plane adapter normalizes kind spelling, maps issue-relation edges to `Relation` records with stable IDs, rejects cross-project prefixes, and uses `RelationConfigurationException` versus `RelationEndpointUnavailableException` to separate bad configuration from unsupported/unavailable endpoints. `GetRelationsAsync` is the chain-facing, cache-backed read and degrades an endpoint 404 to an empty graph; `ListRelationsAsync` is the explicit CLI read and reports that 404 instead of hiding it.
+
+### JSON CLI wire contract
+
+`CliEnvelope`, `CliError`, and the typed data records in [CliEnvelope.cs](../../src/ThroughlineBuild.Cli/Json/CliEnvelope.cs) define schema version 1. `CliJsonContext` is the source-generated AOT serialization registry. Successful and failed envelopes share `schemaVersion` and `ok`; failures add only the stable `code`/`message` pair. `TicketDraft` rejects unknown JSON properties and uses `TicketDraftRelation.Kind` plus `TargetId` for post-create edges. This wire contract is separate from `--summary-json`, whose schema remains `PhaseSummary`.
+
+### Public Claude Code facade contract
+
+`ThroughlineBuild.ClaudeCode` is a sibling consumer of `Workers.ClaudeCode`, not a new engine layer. `ClaudeCodeClient.RunAsync(string, ...)` can append the `ClaudeCodeWorkerResultContract.Text` marker contract unless already present; the `Brief` overload leaves full control with advanced callers. Public option records map onto the existing transport and `WorkerOptions` contracts. Runtime status: Functional. Package-distribution status: Partial.
 
 What `build` reads that Plane wrote:
 
@@ -150,7 +161,7 @@ The in-repository half of the old flow has been removed.
 |---|---|---|
 | Plane ticket descriptions, comments, state transitions | both flows | both flows |
 | Plane states + workspace-standard labels | `build setup` (provisions); Plane admin UI | `build` runtime state map (both derived from `WorkspaceSchema`) |
-| `.claude/plane-config.md`, `.claude/ticket-config.md` | operator / old installer | documentation only; `build` does not consume them |
+| Global claude-config ticket settings | operator / external installer | external only; no project-local copy is tracked or consumed by `build` |
 | `~/.claude/projects/<encoded>/...jsonl` | `claude` CLI | `token-audit` (this repo) |
 | `.build/events/*.jsonl` | `build` only | `analyze-event-log` (this repo; now aggregates all chains and prefers pricing-table costs, TLB-547) |
 | `.build/sessions/<id>/` incl. `transcript.jsonl` | `build --debug` | operator + cross-run analysis (keyed by `DebugTranscriptContext`) |
@@ -163,13 +174,13 @@ The in-repository half of the old flow has been removed.
 
 ## Conflicts and overlaps
 
-- **State-name vocabulary**: the worst duplication is resolved - the runtime map and `build setup` both derive from `WorkspaceSchema`. Still duplicated outside the binary: `.claude/plane-config.md` and the `.build/config.toml.example` comments.
+- **State-name vocabulary**: the runtime map and `build setup` both derive from `WorkspaceSchema`; no project-local legacy Plane config remains.
 - **Two `Size` enums** persist by design: ticket-domain `Size` and worker-domain `WorkerSize`, now bridged per-vendor through `ModelTier` (`{model, effort}` tables in config, op-33) and `WorkerSizeMapper`.
 - **Two LLM abstractions** persist: `ILlmClient` (wired: `LlmClientFactory` -> `AnthropicClient`) and `IModelClient` (built, tested, unwired). Unchanged; reconciliation still unfinished.
 - **Two check-result runners**: `AutomatedChecksRunner` (executes) and `PreComputedChecksRunner` (replays gate results into review, TLB-502) both satisfy the verifier's checks input; the latter exists precisely so gate and review cannot disagree about what ran.
 - **Two verdict producers**: `IVerifier` (review) and `IObsoleteRatifier` (chain auto-resolve) both return `Verdict`. Unchanged.
 - **Usage text vs exit-code mapper**: `CliUsage.UsageText` documents chain exit codes only through 9; `ChainExitCodeMapper` emits 10 and 11. Code wins.
-- **Workspace / project IDs** still appear in both `.claude/plane-config.md` and `.build/config.toml`, operator-synced.
+- **Workspace / project IDs** live in the gitignored `.build/config.toml`; external legacy installations may maintain independent copies.
 - **`/ticket-ship` vs `build ship`** - both can transition a ticket to Done. `build` is the current direction; the slash-command flow survives only via the global claude-config install.
 
 ---
@@ -183,6 +194,6 @@ The in-repository half of the old flow has been removed.
 - **`ILlmClient` vs `IModelClient`** - unchanged: two abstractions, one wired; `AnthropicModelClient.StreamAsync` works but has no caller.
 - **Schema-in-two-places fragility persists** for `metadata.escalation`, the per-phase `metadata` keys, and now the `COMPLETION_CLAIM` JSON: a markdown template stub on the producing side and C# validation on the consuming side, with no shared source of truth. The shared template fragments reduce per-agent drift but do not solve template-vs-validator drift.
 - **Brief templates fan out 4 agents x 7 phases plus 10 shared fragments**; nothing enforces that the codex/gemini/copilot variants demand the same metadata keys as claude-code.
-- **`.claude/plane-config.md` / `ticket-config.md`** remain as hand-synced documentation of config the binary owns; with `WorkspaceSchema` + `build setup` now canonical, these files are candidates for deletion or generation.
+- **External legacy ticket configuration** can still drift from `.build/config.toml`; the repository contains no synchronization path.
 - **`src/ThroughlineBuild.Linear/`** - an empty directory implying a Linear backend that does not exist (a feasibility doc exists at `docs/linear-integration-feasibility.md`). Aspirational.
 - **Old claude-config flow**: the in-repo corpus and mirrors are gone, but the architecture-doc Section 8 narrative ("delete in one commit") no longer matches how the cutover actually happened; the architecture doc is stale on this point.

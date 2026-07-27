@@ -1,6 +1,6 @@
 # 00 - State of the System: latticeflow
 
-Last refreshed: 2026-06-11 (HEAD 3a73eb9)
+Last refreshed: 2026-07-26 (HEAD 00dc074)
 
 This doc set is a detailed historical snapshot of the `latticeflow` repository
 at the HEAD stamped above (refresh history in [PROMPT.md](PROMPT.md)). It is not
@@ -83,7 +83,7 @@ The set has two maintenance modes, both first-class: full refreshes run from the
             +-------+ ModelClient / IModelClient (built + tested, UNWIRED)
 ```
 
-The CLI dispatches one of twenty-one action verbs (`plan`, `implement`, `review`, `ship`, `chain`, `rework`, `decompose`, `new`, `init`, `setup`, `settarget`, `user-guide`, `op-doc`, `models`, `sweep`, `scaffold`, `list`, `amend`, `close`, `defer`, `reopen`), plus `help`/`-h` and `-V`/`--version` (the stamped `BuildVersion.Current`); any other token returns exit 2. Dispatch is a chain of `if (verb == ...)` blocks in [src/ThroughlineBuild.Cli/Program.cs](../../src/ThroughlineBuild.Cli/Program.cs); the authoritative per-verb inventory is [01-inventory.md](01-inventory.md). Help is served by the tiered registry under [src/ThroughlineBuild.Cli/Help/](../../src/ThroughlineBuild.Cli/Help/) (`HelpRegistryFactory`, `Tier0Renderer`, `Tier1Renderer`, topic files); the old `CliUsage.UsageText` is Legacy, referenced only by tests. Five verbs run ahead of config load: `init` (interactive connected bootstrap), `settarget`, `user-guide`, `op-doc`, and `models refresh`. Most verbs route to a phase or command, which composes calls against `ITicketing` (Plane), `IWorkerAgent` (the selected agent CLI, constructed through `WorkerAgentBuilder.Create`), `IGitClient` (git subprocesses), and `IEventSink` (JSONL log). The whole binary exits at the end of each verb - there is no daemon, no shared in-process state across invocations.
+The CLI dispatches one of twenty-six action verbs (`init`, `settarget`, `user-guide`, `op-doc`, `models`, `sweep`, `list`, `get`, `comments`, `comment`, `transition`, `relate`, `setup`, `amend`, `close`, `defer`, `reopen`, `new`, `scaffold`, `rework`, `decompose`, `plan`, `implement`, `review`, `ship`, `chain`), plus help and version meta-surfaces. Dispatch begins in `RunAsync` ([Program.cs:23](../../src/ThroughlineBuild.Cli/Program.cs#L23)); the authoritative per-verb inventory is [01-inventory.md](01-inventory.md). Help is served by `HelpRegistryFactory.Build` ([HelpRegistryFactory.cs:7](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs#L7)); `models` and `sweep` are the only visible verbs omitted from its twenty-four entries. Five verbs run ahead of config load: `init`, `settarget`, `user-guide`, `op-doc`, and `models refresh`. The global `--json` pre-pass enables versioned machine-readable envelopes for supported ticket verbs through `CliEnvelopeWriter` ([CliEnvelopeWriter.cs:8](../../src/ThroughlineBuild.Cli/Json/CliEnvelopeWriter.cs#L8)). Most verbs route to a phase or command, which composes calls against `ITicketing`, `IWorkerAgent`, `IGitClient`, and `IEventSink`. The binary exits at the end of each verb; there is no daemon or shared in-process state across invocations.
 
 Coordination between phases happens through three persistent channels:
 
@@ -108,7 +108,7 @@ LLM contact splits into three tiers (architecture Section 3), but at two differe
 | [03-external-dependencies.md](03-external-dependencies.md) | Plane REST API (incl. transport retry + provisioning), Anthropic API, the worker CLIs (claude/codex/gemini/copilot), NuGet packages, what failure looks like for each. |
 | [04-configuration.md](04-configuration.md) | `.build/config.toml` sections key-by-key, per-agent worker blocks and model tiers, per-phase agent selection, environment variables, secrets, precedence. |
 | [05-state-and-persistence.md](05-state-and-persistence.md) | Everything written to disk and to Plane during a session - locations, lifetime, cleanup posture, the sweep story. |
-| [06-public-surfaces.md](06-public-surfaces.md) | CLI exit codes, summary contract, `WORKER_RESULT` envelope + fenced blocks + `COMPLETION_CLAIM`, JSONL event schema, tiered help, library-level public types. |
+| [06-public-surfaces.md](06-public-surfaces.md) | CLI exit codes, versioned `--json` envelopes, summary contract, `WORKER_RESULT` + fenced blocks + `COMPLETION_CLAIM`, JSONL schema, tiered help, and the reusable Claude Code facade. |
 | [07-contracts.md](07-contracts.md) | Inter-project type contracts inside the repo (incl. the gate contract), and shared artifacts with Plane / the worker CLIs / the older claude-config workflow. |
 | [08-workspace-assumptions.md](08-workspace-assumptions.md) | Branch conventions, auto-rebase/push, required tooling, OS / shell / git / encoding assumptions, CI matrix, worktree-aware behavior. |
 | [09-failure-modes.md](09-failure-modes.md) | Per-phase failure modes (incl. the gate family and environmental classification), idempotency, recovery, chain exit codes 0-11. |
@@ -132,7 +132,7 @@ As of the refresh stamped in this doc's header:
 
 - The four worker agents (`claude-code`, `codex`, `gemini`, `copilot`) are all **Functional** and reachable from `WorkerAgentFactory` by config name or `--agent` flag. The new gate machinery (`GatePhase`, `GateVacuityProver`, `GateControlProber`, `SmokeCollector`), the bootstrap verbs (`setup`, connected `init`), and the recovery verb (`sweep`) entered as **Functional**.
 - **Legacy**: `CliUsage.UsageText` - superseded by the tiered help registry, kept alive only by tests, and already lagging the code (it documents chain exit codes only through 9 while `ChainExitCodeMapper` emits 10 and 11).
-- **Partial / Aspirational** items centre on the model-client layer: `AnthropicClient.InvokeStreamAsync` still throws `NotImplementedException`, and the entire `ThroughlineBuild.ModelClient` layer (`IModelClient`, `AnthropicModelClient` with real SSE streaming, `ModelClientLlmAdapter`) is built and unit-tested but constructed on no production path. The `BackendCapabilities` plumbing declared in `ITicketing` is still never read, and the `CompletionClaim` hook fields are declared but unenforced.
+- **Partial / Aspirational** items centre on the model-client layer: `AnthropicClient.InvokeStreamAsync` still throws `NotImplementedException`, and the entire `ThroughlineBuild.ModelClient` layer (`IModelClient`, `AnthropicModelClient` with real SSE streaming, `ModelClientLlmAdapter`) is built and unit-tested but constructed on no production path. The new `ThroughlineBuild.ClaudeCode` public facade is Functional and tested, but NuGet publication is Partial because neither `build.sh` nor CI packs or publishes it. The `BackendCapabilities` plumbing declared in `ITicketing` is still never read, and the `CompletionClaim` hook fields are declared but unenforced.
 - **Aspirational** items named in the architecture but absent from the source tree: the `install` verb (the real bootstrap pair is `init` + `setup`), the OpenAI / Google `ILlmClient` implementations, the GitHub `ITicketing` adapter, MCP server packaging, and the replay verb. `src/ThroughlineBuild.Linear/` exists on disk as untracked build debris only - there is no Linear backend in the tree.
 - There are no **Broken** components.
 
@@ -143,4 +143,10 @@ As of the refresh stamped in this doc's header:
 1. Start at this index for the orientation.
 2. Jump directly to the doc covering the change you are investigating, checking its `Last refreshed` header against the paths you care about (see "Trusting this set" above).
 3. Each doc ends with a "Loose ends" section - skim those first if you want to find the rough edges quickly.
-4. The most current statement of architectural intent is still [docs/throughline-build-architecture.md](../throughline-build-architecture.md), but where it disagrees with the source code, this set wins, and the disagreement is noted explicitly.
+4. The current architecture reference is [docs/throughline-build-architecture.md](../throughline-build-architecture.md), but source and generated help remain authoritative when documentation drifts.
+
+## Loose ends
+
+- `models` and `sweep` remain outside the tiered help registry even though both action verbs are Functional.
+- The public Claude Code facade has package metadata but no pack/publish pipeline.
+- The direct model-client abstraction remains unwired, and no GitHub ticketing or MCP server adapter exists.

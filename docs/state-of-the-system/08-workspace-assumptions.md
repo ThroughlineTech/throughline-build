@@ -1,6 +1,6 @@
 # 08 - Workspace and Environment Assumptions
 
-Last refreshed: 2026-06-11 (HEAD 3a73eb9); untracked native-AOT override description corrected 2026-07-26 (HEAD 5d7eb6d)
+Last refreshed: 2026-07-26 (HEAD 00dc074)
 
 What `build` assumes about the environment it runs in beyond the obvious - branch conventions, required tooling, OS specifics, CI behavior, places where the code branches on stack or platform.
 
@@ -106,6 +106,8 @@ Status: Functional. `build` is cross-platform - CI builds three RIDs (see CI sec
 - **Windows reparse points** are pre-cleaned by `WorktreeDecrufter` before directory deletion (junctions under `node_modules`; [src/ThroughlineBuild.Helpers/WorktreeDecrufter.cs:111-136](../../src/ThroughlineBuild.Helpers/WorktreeDecrufter.cs#L111-L136)).
 - **Path case folding.** Windows-only lowercase normalization in `MainWorktreeLock` ([src/ThroughlineBuild.Helpers/MainWorktreeLock.cs:13-15](../../src/ThroughlineBuild.Helpers/MainWorktreeLock.cs#L13-L15)) and case-insensitive comparison in ship's exe-in-worktree preflight.
 - **`build.sh` adds `.exe`** for Windows RIDs ([build.sh:15-16](../../build.sh#L15-L16)).
+- **Interactive Claude hosting is platform-specific.** Windows uses ConPTY with a mandatory kill-on-close job object; Linux and macOS use a native PTY plus process-group containment. `InteractiveClaudeProcessLauncherFactory.Create` selects the implementation ([InteractiveClaudeProcessHost.cs:48](../../src/ThroughlineBuild.Workers.ClaudeCode/InteractiveClaudeProcessHost.cs#L48)). The capability preflight requires Claude CLI 2.1.177 or newer for this transport.
+- **Local install needs a home or explicit destination.** `build.sh` defaults `INSTALL_DIR` to `$HOME/.local/bin`; callers without a usable home must set `INSTALL_DIR`.
 - **`<InvariantGlobalization>true</InvariantGlobalization>`** ([src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj:11](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L11)) - invariant culture everywhere, no ICU at runtime.
 - **`SlugBuilder` strips non-ASCII** silently - mostly moot for branch names since they carry the ticket id alone.
 
@@ -174,15 +176,17 @@ Status: Functional.
 
 ## Worker-subprocess environment
 
-`ClaudeCodeAgent.ConfigureEnvironment` ([src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs:616-628](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L616-L628)):
+`ClaudeCodeAgent.ConfigureEnvironment` ([ClaudeCodeAgent.cs:463](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L463)):
 
 - Removes `ANTHROPIC_API_KEY` (:620) so the worker authenticates via Claude Code OAuth.
 - Sets `CLAUDE_CODE_MAX_OUTPUT_TOKENS` from config when configured (:623-624); caller-supplied env overrides win.
 - Working directory is the worktree path (:39) so the worker sees only the feature checkout.
-- **Effort-gated tool restriction (NEW, a21be20).** When `[project].context_hygiene = true` AND the ticket size is S, `ImplementPhase` dispatches with `LeanPlanning: true` ([src/ThroughlineBuild.Phases/ImplementPhase.cs:341-348](../../src/ThroughlineBuild.Phases/ImplementPhase.cs#L341-L348)) and the agent appends `--disallowedTools TodoWrite,Task` to the CLI args ([ClaudeCodeAgent.cs:559-562](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L559-L562)) - disallow is used because `--allowedTools` only auto-approves.
+- **Effort-gated tool restriction.** When `[project].context_hygiene = true` and the ticket size is S, `ImplementPhase` dispatches with `LeanPlanning: true`; `ClaudeCodeAgent.BuildArgs` always disallows Agent/Task and additionally disallows TodoWrite for lean planning ([ClaudeCodeAgent.cs:392](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L392)).
 - **Verifier allowlist honesty check (NEW, TLB-478).** `verifier_allowed_tools` is enforced only by workers that forward a per-tool allowlist to their CLI (`claude-code`, `copilot`); `VerifierToolEnforcement.UnenforcedWarning` prints a startup warning when the review worker is codex/gemini, which ignore the allowlist and run the verifier unsandboxed ([src/ThroughlineBuild.Cli/VerifierToolEnforcement.cs:20-29](../../src/ThroughlineBuild.Cli/VerifierToolEnforcement.cs#L20-L29)).
 
 Other env vars pass through from the parent process (PATH, HOME, etc.).
+
+The interactive Claude transport additionally reads `CLAUDE_CONFIG_DIR` or the applicable home/profile directory to locate the user trust file and persisted project transcripts. It writes a trust record for the canonical worktree and uses OS-temp run/lock directories; these are deliberate host-side state, not repository artifacts.
 
 ### Loose ends
 
@@ -228,7 +232,7 @@ Other env vars pass through from the parent process (PATH, HOME, etc.).
 ## Loose ends
 
 - **`BaseRefResolver` remote prefix** is still the literal `origin/` (see Branch conventions).
-- **Architecture-doc disagreement on push** persists: [docs/throughline-build-architecture.md](../throughline-build-architecture.md) Section 5.9 still claims local-merge-only; ship pushes by default and the chain landing pushes the accumulated branch.
+- **Global install is outside repository cleanup.** Removing the clone does not remove the three executables installed by `build.sh`; uninstall them from `INSTALL_DIR` separately.
 - **Case-insensitive Plane name caches** ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:386-429](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L386-L429), `OrdinalIgnoreCase` dictionaries) alias names differing only by case.
 - **Container / WSL support** untested; no telemetry leaves the operator's box.
 - **`Directory.Build.props` is now machine-local** - the only documentation of its required shape is the gitignore comment and this doc set.

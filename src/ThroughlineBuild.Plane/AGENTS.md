@@ -18,6 +18,9 @@ Key behaviors to know before touching it:
   environmental instead of crashing or reworking.
 - State-name and label-name maps are lazily cached; the canonical set lives in
   `Contracts.WorkspaceSchema` (shared with `build setup`).
+- Typed relations use Plane's `issue-relation` endpoint. Chain reads use a
+  per-issue relation cache; explicit CLI list/create/remove operations surface
+  endpoint/configuration errors and invalidate source/target cache entries.
 - AOT: JSON via source-generated context - no reflection serialization.
 
 External-dependency and state detail:
