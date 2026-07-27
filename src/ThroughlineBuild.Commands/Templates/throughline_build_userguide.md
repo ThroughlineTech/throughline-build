@@ -99,7 +99,7 @@ Commands detect a parent by querying its direct children. The current behavior i
 | `implement` | Refuses; implement the children instead. |
 | `review` | Aggregates direct-child states. Any child in InProgress or InReview produces Rework and moves the parent to InProgress; all children Done produces Pass; every other mix produces Fail. |
 | `ship` | Requires every direct child to be Done, then moves the parent to Done. It stops without transitioning the parent if any child is not Done. |
-| `chain` | Recurses through non-terminal children, skipping Done and Cancelled children. Sibling dependencies determine ordering; `--max-depth` limits traversal and `--dry-run` previews the post-order schedule. The source repository includes `docs/grandparent-chain.md` for implementation details. |
+| `chain` | Recurses through non-terminal children, skipping Done and Cancelled children. Sibling dependencies determine ordering; `--max-depth` limits traversal and `--dry-run` previews the post-order schedule. The source repository includes `docs/build-grandparent-chain.md` for implementation details. |
 | `decompose` | Has no parent-specific guard and creates additional direct children. Check existing children before running it again. |
 | `close` / `defer` | Attempts the lifecycle transition on each non-terminal direct child, then on the parent. Use `--no-cascade` to affect only the named ticket. |
 | `reopen` | Reopens only the parent and prints a note; children keep their current states. |

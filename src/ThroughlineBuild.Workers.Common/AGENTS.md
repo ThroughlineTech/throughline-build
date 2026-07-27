@@ -9,7 +9,7 @@ after the marker (trailing narration ignored). Metadata is an AOT-safe
 `<<<NAME_START` / `<<<NAME_END` blocks up to the LAST marker (duplicate names
 last-wins); `FencedBlockResolver.TryResolveRef` resolves a metadata `*_ref` to
 its block body. Batch envelopes (`BatchWorkerResultDto`) share the file.
-Protocol spec: [../../docs/worker-result-envelope.md](../../docs/worker-result-envelope.md)
+Protocol spec: [../../docs/build-worker-result-envelope.md](../../docs/build-worker-result-envelope.md)
 and [../../docs/op-docs/examples/op-27-worker-result-fenced-payloads.md](../../docs/op-docs/examples/op-27-worker-result-fenced-payloads.md).
 
 Also here: `CompletionClaimParser` (gate-phase completion claims),

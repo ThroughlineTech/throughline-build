@@ -8,7 +8,7 @@ ticket tree, schedules its live leaves, accumulates their commits on integration
 branches, and lands the completed root. For the command-level parent matrix, see
 the [operator user guide](throughline_build_userguide.md#parent-tickets). For
 the shared UUID parent-query convention, see
-[tree-aware behavior](tree-aware-behavior.md).
+[tree-aware behavior](build-tree-aware-behavior.md).
 
 Normative implementation:
 

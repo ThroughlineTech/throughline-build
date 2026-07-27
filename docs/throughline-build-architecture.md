@@ -7,8 +7,8 @@ This is the de-facto architecture reference for the current source tree. Public
 wire formats have their own stable specifications:
 
 - [event log](build-event-log-format.md)
-- [worker debug transcript](debug-transcript-format.md)
-- [WORKER_RESULT envelope](worker-result-envelope.md)
+- [worker debug transcript](build-debug-transcript-format.md)
+- [WORKER_RESULT envelope](build-worker-result-envelope.md)
 
 ## 1. Context
 
@@ -141,7 +141,7 @@ than implementing the generic phase interface directly.
 Parent tickets deliberately follow different rules from leaves. The
 operator-facing matrix is in the
 [user guide](throughline_build_userguide.md#parent-tickets), and recursive
-behavior is detailed in [The Grandparent Chain](grandparent-chain.md).
+behavior is detailed in [The Grandparent Chain](build-grandparent-chain.md).
 
 ### 5.3 Ticketing Backend
 
@@ -173,7 +173,7 @@ streaming sinks, size tier, transcript context, and the lean-planning hint.
 The four registered adapters are `claude-code`, `codex`, `gemini`, and
 `copilot`. Invocation, authentication environment, permissions, model-name
 normalization, provider envelopes, and usage extraction remain adapter
-responsibilities. See [Worker agent adapter mapping](agent-tool-name-mapping.md).
+responsibilities. See [Worker agent adapter mapping](build-agent-tool-name-mapping.md).
 
 All adapters normalize terminal output with the common `WorkerResultParser`.
 Malformed or missing results fail loudly; they are not treated as successful
@@ -200,7 +200,7 @@ repository evidence, prior-chain context, and relevant policy into a `Brief`;
 workers receive only that scoped instruction.
 
 The shared terminal contract is documented in
-[WORKER_RESULT Envelope Specification](worker-result-envelope.md).
+[WORKER_RESULT Envelope Specification](build-worker-result-envelope.md).
 
 ### 5.8 Verifier
 
@@ -236,10 +236,10 @@ workspace, and build identifiers without changing the original event fields.
 structured `transcript.jsonl` when the adapter can derive it. These contracts
 have different scopes:
 
-- [Event Log File Format](event-log-format.md) describes orchestration events.
-- [Worker Debug Transcript Format](debug-transcript-format.md) describes
+- [Event Log File Format](build-event-log-format.md) describes orchestration events.
+- [Worker Debug Transcript Format](build-debug-transcript-format.md) describes
   per-turn diagnostic telemetry.
-- [WORKER_RESULT Envelope Specification](worker-result-envelope.md) describes
+- [WORKER_RESULT Envelope Specification](build-worker-result-envelope.md) describes
   the model-to-adapter terminal protocol.
 
 ## 6. Interfaces & Contracts
@@ -384,7 +384,7 @@ Backlog --plan--> Ready --implement--> InReview
 `chain` resumes a leaf from its current state and recursively processes live
 children for a parent. Internal nodes use integration branches; only the root
 landing moves the configured target. See
-[The Grandparent Chain](grandparent-chain.md).
+[The Grandparent Chain](build-grandparent-chain.md).
 
 ## 10. Risk Register
 

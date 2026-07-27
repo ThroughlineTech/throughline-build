@@ -1,6 +1,6 @@
 # 01 - Inventory
 
-Last refreshed: 2026-06-11 (HEAD 3a73eb9); `build setup` entry updated 2026-06-14 (`heartbeat-stage-07-cutover`: setup now also runs the Claude transport preflight); op-doc authoring references updated 2026-07-26 (HEAD 6be6ffd); op-docs section rewritten 2026-07-26 for the complete/ -> examples/ cull
+Last refreshed: 2026-06-11 (HEAD 3a73eb9); `build setup` entry updated 2026-06-14 (`heartbeat-stage-07-cutover`: setup now also runs the Claude transport preflight); op-doc authoring references updated 2026-07-26 (HEAD 6be6ffd); op-docs section rewritten 2026-07-26 for the complete/ -> examples/ cull; local editor and agent-file inventory corrected 2026-07-26 (HEAD 5d7eb6d)
 
 Every command, library project, tool, script, and CI workflow currently in the repository, with a one-paragraph high-level description, inputs, outputs, and the major components it composes with. Status tags follow the convention defined in the index: Functional, Partial, Legacy, Aspirational, Broken.
 
@@ -173,8 +173,8 @@ Two single-file C# programs, AOT-compiled by `build.sh` into `bin/` (note: `bin/
 ### `build.sh` - Functional
 [build.sh](../../build.sh). Publishes three AOT binaries for one RID (default derived from `uname`, override via `$RID`) and copies them into `bin/`: the CLI -> `build`, `src/tools/token-audit.cs` -> `token-audit`, `src/tools/analyze-event-log.cs` -> `analyze-event-log`. Only change this period: `--nologo -v q` quiet flags on each `dotnet publish`.
 
-### Runner (`.vscode/`) - Functional
-[.vscode/launch.json](../../.vscode/launch.json) and [.vscode/tasks.json](../../.vscode/tasks.json) - VS Code launch/task definitions for running and debugging the CLI. No standalone runner beyond `build.sh`.
+### Editor runner configuration - Partial
+[.vscode/tasks.json](../../.vscode/tasks.json) provides VS Code build tasks. No launch configuration is tracked at HEAD; developers may keep one locally. The repository's editor-independent build contract is `build.sh` plus the commands documented above.
 
 ### `.github/workflows/build.yml` - Functional
 [.github/workflows/build.yml](../../.github/workflows/build.yml). Single workflow, matrix `{osx-arm64, win-x64, linux-x64}`. On push/PR to `main`: `actions/setup-dotnet@v4` (`dotnet-version: '10.x'`), restore, test, publish the CLI, upload the artifact. Only change this period: quiet `--nologo -v q` flags. No release-tagging or deploy.
@@ -226,17 +226,9 @@ feasibility studies (Linear backend, partial test selection, plan-phase repo ind
 
 ---
 
-## `.claude/` (ticket workflow harness, external)
+## `.claude/` (agent settings only)
 
-Consumed by the Claude Code harness, not by `build`. Included because every contributor encounters it.
-
-- [.claude/plane-config.md](../../.claude/plane-config.md) - workspace/project/state/label UUIDs and pre-built Plane view URLs.
-- [.claude/ticket-config.md](../../.claude/ticket-config.md) - stack info and test/build/preflight commands.
-- `.claude/commands/` - harness slash-command definitions (new since the last refresh).
-- `.claude/settings.json` - harness settings.
-- `.claude/plane-rest/` - cached Plane API response fixtures.
-- `.claude/worktrees/` - placeholder for git worktree state.
-- `.claude/tmp_lengths.py` - transient helper script (not part of the workflow contract).
+The repository tracks [.claude/settings.json](../../.claude/settings.json) and [.claude/settings.json.example](../../.claude/settings.json.example). It does not track project command definitions, Plane configuration, ticket configuration, or worktree state under `.claude/`, and `build` does not read these settings files. The repository's ticket workflow is the `build` CLI configured through the gitignored `.build/config.toml`; any globally installed agent commands are external to this inventory.
 
 ---
 

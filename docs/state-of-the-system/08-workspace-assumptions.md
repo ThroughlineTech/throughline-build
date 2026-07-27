@@ -1,6 +1,6 @@
 # 08 - Workspace and Environment Assumptions
 
-Last refreshed: 2026-06-11 (HEAD 3a73eb9)
+Last refreshed: 2026-06-11 (HEAD 3a73eb9); untracked native-AOT override description corrected 2026-07-26 (HEAD 5d7eb6d)
 
 What `build` assumes about the environment it runs in beyond the obvious - branch conventions, required tooling, OS specifics, CI behavior, places where the code branches on stack or platform.
 
@@ -87,7 +87,7 @@ Spelled out in [02-install-build-run.md](02-install-build-run.md). Recap of the 
 - `build models refresh` and connected `build init` additionally assume the Codex CLI supports `codex debug models`, which `CodexModelProbe` parses ([src/ThroughlineBuild.Workers.Codex/CodexModelProbe.cs:36-64](../../src/ThroughlineBuild.Workers.Codex/CodexModelProbe.cs#L36-L64)).
 - `.NET 10 SDK` for builds (all 20 `src/` projects target `net10.0`, e.g. [src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj:4](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L4)) and for `dotnet`-based checks.
 - A C/C++ toolchain for AOT publish.
-- **Host-coupled native-AOT link paths (win-x64), now untracked.** `Directory.Build.props` still hardcodes machine-specific MSVC / Windows SDK paths (`_VcToolsRoot` = MSVC `14.44.35207`, `_WinSdkLib` = SDK `10.0.26100.0`) with `IlcUseEnvironmentalTools=true` ([Directory.Build.props:13-24](../../Directory.Build.props#L13-L24)), but the file is now **gitignored** ([.gitignore:17-19](../../.gitignore#L17-L19)) - it is a local, per-machine override that other clones simply will not have. A different machine doing a Windows native publish either supplies its own `Directory.Build.props` or relies on default `vswhere` discovery.
+- **Host-coupled native-AOT link overrides (win-x64), untracked.** A developer may supply machine-specific `Directory.Build.props` or `Directory.Build.targets` files for MSVC and Windows SDK discovery, but both paths are gitignored ([.gitignore:17-19](../../.gitignore#L17-L19)) and absent from a fresh clone by design. Windows native publish otherwise relies on the default toolchain discovery.
 - Network to Plane and (for `close`/`defer`/`reopen` reason translation only) Anthropic.
 
 ### Loose ends

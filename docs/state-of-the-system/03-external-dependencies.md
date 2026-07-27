@@ -1,6 +1,6 @@
 # 03 - External Dependencies
 
-Last refreshed: 2026-06-11 (HEAD 3a73eb9)
+Last refreshed: 2026-06-11 (HEAD 3a73eb9); untracked live-config references corrected 2026-07-26 (HEAD 5d7eb6d)
 
 Every service, API, CLI, and runtime library this repo depends on; what specific endpoints or tools it touches; what happens when the dependency is missing or unauthenticated.
 
@@ -165,7 +165,7 @@ A parallel client abstraction `IModelClient` ([src/ThroughlineBuild.ModelClient/
 
 Status: Functional (all four agents). Which CLI must be installed depends on `[workers] default_agent` in the live config, not on a hardcoded vendor default.
 
-**Which external CLI the repo requires depends on config.** `default_agent` is a required string read by `ReadWorkersSection` ([src/ThroughlineBuild.Cli/Config.cs:578](../../src/ThroughlineBuild.Cli/Config.cs#L578)) and `WorkerAgentBuilder.Create` dispatches off whatever name is configured ([src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs:16-45](../../src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs#L16-L45)). Both the shipped `build init` template and the checked-in operator config currently set `default_agent = "claude-code"` ([src/ThroughlineBuild.Commands/Templates/config.toml.template:25](../../src/ThroughlineBuild.Commands/Templates/config.toml.template#L25), [.build/config.toml:25](../../.build/config.toml#L25)), with active `[workers.codex]` blocks as the configured alternate. Config load fail-fasts when the named default (or a phase agent) has no `[workers.<name>]` sub-table (TLB-512; [src/ThroughlineBuild.Cli/Config.cs:679-686](../../src/ThroughlineBuild.Cli/Config.cs#L679-L686)).
+**Which external CLI the repo requires depends on config.** `default_agent` is a required string read by `ReadWorkersSection` ([src/ThroughlineBuild.Cli/Config.cs:578](../../src/ThroughlineBuild.Cli/Config.cs#L578)) and `WorkerAgentBuilder.Create` dispatches off whatever name is configured ([src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs:16-45](../../src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs#L16-L45)). The shipped `build init` template sets `default_agent = "claude-code"` ([src/ThroughlineBuild.Commands/Templates/config.toml.template:28](../../src/ThroughlineBuild.Commands/Templates/config.toml.template#L28)), with active `[workers.codex]` blocks as the configured alternate. The live `.build/config.toml` is gitignored and may select a different agent. Config load fail-fasts when the named default (or a phase agent) has no `[workers.<name>]` sub-table (TLB-512; [src/ThroughlineBuild.Cli/Config.cs:679-686](../../src/ThroughlineBuild.Cli/Config.cs#L679-L686)).
 
 There are four `IWorkerAgent` implementations, one per vendor CLI. Each shells out to a subprocess, delivers the brief, and reads a `WORKER_RESULT` envelope back. The envelope parser is shared in `ThroughlineBuild.Workers.Common` ([src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs)); since the last refresh it grew substantially:
 

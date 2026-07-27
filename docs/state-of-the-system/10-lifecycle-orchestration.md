@@ -456,11 +456,11 @@ The `EventKind` enum has 14 values ([src/ThroughlineBuild.Contracts/Models/Workf
 
 `GateFailure` `kind` discriminators are defined at their emit sites, not centrally. Representative values by area: implement (`hygiene_gate`, `drift_warning`, `dirty_worktree_first_attempt`/`dirty_worktree_retry_failed`, `preload_file_not_found`, `preload_empty`), gate (`claim_schema_invalid`, `setup_failed`, `gating_checks_failed`, `gate_control_run`, `gate_config_reloaded`, `gate_environment_failure`, `gate_vacuous`, `gate_unverified`, `gate_canary_cleanup_failed`), review (`dirty_worktree_after_review`, `implemented_at_superseded`), ship (`pre_flight_*`, `wrong_worktree_branch`), chain (`chain_preflight_wrong_branch`, `chain_preflight_dirty`, `hygiene_gate_preflight`, `rework_recheck_failed`, `integration_worktree_unavailable`, `batch_implement_unavailable`, `chain_refresh_rebase_conflicts`).
 
-Full event-line schema in [docs/event-log-format.md](../event-log-format.md).
+Full event-line schema in [docs/build-event-log-format.md](../build-event-log-format.md).
 
 ### Loose ends
 
-- `event-log-format.md` does not enumerate the per-`Data` shape of every kind; the authoritative `Data` keys are in the emitting code.
+- `build-event-log-format.md` does not enumerate the per-`Data` shape of every kind; the authoritative `Data` keys are in the emitting code.
 - `DispatchStart`/`DispatchEnd` carry an empty `TicketId`; `max_concurrency` is always 1.
 - The `GateFailure` discriminator namespace is conventions-only; nothing prevents a collision between emit sites.
 
@@ -508,7 +508,7 @@ The `ChainOutcome` enum has 20 values ([src/ThroughlineBuild.Contracts/Models/Ch
 - **`MaxReworkRounds = 2` is hardcoded; all dispatch is serial since op-29.** Both the parent chain level loop and `ParallelDispatcher` (width pinned to 1) run one ticket at a time; no concurrency knob remains.
 - **The gate is chain-only.** Standalone phase verbs (`build implement`, `build review`) bypass `GatePhase`, completion claims, the consumes-provides preflight, and vacuity proving.
 - **No cross-phase live channel.** ReviewPhase reconstructs the implementer brief deterministically; the chain holds in-process orchestration state (accumulated provides, gate cost accumulators) only for the duration of a run.
-- **Chain `WorkflowEvent.Data`** schema lives in code, not exhaustively in [docs/event-log-format.md](../event-log-format.md).
+- **Chain `WorkflowEvent.Data`** schema lives in code, not exhaustively in [docs/build-event-log-format.md](../build-event-log-format.md).
 - **No replay verb** (`build replay <session-id>`). Architecture Appendix item 4 notes this as a future.
 - **`SequentialChainDispatcher`** remains as a legacy fallback alongside the now-serial `ParallelDispatcher`.
 - **Two cleanup paths:** end-of-chain `SweepChainWorktreesAsync` (success only) and the `build sweep` verb (recovery) overlap; their merged-gating rules live in `ChainWorktreeSweeper` and should stay aligned.

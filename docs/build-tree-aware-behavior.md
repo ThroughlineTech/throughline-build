@@ -4,7 +4,7 @@ The operator-facing behavior matrix lives in the
 [Throughline Build user guide](throughline_build_userguide.md#parent-tickets).
 The recursive scheduler, dependency ordering, branch topology, depth limits,
 and outcomes are documented in the
-[recursive-chain deep dive](grandparent-chain.md). This stable page records only
+[recursive-chain deep dive](build-grandparent-chain.md). This stable page records only
 the parent-detection convention shared by those documents.
 
 ## Parent detection

@@ -18,9 +18,9 @@ files exist only after particular failures.
 
 Related contracts:
 
-- [Event log](event-log-format.md) defines the durable workflow event stream
+- [Event log](build-event-log-format.md) defines the durable workflow event stream
   and its session correlation.
-- [WORKER_RESULT envelope](worker-result-envelope.md) defines the worker result
+- [WORKER_RESULT envelope](build-worker-result-envelope.md) defines the worker result
   summarized by `worker_status`.
 
 ## Capture directories

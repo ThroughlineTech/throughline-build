@@ -6,7 +6,7 @@ phase supplies a provider-neutral brief, working directory, timeout, model-size
 signal, optional tool allowlist, environment overrides, and diagnostic sinks.
 The adapter owns the provider-specific process invocation and converts the
 response into a common `WorkerResult`. The shared wire format is documented in
-the [WORKER_RESULT envelope specification](worker-result-envelope.md).
+the [WORKER_RESULT envelope specification](build-worker-result-envelope.md).
 
 Configured agent names are exact and case-sensitive:
 
@@ -81,7 +81,7 @@ responsibilities. All adapters ultimately use the shared `WorkerResultParser`,
 so phases consume the same `WORKER_RESULT` protocol without depending on a
 vendor's wire format. The optional structured debug transcript is currently a
 Claude Code-specific diagnostic; see the
-[debug transcript reference](debug-transcript-format.md).
+[debug transcript reference](build-debug-transcript-format.md).
 
 When adding an adapter, implement `IWorkerAgent`, use the shared parser, register
 the exact config name in `WorkerAgentBuilder`, and cover the common good/error

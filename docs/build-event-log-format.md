@@ -6,9 +6,9 @@ numeric enum values; the contents of `Data` remain emitter-specific.
 
 Related contracts:
 
-- [Worker debug transcript](debug-transcript-format.md) describes optional,
+- [Worker debug transcript](build-debug-transcript-format.md) describes optional,
   high-detail worker diagnostics.
-- [WORKER_RESULT envelope](worker-result-envelope.md) describes the structured
+- [WORKER_RESULT envelope](build-worker-result-envelope.md) describes the structured
   result returned by a worker before phases emit summary events.
 - [Architecture](throughline-build-architecture.md) explains where the event
   sink sits in the application.

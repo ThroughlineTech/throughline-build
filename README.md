@@ -31,6 +31,6 @@ For automation, `build new - --json` accepts the strict JSON draft described by
 - [Operator user guide](docs/throughline_build_userguide.md) - configuration and everyday workflow
 - [Building from source](docs/build-command-setup.md) - contributor build, test, and publish commands
 - [Architecture](docs/throughline-build-architecture.md) - as-built components and invariants
-- Wire and diagnostic references: [event log](docs/build-event-log-format.md), [debug transcript](docs/debug-transcript-format.md), and [worker result envelope](docs/worker-result-envelope.md)
-- [Worker agent adapters](docs/agent-tool-name-mapping.md) - shared contract and provider differences
-- [Recursive chain deep dive](docs/grandparent-chain.md) - tree scheduling, dependencies, depth, and branch topology
+- Wire and diagnostic references: [event log](docs/build-event-log-format.md), [debug transcript](docs/build-debug-transcript-format.md), and [worker result envelope](docs/build-worker-result-envelope.md)
+- [Worker agent adapters](docs/build-agent-tool-name-mapping.md) - shared contract and provider differences
+- [Recursive chain deep dive](docs/build-grandparent-chain.md) - tree scheduling, dependencies, depth, and branch topology

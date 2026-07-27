@@ -1,6 +1,6 @@
 # 07 - Contracts
 
-Last refreshed: 2026-06-11 (HEAD 3a73eb9)
+Last refreshed: 2026-06-11 (HEAD 3a73eb9); older claude-config workflow corrected 2026-07-26 (HEAD 5d7eb6d)
 
 The inter-project type contracts inside this repo, and the artifacts shared with sibling systems (Plane, Claude Code, the older claude-config slash commands).
 
@@ -82,7 +82,7 @@ The op that landed TLB-500..510 introduced a typed contract between the implemen
 
 ### Untyped / fragile contracts inside the model
 
-Unchanged in kind: `PhaseResult.Outputs` (`IReadOnlyDictionary<string,string>`), `WorkflowEvent.Data` (`IReadOnlyDictionary<string,object>`, per-`Kind` shape in [docs/event-log-format.md](../event-log-format.md)), `WorkerResult.Metadata` (free-form, asserted per-phase), `TicketCommandContext.Args` (flag-name-keyed strings). Two partial mitigations since the last refresh: `WorkerResultMetadata` centralizes the `envelope_status` strings, and `ReviewFeedback.FailedCheckDetails` carries typed `CheckResult`s instead of re-parsing prose. The rest still narrows at use, not at the boundary.
+Unchanged in kind: `PhaseResult.Outputs` (`IReadOnlyDictionary<string,string>`), `WorkflowEvent.Data` (`IReadOnlyDictionary<string,object>`, per-`Kind` shape in [docs/build-event-log-format.md](../build-event-log-format.md)), `WorkerResult.Metadata` (free-form, asserted per-phase), `TicketCommandContext.Args` (flag-name-keyed strings). Two partial mitigations since the last refresh: `WorkerResultMetadata` centralizes the `envelope_status` strings, and `ReviewFeedback.FailedCheckDetails` carries typed `CheckResult`s instead of re-parsing prose. The rest still narrows at use, not at the boundary.
 
 ---
 
@@ -138,13 +138,11 @@ Two scaffold-side formats hardened into published contracts since the last refre
 
 ### Older claude-config workflow
 
-This section needed the largest correction: the in-repo half of the old flow is substantially gone.
+The in-repository half of the old flow has been removed.
 
-- **This repo's `.claude/commands/` now contains only `op-plan.md`** - the `/ticket-*` command corpus no longer lives here. The `/ticket-*` skills the operator still uses are served from the global claude-config install; the project `CLAUDE.md` still documents them as the project's ticket workflow.
-- **The mirror infrastructure is deleted**: there is no `bin/sync-*`, no `copilot-prompts/`, no `plugins/latticeflow/` at HEAD. `bin/` now holds published binaries (`build.exe`, `analyze-event-log.exe`, `token-audit.exe`). The architecture Section 8 cutover ("delete the markdown corpus and mirrors in one commit") has therefore *mostly happened*, piecemeal rather than in one commit; what remains shared is configuration and Plane data, not code.
-- Still present and still shared: [.claude/plane-config.md](../../.claude/plane-config.md) (state/label UUIDs for this Plane project) and `.claude/ticket-config.md`. `build` does **not** read them; they document the same configuration the operator put into `.build/config.toml`, and they must be kept in sync by hand.
-- The two flows still write **different comment formats** to the same Plane tickets (headed sections vs markers), and `build new --print-template` still emits the body shape (`# Title`, `**Type:**`, `## Description`, `## Acceptance criteria`, ...) from [new-ticket-body.md](../../src/ThroughlineBuild.Commands/Templates/new-ticket-body.md) that both flows recognize.
-- `build`'s state vocabulary (now `WorkspaceSchema`) matches the state list in `.claude/plane-config.md`; with `build setup` able to *provision* that vocabulary, the direction of authority has flipped - the C# schema is canonical, the markdown documents it.
+- No `.claude/commands/`, `.claude/plane-config.md`, or `.claude/ticket-config.md` files are tracked at HEAD. Any global claude-config installation is external to this repository and is not part of the Throughline Build contract.
+- The mirror infrastructure is also gone: there is no `bin/sync-*`, `copilot-prompts/`, or `plugins/latticeflow/` tree. The `bin/` directory is reserved for locally published binaries.
+- `build` owns the current ticket workflow. `.build/config.toml` is the local backend configuration, `WorkspaceSchema` is the canonical state and label vocabulary, and `build setup` provisions it. `build new --print-template` emits the recognized ticket body shape from [new-ticket-body.md](../../src/ThroughlineBuild.Commands/Templates/new-ticket-body.md).
 
 ### Shared artifacts visible across flows
 

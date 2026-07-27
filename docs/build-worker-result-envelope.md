@@ -5,9 +5,9 @@ the core envelope parser from phase-specific metadata consumers.
 
 Related references:
 
-- [Event log](event-log-format.md) describes summaries emitted after worker
+- [Event log](build-event-log-format.md) describes summaries emitted after worker
   processing.
-- [Debug transcript](debug-transcript-format.md) describes optional diagnostic
+- [Debug transcript](build-debug-transcript-format.md) describes optional diagnostic
   capture of worker sessions.
 - [Architecture](throughline-build-architecture.md) describes the worker
   boundary and AOT serialization constraints.
