@@ -190,107 +190,7 @@ public class ChainPhase
 
         var ticket = await _ticketing.GetAsync(options.TicketId, ct).ConfigureAwait(false);
 
-        // Preflight hygiene gate: run ONCE at the outermost chain entry (children recurse
-        // with ChainTargetBranch set, so they are skipped here). The stash stack is
-        // repo-global and leaks across worktrees, so a dangling stash or conflict left on
-        // the tree can corrupt a ticket mid-chain. Catch it here - before any planning -
-        // instead of burning a plan round and failing opaquely inside implement.
-        if (options.ChainTargetBranch is null)
-        {
-            // Wrong-branch guard: the chain ends by shipping into _baseOptions.TargetBranch,
-            // and ShipPhase performs that merge by advancing whatever HEAD the MAIN worktree
-            // points at (FastForwardMergeAsync). If the main worktree is parked on a different
-            // branch (or detached), the ship gate refuses - but only after plan/implement/review
-            // have already burned minutes of work. Mirror that ship preflight here, before any
-            // planning, so the operator fixes the branch up front instead of discovering it at
-            // the very end. The two checks compare against the same target branch and must agree.
-            var targetBranch = _baseOptions.TargetBranch;
-            var currentBranch = await _git.CurrentBranchAsync(_workingDirectory, ct).ConfigureAwait(false);
-            if (!string.Equals(currentBranch, targetBranch, StringComparison.Ordinal))
-            {
-                var wrongBranchMessage =
-                    $"{_workingDirectory} is on '{currentBranch}' (or detached); the chain ships into " +
-                    $"'{targetBranch}', so the main worktree must be on '{targetBranch}' before starting. " +
-                    $"Switch with 'git switch {targetBranch}' and re-run.";
-
-                Console.Error.WriteLine($"[{options.TicketId}] chain refused: {wrongBranchMessage}");
-                await _events.EmitAsync(new WorkflowEvent(
-                    SessionId: chainSessionId,
-                    Timestamp: DateTimeOffset.UtcNow,
-                    Kind: EventKind.GateFailure,
-                    TicketId: options.TicketId,
-                    Phase: Phase.Chain,
-                    Data: new Dictionary<string, object>
-                    {
-                        ["kind"] = "chain_preflight_wrong_branch",
-                        ["expected"] = targetBranch,
-                        ["actual"] = currentBranch,
-                        ["worktree"] = _workingDirectory
-                    }), ct).ConfigureAwait(false);
-                totalSw.Stop();
-                var refused = new ChainResult(options.TicketId, steps, ChainOutcome.RefusedWrongBranch,
-                    totalSw.Elapsed, wrongBranchMessage);
-                await EmitChainEndAsync(refused, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
-                return refused;
-            }
-
-            var preflightBranch = PhaseWorktreeLayout.BranchName(ticket.Id);
-            var preflightFailure = await WorkingTreeHygieneGate
-                .CheckAsync(_git, _workingDirectory, preflightBranch, ct).ConfigureAwait(false);
-            if (preflightFailure is not null)
-            {
-                await _events.EmitAsync(new WorkflowEvent(
-                    SessionId: chainSessionId,
-                    Timestamp: DateTimeOffset.UtcNow,
-                    Kind: EventKind.GateFailure,
-                    TicketId: options.TicketId,
-                    Phase: Phase.Chain,
-                    Data: new Dictionary<string, object>
-                    {
-                        ["kind"] = "hygiene_gate_preflight",
-                        ["detail"] = preflightFailure
-                    }), ct).ConfigureAwait(false);
-                totalSw.Stop();
-                var refused = new ChainResult(options.TicketId, steps, ChainOutcome.RefusedDirtyTree,
-                    totalSw.Elapsed, preflightFailure, DirtyTreeCause: DirtyTreeCause.Hygiene);
-                await EmitChainEndAsync(refused, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
-                return refused;
-            }
-
-            var dirtyTrackedPaths = await _git.GetTrackedChangesAsync(_workingDirectory, ct).ConfigureAwait(false);
-            if (dirtyTrackedPaths.Count > 0)
-            {
-                const int dirtyPathSampleLimit = 25;
-                var dirtyPathSample = dirtyTrackedPaths.Take(dirtyPathSampleLimit).ToList();
-                var dirtyPathList = string.Join(", ", dirtyPathSample);
-                var more = dirtyTrackedPaths.Count > dirtyPathSample.Count
-                    ? $" (+{dirtyTrackedPaths.Count - dirtyPathSample.Count} more)"
-                    : "";
-                var dirtyMessage =
-                    $"{_workingDirectory} has {dirtyTrackedPaths.Count} modified tracked files: " +
-                    $"{dirtyPathList}{more}. Commit, stash, or revert them before running build chain.";
-
-                Console.Error.WriteLine($"[{options.TicketId}] chain refused: {dirtyMessage}");
-                await _events.EmitAsync(new WorkflowEvent(
-                    SessionId: chainSessionId,
-                    Timestamp: DateTimeOffset.UtcNow,
-                    Kind: EventKind.GateFailure,
-                    TicketId: options.TicketId,
-                    Phase: Phase.Chain,
-                    Data: new Dictionary<string, object>
-                    {
-                        ["kind"] = "chain_preflight_dirty",
-                        ["dirty_count"] = dirtyTrackedPaths.Count,
-                        ["dirty_paths"] = dirtyPathSample,
-                        ["worktree"] = _workingDirectory
-                    }), ct).ConfigureAwait(false);
-                totalSw.Stop();
-                var refused = new ChainResult(options.TicketId, steps, ChainOutcome.RefusedDirtyTree,
-                    totalSw.Elapsed, dirtyMessage, DirtyTreeCause: DirtyTreeCause.TrackedChanges);
-                await EmitChainEndAsync(refused, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
-                return refused;
-            }
-        }
+        if (await RunOutermostPreflightAsync(options, ticket, steps, totalSw, chainSessionId, ct).ConfigureAwait(false) is { } preflightRefusal) return preflightRefusal;
 
         if (options.VisitedTicketUuids is not null && options.VisitedTicketUuids.Contains(ticket.Uuid))
         {
@@ -533,6 +433,54 @@ public class ChainPhase
             await SweepChainWorktreesAsync(options.TicketId, chainSessionId, ct).ConfigureAwait(false);
         await EmitChainEndAsync(completed, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
         return completed;
+    }
+
+    private async Task<ChainResult?> RunOutermostPreflightAsync(
+        ChainPhaseOptions options,
+        Ticket ticket,
+        IReadOnlyList<ChainStep> steps,
+        Stopwatch totalSw,
+        string chainSessionId,
+        CancellationToken ct)
+    {
+        // Children recurse with ChainTargetBranch set, so preflight runs only at the
+        // outermost entry, before any planning or mutation.
+        if (options.ChainTargetBranch is not null)
+            return null;
+
+        var preflight = new ChainPreflight(_git, _workingDirectory, _baseOptions.TargetBranch);
+        var refusal = await preflight
+            .CheckAsync(PhaseWorktreeLayout.BranchName(ticket.Id), ct)
+            .ConfigureAwait(false);
+        if (refusal is null)
+            return null;
+
+        // Preserve the existing diagnostics: hygiene failures emit an event but do not
+        // write this refusal line.
+        if (refusal.Outcome == ChainOutcome.RefusedWrongBranch
+            || refusal.DirtyTreeCause == DirtyTreeCause.TrackedChanges)
+        {
+            Console.Error.WriteLine($"[{options.TicketId}] chain refused: {refusal.Message}");
+        }
+
+        await _events.EmitAsync(new WorkflowEvent(
+            SessionId: chainSessionId,
+            Timestamp: DateTimeOffset.UtcNow,
+            Kind: EventKind.GateFailure,
+            TicketId: options.TicketId,
+            Phase: Phase.Chain,
+            Data: refusal.EventData), ct).ConfigureAwait(false);
+
+        totalSw.Stop();
+        var result = new ChainResult(
+            options.TicketId,
+            steps,
+            refusal.Outcome,
+            totalSw.Elapsed,
+            refusal.Message,
+            DirtyTreeCause: refusal.DirtyTreeCause);
+        await EmitChainEndAsync(result, chainSessionId, options.TicketId, ct).ConfigureAwait(false);
+        return result;
     }
 
     // Emits a pre-run START notice through the OnStep stream so the operator sees a
