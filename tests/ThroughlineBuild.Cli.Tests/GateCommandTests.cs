@@ -1,11 +1,13 @@
 using System.Text.Json;
 using ThroughlineBuild.Cli;
 using ThroughlineBuild.Contracts;
+using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Verification;
 using Xunit;
 
 namespace ThroughlineBuild.Cli.Tests;
 
+[Collection("Cli Tests Environment")]
 public sealed class GateCommandTests
 {
     [Fact]
@@ -113,6 +115,9 @@ public sealed class GateCommandTests
         Assert.Equal(0, exit);
         Assert.Equal(["prepare", "test"], runner.LastSpecs.Select(s => s.Name));
         Assert.Single(runner.LastSpecs, s => s.Role == CheckRole.Setup);
+        Assert.Equal(
+            AutomatedChecksRunner.RequiredPathHandling.Inconclusive,
+            runner.LastRequiredPathHandling);
     }
 
     [Fact]
@@ -172,6 +177,41 @@ public sealed class GateCommandTests
     }
 
     [Fact]
+    public async Task MissingRequiredPath_GateOptInDoesNotExecuteCommand_AndReturnsInconclusive()
+    {
+        var missing = $"missing-{Guid.NewGuid():N}";
+        var output = new StringWriter();
+        var check = new CheckSpec(
+            "requires-input",
+            "this-command-must-not-run",
+            Array.Empty<string>(),
+            TimeSpan.FromSeconds(5),
+            CheckRole.Gating,
+            RequiredPaths: [missing]);
+
+        var exit = await GateCommand.ExecuteAsync(
+            ["gate"],
+            json: true,
+            [check],
+            Directory.GetCurrentDirectory(),
+            new AutomatedChecksRunner(),
+            output,
+            TextWriter.Null,
+            CancellationToken.None);
+
+        Assert.Equal(1, exit);
+        using var json = JsonDocument.Parse(output.ToString());
+        var evidence = json.RootElement
+            .GetProperty("data")
+            .GetProperty("checks")
+            .EnumerateArray()
+            .Single();
+        Assert.Equal("inconclusive", evidence.GetProperty("status").GetString());
+        Assert.Equal(-1, evidence.GetProperty("exitCode").GetInt32());
+        Assert.Equal(missing, evidence.GetProperty("missingRequiredPaths").EnumerateArray().Single().GetString());
+    }
+
+    [Fact]
     public async Task UsesInvocationDirectory_NotPrimaryWorktree()
     {
         var leasedWorktree = Path.Combine(Path.GetTempPath(), "gate-command-tests", Guid.NewGuid().ToString("N"));
@@ -200,15 +240,64 @@ public sealed class GateCommandTests
     }
 
     [Fact]
-    public void CommandSurface_HasNoWorkerAgentDependency()
+    public async Task CliGate_DoesNotConstructOrInvokeWorkerAgent()
     {
-        var parameterTypes = typeof(GateCommand)
-            .GetMethods()
-            .SelectMany(method => method.GetParameters())
-            .Select(parameter => parameter.ParameterType);
+        var repository = Path.Combine(
+            Path.GetTempPath(),
+            "gate-command-tests",
+            Guid.NewGuid().ToString("N"));
+        var originalDirectory = Directory.GetCurrentDirectory();
+        Directory.CreateDirectory(Path.Combine(repository, ".build"));
 
-        Assert.DoesNotContain(typeof(IWorkerAgent), parameterTypes);
-        Assert.DoesNotContain(typeof(IWorkerAgentFactory), parameterTypes);
+        try
+        {
+            await RunGitAsync(repository, "init");
+            File.WriteAllText(
+                Path.Combine(repository, ".build", "config.toml"),
+                """
+                [ticketing]
+                backend = "plane"
+                plane_base_url = "https://api.plane.test"
+                plane_workspace_slug = "workspace"
+                plane_project_id = "project"
+                plane_api_token = "test-token"
+
+                [workers]
+                default_agent = "codex"
+
+                [workers.codex]
+                executable = "worker-must-not-run"
+
+                [workers.codex.sizes]
+                small = { model = "test" }
+                medium = { model = "test" }
+                large = { model = "test" }
+
+                [events]
+                log_directory = ".build/events"
+                """);
+
+            var worker = new RecordingWorkerAgent();
+            var constructionCount = 0;
+            Directory.SetCurrentDirectory(repository);
+
+            var exit = await CliApplication.RunAsync(
+                ["gate"],
+                (_, _) =>
+                {
+                    constructionCount++;
+                    return worker;
+                });
+
+            Assert.Equal(0, exit);
+            Assert.Equal(0, constructionCount);
+            Assert.Equal(0, worker.InvocationCount);
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(originalDirectory);
+            Directory.Delete(repository, recursive: true);
+        }
     }
 
     private static CheckSpec Spec(string name, CheckRole role) =>
@@ -234,17 +323,64 @@ public sealed class GateCommandTests
         public int CallCount { get; private set; }
         public IReadOnlyList<CheckSpec> LastSpecs { get; private set; } = Array.Empty<CheckSpec>();
         public string? LastWorkingDirectory { get; private set; }
+        public AutomatedChecksRunner.RequiredPathHandling? LastRequiredPathHandling { get; private set; }
 
         public override Task<IReadOnlyList<CheckResult>> RunAsync(
             IReadOnlyList<CheckSpec> specs,
             string workingDirectory,
-            CancellationToken ct)
+            CancellationToken ct,
+            RequiredPathHandling requiredPathHandling)
         {
             CallCount++;
             LastSpecs = OrderSetupFirst(specs);
             LastWorkingDirectory = workingDirectory;
+            LastRequiredPathHandling = requiredPathHandling;
             return Task.FromResult<IReadOnlyList<CheckResult>>(
                 LastSpecs.Select(_resultFactory).ToList());
         }
+    }
+
+    private sealed class RecordingWorkerAgent : IWorkerAgent
+    {
+        public string Name => "recording";
+        public IWorkerProgressDigester? Digester => null;
+        public int InvocationCount { get; private set; }
+
+        public Task<WorkerResult> ExecuteAsync(
+            Brief brief,
+            string workingDirectory,
+            WorkerOptions options,
+            CancellationToken ct)
+        {
+            InvocationCount++;
+            return Task.FromResult(new WorkerResult(
+                Status.Ok,
+                "unexpected invocation",
+                Array.Empty<string>(),
+                null,
+                new Dictionary<string, object>()));
+        }
+    }
+
+    private static async Task RunGitAsync(string workingDirectory, params string[] args)
+    {
+        var startInfo = new System.Diagnostics.ProcessStartInfo("git")
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in args)
+            startInfo.ArgumentList.Add(arg);
+
+        using var process = System.Diagnostics.Process.Start(startInfo)!;
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        Assert.True(
+            process.ExitCode == 0,
+            $"git {string.Join(" ", args)} failed: {await stderr}; stdout: {await stdout}");
     }
 }

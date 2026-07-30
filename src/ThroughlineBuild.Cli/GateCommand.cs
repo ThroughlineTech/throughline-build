@@ -28,7 +28,11 @@ public static class GateCommand
         }
         else
         {
-            results = await runner.RunAsync(selected, workingDirectory, ct).ConfigureAwait(false);
+            results = await runner.RunAsync(
+                selected,
+                workingDirectory,
+                ct,
+                AutomatedChecksRunner.RequiredPathHandling.Inconclusive).ConfigureAwait(false);
         }
 
         var passed = results.All(IsNonBlocking);

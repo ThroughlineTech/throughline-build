@@ -22,7 +22,12 @@ namespace ThroughlineBuild.Cli;
 
 public static class CliApplication
 {
-    public static async Task<int> RunAsync(string[] args)
+    public static Task<int> RunAsync(string[] args) =>
+        RunAsync(args, WorkerAgentBuilder.Create);
+
+    internal static async Task<int> RunAsync(
+        string[] args,
+        Func<string, AgentConfig, IWorkerAgent> workerAgentBuilder)
     {
         if (ClaudeStopHookCommand.IsMatch(args))
             return await ClaudeStopHookCommand.RunAsync(args);
@@ -1597,7 +1602,7 @@ public static class CliApplication
                 throw new ConfigException($"missing [workers.{agentName}] sub-table in config");
             var capturedCfg = aCfg;
             var capturedName = agentName;
-            factoryEntries[agentName] = () => WorkerAgentBuilder.Create(capturedName, capturedCfg);
+            factoryEntries[agentName] = () => workerAgentBuilder(capturedName, capturedCfg);
         }
         var workerFactory = new WorkerAgentFactory(factoryEntries);
 

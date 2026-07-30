@@ -241,7 +241,29 @@ public class AutomatedChecksRunnerTests
     }
 
     [Fact]
-    public async Task MissingRequiredPath_IsInconclusive_AndCommandDoesNotRun()
+    public async Task MissingRequiredPath_DefaultMode_StillRunsCommand()
+    {
+        var missing = $"missing-{Guid.NewGuid():N}";
+        var spec = new CheckSpec(
+            "version",
+            "dotnet",
+            ["--version"],
+            TimeSpan.FromSeconds(30),
+            RequiredPaths: [missing]);
+
+        var result = Assert.Single(await new AutomatedChecksRunner().RunAsync(
+            [spec],
+            Directory.GetCurrentDirectory(),
+            CancellationToken.None));
+
+        Assert.True(result.Passed, result.StderrTail);
+        Assert.False(result.Inconclusive);
+        Assert.Equal(0, result.ExitCode);
+        Assert.False(string.IsNullOrWhiteSpace(result.StdoutTail));
+    }
+
+    [Fact]
+    public async Task MissingRequiredPath_OptInMode_IsInconclusive_AndCommandDoesNotRun()
     {
         var missing = $"missing-{Guid.NewGuid():N}";
         var spec = new CheckSpec(
@@ -254,7 +276,8 @@ public class AutomatedChecksRunnerTests
         var result = Assert.Single(await new AutomatedChecksRunner().RunAsync(
             [spec],
             Directory.GetCurrentDirectory(),
-            CancellationToken.None));
+            CancellationToken.None,
+            AutomatedChecksRunner.RequiredPathHandling.Inconclusive));
 
         Assert.False(result.Passed);
         Assert.True(result.Inconclusive);
@@ -262,6 +285,54 @@ public class AutomatedChecksRunnerTests
         Assert.Equal(TimeSpan.Zero, result.Elapsed);
         Assert.Equal([missing], result.MissingRequiredPaths);
         Assert.Contains("required paths absent", result.StderrTail);
+    }
+
+    [Fact]
+    public async Task RunNamed_MissingRequiredPath_DefaultMode_StillRunsCommand()
+    {
+        var missing = $"missing-{Guid.NewGuid():N}";
+        var spec = new CheckSpec(
+            "version",
+            "dotnet",
+            ["--version"],
+            TimeSpan.FromSeconds(30),
+            RequiredPaths: [missing]);
+
+        var result = await new AutomatedChecksRunner().RunNamedAsync(
+            "version",
+            [spec],
+            Directory.GetCurrentDirectory(),
+            CancellationToken.None);
+
+        Assert.True(result.Passed, result.StderrTail);
+        Assert.False(result.Inconclusive);
+        Assert.Equal(0, result.ExitCode);
+        Assert.False(string.IsNullOrWhiteSpace(result.StdoutTail));
+    }
+
+    [Fact]
+    public async Task RunNamed_MissingRequiredPath_OptInMode_IsInconclusive_AndCommandDoesNotRun()
+    {
+        var missing = $"missing-{Guid.NewGuid():N}";
+        var spec = new CheckSpec(
+            "requires-input",
+            "this-command-must-not-run",
+            Array.Empty<string>(),
+            TimeSpan.FromSeconds(5),
+            RequiredPaths: [missing]);
+
+        var result = await new AutomatedChecksRunner().RunNamedAsync(
+            "requires-input",
+            [spec],
+            Directory.GetCurrentDirectory(),
+            CancellationToken.None,
+            AutomatedChecksRunner.RequiredPathHandling.Inconclusive);
+
+        Assert.False(result.Passed);
+        Assert.True(result.Inconclusive);
+        Assert.Equal(-1, result.ExitCode);
+        Assert.Equal(TimeSpan.Zero, result.Elapsed);
+        Assert.Equal([missing], result.MissingRequiredPaths);
     }
 
     [Fact]

@@ -6,6 +6,12 @@ namespace ThroughlineBuild.Verification;
 
 public class AutomatedChecksRunner
 {
+    public enum RequiredPathHandling
+    {
+        Ignore,
+        Inconclusive
+    }
+
     private readonly bool _stopOnFirstFailure;
 
     public AutomatedChecksRunner(bool stopOnFirstFailure = false)
@@ -17,6 +23,19 @@ public class AutomatedChecksRunner
         IReadOnlyList<CheckSpec> specs,
         string workingDirectory,
         CancellationToken ct)
+    {
+        return await RunAsync(
+            specs,
+            workingDirectory,
+            ct,
+            RequiredPathHandling.Ignore).ConfigureAwait(false);
+    }
+
+    public virtual async Task<IReadOnlyList<CheckResult>> RunAsync(
+        IReadOnlyList<CheckSpec> specs,
+        string workingDirectory,
+        CancellationToken ct,
+        RequiredPathHandling requiredPathHandling)
     {
         // Setup-role specs are prerequisites (a codegen/install step the real checks depend on); run
         // them FIRST so the gating/advisory checks they enable see a prepared worktree. Stable, and a
@@ -45,7 +64,7 @@ public class AutomatedChecksRunner
                 continue;
             }
 
-            var result = await RunSpecAsync(spec, workingDirectory, ct);
+            var result = await RunSpecAsync(spec, workingDirectory, ct, requiredPathHandling);
             results.Add(result);
 
             // Determine whether to stop
@@ -71,10 +90,25 @@ public class AutomatedChecksRunner
         string workingDirectory,
         CancellationToken ct)
     {
+        return await RunNamedAsync(
+            checkName,
+            specs,
+            workingDirectory,
+            ct,
+            RequiredPathHandling.Ignore).ConfigureAwait(false);
+    }
+
+    public virtual async Task<CheckResult> RunNamedAsync(
+        string checkName,
+        IReadOnlyList<CheckSpec> specs,
+        string workingDirectory,
+        CancellationToken ct,
+        RequiredPathHandling requiredPathHandling)
+    {
         var spec = specs.FirstOrDefault(s => s.Name == checkName);
         if (spec is null)
             return new CheckResult(checkName, false, 0, "", "", TimeSpan.Zero, Skipped: true);
-        return await RunSpecAsync(spec, workingDirectory, ct);
+        return await RunSpecAsync(spec, workingDirectory, ct, requiredPathHandling);
     }
 
     // Reorder so every CheckRole.Setup spec runs before the rest, preserving relative order within each
@@ -108,22 +142,26 @@ public class AutomatedChecksRunner
     private static Task<CheckResult> RunSpecAsync(
         CheckSpec spec,
         string workingDirectory,
-        CancellationToken ct)
+        CancellationToken ct,
+        RequiredPathHandling requiredPathHandling)
     {
-        var missingPaths = MissingRequiredPaths(spec, workingDirectory);
-        if (missingPaths.Count > 0)
+        if (requiredPathHandling == RequiredPathHandling.Inconclusive)
         {
-            return Task.FromResult(new CheckResult(
-                spec.Name,
-                Passed: false,
-                ExitCode: -1,
-                StdoutTail: "",
-                StderrTail: $"[runner] required paths absent: {string.Join(", ", missingPaths)}",
-                Elapsed: TimeSpan.Zero,
-                Role: spec.Role,
-                CommandLine: FormatCommandLine(spec),
-                Inconclusive: true,
-                MissingRequiredPaths: missingPaths));
+            var missingPaths = MissingRequiredPaths(spec, workingDirectory);
+            if (missingPaths.Count > 0)
+            {
+                return Task.FromResult(new CheckResult(
+                    spec.Name,
+                    Passed: false,
+                    ExitCode: -1,
+                    StdoutTail: "",
+                    StderrTail: $"[runner] required paths absent: {string.Join(", ", missingPaths)}",
+                    Elapsed: TimeSpan.Zero,
+                    Role: spec.Role,
+                    CommandLine: FormatCommandLine(spec),
+                    Inconclusive: true,
+                    MissingRequiredPaths: missingPaths));
+            }
         }
 
         return RunSingleAsync(spec, workingDirectory, ct);
