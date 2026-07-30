@@ -23,6 +23,7 @@ public class HelpRegistryFactoryTests
     [InlineData("chain")]
     [InlineData("rework")]
     [InlineData("decompose")]
+    [InlineData("worktree")]
     [InlineData("new")]
     [InlineData("list")]
     [InlineData("amend")]
@@ -65,6 +66,12 @@ public class HelpRegistryFactoryTests
         Assert.Equal(CommandGroup.Pipeline, Registry.TryGet(verb)!.Group);
     }
 
+    [Fact]
+    public void WorktreeCommand_IsGroupedForCallerOwnedConductors()
+    {
+        Assert.Equal(CommandGroup.Conductor, Registry.TryGet("worktree")!.Group);
+    }
+
     [Theory]
     [InlineData("new")]
     [InlineData("list")]
@@ -101,6 +108,7 @@ public class HelpRegistryFactoryTests
     [InlineData("chain")]
     [InlineData("rework")]
     [InlineData("decompose")]
+    [InlineData("worktree")]
     [InlineData("new")]
     [InlineData("list")]
     [InlineData("amend")]

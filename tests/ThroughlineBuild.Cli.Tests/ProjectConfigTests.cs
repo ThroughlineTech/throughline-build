@@ -105,6 +105,46 @@ plane_project_url = "https://plane.example.com/workspace/browse/PROJ/"
     }
 
     [Fact]
+    public void Load_WorktreeSectionPopulatesRootAndSeedAllowlist()
+    {
+        var toml = BaseToml + """
+
+[worktree]
+root = ".leases"
+seed_files = [".dev.vars", ".npmrc"]
+""";
+        var path = WriteToml(toml, out var dir);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            Assert.Equal(".leases", config.Worktree.Root);
+            Assert.Equal([".dev.vars", ".npmrc"], config.Worktree.SeedFiles);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Load_MissingWorktreeSectionUsesSafeDefaults()
+    {
+        var path = WriteToml(BaseToml, out var dir);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            Assert.Equal(".worktrees/conductor", config.Worktree.Root);
+            Assert.Empty(config.Worktree.SeedFiles);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Load_NotesFilePresent_InlinesFileContents()
     {
         var notesContent = "## Notes\n\nThis is the project's notes file.\n";

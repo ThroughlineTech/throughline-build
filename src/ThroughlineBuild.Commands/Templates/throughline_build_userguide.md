@@ -229,3 +229,23 @@ git log --oneline -1
 ```
 
 You should see the commit for your ticket at HEAD. Setup is complete.
+
+## Bring your own conductor
+
+To keep one long-lived agent session in charge of implementation and review, use
+the ticket CRUD verbs together with deterministic worktree leases:
+
+```
+build worktree lease --ticket TLB-1 --slug readme-fix
+build worktree list
+build worktree teardown --ticket TLB-1
+```
+
+Lease prints the absolute worktree path for use as an agent working directory,
+runs `[project].install_command`, and writes a safety manifest. Configure the
+root and the only untracked local files Build may copy with `[worktree] root`
+and `[worktree] seed_files`. Use `--require-seed <path>` when a listed file must
+exist before lease creation. All three forms support `--json`.
+
+See `docs/bring-your-own-conductor.md` for the manifest safety model, exit codes,
+and a complete caller-owned conductor sequence.

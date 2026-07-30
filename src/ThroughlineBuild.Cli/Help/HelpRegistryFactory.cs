@@ -35,6 +35,9 @@ public static class HelpRegistryFactory
         r.Register(Rework());
         r.Register(Decompose());
 
+        // Bring your own conductor
+        r.Register(Worktree());
+
         // Work items
         r.Register(New());
         r.Register(List());
@@ -229,6 +232,44 @@ public static class HelpRegistryFactory
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2, s_exit3, s_exit4],
         Examples: []
+    );
+
+    // ------------------------------------------------------------------
+    // Bring-your-own-conductor commands
+    // ------------------------------------------------------------------
+
+    private static CommandHelp Worktree() => new(
+        Name: "worktree",
+        Group: CommandGroup.Conductor,
+        Summary: "Lease, list, or tear down conductor-owned worktrees",
+        Usage:
+            "worktree lease --ticket <id> [--slug <slug>] [--base <ref>] [--require-seed <path>] [--json]\n" +
+            "worktree teardown (--ticket <id> | --dir <path>) [--json]\n" +
+            "worktree list [--json]",
+        Options:
+        [
+            new("--ticket <id>", "Ticket identity used to derive and locate the helper branch", false),
+            new("--slug <slug>", "Optional readable suffix for the helper branch and directory", false),
+            new("--base <ref>", "Base ref for the new helper branch (default: HEAD)", false),
+            new("--require-seed <path>", "Fail before creation unless this allowlisted seed exists", false),
+            new("--dir <path>", "Manifest-backed worktree directory to tear down", false),
+            new("--json", "Emit a versioned JSON envelope", false),
+        ],
+        ExitCodes:
+        [
+            new(0, "Success"),
+            new(1, "Git, install, or filesystem failure"),
+            new(2, "Config error or bad arguments"),
+            new(6, "Ticket, branch, or target-path collision"),
+            new(7, "Required seed is missing or not allowlisted"),
+            new(8, "Containment or manifest validation refusal"),
+        ],
+        Examples:
+        [
+            new("worktree lease --ticket TLB-582 --slug worktree-verbs", "Lease an isolated workspace"),
+            new("worktree list --json", "Inspect leases and unmanifested directories"),
+            new("worktree teardown --ticket TLB-582", "Remove the validated lease and helper branch"),
+        ]
     );
 
     // ------------------------------------------------------------------

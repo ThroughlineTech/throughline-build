@@ -444,6 +444,40 @@ public static class CliApplication
         string ResolveLogDir(string raw) => cliContext.ResolveLogDirectory(raw);
         var sessionContext = cliContext.SessionContext;
 
+        // Standalone deterministic worktree lifecycle for caller-owned conductor loops.
+        // This path composes only git, filesystem, and the configured install command; it
+        // never constructs or invokes a worker agent.
+        if (verbKind == CliVerbKind.Worktree)
+        {
+            var worktreeRoot = Path.IsPathRooted(config.Worktree.Root)
+                ? Path.GetFullPath(config.Worktree.Root)
+                : Path.GetFullPath(Path.Combine(configuredCwd, config.Worktree.Root));
+            var worktreeManager = new WorktreeLeaseManager(
+                new ProcessGitClient(configuredCwd),
+                new ProcessInstallCommandRunner(),
+                new WorktreeLeaseOptions(
+                    RepositoryPath: configuredCwd,
+                    MainWorktreePath: configuredCwd,
+                    WorktreeRoot: worktreeRoot,
+                    SeedAllowlist: config.Worktree.SeedFiles,
+                    InstallCommand: config.Project.InstallCommand));
+            using var worktreeCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; worktreeCts.Cancel(); };
+            try
+            {
+                return await WorktreeCommand.ExecuteAsync(
+                    args, jsonOutput, worktreeManager, Console.Out, Console.Error, worktreeCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                if (jsonOutput)
+                    CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, "cancelled");
+                else
+                    Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
+        }
+
         // 'build sweep' removes leftover chain worktrees and merged branches that a prior
         // 'build chain' left behind - the recovery path when a chain was interrupted or
         // preserved-on-failure and so never reached its own end-of-chain sweep. Stack-agnostic:

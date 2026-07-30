@@ -55,6 +55,13 @@ public record ShipConfig(
 
 public record WorkConfig(string? TargetBranch);
 
+public record WorktreeConfig(
+    string Root,
+    IReadOnlyList<string> SeedFiles)
+{
+    public static WorktreeConfig Default => new(".worktrees/conductor", Array.Empty<string>());
+}
+
 // [plan] section: controls whether chain planning runs a worker investigation or promotes in place.
 // Standalone `build plan` ignores this setting unless --from-brief explicitly requests promotion.
 public record PlanConfig(string Mode)
@@ -89,6 +96,7 @@ public record BuildConfig(
     ReviewConfig Review,
     ShipConfig Ship,
     WorkConfig Work,
+    WorktreeConfig Worktree,
     ProjectContext Project,
     PlanConfig Plan,
     BatchConfig Batch)
@@ -159,6 +167,7 @@ public static class BuildConfigLoader
         var review = ReadReviewSection(root);
         var ship = ReadShipSection(root);
         var work = ReadWorkSection(root);
+        var worktree = ReadWorktreeSection(root);
         var project = ReadProjectSection(root, path);
         var plan = ReadPlanSection(root);
         var batch = ReadBatchSection(root);
@@ -179,7 +188,7 @@ public static class BuildConfigLoader
         foreach (var warning in warnings)
             emit(warning);
 
-        return new BuildConfig(ticketing, llm, workers, events, review, ship, work, project, plan, batch);
+        return new BuildConfig(ticketing, llm, workers, events, review, ship, work, worktree, project, plan, batch);
     }
 
     public static string ResolveLogDirectory(string configFilePath, string rawLogDir, string cwdFallback)
@@ -212,7 +221,7 @@ public static class BuildConfigLoader
 
     private static readonly HashSet<string> KnownTopLevelSections = new(StringComparer.Ordinal)
     {
-        "ticketing", "llm", "workers", "events", "review", "ship", "work", "plan", "project", "batch"
+        "ticketing", "llm", "workers", "events", "review", "ship", "work", "worktree", "plan", "project", "batch"
     };
 
     private static readonly HashSet<string> KnownTicketingKeys = new(StringComparer.Ordinal)
@@ -273,6 +282,11 @@ public static class BuildConfigLoader
     private static readonly HashSet<string> KnownWorkKeys = new(StringComparer.Ordinal)
     {
         "target_branch"
+    };
+
+    private static readonly HashSet<string> KnownWorktreeKeys = new(StringComparer.Ordinal)
+    {
+        "root", "seed_files"
     };
 
     private static readonly HashSet<string> KnownPlanKeys = new(StringComparer.Ordinal)
@@ -435,6 +449,16 @@ public static class BuildConfigLoader
             {
                 if (!KnownWorkKeys.Contains(kv.Key))
                     warnings.Add($"warning: unknown config key work.{kv.Key} - ignored");
+            }
+        }
+
+        // [worktree]
+        if (root.TryGetValue("worktree", out var worktreeRaw) && worktreeRaw is TomlTable worktree)
+        {
+            foreach (var kv in worktree)
+            {
+                if (!KnownWorktreeKeys.Contains(kv.Key))
+                    warnings.Add($"warning: unknown config key worktree.{kv.Key} - ignored");
             }
         }
 
@@ -917,6 +941,22 @@ public static class BuildConfigLoader
         if (t.TryGetValue("target_branch", out var tbVal) && tbVal is string tbStr && !string.IsNullOrEmpty(tbStr))
             targetBranch = tbStr;
         return new WorkConfig(TargetBranch: targetBranch);
+    }
+
+    private static WorktreeConfig ReadWorktreeSection(TomlTable root)
+    {
+        if (!root.TryGetValue("worktree", out var val) || val is not TomlTable t)
+            return WorktreeConfig.Default;
+
+        var configuredRoot = OptionalString(t, "root", WorktreeConfig.Default.Root);
+        if (string.IsNullOrWhiteSpace(configuredRoot))
+            throw new ConfigException("key 'root' in [worktree] must not be blank");
+        var seeds = OptionalStringList(t, "seed_files", Array.Empty<string>())
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => p.Trim())
+            .ToList()
+            .AsReadOnly();
+        return new WorktreeConfig(configuredRoot, seeds);
     }
 
     private static PlanConfig ReadPlanSection(TomlTable root)

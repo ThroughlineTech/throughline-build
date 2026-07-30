@@ -184,7 +184,9 @@ free-form output.
 `ThroughlineBuild.Helpers` contains reusable repository and workflow helpers,
 including worktree naming, summaries, parent/tree inspection, result metadata
 flattening, and scheduling support. `ThroughlineBuild.Git` owns the process
-adapter for git.
+adapter for git. `WorktreeLeaseManager` exposes the same ownership boundary to
+a caller-owned conductor: it validates collisions, seed policy, manifest
+identity, and teardown containment without constructing a worker agent.
 
 `ThroughlineBuild.Verification` runs configured `CheckSpec` commands and
 returns typed `CheckResult` values. Check roles distinguish setup, gating, and

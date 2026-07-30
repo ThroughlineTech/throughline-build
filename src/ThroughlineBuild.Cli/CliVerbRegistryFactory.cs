@@ -12,6 +12,7 @@ public static class CliVerbRegistryFactory
         ("op-doc", CliVerbKind.OpDoc, true),
         ("models", CliVerbKind.Models, true),
         ("sweep", CliVerbKind.Sweep, false),
+        ("worktree", CliVerbKind.Worktree, false),
         ("list", CliVerbKind.List, false),
         ("get", CliVerbKind.Get, false),
         ("comments", CliVerbKind.Comments, false),

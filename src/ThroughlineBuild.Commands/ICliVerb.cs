@@ -19,6 +19,7 @@ public enum CliVerbKind
     OpDoc,
     Models,
     Sweep,
+    Worktree,
     List,
     Get,
     Comments,

@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Helpers;
 
 namespace ThroughlineBuild.Cli.Json;
 
@@ -150,6 +151,17 @@ public sealed record AckView(string Id, string Action);
 /// <summary>Success envelope for the lifecycle verbs (close, defer, reopen, amend).</summary>
 public sealed record AckEnvelope(int SchemaVersion, bool Ok, AckView Data);
 
+// ---- build worktree ---------------------------------------------------------------
+
+public sealed record WorktreeLeaseView(string Path, WorktreeLeaseManifest Manifest);
+public sealed record WorktreeLeaseEnvelope(int SchemaVersion, bool Ok, WorktreeLeaseView Data);
+public sealed record WorktreeListView(
+    IReadOnlyList<WorktreeLeaseManifest> Leases,
+    IReadOnlyList<string> UnmanifestedDirectories);
+public sealed record WorktreeListEnvelope(int SchemaVersion, bool Ok, WorktreeListView Data);
+public sealed record WorktreeTeardownView(string Path, string Branch);
+public sealed record WorktreeTeardownEnvelope(int SchemaVersion, bool Ok, WorktreeTeardownView Data);
+
 // Source-generated context keeps the --json path statically analyzable under PublishAot=true
 // (reflection-based serialization trips IL2026/IL3050). UseStringEnumConverter renders
 // State/Size/Risk as their names rather than integers. Mirrors PhaseSummaryJsonContext.
@@ -169,4 +181,7 @@ public sealed record AckEnvelope(int SchemaVersion, bool Ok, AckView Data);
 [JsonSerializable(typeof(RelationsEnvelope))]
 [JsonSerializable(typeof(RelateEnvelope))]
 [JsonSerializable(typeof(AckEnvelope))]
+[JsonSerializable(typeof(WorktreeLeaseEnvelope))]
+[JsonSerializable(typeof(WorktreeListEnvelope))]
+[JsonSerializable(typeof(WorktreeTeardownEnvelope))]
 internal partial class CliJsonContext : JsonSerializerContext { }

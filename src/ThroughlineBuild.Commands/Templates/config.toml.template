@@ -203,6 +203,15 @@ delete_feature_branch = true
 # role = "gating"
 # required_paths = ["package.json", "src"]
 
+# [worktree] configures the standalone conductor-owned worktree lease.
+# The root resolves relative to the primary worktree. Only explicitly listed
+# untracked local files can be seeded into a lease.
+[worktree]
+root = ".worktrees/conductor"
+seed_files = []
+# Example for a local ignored environment file:
+# seed_files = [".dev.vars"]
+
 # [project] is optional - omit entirely to skip project-aware brief enrichment.
 # The toolchain fields below are LEFT BLANK on purpose: they are derived from your op-doc
 # at 'build scaffold' time. An all-blank toolchain assumes no stack (no phantom dotnet).
