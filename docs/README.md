@@ -18,7 +18,7 @@ Start with these documents when evaluating or using the current source tree:
 | [Worker result envelope](build-worker-result-envelope.md) | Structured result protocol returned by workers |
 | [Recursive chains](build-grandparent-chain.md) | Tree scheduling, dependencies, depth, and branch topology |
 | [Tree-aware behavior](build-tree-aware-behavior.md) | Parent and child workflow rules |
-| [Bring your own conductor](bring-your-own-conductor.md) | Deterministic worktree leases for an external agent loop |
+| [Bring your own conductor](bring-your-own-conductor.md) | Deterministic worktree leases and configured gates for an external agent loop |
 
 The source and `build help <topic>` remain authoritative when a current
 reference and the executable disagree.

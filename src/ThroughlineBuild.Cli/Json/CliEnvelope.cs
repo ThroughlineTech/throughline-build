@@ -162,6 +162,29 @@ public sealed record WorktreeListEnvelope(int SchemaVersion, bool Ok, WorktreeLi
 public sealed record WorktreeTeardownView(string Path, string Branch);
 public sealed record WorktreeTeardownEnvelope(int SchemaVersion, bool Ok, WorktreeTeardownView Data);
 
+// ---- build gate -------------------------------------------------------------------
+
+public sealed record GateCheckView(
+    string Name,
+    string Role,
+    string Status,
+    int ExitCode,
+    long DurationMilliseconds,
+    string Stdout,
+    string Stderr,
+    IReadOnlyList<string> MissingRequiredPaths);
+
+public sealed record GateView(
+    string? Ticket,
+    string Role,
+    string WorkingDirectory,
+    bool ChecksConfigured,
+    bool Passed,
+    string Message,
+    IReadOnlyList<GateCheckView> Checks);
+
+public sealed record GateEnvelope(int SchemaVersion, bool Ok, GateView Data);
+
 // Source-generated context keeps the --json path statically analyzable under PublishAot=true
 // (reflection-based serialization trips IL2026/IL3050). UseStringEnumConverter renders
 // State/Size/Risk as their names rather than integers. Mirrors PhaseSummaryJsonContext.
@@ -184,4 +207,5 @@ public sealed record WorktreeTeardownEnvelope(int SchemaVersion, bool Ok, Worktr
 [JsonSerializable(typeof(WorktreeLeaseEnvelope))]
 [JsonSerializable(typeof(WorktreeListEnvelope))]
 [JsonSerializable(typeof(WorktreeTeardownEnvelope))]
+[JsonSerializable(typeof(GateEnvelope))]
 internal partial class CliJsonContext : JsonSerializerContext { }

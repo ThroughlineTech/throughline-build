@@ -478,6 +478,35 @@ public static class CliApplication
             }
         }
 
+        // Standalone configured gate for caller-owned conductor loops. Use the raw cwd
+        // so invocation from a leased worktree checks that tree, not the primary tree
+        // resolved by bootstrap. This path never constructs a worker agent.
+        if (verbKind == CliVerbKind.Gate)
+        {
+            using var gateCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; gateCts.Cancel(); };
+            try
+            {
+                return await GateCommand.ExecuteAsync(
+                    args,
+                    jsonOutput,
+                    config.Review.Checks,
+                    rawCwd,
+                    new AutomatedChecksRunner(),
+                    Console.Out,
+                    Console.Error,
+                    gateCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                if (jsonOutput)
+                    CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, "cancelled");
+                else
+                    Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
+        }
+
         // 'build sweep' removes leftover chain worktrees and merged branches that a prior
         // 'build chain' left behind - the recovery path when a chain was interrupted or
         // preserved-on-failure and so never reached its own end-of-chain sweep. Stack-agnostic:

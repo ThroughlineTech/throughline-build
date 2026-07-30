@@ -125,6 +125,13 @@ public static class CliEnvelopeWriter
             envelope, CliJsonContext.Default.WorktreeTeardownEnvelope));
     }
 
+    public static void WriteGate(TextWriter output, GateView result)
+    {
+        var envelope = new GateEnvelope(SchemaVersion, Ok: true, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.GateEnvelope));
+    }
+
     /// <summary>Project a domain <see cref="Ticket"/> onto its wire shape.</summary>
     public static TicketView ToView(Ticket ticket) => new(
         Id: ticket.Id,

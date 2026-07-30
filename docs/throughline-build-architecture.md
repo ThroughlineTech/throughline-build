@@ -190,7 +190,9 @@ identity, and teardown containment without constructing a worker agent.
 
 `ThroughlineBuild.Verification` runs configured `CheckSpec` commands and
 returns typed `CheckResult` values. Check roles distinguish setup, gating, and
-advisory work. Repository cleanliness and baseline attribution prevent worker
+advisory work. `build gate` exposes that same runner in the invocation directory
+without constructing a worker agent; absent declared inputs produce an
+inconclusive result rather than a command failure. Repository cleanliness and baseline attribution prevent worker
 or environment failures from being mistaken for product regressions.
 
 ### 5.7 Brief Constructor

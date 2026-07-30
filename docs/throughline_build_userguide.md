@@ -237,6 +237,7 @@ the ticket CRUD verbs together with deterministic worktree leases:
 
 ```
 build worktree lease --ticket TLB-1 --slug readme-fix
+build gate --ticket TLB-1
 build worktree list
 build worktree teardown --ticket TLB-1
 ```
@@ -246,6 +247,12 @@ runs `[project].install_command`, and writes a safety manifest. Configure the
 root and the only untracked local files Build may copy with `[worktree] root`
 and `[worktree] seed_files`. Use `--require-seed <path>` when a listed file must
 exist before lease creation. All three forms support `--json`.
+
+Run `build gate` from the leased worktree to execute its configured
+`[[review.checks]]`. Setup checks run first. Gating and setup failures exit 1;
+advisory failures remain visible but do not change the exit code. Use
+`--role gating|advisory|all` to select a role, and `--json` for typed per-check
+exit codes, durations, captured output, and inconclusive missing-path results.
 
 See `docs/bring-your-own-conductor.md` for the manifest safety model, exit codes,
 and a complete caller-owned conductor sequence.

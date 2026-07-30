@@ -6,8 +6,9 @@ workflow and starts a fresh configured worker for each judgment phase.
 An operator can instead keep one long-lived agent session as the conductor. The
 conductor uses the ticket CRUD verbs (`list`, `get`, `comments`, `comment`,
 `transition`, and `amend`) and asks Build to own deterministic resources. The
-`worktree` verb is the isolated-workspace primitive for that topology. It never
-starts a worker agent and does not decide which tickets should run concurrently.
+`worktree` verb is the isolated-workspace primitive for that topology. The
+`gate` verb runs the repository's configured review checks in that workspace.
+Neither starts a worker agent or decides which tickets should run concurrently.
 
 ## Configuration
 
@@ -81,6 +82,27 @@ and strict containment below the configured root. A missing, moved, or tampered
 manifest is refused. On success Build removes the linked worktree and deletes its
 lease helper branch.
 
+## Run the configured gate
+
+Run the gate with the leased worktree as the current directory:
+
+```sh
+build gate --ticket TLB-583
+build gate --ticket TLB-583 --role gating --json
+```
+
+The command reads `[[review.checks]]` from the repository configuration and
+runs the selected checks in the current directory. Setup checks always run
+first and exactly once. A setup or gating failure exits 1. Advisory failures
+are reported but exit 0. A declared `required_paths` entry that is absent makes
+that check `inconclusive`, distinct from a command failure; an inconclusive
+setup or gating check exits 1.
+
+The JSON envelope includes the optional ticket identity, selected role, working
+directory, overall result, and each check's name, role, status, exit code,
+duration, stdout, stderr, and missing required paths. If no review checks are
+configured, the command clearly reports `no checks configured` and exits 0.
+
 ## Suggested conductor sequence
 
 For each selected ticket, a caller-owned conductor can:
@@ -88,10 +110,12 @@ For each selected ticket, a caller-owned conductor can:
 1. Read the ticket and comments.
 2. Lease a worktree and pass the printed path as the implementation agent's
    working directory.
-3. Run its own implementation and review agents in that directory.
-4. Record evidence with `build comment` and move workflow state with
+3. Run its own implementation agent in that directory.
+4. Run `build gate` in that directory, then run the conductor's own review
+   agent with the gate evidence.
+5. Record evidence with `build comment` and move workflow state with
    `build transition`.
-5. Tear down the lease only after the branch no longer needs to be preserved.
+6. Tear down the lease only after the branch no longer needs to be preserved.
 
 The conductor still owns concurrency, agent selection, review judgment, and
 delivery policy. Build owns the validated workspace lifecycle.

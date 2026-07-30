@@ -45,7 +45,7 @@ public class AutomatedChecksRunner
                 continue;
             }
 
-            var result = await RunSingleAsync(spec, workingDirectory, ct);
+            var result = await RunSpecAsync(spec, workingDirectory, ct);
             results.Add(result);
 
             // Determine whether to stop
@@ -74,7 +74,7 @@ public class AutomatedChecksRunner
         var spec = specs.FirstOrDefault(s => s.Name == checkName);
         if (spec is null)
             return new CheckResult(checkName, false, 0, "", "", TimeSpan.Zero, Skipped: true);
-        return await RunSingleAsync(spec, workingDirectory, ct);
+        return await RunSpecAsync(spec, workingDirectory, ct);
     }
 
     // Reorder so every CheckRole.Setup spec runs before the rest, preserving relative order within each
@@ -104,6 +104,55 @@ public class AutomatedChecksRunner
     // the worker to re-run the exact failing command and confirm exit 0 before committing.
     public static string FormatCommandLine(CheckSpec spec) =>
         spec.Arguments.Count == 0 ? spec.Executable : spec.Executable + " " + string.Join(" ", spec.Arguments);
+
+    private static Task<CheckResult> RunSpecAsync(
+        CheckSpec spec,
+        string workingDirectory,
+        CancellationToken ct)
+    {
+        var missingPaths = MissingRequiredPaths(spec, workingDirectory);
+        if (missingPaths.Count > 0)
+        {
+            return Task.FromResult(new CheckResult(
+                spec.Name,
+                Passed: false,
+                ExitCode: -1,
+                StdoutTail: "",
+                StderrTail: $"[runner] required paths absent: {string.Join(", ", missingPaths)}",
+                Elapsed: TimeSpan.Zero,
+                Role: spec.Role,
+                CommandLine: FormatCommandLine(spec),
+                Inconclusive: true,
+                MissingRequiredPaths: missingPaths));
+        }
+
+        return RunSingleAsync(spec, workingDirectory, ct);
+    }
+
+    private static IReadOnlyList<string> MissingRequiredPaths(
+        CheckSpec spec,
+        string workingDirectory)
+    {
+        if (spec.RequiredPaths is not { Count: > 0 })
+            return Array.Empty<string>();
+
+        var missing = new List<string>();
+        foreach (var path in spec.RequiredPaths)
+        {
+            try
+            {
+                var candidate = Path.GetFullPath(Path.Combine(workingDirectory, path));
+                if (!File.Exists(candidate) && !Directory.Exists(candidate))
+                    missing.Add(path);
+            }
+            catch
+            {
+                missing.Add(path);
+            }
+        }
+
+        return missing.AsReadOnly();
+    }
 
     private static async Task<CheckResult> RunSingleAsync(
         CheckSpec spec,

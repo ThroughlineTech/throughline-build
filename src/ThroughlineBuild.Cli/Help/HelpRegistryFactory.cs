@@ -37,6 +37,7 @@ public static class HelpRegistryFactory
 
         // Bring your own conductor
         r.Register(Worktree());
+        r.Register(Gate());
 
         // Work items
         r.Register(New());
@@ -269,6 +270,31 @@ public static class HelpRegistryFactory
             new("worktree lease --ticket TLB-582 --slug worktree-verbs", "Lease an isolated workspace"),
             new("worktree list --json", "Inspect leases and unmanifested directories"),
             new("worktree teardown --ticket TLB-582", "Remove the validated lease and helper branch"),
+        ]
+    );
+
+    private static CommandHelp Gate() => new(
+        Name: "gate",
+        Group: CommandGroup.Conductor,
+        Summary: "Run configured review checks in the current working directory",
+        Usage: "gate [--ticket <id>] [--role gating|advisory|all] [--json]",
+        Options:
+        [
+            new("--ticket <id>", "Optional ticket identity included in the result", false),
+            new("--role <role>", "Run gating, advisory, or all checks (default: all); setup always runs first", false),
+            new("--json", "Emit a versioned JSON envelope with typed per-check results", false),
+        ],
+        ExitCodes:
+        [
+            new(0, "Every selected setup and gating check passed, or no checks are configured"),
+            new(1, "A setup or gating check failed or was inconclusive"),
+            new(2, "Config error or bad arguments"),
+            new(3, "Missing secret (env var not set)"),
+        ],
+        Examples:
+        [
+            new("gate", "Run the complete configured gate in the current tree"),
+            new("gate --ticket TLB-583 --role gating --json", "Run setup and gating checks with structured output"),
         ]
     );
 
