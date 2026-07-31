@@ -258,8 +258,8 @@ attempt. Teardown is safe by default: it refuses tracked work and unexpected
 untracked files before removing the worktree. Add
 `--require-merged-into <ref>` to prove the helper branch is an ancestor of a
 named target before any removal. Branch deletion uses Git's non-force delete
-unless `--force` is present. `--force` skips those protections and may
-permanently discard work. All three forms support `--json`.
+unless `--force` is present. `--force` skips the worktree cleanliness proof and
+may permanently discard work. All three forms support `--json`.
 
 Run `build gate` from the leased worktree to execute its configured
 `[[review.checks]]`. Setup checks run first. Gating and setup failures exit 1;

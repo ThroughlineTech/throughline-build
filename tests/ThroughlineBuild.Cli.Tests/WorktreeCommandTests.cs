@@ -497,7 +497,7 @@ public sealed class WorktreeCommandTests
     }
 
     [Fact]
-    public async Task TeardownForceSkipsRequireMergedIntoProof()
+    public async Task TeardownForceStillRequiresRequireMergedIntoProof()
     {
         var temp = Path.Combine(
             Path.GetTempPath(),
@@ -527,11 +527,16 @@ public sealed class WorktreeCommandTests
                 TextWriter.Null,
                 CancellationToken.None);
 
-            Assert.Equal(0, exit);
-            Assert.False(Directory.Exists(manifest.WorktreePath));
-            Assert.Equal(
-                string.Empty,
-                (await RunGitOutputAsync(repository, "branch", "--list", manifest.Branch)).Trim());
+            Assert.Equal(1, exit);
+            using var json = JsonDocument.Parse(output.ToString());
+            Assert.False(json.RootElement.GetProperty("ok").GetBoolean());
+            Assert.Contains(
+                "not proven merged into 'main'",
+                json.RootElement.GetProperty("error").GetProperty("message").GetString());
+            Assert.True(Directory.Exists(manifest.WorktreePath));
+            Assert.Contains(
+                manifest.Branch,
+                await RunGitOutputAsync(repository, "branch", "--list", manifest.Branch));
         }
         finally
         {

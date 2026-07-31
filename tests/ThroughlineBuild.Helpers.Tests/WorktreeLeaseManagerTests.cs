@@ -565,6 +565,40 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task TeardownForceStillHonorsRequireMergedInto()
+    {
+        var git = new FakeGit(Sha)
+        {
+            AncestorResult = new GitAncestorResult(true, false, null)
+        };
+        git.TrackedChanges.Add(" M tracked.txt");
+        git.UntrackedFiles.Add("stray.txt");
+        var manager = CreateManager(git, new FakeInstaller());
+        var leased = await manager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582"), CancellationToken.None);
+
+        var result = await manager.TeardownAsync(
+            ticket: null,
+            directory: leased.Manifest!.WorktreePath,
+            CancellationToken.None,
+            force: true,
+            requireMergedInto: "main");
+
+        Assert.False(result.Success);
+        Assert.Equal(WorktreeLeaseManager.FailureError, result.ErrorCode);
+        Assert.Contains("not proven merged", result.Message);
+        Assert.Empty(git.TrackedChangeQueries);
+        Assert.Empty(git.UntrackedFileQueries);
+        Assert.Equal(
+            [(leased.Manifest.Branch, "main", leased.Manifest.MainWorktreePath)],
+            git.AncestorQueries);
+        Assert.True(git.HasWorktree(leased.Manifest.WorktreePath));
+        Assert.True(git.HasBranch(leased.Manifest.Branch));
+        Assert.Empty(git.RemovedWorktrees);
+        Assert.Empty(git.DeletedBranches);
+    }
+
+    [Fact]
     public async Task TeardownPreservesUnmergedBranchWhenNonForceDeleteFails()
     {
         var git = new FakeGit(Sha)
@@ -586,6 +620,80 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
         Assert.False(git.HasWorktree(leased.Manifest.WorktreePath));
         Assert.False(Directory.Exists(leased.Manifest.WorktreePath));
         Assert.True(git.HasBranch(leased.Manifest.Branch));
+    }
+
+    [Fact]
+    public async Task TeardownDeletesUnregisteredDirectoryLeftBehindByGitRemove()
+    {
+        var git = new FakeGit(Sha)
+        {
+            LeaveDirectoryAfterRemove = true
+        };
+        var manager = CreateManager(git, new FakeInstaller());
+        var leased = await manager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582"), CancellationToken.None);
+
+        var result = await manager.TeardownAsync(
+            ticket: null, directory: leased.Manifest!.WorktreePath, CancellationToken.None);
+        var list = await manager.ListAsync();
+
+        Assert.True(result.Success);
+        Assert.Equal([leased.Manifest.WorktreePath], git.RemovedWorktrees);
+        Assert.False(git.HasWorktree(leased.Manifest.WorktreePath));
+        Assert.False(git.HasBranch(leased.Manifest.Branch));
+        Assert.False(Directory.Exists(leased.Manifest.WorktreePath));
+        Assert.Empty(list.Leases);
+        Assert.Empty(list.UnmanifestedDirectories);
+    }
+
+    [Fact]
+    public async Task TeardownDeletesUnregisteredDirectoryWhenGitRemoveReportsFailure()
+    {
+        var git = new FakeGit(Sha)
+        {
+            LeaveDirectoryAfterRemove = true,
+            FailRemoveAfterUnregistering = true
+        };
+        var manager = CreateManager(git, new FakeInstaller());
+        var leased = await manager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582"), CancellationToken.None);
+
+        var result = await manager.TeardownAsync(
+            ticket: null, directory: leased.Manifest!.WorktreePath, CancellationToken.None);
+        var list = await manager.ListAsync();
+
+        Assert.True(result.Success);
+        Assert.Equal([leased.Manifest.WorktreePath], git.RemovedWorktrees);
+        Assert.False(git.HasWorktree(leased.Manifest.WorktreePath));
+        Assert.False(git.HasBranch(leased.Manifest.Branch));
+        Assert.False(Directory.Exists(leased.Manifest.WorktreePath));
+        Assert.Empty(list.Leases);
+        Assert.Empty(list.UnmanifestedDirectories);
+    }
+
+    [Fact]
+    public async Task TeardownRefusesFallbackWhenGitStillRegistersWorktree()
+    {
+        var git = new FakeGit(Sha)
+        {
+            KeepWorktreeRegisteredOnRemove = true,
+            LeaveDirectoryAfterRemove = true
+        };
+        var manager = CreateManager(git, new FakeInstaller());
+        var leased = await manager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582"), CancellationToken.None);
+
+        var result = await manager.TeardownAsync(
+            ticket: null, directory: leased.Manifest!.WorktreePath, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(WorktreeLeaseManager.FailureError, result.ErrorCode);
+        Assert.Contains("still registered", result.Message);
+        Assert.True(git.HasWorktree(leased.Manifest.WorktreePath));
+        Assert.True(git.HasBranch(leased.Manifest.Branch));
+        Assert.True(Directory.Exists(leased.Manifest.WorktreePath));
+        Assert.Empty(git.DeletedBranches);
+        Assert.Empty(git.DeleteBranchForces);
     }
 
     [Fact]
@@ -750,6 +858,9 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
         public List<bool> RemoveWorktreeForces { get; } = [];
         public List<bool> DeleteBranchForces { get; } = [];
         public bool FailNonForceBranchDelete { get; init; }
+        public bool LeaveDirectoryAfterRemove { get; init; }
+        public bool FailRemoveAfterUnregistering { get; init; }
+        public bool KeepWorktreeRegisteredOnRemove { get; init; }
 
         public bool HasBranch(string branch) =>
             _branches.Contains(branch, StringComparer.Ordinal);
@@ -824,10 +935,27 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
         {
             RemovedWorktrees.Add(path);
             RemoveWorktreeForces.Add(force);
-            _worktrees.RemoveAll(w => string.Equals(w.Path, path, StringComparison.OrdinalIgnoreCase));
+            if (!KeepWorktreeRegisteredOnRemove)
+                _worktrees.RemoveAll(w => string.Equals(w.Path, path, StringComparison.OrdinalIgnoreCase));
             if (Directory.Exists(path))
-                Directory.Delete(path, recursive: true);
-            return Task.FromResult(new WorktreeRemoveResult(true, null));
+            {
+                if (LeaveDirectoryAfterRemove)
+                {
+                    var manifestPath = Path.Combine(path, WorktreeLeaseConstants.ManifestFileName);
+                    if (File.Exists(manifestPath))
+                        File.Delete(manifestPath);
+                    var dependency = Path.Combine(path, "node_modules", "dep");
+                    Directory.CreateDirectory(dependency);
+                    File.WriteAllText(Path.Combine(dependency, "package.json"), "{}");
+                }
+                else
+                {
+                    Directory.Delete(path, recursive: true);
+                }
+            }
+            return Task.FromResult(FailRemoveAfterUnregistering
+                ? new WorktreeRemoveResult(false, "directory is not empty")
+                : new WorktreeRemoveResult(true, null));
         }
 
         public Task<GitOpResult> DeleteBranchAsync(

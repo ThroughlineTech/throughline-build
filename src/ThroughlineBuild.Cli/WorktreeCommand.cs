@@ -160,7 +160,7 @@ public static class WorktreeCommand
             error.WriteLine("       build worktree list");
             error.WriteLine("       default teardown refuses tracked work and unexpected untracked files");
             error.WriteLine("       --require-merged-into proves the helper branch is an ancestor of the named ref before removal");
-            error.WriteLine("       --force skips those checks and may permanently discard work");
+            error.WriteLine("       --force skips worktree cleanliness checks and may permanently discard work");
         }
         return 2;
     }

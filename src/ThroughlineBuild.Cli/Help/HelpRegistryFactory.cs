@@ -256,7 +256,7 @@ public static class HelpRegistryFactory
             new("--require-seed <path>", "Fail before creation unless this allowlisted seed exists", false),
             new("--dir <path>", "Manifest-backed worktree directory to tear down", false),
             new("--require-merged-into <ref>", "Before teardown, prove the helper branch is an ancestor of the named ref", false),
-            new("--force", "Skip teardown safety checks and permanently discard work", false),
+            new("--force", "Skip worktree cleanliness checks and permanently discard work", false),
             new("--json", "Emit a versioned JSON envelope", false),
         ],
         ExitCodes:

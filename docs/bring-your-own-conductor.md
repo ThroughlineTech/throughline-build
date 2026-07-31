@@ -182,8 +182,9 @@ place. This is the conductor-safe form when the intended merge target is known.
 After that proof passes, Build removes the linked worktree and deletes its lease
 helper branch with Git's non-force branch deletion. An unmerged helper branch is
 preserved and reported as a partial failure after worktree removal. `--force`
-skips the user-work and merge-target proofs, may permanently discard work, and
-force-deletes the lease helper branch.
+skips the user-work proof, may permanently discard work, and force-deletes the
+lease helper branch. If `--require-merged-into <ref>` is supplied, that
+merge-target proof still runs before any removal.
 
 ## Run the configured gate
 

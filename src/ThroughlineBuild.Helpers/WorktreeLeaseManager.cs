@@ -11,6 +11,7 @@ public sealed class WorktreeLeaseManager
     public const string InvalidManifestError = "invalid_manifest";
     public const string ContainmentError = "containment_refused";
     public const string FailureError = "failure";
+    private const int DirectoryDeleteMaxAttempts = 6;
 
     private readonly IGitClient _git;
     private readonly IInstallCommandRunner _installer;
@@ -316,7 +317,10 @@ public sealed class WorktreeLeaseManager
             var proof = await ProveNoUserWorkAsync(manifest, ct).ConfigureAwait(false);
             if (!proof.Success)
                 return Failed(FailureError, proof.Message!);
+        }
 
+        if (!force || requireMergedInto is not null)
+        {
             var mergeProof = await ProveBranchMergedIntoAsync(
                 manifest, requireMergedInto, ct).ConfigureAwait(false);
             if (!mergeProof.Success)
@@ -325,15 +329,135 @@ public sealed class WorktreeLeaseManager
 
         var remove = await _git.RemoveWorktreeAsync(manifest.WorktreePath, force: true, ct)
             .ConfigureAwait(false);
-        if (!remove.Success)
-            return Failed(FailureError, $"worktree removal failed: {remove.FailureReason}");
+        var removed = await CompleteWorktreePathRemovalAsync(manifest, root, remove, ct)
+            .ConfigureAwait(false);
+        if (!removed.Success)
+            return Failed(FailureError, removed.Message!);
 
         var delete = await _git.DeleteBranchAsync(
             manifest.Branch, force, manifest.MainWorktreePath, ct).ConfigureAwait(false);
         if (!delete.Success)
             return Failed(FailureError, $"worktree removed but branch deletion failed: {delete.FailureReason}");
 
+        var finalList = await ListAsync(ct).ConfigureAwait(false);
+        if (finalList.Leases.Any(l => PathsEqual(l.WorktreePath, manifest.WorktreePath)) ||
+            finalList.UnmanifestedDirectories.Any(d => PathsEqual(d, manifest.WorktreePath)))
+            return Failed(
+                FailureError,
+                $"worktree teardown left a lease directory behind: {manifest.WorktreePath}");
+
         return new WorktreeLeaseResult(true, null, null, manifest);
+    }
+
+    private async Task<WorktreeProof> CompleteWorktreePathRemovalAsync(
+        WorktreeLeaseManifest manifest,
+        string root,
+        WorktreeRemoveResult remove,
+        CancellationToken ct)
+    {
+        var path = Path.GetFullPath(manifest.WorktreePath);
+        if (!PathsEqual(path, manifest.WorktreePath))
+            return new WorktreeProof(false, "manifest worktreePath changed during teardown");
+        if (!IsStrictlyBelow(path, root))
+            return new WorktreeProof(false, $"worktree path is not strictly below configured root: {path}");
+
+        if (remove.Success && !Directory.Exists(path))
+            return new WorktreeProof(true, null);
+
+        IReadOnlyList<WorktreeInfo> worktrees;
+        try
+        {
+            worktrees = await _git.ListWorktreesAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            var prefix = remove.Success ? "worktree removal verification failed" : "worktree removal failed";
+            return new WorktreeProof(false, $"{prefix}: {ex.Message}");
+        }
+
+        if (worktrees.Any(w => PathsEqual(w.Path, path)))
+        {
+            var reason = remove.Success
+                ? "git worktree remove reported success but the worktree is still registered"
+                : $"worktree removal failed: {remove.FailureReason}";
+            return new WorktreeProof(false, reason);
+        }
+
+        if (!Directory.Exists(path))
+            return new WorktreeProof(true, null);
+
+        var deletion = await DeleteDirectoryWithRetryAsync(path, ct).ConfigureAwait(false);
+        if (deletion is not null)
+        {
+            var prefix = remove.Success
+                ? "git worktree remove left the directory behind"
+                : $"worktree removal failed after unregistering the worktree: {remove.FailureReason}";
+            return new WorktreeProof(false, $"{prefix}; recursive cleanup failed: {deletion}");
+        }
+
+        return new WorktreeProof(true, null);
+    }
+
+    private static async Task<string?> DeleteDirectoryWithRetryAsync(
+        string path,
+        CancellationToken ct)
+    {
+        var delay = TimeSpan.FromMilliseconds(50);
+        string? lastFailure = null;
+        for (var attempt = 1; attempt <= DirectoryDeleteMaxAttempts; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                if (!Directory.Exists(path))
+                    return null;
+
+                ClearAttributesForDelete(path);
+                Directory.Delete(path, recursive: true);
+                if (!Directory.Exists(path))
+                    return null;
+
+                lastFailure = "directory still exists after recursive delete";
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                if (ex is DirectoryNotFoundException)
+                    return null;
+                lastFailure = ex.Message;
+            }
+
+            if (attempt < DirectoryDeleteMaxAttempts)
+            {
+                await Task.Delay(delay, ct).ConfigureAwait(false);
+                delay += delay;
+            }
+        }
+
+        return lastFailure ?? "unknown delete failure";
+    }
+
+    private static void ClearAttributesForDelete(string path)
+    {
+        var directory = new DirectoryInfo(path);
+        if (!directory.Exists)
+            return;
+        ClearAttributesForDelete(directory);
+    }
+
+    private static void ClearAttributesForDelete(DirectoryInfo directory)
+    {
+        if ((directory.Attributes & FileAttributes.ReparsePoint) != 0)
+        {
+            directory.Attributes = FileAttributes.Normal;
+            return;
+        }
+
+        foreach (var file in directory.EnumerateFiles())
+            file.Attributes = FileAttributes.Normal;
+        foreach (var child in directory.EnumerateDirectories())
+            ClearAttributesForDelete(child);
+
+        directory.Attributes = FileAttributes.Normal;
     }
 
     private async Task<WorktreeProof> ProveNoUserWorkAsync(
