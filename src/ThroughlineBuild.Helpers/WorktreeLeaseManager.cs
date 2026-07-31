@@ -277,7 +277,8 @@ public sealed class WorktreeLeaseManager
     public async Task<WorktreeLeaseResult> TeardownAsync(
         string? ticket,
         string? directory,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool force = false)
     {
         var root = Path.GetFullPath(_options.WorktreeRoot);
         WorktreeLeaseManifest manifest;
@@ -309,17 +310,61 @@ public sealed class WorktreeLeaseManager
             return Failed(InvalidManifestError, ex.Message);
         }
 
+        if (!force)
+        {
+            var proof = await ProveNoUserWorkAsync(manifest, ct).ConfigureAwait(false);
+            if (!proof.Success)
+                return Failed(FailureError, proof.Message!);
+        }
+
         var remove = await _git.RemoveWorktreeAsync(manifest.WorktreePath, force: true, ct)
             .ConfigureAwait(false);
         if (!remove.Success)
             return Failed(FailureError, $"worktree removal failed: {remove.FailureReason}");
 
         var delete = await _git.DeleteBranchAsync(
-            manifest.Branch, force: true, manifest.MainWorktreePath, ct).ConfigureAwait(false);
+            manifest.Branch, force, manifest.MainWorktreePath, ct).ConfigureAwait(false);
         if (!delete.Success)
             return Failed(FailureError, $"worktree removed but branch deletion failed: {delete.FailureReason}");
 
         return new WorktreeLeaseResult(true, null, null, manifest);
+    }
+
+    private async Task<WorktreeProof> ProveNoUserWorkAsync(
+        WorktreeLeaseManifest manifest,
+        CancellationToken ct)
+    {
+        var tracked = await _git.GetTrackedChangesAsync(manifest.WorktreePath, ct)
+            .ConfigureAwait(false);
+        var untracked = await _git.GetUntrackedFilesAsync(manifest.WorktreePath, ct)
+            .ConfigureAwait(false);
+
+        if (tracked.Count > 0)
+            return new WorktreeProof(
+                false,
+                $"worktree contains tracked changes: {string.Join(", ", tracked.Take(10))}");
+
+        var allowed = new HashSet<string>(StringComparer.Ordinal)
+        {
+            WorktreeLeaseConstants.ManifestFileName
+        };
+        foreach (var seeded in manifest.SeededFiles)
+            allowed.Add(seeded);
+
+        var unexpected = new List<string>();
+        foreach (var path in untracked)
+        {
+            if (!TryNormalizeRelativePath(path, out var normalized) ||
+                !allowed.Contains(normalized))
+                unexpected.Add(path);
+        }
+
+        if (unexpected.Count > 0)
+            return new WorktreeProof(
+                false,
+                $"worktree contains unexpected untracked files: {string.Join(", ", unexpected.Take(10))}");
+
+        return new WorktreeProof(true, null);
     }
 
     private SeedValidation ValidateSeeds(string? requiredSeed)
@@ -553,4 +598,6 @@ public sealed class WorktreeLeaseManager
         string? ErrorCode,
         string? Message,
         IReadOnlyList<string>? Paths);
+
+    private sealed record WorktreeProof(bool Success, string? Message);
 }

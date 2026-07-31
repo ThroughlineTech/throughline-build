@@ -159,12 +159,21 @@ a missing or invalid manifest is reported as unmanifested.
 ```sh
 build worktree teardown --ticket TLB-582
 build worktree teardown --dir .worktrees/conductor/tlb-582-safe-worktrees
+build worktree teardown --ticket TLB-582 --force
 ```
 
 Exactly one selector is required. Before removing anything, Build validates the
 manifest schema, repository identity, absolute paths, exact manifest location,
-and strict containment below the configured root. A missing, moved, or tampered
-manifest is refused. On success Build removes the linked worktree and deletes its
+and strict containment below the configured root. It then checks the lease
+worktree for tracked changes and non-ignored untracked files. The default path
+allows only `.build-worktree-lease.json` and files listed in the manifest's
+`seededFiles`; tracked work or any other untracked file is refused before
+mutation.
+
+After that proof passes, Build removes the linked worktree and deletes its lease
+helper branch with Git's non-force branch deletion. An unmerged helper branch is
+preserved and reported as a partial failure after worktree removal. `--force`
+skips the proof and may permanently discard work; it also force-deletes the
 lease helper branch.
 
 ## Run the configured gate

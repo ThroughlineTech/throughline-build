@@ -246,7 +246,7 @@ public static class HelpRegistryFactory
         Summary: "Lease, list, or tear down conductor-owned worktrees",
         Usage:
             "worktree lease --ticket <id> [--slug <slug>] [--base <ref>] [--require-seed <path>] [--json]\n" +
-            "worktree teardown (--ticket <id> | --dir <path>) [--json]\n" +
+            "worktree teardown (--ticket <id> | --dir <path>) [--force] [--json]\n" +
             "worktree list [--json]",
         Options:
         [
@@ -255,6 +255,7 @@ public static class HelpRegistryFactory
             new("--base <ref>", "Base ref for the new helper branch (default: HEAD)", false),
             new("--require-seed <path>", "Fail before creation unless this allowlisted seed exists", false),
             new("--dir <path>", "Manifest-backed worktree directory to tear down", false),
+            new("--force", "Skip teardown safety checks and permanently discard work", false),
             new("--json", "Emit a versioned JSON envelope", false),
         ],
         ExitCodes:
@@ -270,7 +271,7 @@ public static class HelpRegistryFactory
         [
             new("worktree lease --ticket TLB-582 --slug worktree-verbs", "Lease an isolated workspace"),
             new("worktree list --json", "Inspect leases and unmanifested directories"),
-            new("worktree teardown --ticket TLB-582", "Remove the validated lease and helper branch"),
+            new("worktree teardown --ticket TLB-582", "Safely remove a clean lease and merged helper branch"),
         ]
     );
 

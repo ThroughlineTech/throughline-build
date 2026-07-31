@@ -44,7 +44,7 @@ public static class WorktreeCommand
             }
             case "teardown":
             {
-                var parsed = ParseOptions(args, 2, ["--ticket", "--dir"]);
+                var parsed = ParseOptions(args, 2, ["--ticket", "--dir"], ["--force"]);
                 if (parsed.Error is not null)
                     return Usage(json, output, error, parsed.Error);
                 var hasTicket = parsed.Values.TryGetValue("--ticket", out var ticket);
@@ -52,7 +52,8 @@ public static class WorktreeCommand
                 if (hasTicket == hasDir)
                     return Usage(json, output, error, "worktree teardown requires exactly one of --ticket or --dir");
 
-                var result = await manager.TeardownAsync(ticket, dir, ct).ConfigureAwait(false);
+                var result = await manager.TeardownAsync(
+                    ticket, dir, ct, force: parsed.Flags.Contains("--force")).ConfigureAwait(false);
                 if (!result.Success)
                     return ReportFailure(result, json, output, error);
                 if (json)
@@ -89,21 +90,35 @@ public static class WorktreeCommand
     private static ParsedOptions ParseOptions(
         IReadOnlyList<string> args,
         int start,
-        IReadOnlyCollection<string> allowed)
+        IReadOnlyCollection<string> allowed) =>
+        ParseOptions(args, start, allowed, Array.Empty<string>());
+
+    private static ParsedOptions ParseOptions(
+        IReadOnlyList<string> args,
+        int start,
+        IReadOnlyCollection<string> allowedValues,
+        IReadOnlyCollection<string> allowedFlags)
     {
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        var flags = new HashSet<string>(StringComparer.Ordinal);
         for (var i = start; i < args.Count; i++)
         {
             var option = args[i];
-            if (!allowed.Contains(option))
-                return new ParsedOptions(values, $"unknown option: {option}");
+            if (allowedFlags.Contains(option))
+            {
+                if (!flags.Add(option))
+                    return new ParsedOptions(values, flags, $"option may be specified only once: {option}");
+                continue;
+            }
+            if (!allowedValues.Contains(option))
+                return new ParsedOptions(values, flags, $"unknown option: {option}");
             if (values.ContainsKey(option))
-                return new ParsedOptions(values, $"option may be specified only once: {option}");
+                return new ParsedOptions(values, flags, $"option may be specified only once: {option}");
             if (++i >= args.Count || args[i].StartsWith("--", StringComparison.Ordinal))
-                return new ParsedOptions(values, $"{option} requires a value");
+                return new ParsedOptions(values, flags, $"{option} requires a value");
             values[option] = args[i];
         }
-        return new ParsedOptions(values, null);
+        return new ParsedOptions(values, flags, null);
     }
 
     private static int ReportFailure(
@@ -134,13 +149,16 @@ public static class WorktreeCommand
         {
             error.WriteLine($"Error: {message}");
             error.WriteLine("Usage: build worktree lease --ticket <id> [--slug <slug>] [--base <ref>] [--require-seed <path>]");
-            error.WriteLine("       build worktree teardown (--ticket <id> | --dir <path>)");
+            error.WriteLine("       build worktree teardown (--ticket <id> | --dir <path>) [--force]");
             error.WriteLine("       build worktree list");
+            error.WriteLine("       default teardown refuses tracked work and unexpected untracked files");
+            error.WriteLine("       --force skips those checks and may permanently discard work");
         }
         return 2;
     }
 
     private sealed record ParsedOptions(
         IReadOnlyDictionary<string, string> Values,
+        IReadOnlySet<string> Flags,
         string? Error);
 }

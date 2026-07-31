@@ -252,7 +252,10 @@ root and the only untracked local files Build may copy with `[worktree] root`
 and `[worktree] seed_files`. Use `--require-seed <path>` when a listed file must
 exist before lease creation. Concurrent attempts for one ticket are serialized,
 and rollback removes only branch and worktree artifacts owned by the failing
-attempt. All three forms support `--json`.
+attempt. Teardown is safe by default: it refuses tracked work and unexpected
+untracked files before removing the worktree, then deletes the helper branch
+without force. `--force` skips those protections and may permanently discard
+work. All three forms support `--json`.
 
 Run `build gate` from the leased worktree to execute its configured
 `[[review.checks]]`. Setup checks run first. Gating and setup failures exit 1;

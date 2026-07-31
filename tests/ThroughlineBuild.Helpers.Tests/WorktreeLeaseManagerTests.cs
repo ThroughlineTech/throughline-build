@@ -45,8 +45,12 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
             ticket: "TLB-582", directory: null, CancellationToken.None);
 
         Assert.True(removed.Success);
+        Assert.Equal([leased.Manifest.WorktreePath], git.TrackedChangeQueries);
+        Assert.Equal([leased.Manifest.WorktreePath], git.UntrackedFileQueries);
         Assert.False(Directory.Exists(leased.Manifest.WorktreePath));
         Assert.Contains("lease/tlb-582-safe-worktrees", git.DeletedBranches);
+        Assert.Equal([true], git.RemoveWorktreeForces);
+        Assert.Equal([false], git.DeleteBranchForces);
     }
 
     [Fact]
@@ -326,6 +330,113 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task TeardownRefusesTrackedWorkBeforeRemovingAnything()
+    {
+        File.WriteAllText(Path.Combine(_main, ".dev.vars"), "SECRET=value");
+        var git = new FakeGit(Sha);
+        var manager = CreateManager(git, new FakeInstaller(), [".dev.vars"]);
+        var leased = await manager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582", RequiredSeed: ".dev.vars"),
+            CancellationToken.None);
+        git.TrackedChanges.Add(" M tracked.txt");
+
+        var result = await manager.TeardownAsync(
+            ticket: null, directory: leased.Manifest!.WorktreePath, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(WorktreeLeaseManager.FailureError, result.ErrorCode);
+        Assert.Contains("tracked changes", result.Message);
+        Assert.Equal([leased.Manifest.WorktreePath], git.TrackedChangeQueries);
+        Assert.Equal([leased.Manifest.WorktreePath], git.UntrackedFileQueries);
+        Assert.True(File.Exists(Path.Combine(
+            leased.Manifest.WorktreePath, WorktreeLeaseConstants.ManifestFileName)));
+        Assert.True(File.Exists(Path.Combine(leased.Manifest.WorktreePath, ".dev.vars")));
+        Assert.True(git.HasWorktree(leased.Manifest.WorktreePath));
+        Assert.True(git.HasBranch(leased.Manifest.Branch));
+        Assert.Empty(git.RemovedWorktrees);
+        Assert.Empty(git.DeletedBranches);
+    }
+
+    [Fact]
+    public async Task TeardownRefusesUnexpectedUntrackedFilesBeforeRemovingAnything()
+    {
+        File.WriteAllText(Path.Combine(_main, ".dev.vars"), "SECRET=value");
+        var git = new FakeGit(Sha);
+        var manager = CreateManager(git, new FakeInstaller(), [".dev.vars"]);
+        var leased = await manager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582", RequiredSeed: ".dev.vars"),
+            CancellationToken.None);
+        git.UntrackedFiles.Add(WorktreeLeaseConstants.ManifestFileName);
+        git.UntrackedFiles.Add(".dev.vars");
+        git.UntrackedFiles.Add("stray.txt");
+
+        var result = await manager.TeardownAsync(
+            ticket: null, directory: leased.Manifest!.WorktreePath, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(WorktreeLeaseManager.FailureError, result.ErrorCode);
+        Assert.Contains("unexpected untracked files", result.Message);
+        Assert.Equal([leased.Manifest.WorktreePath], git.TrackedChangeQueries);
+        Assert.Equal([leased.Manifest.WorktreePath], git.UntrackedFileQueries);
+        Assert.True(File.Exists(Path.Combine(
+            leased.Manifest.WorktreePath, WorktreeLeaseConstants.ManifestFileName)));
+        Assert.True(File.Exists(Path.Combine(leased.Manifest.WorktreePath, ".dev.vars")));
+        Assert.True(git.HasWorktree(leased.Manifest.WorktreePath));
+        Assert.True(git.HasBranch(leased.Manifest.Branch));
+        Assert.Empty(git.RemovedWorktrees);
+        Assert.Empty(git.DeletedBranches);
+    }
+
+    [Fact]
+    public async Task TeardownForceSkipsProofAndForceDeletesBranch()
+    {
+        var git = new FakeGit(Sha);
+        git.TrackedChanges.Add(" M tracked.txt");
+        git.UntrackedFiles.Add("stray.txt");
+        var manager = CreateManager(git, new FakeInstaller());
+        var leased = await manager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582"), CancellationToken.None);
+
+        var result = await manager.TeardownAsync(
+            ticket: null,
+            directory: leased.Manifest!.WorktreePath,
+            CancellationToken.None,
+            force: true);
+
+        Assert.True(result.Success);
+        Assert.Empty(git.TrackedChangeQueries);
+        Assert.Empty(git.UntrackedFileQueries);
+        Assert.Equal([true], git.RemoveWorktreeForces);
+        Assert.Equal([true], git.DeleteBranchForces);
+        Assert.False(git.HasWorktree(leased.Manifest.WorktreePath));
+        Assert.False(git.HasBranch(leased.Manifest.Branch));
+    }
+
+    [Fact]
+    public async Task TeardownPreservesUnmergedBranchWhenNonForceDeleteFails()
+    {
+        var git = new FakeGit(Sha)
+        {
+            FailNonForceBranchDelete = true
+        };
+        var manager = CreateManager(git, new FakeInstaller());
+        var leased = await manager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582"), CancellationToken.None);
+
+        var result = await manager.TeardownAsync(
+            ticket: null, directory: leased.Manifest!.WorktreePath, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(WorktreeLeaseManager.FailureError, result.ErrorCode);
+        Assert.Contains("worktree removed but branch deletion failed", result.Message);
+        Assert.Equal([true], git.RemoveWorktreeForces);
+        Assert.Equal([false], git.DeleteBranchForces);
+        Assert.False(git.HasWorktree(leased.Manifest.WorktreePath));
+        Assert.False(Directory.Exists(leased.Manifest.WorktreePath));
+        Assert.True(git.HasBranch(leased.Manifest.Branch));
+    }
+
+    [Fact]
     public void WorktreeLeaseServiceReferencesNoWorkerAgentAssembly()
     {
         var references = typeof(WorktreeLeaseManager).Assembly
@@ -476,6 +587,13 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
         public List<string> RemovedWorktrees { get; } = [];
         public List<string> DeletedBranches { get; } = [];
         public List<string> TrackedPaths { get; } = [];
+        public List<string> TrackedChanges { get; } = [];
+        public List<string> UntrackedFiles { get; } = [];
+        public List<string> TrackedChangeQueries { get; } = [];
+        public List<string> UntrackedFileQueries { get; } = [];
+        public List<bool> RemoveWorktreeForces { get; } = [];
+        public List<bool> DeleteBranchForces { get; } = [];
+        public bool FailNonForceBranchDelete { get; init; }
 
         public bool HasBranch(string branch) =>
             _branches.Contains(branch, StringComparer.Ordinal);
@@ -549,6 +667,7 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
             string path, bool force, CancellationToken ct)
         {
             RemovedWorktrees.Add(path);
+            RemoveWorktreeForces.Add(force);
             _worktrees.RemoveAll(w => string.Equals(w.Path, path, StringComparison.OrdinalIgnoreCase));
             if (Directory.Exists(path))
                 Directory.Delete(path, recursive: true);
@@ -558,9 +677,26 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
         public Task<GitOpResult> DeleteBranchAsync(
             string branch, bool force, string mainWorktreePath, CancellationToken ct)
         {
+            DeleteBranchForces.Add(force);
+            if (FailNonForceBranchDelete && !force)
+                return Task.FromResult(new GitOpResult(false, "branch is not fully merged"));
             _branches.Remove(branch);
             DeletedBranches.Add(branch);
             return Task.FromResult(new GitOpResult(true, null));
+        }
+
+        public Task<IReadOnlyList<string>> GetTrackedChangesAsync(
+            string workingDirectory, CancellationToken ct)
+        {
+            TrackedChangeQueries.Add(workingDirectory);
+            return Task.FromResult<IReadOnlyList<string>>(TrackedChanges.ToList());
+        }
+
+        public Task<IReadOnlyList<string>> GetUntrackedFilesAsync(
+            string workingDirectory, CancellationToken ct)
+        {
+            UntrackedFileQueries.Add(workingDirectory);
+            return Task.FromResult<IReadOnlyList<string>>(UntrackedFiles.ToList());
         }
 
         public Task<IReadOnlyList<string>> GetBranchesNotMergedAsync(
