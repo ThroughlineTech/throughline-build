@@ -21,6 +21,7 @@ public enum CliVerbKind
     Sweep,
     Worktree,
     Gate,
+    Waves,
     List,
     Get,
     Comments,

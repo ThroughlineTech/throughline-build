@@ -237,6 +237,7 @@ the ticket CRUD verbs together with deterministic worktree leases:
 
 ```
 build worktree lease --ticket TLB-1 --slug readme-fix
+build waves --input tickets.json
 build gate --ticket TLB-1
 build worktree list
 build worktree teardown --ticket TLB-1
@@ -253,6 +254,15 @@ Run `build gate` from the leased worktree to execute its configured
 advisory failures remain visible but do not change the exit code. Use
 `--role gating|advisory|all` to select a role, and `--json` for typed per-check
 exit codes, durations, captured output, and inconclusive missing-path results.
+
+Use `build waves --input <path|->` before leasing worktrees to level declared
+dependencies and pack file-disjoint ready tickets up to `[waves].cap` (default
+2). Exact-file overlap and uncertain or empty file predictions serialize
+automatically. Repository-specific `global`, `cohesive-module`, and `pairwise`
+path rules belong in `[[waves.serialize]]`; no repository paths are built into
+the command. Output names the rule and path for each serialization decision
+and reports estimated speedup. JSON input and output shapes, glob semantics,
+and exit codes are documented in `docs/bring-your-own-conductor.md`.
 
 See `docs/bring-your-own-conductor.md` for the manifest safety model, exit codes,
 and a complete caller-owned conductor sequence.

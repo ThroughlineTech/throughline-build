@@ -21,6 +21,7 @@ public static class CliErrorCodes
     public const string MissingSecret = "missing_secret";
     public const string NotFound = "not_found";
     public const string Failure = "failure";
+    public const string DependencyCycle = "dependency_cycle";
 }
 
 /// <summary>A machine-readable error: a stable <paramref name="Code"/> plus a human message.</summary>
@@ -185,6 +186,23 @@ public sealed record GateView(
 
 public sealed record GateEnvelope(int SchemaVersion, bool Ok, GateView Data);
 
+// ---- build waves ------------------------------------------------------------------
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record WaveTicketInput(
+    string? Id = null,
+    IReadOnlyList<string>? Files = null,
+    IReadOnlyList<string>? Deps = null,
+    bool Uncertain = false);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record WavesInput(
+    int? Cap = null,
+    IReadOnlyList<string>? VerifiedExternalDeps = null,
+    IReadOnlyList<WaveTicketInput>? Tickets = null);
+
+public sealed record WavesEnvelope(int SchemaVersion, bool Ok, WavePlan Data);
+
 // Source-generated context keeps the --json path statically analyzable under PublishAot=true
 // (reflection-based serialization trips IL2026/IL3050). UseStringEnumConverter renders
 // State/Size/Risk as their names rather than integers. Mirrors PhaseSummaryJsonContext.
@@ -208,4 +226,7 @@ public sealed record GateEnvelope(int SchemaVersion, bool Ok, GateView Data);
 [JsonSerializable(typeof(WorktreeListEnvelope))]
 [JsonSerializable(typeof(WorktreeTeardownEnvelope))]
 [JsonSerializable(typeof(GateEnvelope))]
+[JsonSerializable(typeof(WavesInput))]
+[JsonSerializable(typeof(WaveTicketInput[]))]
+[JsonSerializable(typeof(WavesEnvelope))]
 internal partial class CliJsonContext : JsonSerializerContext { }

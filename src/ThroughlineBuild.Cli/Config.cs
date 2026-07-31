@@ -1,6 +1,7 @@
 using ThroughlineBuild.Briefs;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Helpers;
 using ThroughlineBuild.Plane;
 using ThroughlineBuild.Workers.ClaudeCode;
 using Tomlyn;
@@ -62,6 +63,13 @@ public record WorktreeConfig(
     public static WorktreeConfig Default => new(".worktrees/conductor", Array.Empty<string>());
 }
 
+public record WavesConfig(
+    int Cap,
+    IReadOnlyList<WaveSerializeRule> Serialize)
+{
+    public static WavesConfig Default => new(WavePlanner.DefaultCap, Array.Empty<WaveSerializeRule>());
+}
+
 // [plan] section: controls whether chain planning runs a worker investigation or promotes in place.
 // Standalone `build plan` ignores this setting unless --from-brief explicitly requests promotion.
 public record PlanConfig(string Mode)
@@ -97,6 +105,7 @@ public record BuildConfig(
     ShipConfig Ship,
     WorkConfig Work,
     WorktreeConfig Worktree,
+    WavesConfig Waves,
     ProjectContext Project,
     PlanConfig Plan,
     BatchConfig Batch)
@@ -168,6 +177,7 @@ public static class BuildConfigLoader
         var ship = ReadShipSection(root);
         var work = ReadWorkSection(root);
         var worktree = ReadWorktreeSection(root);
+        var waves = ReadWavesSection(root);
         var project = ReadProjectSection(root, path);
         var plan = ReadPlanSection(root);
         var batch = ReadBatchSection(root);
@@ -188,7 +198,7 @@ public static class BuildConfigLoader
         foreach (var warning in warnings)
             emit(warning);
 
-        return new BuildConfig(ticketing, llm, workers, events, review, ship, work, worktree, project, plan, batch);
+        return new BuildConfig(ticketing, llm, workers, events, review, ship, work, worktree, waves, project, plan, batch);
     }
 
     public static string ResolveLogDirectory(string configFilePath, string rawLogDir, string cwdFallback)
@@ -221,7 +231,7 @@ public static class BuildConfigLoader
 
     private static readonly HashSet<string> KnownTopLevelSections = new(StringComparer.Ordinal)
     {
-        "ticketing", "llm", "workers", "events", "review", "ship", "work", "worktree", "plan", "project", "batch"
+        "ticketing", "llm", "workers", "events", "review", "ship", "work", "worktree", "waves", "plan", "project", "batch"
     };
 
     private static readonly HashSet<string> KnownTicketingKeys = new(StringComparer.Ordinal)
@@ -287,6 +297,16 @@ public static class BuildConfigLoader
     private static readonly HashSet<string> KnownWorktreeKeys = new(StringComparer.Ordinal)
     {
         "root", "seed_files"
+    };
+
+    private static readonly HashSet<string> KnownWavesKeys = new(StringComparer.Ordinal)
+    {
+        "cap", "serialize"
+    };
+
+    private static readonly HashSet<string> KnownWavesSerializeKeys = new(StringComparer.Ordinal)
+    {
+        "kind", "paths"
     };
 
     private static readonly HashSet<string> KnownPlanKeys = new(StringComparer.Ordinal)
@@ -459,6 +479,28 @@ public static class BuildConfigLoader
             {
                 if (!KnownWorktreeKeys.Contains(kv.Key))
                     warnings.Add($"warning: unknown config key worktree.{kv.Key} - ignored");
+            }
+        }
+
+        // [waves] and [[waves.serialize]]
+        if (root.TryGetValue("waves", out var wavesRaw) && wavesRaw is TomlTable waves)
+        {
+            foreach (var kv in waves)
+            {
+                if (!KnownWavesKeys.Contains(kv.Key))
+                    warnings.Add($"warning: unknown config key waves.{kv.Key} - ignored");
+            }
+            if (waves.TryGetValue("serialize", out var serializeRaw)
+                && serializeRaw is TomlTableArray serialize)
+            {
+                foreach (var entry in serialize)
+                {
+                    foreach (var kv in entry)
+                    {
+                        if (!KnownWavesSerializeKeys.Contains(kv.Key))
+                            warnings.Add($"warning: unknown config key waves.serialize.{kv.Key} - ignored");
+                    }
+                }
             }
         }
 
@@ -957,6 +999,69 @@ public static class BuildConfigLoader
             .ToList()
             .AsReadOnly();
         return new WorktreeConfig(configuredRoot, seeds);
+    }
+
+    private static WavesConfig ReadWavesSection(TomlTable root)
+    {
+        if (!root.TryGetValue("waves", out var val) || val is not TomlTable table)
+            return WavesConfig.Default;
+
+        var cap = WavePlanner.DefaultCap;
+        if (table.TryGetValue("cap", out var capValue))
+        {
+            cap = capValue switch
+            {
+                int intValue => intValue,
+                long longValue when longValue is >= int.MinValue and <= int.MaxValue =>
+                    (int)longValue,
+                _ => throw new ConfigException(
+                    "key 'cap' in [waves] must be an integer"),
+            };
+        }
+        if (cap is < 1 or > WavePlanner.MaximumCap)
+            throw new ConfigException(
+                $"key 'cap' in [waves] must be an integer from 1 to {WavePlanner.MaximumCap}");
+
+        var rules = new List<WaveSerializeRule>();
+        if (table.TryGetValue("serialize", out var serializeValue))
+        {
+            if (serializeValue is not TomlTableArray serialize)
+                throw new ConfigException(
+                    "key 'serialize' in [waves] must be an array of tables");
+            foreach (var entry in serialize)
+            {
+                var rawKind = RequireString(entry, "waves.serialize", "kind");
+                var kind = rawKind switch
+                {
+                    "global" => WaveSerializeKind.Global,
+                    "cohesive-module" => WaveSerializeKind.CohesiveModule,
+                    "pairwise" => WaveSerializeKind.Pairwise,
+                    _ => throw new ConfigException(
+                        $"key 'kind' in [[waves.serialize]] must be \"global\", " +
+                        $"\"cohesive-module\", or \"pairwise\", got \"{rawKind}\""),
+                };
+                var paths = OptionalStringList(entry, "paths", Array.Empty<string>())
+                    .Where(path => !string.IsNullOrWhiteSpace(path))
+                    .Select(path => path.Trim())
+                    .ToList();
+                if (paths.Count == 0)
+                    throw new ConfigException(
+                        $"key 'paths' in [[waves.serialize]] for kind \"{rawKind}\" " +
+                        "must contain at least one non-empty string");
+                try
+                {
+                    rules.Add(new WaveSerializeRule(
+                        kind,
+                        paths.Select(WavePlanner.NormalizePathPattern).ToList()));
+                }
+                catch (ArgumentException ex)
+                {
+                    throw new ConfigException(
+                        $"invalid path in [[waves.serialize]] for kind \"{rawKind}\": {ex.Message}");
+                }
+            }
+        }
+        return new WavesConfig(cap, rules.AsReadOnly());
     }
 
     private static PlanConfig ReadPlanSection(TomlTable root)

@@ -14,6 +14,7 @@ public static class CliVerbRegistryFactory
         ("sweep", CliVerbKind.Sweep, false),
         ("worktree", CliVerbKind.Worktree, false),
         ("gate", CliVerbKind.Gate, false),
+        ("waves", CliVerbKind.Waves, false),
         ("list", CliVerbKind.List, false),
         ("get", CliVerbKind.Get, false),
         ("comments", CliVerbKind.Comments, false),

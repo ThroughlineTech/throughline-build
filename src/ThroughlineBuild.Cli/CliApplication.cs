@@ -512,6 +512,33 @@ public static class CliApplication
             }
         }
 
+        // Standalone dependency-safe wave planner for caller-owned conductor loops.
+        // It reads only JSON input and config, and never constructs a worker or ticket client.
+        if (verbKind == CliVerbKind.Waves)
+        {
+            using var wavesCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; wavesCts.Cancel(); };
+            try
+            {
+                return await WavesCommand.ExecuteAsync(
+                    args,
+                    jsonOutput,
+                    config.Waves,
+                    Console.In,
+                    Console.Out,
+                    Console.Error,
+                    wavesCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                if (jsonOutput)
+                    CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, "cancelled");
+                else
+                    Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
+        }
+
         // 'build sweep' removes leftover chain worktrees and merged branches that a prior
         // 'build chain' left behind - the recovery path when a chain was interrupted or
         // preserved-on-failure and so never reached its own end-of-chain sweep. Stack-agnostic:

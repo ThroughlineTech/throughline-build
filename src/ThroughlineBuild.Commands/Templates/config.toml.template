@@ -212,6 +212,26 @@ seed_files = []
 # Example for a local ignored environment file:
 # seed_files = [".dev.vars"]
 
+# [waves] configures deterministic dependency leveling and conflict-aware packing.
+# cap defaults to 2. Paths are repository-relative and support *, ?, and ** globs.
+[waves]
+cap = 2
+#
+# A global match serializes the matching ticket with every ready peer.
+# [[waves.serialize]]
+# kind = "global"
+# paths = ["package.json", "*.lock", "migrations/**", ".github/**"]
+#
+# Tickets that both match the same listed module serialize.
+# [[waves.serialize]]
+# kind = "cohesive-module"
+# paths = ["src/admin", "src/owner", "src/middleware"]
+#
+# Any two tickets that each touch this shared surface serialize.
+# [[waves.serialize]]
+# kind = "pairwise"
+# paths = ["src/contract.ts", "share-contract.md"]
+
 # [project] is optional - omit entirely to skip project-aware brief enrichment.
 # The toolchain fields below are LEFT BLANK on purpose: they are derived from your op-doc
 # at 'build scaffold' time. An all-blank toolchain assumes no stack (no phantom dotnet).

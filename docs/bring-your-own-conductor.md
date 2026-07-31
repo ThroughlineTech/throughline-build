@@ -8,7 +8,8 @@ conductor uses the ticket CRUD verbs (`list`, `get`, `comments`, `comment`,
 `transition`, and `amend`) and asks Build to own deterministic resources. The
 `worktree` verb is the isolated-workspace primitive for that topology. The
 `gate` verb runs the repository's configured review checks in that workspace.
-Neither starts a worker agent or decides which tickets should run concurrently.
+The `waves` verb plans which selected tickets can safely run concurrently.
+None of these verbs starts a worker agent.
 
 ## Configuration
 
@@ -30,6 +31,82 @@ copies all untracked files.
 
 The lease runs `[project].install_command` in the new worktree. A blank install
 command is recorded as `skipped`.
+
+Wave planning has its own optional configuration:
+
+```toml
+[waves]
+cap = 2
+
+[[waves.serialize]]
+kind = "global"
+paths = ["package.json", "*.lock", "migrations/**", ".github/**"]
+
+[[waves.serialize]]
+kind = "cohesive-module"
+paths = ["src/admin", "src/owner", "src/middleware"]
+
+[[waves.serialize]]
+kind = "pairwise"
+paths = ["src/contract.ts", "share-contract.md"]
+```
+
+`cap` defaults to 2 and may be 1 through 16. Configured paths are
+repository-relative. `*` and `?` match within one path segment, while `**`
+matches across directories. A path with no wildcard matches itself and its
+descendants.
+
+A `global` match serializes a ticket with every ready peer.
+`cohesive-module` serializes two tickets when both match the same configured
+module. `pairwise` serializes two tickets when each matches any path in that
+rule. Exact-file overlap always serializes without configuration.
+
+## Plan safe waves
+
+Supply either a ticket array or an object:
+
+```json
+{
+  "cap": 2,
+  "verifiedExternalDeps": ["TLB-1"],
+  "tickets": [
+    {
+      "id": "TLB-2",
+      "files": ["src/a.cs"],
+      "deps": ["TLB-1"],
+      "uncertain": false
+    }
+  ]
+}
+```
+
+Run the planner from a file or stdin:
+
+```sh
+build waves --input tickets.json
+build waves --input - --json
+```
+
+The input object's `cap` overrides `[waves].cap`. A dependency outside the
+selected ticket set must appear in `verifiedExternalDeps`. Selected
+dependencies are topologically leveled, so a prerequisite always runs in an
+earlier wave. Tickets within one level are packed by numeric ticket order,
+file disjointness, configured rules, and the cap.
+
+Set `uncertain` to true when the predicted file list is unreliable. An
+uncertain ticket, or any ticket with an empty `files` array, serializes with
+every ready peer.
+
+Human and JSON output include the schedule, every conflict edge, the rule and
+path behind each serialization decision, and an estimated speedup over one
+ticket per wave. Invalid input or an unverified external dependency exits 2.
+A dependency cycle has the distinct `dependency_cycle` error and exits 5.
+Planning does not lease worktrees or run tickets.
+
+Treat the estimate as a planning signal, not a promise. Fan-out pays roughly 2x
+on a genuinely disjoint batch once per-workspace setup and serial integration
+are counted. A mostly overlapping batch should collapse to a serial schedule;
+that is the planner protecting the integration path.
 
 ## Lease a worktree
 
@@ -107,8 +184,8 @@ configured, the command clearly reports `no checks configured` and exits 0.
 
 For each selected ticket, a caller-owned conductor can:
 
-1. Read the ticket and comments.
-2. Lease a worktree and pass the printed path as the implementation agent's
+1. Read the tickets and comments, predict touched files, and run `build waves`.
+2. For each ticket in the next wave, lease a worktree and pass the printed path as the implementation agent's
    working directory.
 3. Run its own implementation agent in that directory.
 4. Run `build gate` in that directory, then run the conductor's own review
@@ -117,5 +194,6 @@ For each selected ticket, a caller-owned conductor can:
    `build transition`.
 6. Tear down the lease only after the branch no longer needs to be preserved.
 
-The conductor still owns concurrency, agent selection, review judgment, and
-delivery policy. Build owns the validated workspace lifecycle.
+The conductor still owns agent selection, review judgment, execution, and
+delivery policy. Build owns wave planning, validated workspace lifecycle, and
+configured checks.

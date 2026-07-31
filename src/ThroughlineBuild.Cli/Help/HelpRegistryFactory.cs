@@ -38,6 +38,7 @@ public static class HelpRegistryFactory
         // Bring your own conductor
         r.Register(Worktree());
         r.Register(Gate());
+        r.Register(Waves());
 
         // Work items
         r.Register(New());
@@ -295,6 +296,30 @@ public static class HelpRegistryFactory
         [
             new("gate", "Run the complete configured gate in the current tree"),
             new("gate --ticket TLB-583 --role gating --json", "Run setup and gating checks with structured output"),
+        ]
+    );
+
+    private static CommandHelp Waves() => new(
+        Name: "waves",
+        Group: CommandGroup.Conductor,
+        Summary: "Plan dependency-safe, conflict-aware ticket waves",
+        Usage: "waves --input <path|-> [--json]",
+        Options:
+        [
+            new("--input <path|->", "Read a ticket array or wave-plan object from a file or stdin", false),
+            new("--json", "Emit the schedule, serialization reasons, and speedup verdict in a versioned envelope", false),
+        ],
+        ExitCodes:
+        [
+            new(0, "Wave schedule produced"),
+            new(2, "Config, arguments, input JSON, or dependency scope is invalid"),
+            new(3, "Missing secret (env var not set)"),
+            new(5, "Selected tickets contain a dependency cycle"),
+        ],
+        Examples:
+        [
+            new("waves --input tickets.json", "Print a human-readable schedule"),
+            new("waves --input - --json", "Read JSON from stdin and emit a typed envelope"),
         ]
     );
 

@@ -25,6 +25,7 @@ public class HelpRegistryFactoryTests
     [InlineData("decompose")]
     [InlineData("worktree")]
     [InlineData("gate")]
+    [InlineData("waves")]
     [InlineData("new")]
     [InlineData("list")]
     [InlineData("amend")]
@@ -328,6 +329,7 @@ public class HelpRegistryFactoryTests
         var output = Tier0Renderer.Render(Registry);
         Assert.Contains("build - Throughline Build", output);
         Assert.Contains("Pipeline:", output);
+        Assert.Contains("Bring your own conductor:", output);
         Assert.Contains("Work items:", output);
         Assert.Contains("Configure:", output);
     }
