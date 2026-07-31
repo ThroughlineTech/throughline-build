@@ -3,6 +3,41 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+LOCKFILE_SNAPSHOT_DIR=""
+
+# Local publish restores are RID- and SDK-patch-sensitive, so they can rewrite
+# tracked NuGet lockfiles just because this script ran on another host. Preserve
+# the caller's pre-run lockfile state; dependency updates belong in restore/test
+# workflows, not in the local installer.
+snapshot_lockfiles() {
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    return
+  fi
+
+  LOCKFILE_SNAPSHOT_DIR="$(mktemp -d)"
+  git ls-files -z -- '*/packages.lock.json' > "$LOCKFILE_SNAPSHOT_DIR/paths.z"
+  while IFS= read -r -d '' path; do
+    mkdir -p "$LOCKFILE_SNAPSHOT_DIR/$(dirname "$path")"
+    cp "$path" "$LOCKFILE_SNAPSHOT_DIR/$path"
+  done < "$LOCKFILE_SNAPSHOT_DIR/paths.z"
+}
+
+restore_lockfiles() {
+  if [[ -z "$LOCKFILE_SNAPSHOT_DIR" || ! -d "$LOCKFILE_SNAPSHOT_DIR" ]]; then
+    return
+  fi
+
+  while IFS= read -r -d '' path; do
+    if [[ -f "$LOCKFILE_SNAPSHOT_DIR/$path" ]]; then
+      cp "$LOCKFILE_SNAPSHOT_DIR/$path" "$path"
+    fi
+  done < "$LOCKFILE_SNAPSHOT_DIR/paths.z"
+  rm -rf "$LOCKFILE_SNAPSHOT_DIR"
+}
+
+snapshot_lockfiles
+trap restore_lockfiles EXIT
+
 if [[ -z "${RID:-}" ]]; then
   case "$(uname -s)-$(uname -m)" in
     Linux-x86_64)  RID="linux-x64" ;;
