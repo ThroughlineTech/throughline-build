@@ -28,7 +28,8 @@ public static class CliBootstrap
 {
     public static async Task<CliBootstrapResult> CreateAsync(
         string rawWorkingDirectory,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool requireTicketing = true)
     {
         var resolverGit = new ProcessGitClient(rawWorkingDirectory);
         var workingDirectory = await MainWorktreeResolver.ResolveAsync(
@@ -58,6 +59,15 @@ public static class CliBootstrap
         catch (ConfigException ex)
         {
             return CliBootstrapResult.Failed(2, CliErrorCodes.ConfigError, "Config error", ex);
+        }
+
+        if (!requireTicketing)
+        {
+            return CliBootstrapResult.Success(new CliContext(
+                rawWorkingDirectory,
+                workingDirectory,
+                configPath,
+                config));
         }
 
         BuildSecrets secrets;

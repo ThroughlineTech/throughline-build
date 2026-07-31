@@ -127,6 +127,13 @@ public interface IGitClient
     Task<GitOpResult> CreateBranchAsync(string branch, string fromRef, string worktreePath, CancellationToken ct) =>
         Task.FromResult(new GitOpResult(false, "not implemented"));
 
+    Task<GitOpResult> CreateBranchRefAsync(
+        string branch,
+        string fromRef,
+        string workingDirectory,
+        CancellationToken ct) =>
+        Task.FromResult(new GitOpResult(false, "not implemented"));
+
     // Switches an existing worktree onto an already-existing local branch (git switch <branch>).
     // Differs from CreateBranchAsync (checkout -b, new branch) and CheckoutWorktreeAsync (new
     // worktree). Used by the batch chain ship: a warm batch session leaves the integration worktree

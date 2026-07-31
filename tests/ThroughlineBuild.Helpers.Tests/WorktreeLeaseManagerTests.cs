@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.Json;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Helpers;
 using Xunit;
@@ -68,19 +70,13 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
         Assert.Empty(git.DeletedBranches);
     }
 
-    [Theory]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(true, true)]
-    public async Task FailedCreateRollsBackEveryArtifactCreatedByTheAttempt(
-        bool createBranch,
-        bool createWorktree)
+    [Fact]
+    public async Task FailedCheckoutRemovesOwnedBranchButNotUnownedTarget()
     {
         var git = new FakeGit(Sha)
         {
-            FailCreate = true,
-            CreateBranchOnFailure = createBranch,
-            CreateWorktreeOnFailure = createWorktree
+            FailCheckout = true,
+            CreateUnownedTargetOnCheckoutFailure = true
         };
         var manager = CreateManager(git, new FakeInstaller());
         var target = Path.Combine(_root, "tlb-582");
@@ -92,6 +88,25 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
         Assert.False(result.Success);
         Assert.Equal(WorktreeLeaseManager.FailureError, result.ErrorCode);
         Assert.Equal(1, git.CreateCount);
+        Assert.DoesNotContain(target, git.RemovedWorktrees);
+        Assert.Contains(branch, git.DeletedBranches);
+        Assert.False(git.HasBranch(branch));
+        Assert.False(git.HasWorktree(target));
+        Assert.True(File.Exists(Path.Combine(target, "uncommitted.txt")));
+    }
+
+    [Fact]
+    public async Task SetupFailureRollsBackOnlyBranchAndWorktreeCreatedByAttempt()
+    {
+        var git = new FakeGit(Sha);
+        var manager = CreateManager(git, new ThrowingInstaller());
+        var target = Path.Combine(_root, "tlb-582");
+        var branch = "lease/tlb-582";
+
+        var result = await manager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582"), CancellationToken.None);
+
+        Assert.False(result.Success);
         Assert.Contains(target, git.RemovedWorktrees);
         Assert.Contains(branch, git.DeletedBranches);
         Assert.False(git.HasBranch(branch));
@@ -99,6 +114,33 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
         Assert.False(Directory.Exists(target));
         Assert.False(File.Exists(Path.Combine(
             target, WorktreeLeaseConstants.ManifestFileName)));
+    }
+
+    [Fact]
+    public async Task ConcurrentSameTicketLoserCannotAlterWinnerOrItsUncommittedFile()
+    {
+        var git = new FakeGit(Sha);
+        var installer = new BlockingInstaller();
+        var winnerManager = CreateManager(git, installer);
+        var loserManager = CreateManager(git, new FakeInstaller());
+
+        var winnerTask = winnerManager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582", "winner"), CancellationToken.None);
+        await installer.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var loser = await loserManager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582", "loser"), CancellationToken.None);
+        installer.Release.SetResult();
+        var winner = await winnerTask;
+
+        Assert.True(winner.Success);
+        Assert.False(loser.Success);
+        Assert.Equal(WorktreeLeaseManager.CollisionError, loser.ErrorCode);
+        Assert.True(File.Exists(Path.Combine(winner.Manifest!.WorktreePath, "uncommitted.txt")));
+        Assert.True(git.HasBranch(winner.Manifest.Branch));
+        Assert.True(git.HasWorktree(winner.Manifest.WorktreePath));
+        Assert.Empty(git.RemovedWorktrees);
+        Assert.Empty(git.DeletedBranches);
     }
 
     [Fact]
@@ -114,7 +156,7 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
         Assert.False(result.Success);
         Assert.Equal(WorktreeLeaseManager.MissingSeedError, result.ErrorCode);
         Assert.Equal(0, git.CreateCount);
-        Assert.False(Directory.Exists(_root));
+        Assert.False(Directory.Exists(Path.Combine(_root, "tlb-582")));
     }
 
     [Fact]
@@ -189,6 +231,100 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
         Assert.Empty(git.DeletedBranches);
     }
 
+    [Theory]
+    [InlineData("baseSha")]
+    [InlineData("repositoryPath")]
+    [InlineData("mainWorktreePath")]
+    [InlineData("worktreeRoot")]
+    [InlineData("worktreePath")]
+    [InlineData("ticket")]
+    [InlineData("branch")]
+    [InlineData("slug")]
+    [InlineData("seededFiles")]
+    [InlineData("leasedResources")]
+    [InlineData("install")]
+    [InlineData("install.status")]
+    public async Task TeardownRejectsNullRequiredManifestFieldsBeforeMutation(string propertyPath)
+    {
+        AppContext.SetSwitch(
+            "System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault",
+            false);
+        var git = new FakeGit(Sha);
+        var manager = CreateManager(git, new FakeInstaller());
+        var leased = await manager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582"), CancellationToken.None);
+        var manifestPath = Path.Combine(
+            leased.Manifest!.WorktreePath, WorktreeLeaseConstants.ManifestFileName);
+        WriteTamperedManifest(manifestPath, propertyPath, writeValue: writer => writer.WriteNullValue());
+
+        var result = await manager.TeardownAsync(
+            ticket: null, directory: leased.Manifest.WorktreePath, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(WorktreeLeaseManager.InvalidManifestError, result.ErrorCode);
+        Assert.True(Directory.Exists(leased.Manifest.WorktreePath));
+        Assert.Empty(git.RemovedWorktrees);
+        Assert.Empty(git.DeletedBranches);
+    }
+
+    [Fact]
+    public async Task LeaseAndListSafelyRefuseNullManifestField()
+    {
+        AppContext.SetSwitch(
+            "System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault",
+            false);
+        var git = new FakeGit(Sha);
+        var manager = CreateManager(git, new FakeInstaller());
+        var leased = await manager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582"), CancellationToken.None);
+        var manifestPath = Path.Combine(
+            leased.Manifest!.WorktreePath, WorktreeLeaseConstants.ManifestFileName);
+        WriteTamperedManifest(manifestPath, "baseSha", writer => writer.WriteNullValue());
+
+        var collisionCheck = await manager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-583"), CancellationToken.None);
+        var list = await manager.ListAsync();
+
+        Assert.False(collisionCheck.Success);
+        Assert.Equal(WorktreeLeaseManager.InvalidManifestError, collisionCheck.ErrorCode);
+        Assert.Empty(list.Leases);
+        Assert.Equal([leased.Manifest.WorktreePath], list.UnmanifestedDirectories);
+        Assert.Empty(git.RemovedWorktrees);
+        Assert.Empty(git.DeletedBranches);
+    }
+
+    [Fact]
+    public async Task TeardownRejectsMalformedNestedInstallUnderAotSerialization()
+    {
+        AppContext.SetSwitch(
+            "System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault",
+            false);
+        var git = new FakeGit(Sha);
+        var manager = CreateManager(git, new FakeInstaller());
+        var leased = await manager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582"), CancellationToken.None);
+        var manifestPath = Path.Combine(
+            leased.Manifest!.WorktreePath, WorktreeLeaseConstants.ManifestFileName);
+        WriteTamperedManifest(
+            manifestPath,
+            "install",
+            writer =>
+            {
+                writer.WriteStartArray();
+                writer.WriteStringValue("malformed");
+                writer.WriteEndArray();
+            });
+
+        var result = await manager.TeardownAsync(
+            ticket: null, directory: leased.Manifest.WorktreePath, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(WorktreeLeaseManager.InvalidManifestError, result.ErrorCode);
+        Assert.True(Directory.Exists(leased.Manifest.WorktreePath));
+        Assert.Empty(git.RemovedWorktrees);
+        Assert.Empty(git.DeletedBranches);
+    }
+
     [Fact]
     public void WorktreeLeaseServiceReferencesNoWorkerAgentAssembly()
     {
@@ -237,17 +373,62 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
                 seeds ?? Array.Empty<string>(),
                 "install dependencies"));
 
+    private static void WriteTamperedManifest(
+        string path,
+        string propertyPath,
+        Action<Utf8JsonWriter> writeValue)
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
+        {
+            WriteElement(writer, document.RootElement, propertyPath.Split('.'), 0, writeValue);
+        }
+        File.WriteAllText(path, Encoding.UTF8.GetString(stream.ToArray()) + Environment.NewLine);
+    }
+
+    private static void WriteElement(
+        Utf8JsonWriter writer,
+        JsonElement element,
+        IReadOnlyList<string> propertyPath,
+        int depth,
+        Action<Utf8JsonWriter> writeValue)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            writer.WriteStartObject();
+            foreach (var property in element.EnumerateObject())
+            {
+                writer.WritePropertyName(property.Name);
+                if (string.Equals(property.Name, propertyPath[depth], StringComparison.Ordinal))
+                {
+                    if (depth == propertyPath.Count - 1)
+                        writeValue(writer);
+                    else
+                        WriteElement(writer, property.Value, propertyPath, depth + 1, writeValue);
+                }
+                else
+                {
+                    property.Value.WriteTo(writer);
+                }
+            }
+            writer.WriteEndObject();
+            return;
+        }
+        element.WriteTo(writer);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_temp))
             Directory.Delete(_temp, recursive: true);
     }
 
-    private sealed class FakeInstaller : IInstallCommandRunner
+    private class FakeInstaller : IInstallCommandRunner
     {
         public string? WorkingDirectory { get; private set; }
 
-        public Task<InstallCommandResult> RunAsync(
+        public virtual Task<InstallCommandResult> RunAsync(
             string command,
             string workingDirectory,
             CancellationToken ct)
@@ -257,14 +438,41 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
         }
     }
 
+    private sealed class ThrowingInstaller : FakeInstaller
+    {
+        public override Task<InstallCommandResult> RunAsync(
+            string command,
+            string workingDirectory,
+            CancellationToken ct) =>
+            throw new IOException("simulated setup failure");
+    }
+
+    private sealed class BlockingInstaller : FakeInstaller
+    {
+        public TaskCompletionSource Entered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override async Task<InstallCommandResult> RunAsync(
+            string command,
+            string workingDirectory,
+            CancellationToken ct)
+        {
+            File.WriteAllText(Path.Combine(workingDirectory, "uncommitted.txt"), "keep");
+            Entered.SetResult();
+            await Release.Task.WaitAsync(ct);
+            return new InstallCommandResult(true, null);
+        }
+    }
+
     private sealed class FakeGit(string sha) : IGitClient
     {
         private readonly List<WorktreeInfo> _worktrees = [];
         private readonly List<string> _branches = [];
         public int CreateCount { get; private set; }
-        public bool FailCreate { get; init; }
-        public bool CreateBranchOnFailure { get; init; }
-        public bool CreateWorktreeOnFailure { get; init; }
+        public bool FailCheckout { get; init; }
+        public bool CreateUnownedTargetOnCheckoutFailure { get; init; }
         public List<string> RemovedWorktrees { get; } = [];
         public List<string> DeletedBranches { get; } = [];
         public List<string> TrackedPaths { get; } = [];
@@ -295,31 +503,45 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
             Task.FromResult<IReadOnlyList<string>>(
                 paths.Where(TrackedPaths.Contains).ToList());
 
+        public Task<GitOpResult> CreateBranchRefAsync(
+            string branch,
+            string fromRef,
+            string worktreePath,
+            CancellationToken ct)
+        {
+            _branches.Add(branch);
+            return Task.FromResult(new GitOpResult(true, null));
+        }
+
         public Task<WorktreeCreateResult> CreateWorktreeAsync(
             string worktreePath,
             string newBranch,
             string fromRef,
             string mainWorktreePath,
+            CancellationToken ct) =>
+            throw new InvalidOperationException(
+                "lease manager must create owned branch and worktree artifacts separately");
+
+        public Task<WorktreeCreateResult> CheckoutWorktreeAsync(
+            string worktreePath,
+            string existingBranch,
+            string mainWorktreePath,
             CancellationToken ct)
         {
             CreateCount++;
-            if (FailCreate)
+            if (FailCheckout)
             {
-                if (CreateBranchOnFailure)
-                    _branches.Add(newBranch);
-                if (CreateWorktreeOnFailure)
+                if (CreateUnownedTargetOnCheckoutFailure)
                 {
                     Directory.CreateDirectory(worktreePath);
-                    _worktrees.Add(new WorktreeInfo(
-                        worktreePath, newBranch, sha, false, false));
+                    File.WriteAllText(Path.Combine(worktreePath, "uncommitted.txt"), "keep");
                 }
                 return Task.FromResult(new WorktreeCreateResult(
-                    false, "simulated partial creation failure", null));
+                    false, "simulated checkout failure", null));
             }
 
             Directory.CreateDirectory(worktreePath);
-            _branches.Add(newBranch);
-            _worktrees.Add(new WorktreeInfo(worktreePath, newBranch, sha, false, false));
+            _worktrees.Add(new WorktreeInfo(worktreePath, existingBranch, sha, false, false));
             return Task.FromResult(new WorktreeCreateResult(true, null, worktreePath));
         }
 

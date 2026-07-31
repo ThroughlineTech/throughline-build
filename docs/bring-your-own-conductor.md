@@ -10,6 +10,9 @@ conductor uses the ticket CRUD verbs (`list`, `get`, `comments`, `comment`,
 `gate` verb runs the repository's configured review checks in that workspace.
 The `waves` verb plans which selected tickets can safely run concurrently.
 None of these verbs starts a worker agent.
+They load repository configuration but do not resolve ticketing secrets or
+construct a Plane client. Missing ticketing credentials therefore do not block
+`worktree`, `gate`, or `waves`.
 
 ## Configuration
 
@@ -116,13 +119,18 @@ build worktree lease --ticket TLB-582 --slug safe-worktrees
 
 The command:
 
-1. Refuses existing leases, helper branches, or target directories.
-2. Resolves `--base` (default `HEAD`) to a full commit SHA.
-3. Creates `lease/tlb-582-safe-worktrees` under the configured root.
-4. Copies existing allowlisted seed files.
-5. Runs the configured install command.
-6. Writes `.build-worktree-lease.json` inside the worktree.
-7. Prints the absolute worktree path.
+1. Takes an exclusive per-ticket lock and refuses concurrent attempts, even when
+   they request different slugs.
+2. Refuses existing leases, helper branches, or target directories.
+3. Resolves `--base` (default `HEAD`) to a full commit SHA.
+4. Creates `lease/tlb-582-safe-worktrees` under the configured root.
+5. Copies existing allowlisted seed files.
+6. Runs the configured install command.
+7. Writes `.build-worktree-lease.json` inside the worktree.
+8. Prints the absolute worktree path.
+
+Creation tracks branch and worktree ownership separately. Failure cleanup
+removes only artifacts that the current attempt proved it created.
 
 Use `--require-seed <path>` when a specific allowlisted file is mandatory. Build
 checks that file before creating the branch or worktree.

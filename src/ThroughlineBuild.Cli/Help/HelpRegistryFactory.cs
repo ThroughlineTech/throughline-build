@@ -290,7 +290,6 @@ public static class HelpRegistryFactory
             new(0, "Every selected setup and gating check passed, or no checks are configured"),
             new(1, "A setup or gating check failed or was inconclusive"),
             new(2, "Config error or bad arguments"),
-            new(3, "Missing secret (env var not set)"),
         ],
         Examples:
         [
@@ -313,7 +312,6 @@ public static class HelpRegistryFactory
         [
             new(0, "Wave schedule produced"),
             new(2, "Config, arguments, input JSON, or dependency scope is invalid"),
-            new(3, "Missing secret (env var not set)"),
             new(5, "Selected tickets contain a dependency cycle"),
         ],
         Examples:

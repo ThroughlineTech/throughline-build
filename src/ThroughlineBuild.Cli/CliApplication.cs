@@ -421,7 +421,12 @@ public static class CliApplication
             throw new InvalidOperationException($"Pre-config verb '{registeredVerb.Name}' has no handler.");
         }
 
-        var bootstrap = await CliBootstrap.CreateAsync(rawCwd, CancellationToken.None);
+        var requiresTicketing = verbKind is not (
+            CliVerbKind.Worktree or CliVerbKind.Gate or CliVerbKind.Waves);
+        var bootstrap = await CliBootstrap.CreateAsync(
+            rawCwd,
+            CancellationToken.None,
+            requireTicketing: requiresTicketing);
         if (bootstrap.Failure is { } bootstrapFailure)
         {
             if (jsonOutput)
@@ -445,7 +450,6 @@ public static class CliApplication
         var resolvedCwd = cliContext.WorkingDirectory;
         var configuredCwd = cliContext.WorkingDirectory;
         var config = cliContext.Config;
-        var secrets = cliContext.Secrets;
         string ResolveLogDir(string raw) => cliContext.ResolveLogDirectory(raw);
         var sessionContext = cliContext.SessionContext;
 
@@ -538,6 +542,8 @@ public static class CliApplication
                 return 1;
             }
         }
+
+        var secrets = cliContext.Secrets;
 
         // 'build sweep' removes leftover chain worktrees and merged branches that a prior
         // 'build chain' left behind - the recovery path when a chain was interrupted or

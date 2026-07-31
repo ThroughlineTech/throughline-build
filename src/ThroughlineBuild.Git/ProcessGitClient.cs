@@ -283,6 +283,30 @@ public sealed class ProcessGitClient : IGitClient
         }
     }
 
+    public async Task<GitOpResult> CreateBranchRefAsync(
+        string branch,
+        string fromRef,
+        string workingDirectory,
+        CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git") { WorkingDirectory = workingDirectory };
+            psi.ArgumentList.Add("branch");
+            psi.ArgumentList.Add(branch);
+            psi.ArgumentList.Add(fromRef);
+
+            var run = await RunGitCaptureAsync(psi, ct).ConfigureAwait(false);
+            if (run.ExitCode != 0)
+                return new GitOpResult(false, FailureDetail(run, "git branch"));
+            return new GitOpResult(true, null);
+        }
+        catch (Exception ex)
+        {
+            return new GitOpResult(false, ex.Message);
+        }
+    }
+
     public async Task<GitOpResult> SwitchBranchAsync(string branch, string worktreePath, CancellationToken ct)
     {
         try

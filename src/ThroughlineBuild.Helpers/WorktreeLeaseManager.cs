@@ -45,6 +45,48 @@ public sealed class WorktreeLeaseManager
         if (!IsStrictlyBelow(target, root))
             return Failed(ContainmentError, $"worktree path is not strictly below configured root: {target}");
 
+        FileStream leaseLock;
+        try
+        {
+            Directory.CreateDirectory(root);
+            var lockPath = Path.Combine(root, $".ticket-{ticket.ToLowerInvariant()}.lock");
+            leaseLock = new FileStream(
+                lockPath,
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.None);
+        }
+        catch (IOException)
+        {
+            return Failed(CollisionError, $"another lease attempt is active for ticket: {ticket}");
+        }
+        catch (Exception ex)
+        {
+            return Failed(FailureError, $"could not acquire lease lock: {ex.Message}");
+        }
+
+        using (leaseLock)
+        {
+            return await LeaseUnderLockAsync(
+                request,
+                ticket,
+                slug,
+                branch,
+                root,
+                target,
+                ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<WorktreeLeaseResult> LeaseUnderLockAsync(
+        WorktreeLeaseRequest request,
+        string ticket,
+        string slug,
+        string branch,
+        string root,
+        string target,
+        CancellationToken ct)
+    {
         List<WorktreeLeaseManifest> existing;
         try
         {
@@ -104,27 +146,40 @@ public sealed class WorktreeLeaseManager
         if (baseSha.Length != 40 || !baseSha.All(Uri.IsHexDigit))
             return Failed(FailureError, $"base ref '{baseRef}' did not resolve to a full 40-character SHA");
 
-        WorktreeCreateResult created;
+        var branchCreated = false;
+        var worktreeCreated = false;
         try
         {
-            Directory.CreateDirectory(root);
-            created = await _git.CreateWorktreeAsync(
-                target, branch, baseSha, _options.MainWorktreePath, ct).ConfigureAwait(false);
+            var createBranch = await _git.CreateBranchRefAsync(
+                branch, baseSha, _options.MainWorktreePath, ct).ConfigureAwait(false);
+            if (!createBranch.Success)
+                return Failed(FailureError, $"branch creation failed: {createBranch.FailureReason}");
+            branchCreated = true;
+
+            var created = await _git.CheckoutWorktreeAsync(
+                target, branch, _options.MainWorktreePath, ct).ConfigureAwait(false);
+            if (!created.Success)
+            {
+                await RollBackCreatedLeaseAsync(
+                    target, branch, worktreeCreated, branchCreated, CancellationToken.None)
+                    .ConfigureAwait(false);
+                return Failed(FailureError, $"worktree creation failed: {created.FailureReason}");
+            }
+            worktreeCreated = true;
         }
         catch (OperationCanceledException)
         {
-            await RollBackCreatedLeaseAsync(target, branch, CancellationToken.None).ConfigureAwait(false);
+            await RollBackCreatedLeaseAsync(
+                target, branch, worktreeCreated, branchCreated, CancellationToken.None)
+                .ConfigureAwait(false);
             throw;
         }
         catch (Exception ex)
         {
-            await RollBackCreatedLeaseAsync(target, branch, CancellationToken.None).ConfigureAwait(false);
+            await RollBackCreatedLeaseAsync(
+                target, branch, worktreeCreated, branchCreated, CancellationToken.None)
+                .ConfigureAwait(false);
             return Failed(FailureError, $"worktree creation failed: {ex.Message}");
-        }
-        if (!created.Success)
-        {
-            await RollBackCreatedLeaseAsync(target, branch, CancellationToken.None).ConfigureAwait(false);
-            return Failed(FailureError, $"worktree creation failed: {created.FailureReason}");
         }
 
         var seeded = new List<string>();
@@ -173,12 +228,16 @@ public sealed class WorktreeLeaseManager
         }
         catch (OperationCanceledException)
         {
-            await RollBackCreatedLeaseAsync(target, branch, CancellationToken.None).ConfigureAwait(false);
+            await RollBackCreatedLeaseAsync(
+                target, branch, worktreeCreated, branchCreated, CancellationToken.None)
+                .ConfigureAwait(false);
             throw;
         }
         catch (Exception ex)
         {
-            await RollBackCreatedLeaseAsync(target, branch, CancellationToken.None).ConfigureAwait(false);
+            await RollBackCreatedLeaseAsync(
+                target, branch, worktreeCreated, branchCreated, CancellationToken.None)
+                .ConfigureAwait(false);
             return Failed(FailureError, $"lease setup failed and was rolled back: {ex.Message}");
         }
     }
@@ -320,13 +379,32 @@ public sealed class WorktreeLeaseManager
             ?? throw new InvalidDataException("lease manifest is empty");
         if (manifest.SchemaVersion != WorktreeLeaseConstants.ManifestSchemaVersion)
             throw new InvalidDataException($"unsupported manifest schema version: {manifest.SchemaVersion}");
+
+        RequireText(manifest.Ticket, "ticket");
+        if (manifest.Slug is null)
+            throw new InvalidDataException("manifest slug is required");
+        RequireText(manifest.Branch, "branch");
+        RequireText(manifest.BaseSha, "baseSha");
+        RequireText(manifest.RepositoryPath, "repositoryPath");
+        RequireText(manifest.MainWorktreePath, "mainWorktreePath");
+        RequireText(manifest.WorktreeRoot, "worktreeRoot");
+        RequireText(manifest.WorktreePath, "worktreePath");
+        if (manifest.SeededFiles is null)
+            throw new InvalidDataException("manifest seededFiles is required");
+        if (manifest.LeasedResources is null)
+            throw new InvalidDataException("manifest leasedResources is required");
+        if (manifest.Install is null)
+            throw new InvalidDataException("manifest install is required");
+        RequireText(manifest.Install.Status, "install.status");
+
         if (manifest.BaseSha.Length != 40 || !manifest.BaseSha.All(Uri.IsHexDigit))
             throw new InvalidDataException("manifest baseSha is not a full 40-character SHA");
-        if (!Path.IsPathFullyQualified(manifest.RepositoryPath) ||
-            !Path.IsPathFullyQualified(manifest.MainWorktreePath) ||
-            !Path.IsPathFullyQualified(manifest.WorktreeRoot) ||
-            !Path.IsPathFullyQualified(manifest.WorktreePath))
-            throw new InvalidDataException("manifest paths must be absolute");
+        if (!string.Equals(manifest.BaseSha, manifest.BaseSha.ToLowerInvariant(), StringComparison.Ordinal))
+            throw new InvalidDataException("manifest baseSha must be lowercase");
+        ValidateAbsoluteNormalizedPath(manifest.RepositoryPath, "repositoryPath");
+        ValidateAbsoluteNormalizedPath(manifest.MainWorktreePath, "mainWorktreePath");
+        ValidateAbsoluteNormalizedPath(manifest.WorktreeRoot, "worktreeRoot");
+        ValidateAbsoluteNormalizedPath(manifest.WorktreePath, "worktreePath");
         if (!PathsEqual(manifest.WorktreeRoot, root))
             throw new InvalidDataException("manifest worktreeRoot does not match configured root");
         if (!PathsEqual(manifest.RepositoryPath, _options.RepositoryPath) ||
@@ -336,9 +414,6 @@ public sealed class WorktreeLeaseManager
             throw new InvalidDataException("manifest worktreePath is not strictly below worktreeRoot");
         if (!PathsEqual(Path.GetDirectoryName(manifestPath)!, manifest.WorktreePath))
             throw new InvalidDataException("manifest location does not match worktreePath");
-        if (string.IsNullOrWhiteSpace(manifest.Ticket) ||
-            string.IsNullOrWhiteSpace(manifest.Branch))
-            throw new InvalidDataException("manifest ticket and branch are required");
         var normalizedTicket = NormalizeTicket(manifest.Ticket);
         var normalizedSlug = NormalizeSlug(manifest.Slug);
         if (!string.Equals(manifest.Ticket, normalizedTicket, StringComparison.Ordinal) ||
@@ -351,7 +426,47 @@ public sealed class WorktreeLeaseManager
             throw new InvalidDataException("manifest branch does not match its ticket and slug");
         if (!PathsEqual(manifest.WorktreePath, expectedPath))
             throw new InvalidDataException("manifest worktreePath does not match its ticket and slug");
+        foreach (var seededFile in manifest.SeededFiles)
+        {
+            if (seededFile is null ||
+                !TryNormalizeRelativePath(seededFile, out var normalizedSeed) ||
+                !string.Equals(seededFile, normalizedSeed, StringComparison.Ordinal))
+                throw new InvalidDataException("manifest seededFiles contains an invalid or non-normalized path");
+        }
+        if (manifest.LeasedResources.Any(string.IsNullOrWhiteSpace))
+            throw new InvalidDataException("manifest leasedResources contains a null or blank value");
+        if (manifest.Install.Status is not ("skipped" or "succeeded" or "failed"))
+            throw new InvalidDataException("manifest install.status is invalid");
+        if (manifest.Install.DurationMilliseconds < 0)
+            throw new InvalidDataException("manifest install.durationMilliseconds must not be negative");
         return manifest;
+    }
+
+    private void ValidateAbsoluteNormalizedPath(string path, string field)
+    {
+        try
+        {
+            if (!Path.IsPathFullyQualified(path))
+                throw new InvalidDataException($"manifest {field} must be absolute");
+            var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+            var supplied = Path.TrimEndingDirectorySeparator(path);
+            if (!string.Equals(supplied, normalized, _pathComparison))
+                throw new InvalidDataException($"manifest {field} must be normalized");
+        }
+        catch (InvalidDataException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            throw new InvalidDataException($"manifest {field} is invalid: {ex.Message}", ex);
+        }
+    }
+
+    private static void RequireText(string? value, string field)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new InvalidDataException($"manifest {field} is required");
     }
 
     private void WriteManifest(WorktreeLeaseManifest manifest)
@@ -362,12 +477,23 @@ public sealed class WorktreeLeaseManager
         File.WriteAllText(path, json + Environment.NewLine);
     }
 
-    private async Task RollBackCreatedLeaseAsync(string target, string branch, CancellationToken ct)
+    private async Task RollBackCreatedLeaseAsync(
+        string target,
+        string branch,
+        bool worktreeCreated,
+        bool branchCreated,
+        CancellationToken ct)
     {
-        try { await _git.RemoveWorktreeAsync(target, force: true, ct).ConfigureAwait(false); }
-        catch { }
-        try { await _git.DeleteBranchAsync(branch, force: true, _options.MainWorktreePath, ct).ConfigureAwait(false); }
-        catch { }
+        if (worktreeCreated)
+        {
+            try { await _git.RemoveWorktreeAsync(target, force: true, ct).ConfigureAwait(false); }
+            catch { }
+        }
+        if (branchCreated)
+        {
+            try { await _git.DeleteBranchAsync(branch, force: true, _options.MainWorktreePath, ct).ConfigureAwait(false); }
+            catch { }
+        }
     }
 
     private bool IsStrictlyBelow(string path, string root)

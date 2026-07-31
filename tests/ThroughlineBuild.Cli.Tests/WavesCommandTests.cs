@@ -178,7 +178,7 @@ public sealed class WavesCommandTests
                 plane_base_url = "https://api.plane.test"
                 plane_workspace_slug = "workspace"
                 plane_project_id = "project"
-                plane_api_token = "test-token"
+                plane_api_token_env = "TLB586_INTENTIONALLY_MISSING_WAVES_TOKEN"
 
                 [workers]
                 default_agent = "codex"
