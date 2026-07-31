@@ -135,6 +135,29 @@ public sealed class WavesCommandTests
     }
 
     [Fact]
+    public async Task NullTicketReturnsUsageEnvelope()
+    {
+        var output = new StringWriter();
+
+        var exit = await WavesCommand.ExecuteAsync(
+            ["waves", "--input", "-"],
+            json: true,
+            WavesConfig.Default,
+            new StringReader("[null]"),
+            output,
+            TextWriter.Null,
+            CancellationToken.None);
+
+        Assert.Equal(2, exit);
+        using var json = JsonDocument.Parse(output.ToString());
+        var error = json.RootElement.GetProperty("error");
+        Assert.Equal("usage", error.GetProperty("code").GetString());
+        Assert.Equal(
+            "each ticket must be a non-null object",
+            error.GetProperty("message").GetString());
+    }
+
+    [Fact]
     public async Task CliWavesDoesNotConstructWorkerAgent()
     {
         var repository = Path.Combine(

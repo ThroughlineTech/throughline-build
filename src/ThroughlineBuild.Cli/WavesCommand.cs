@@ -100,6 +100,8 @@ public static class WavesCommand
 
         var mapped = tickets.Select(ticket =>
         {
+            if (ticket is null)
+                throw new ArgumentException("each ticket must be a non-null object");
             if (string.IsNullOrWhiteSpace(ticket.Id))
                 throw new ArgumentException("each ticket must contain a non-empty string id");
             return new WaveTicket(
