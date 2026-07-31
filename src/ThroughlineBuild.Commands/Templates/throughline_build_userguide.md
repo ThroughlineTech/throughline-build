@@ -262,6 +262,8 @@ Run `build gate` from the leased worktree to execute its configured
 advisory failures remain visible but do not change the exit code. Use
 `--role gating|advisory|all` to select a role, and `--json` for typed per-check
 exit codes, durations, captured output, and inconclusive missing-path results.
+By default an empty selected check list exits 0 for compatibility; add
+`--require-checks` to make that condition exit 1.
 
 Use `build waves --input <path|->` before leasing worktrees to level declared
 dependencies and pack file-disjoint ready tickets up to `[waves].cap` (default

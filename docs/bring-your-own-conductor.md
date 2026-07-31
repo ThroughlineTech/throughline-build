@@ -195,7 +195,8 @@ setup or gating check exits 1.
 The JSON envelope includes the optional ticket identity, selected role, working
 directory, overall result, and each check's name, role, status, exit code,
 duration, stdout, stderr, and missing required paths. If no review checks are
-configured, the command clearly reports `no checks configured` and exits 0.
+configured or selected, the command clearly reports that and exits 0 by default.
+Use `--require-checks` when automation should treat an empty gate as a failure.
 
 ## Suggested conductor sequence
 

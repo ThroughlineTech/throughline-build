@@ -32,6 +32,85 @@ public sealed class GateCommandTests
     }
 
     [Fact]
+    public async Task RequireChecks_NoChecksConfigured_ExitsOneAndReportsFailedGate()
+    {
+        var runner = new RecordingRunner();
+        var output = new StringWriter();
+
+        var exit = await GateCommand.ExecuteAsync(
+            ["gate", "--require-checks"],
+            json: true,
+            Array.Empty<CheckSpec>(),
+            Directory.GetCurrentDirectory(),
+            runner,
+            output,
+            TextWriter.Null,
+            CancellationToken.None);
+
+        Assert.Equal(1, exit);
+        Assert.Equal(0, runner.CallCount);
+        using var json = JsonDocument.Parse(output.ToString());
+        var data = json.RootElement.GetProperty("data");
+        Assert.False(data.GetProperty("passed").GetBoolean());
+        Assert.Equal("no checks configured or selected", data.GetProperty("message").GetString());
+        Assert.Empty(data.GetProperty("checks").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task RequireChecks_RoleSelectsNoChecks_ExitsOneWithoutRunningAnything()
+    {
+        var runner = new RecordingRunner();
+        var output = new StringWriter();
+
+        var exit = await GateCommand.ExecuteAsync(
+            ["gate", "--role", "advisory", "--require-checks"],
+            json: true,
+            [Spec("test", CheckRole.Gating)],
+            Directory.GetCurrentDirectory(),
+            runner,
+            output,
+            TextWriter.Null,
+            CancellationToken.None);
+
+        Assert.Equal(1, exit);
+        Assert.Equal(0, runner.CallCount);
+        using var json = JsonDocument.Parse(output.ToString());
+        var data = json.RootElement.GetProperty("data");
+        Assert.True(data.GetProperty("checksConfigured").GetBoolean());
+        Assert.False(data.GetProperty("passed").GetBoolean());
+        Assert.Equal("no checks configured or selected", data.GetProperty("message").GetString());
+        Assert.Empty(data.GetProperty("checks").EnumerateArray());
+    }
+
+    [Theory]
+    [InlineData(true, 0)]
+    [InlineData(false, 1)]
+    public async Task RequireChecks_SelectedChecksUseNormalPassFailBehavior(bool checkPassed, int expectedExit)
+    {
+        var runner = new RecordingRunner(resultFactory: spec =>
+            Result(spec, passed: checkPassed, exitCode: checkPassed ? 0 : 1, stderr: checkPassed ? "" : "tests failed"));
+        var output = new StringWriter();
+
+        var exit = await GateCommand.ExecuteAsync(
+            ["gate", "--role", "gating", "--require-checks"],
+            json: true,
+            [Spec("test", CheckRole.Gating)],
+            Directory.GetCurrentDirectory(),
+            runner,
+            output,
+            TextWriter.Null,
+            CancellationToken.None);
+
+        Assert.Equal(expectedExit, exit);
+        Assert.Equal(1, runner.CallCount);
+        using var json = JsonDocument.Parse(output.ToString());
+        var data = json.RootElement.GetProperty("data");
+        Assert.Equal(checkPassed, data.GetProperty("passed").GetBoolean());
+        Assert.Equal(checkPassed ? "gate passed" : "gate failed", data.GetProperty("message").GetString());
+        Assert.Single(data.GetProperty("checks").EnumerateArray());
+    }
+
+    [Fact]
     public async Task AdvisoryFailure_IsReportedButDoesNotFailGate()
     {
         var runner = new RecordingRunner(resultFactory: spec =>

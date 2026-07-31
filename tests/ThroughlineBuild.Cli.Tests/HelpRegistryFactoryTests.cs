@@ -172,6 +172,15 @@ public class HelpRegistryFactoryTests
     }
 
     [Fact]
+    public void Gate_HasRequireChecksOption()
+    {
+        var help = Registry.TryGet("gate")!;
+
+        Assert.Contains("--require-checks", help.Usage);
+        Assert.Contains(help.Options, o => o.Flag == "--require-checks" && !o.IsGlobal);
+    }
+
+    [Fact]
     public void Chain_HasPerPhaseAgentOptions()
     {
         var help = Registry.TryGet("chain")!;

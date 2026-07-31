@@ -35,12 +35,17 @@ public static class GateCommand
                 AutomatedChecksRunner.RequiredPathHandling.Inconclusive).ConfigureAwait(false);
         }
 
-        var passed = results.All(IsNonBlocking);
-        var message = configuredChecks.Count == 0
-            ? "no checks configured"
-            : selected.Count == 0
-                ? $"no checks selected for role {parsed.Role}"
-                : passed ? "gate passed" : "gate failed";
+        var hasSelectedChecks = selected.Count > 0;
+        var passed = hasSelectedChecks
+            ? results.All(IsNonBlocking)
+            : !parsed.RequireChecks;
+        var message = !hasSelectedChecks && parsed.RequireChecks
+            ? "no checks configured or selected"
+            : configuredChecks.Count == 0
+                ? "no checks configured"
+                : selected.Count == 0
+                    ? $"no checks selected for role {parsed.Role}"
+                    : passed ? "gate passed" : "gate failed";
 
         var view = new GateView(
             parsed.Ticket,
@@ -117,15 +122,23 @@ public static class GateCommand
     {
         string? ticket = null;
         var role = "all";
+        var requireChecks = false;
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
         for (var i = 1; i < args.Count; i++)
         {
             var option = args[i];
-            if (option is not "--ticket" and not "--role")
+            if (option is not "--ticket" and not "--role" and not "--require-checks")
                 return new ParsedGateOptions(ticket, role, $"unknown option: {option}");
             if (!seen.Add(option))
                 return new ParsedGateOptions(ticket, role, $"option may be specified only once: {option}");
+
+            if (option == "--require-checks")
+            {
+                requireChecks = true;
+                continue;
+            }
+
             if (++i >= args.Count || args[i].StartsWith("--", StringComparison.Ordinal))
                 return new ParsedGateOptions(ticket, role, $"{option} requires a value");
 
@@ -138,7 +151,7 @@ public static class GateCommand
         if (role is not "gating" and not "advisory" and not "all")
             return new ParsedGateOptions(ticket, role, "--role must be gating, advisory, or all");
 
-        return new ParsedGateOptions(ticket, role, null);
+        return new ParsedGateOptions(ticket, role, requireChecks, null);
     }
 
     private static int Usage(bool json, TextWriter output, TextWriter error, string message)
@@ -148,10 +161,16 @@ public static class GateCommand
         else
         {
             error.WriteLine($"Error: {message}");
-            error.WriteLine("Usage: build gate [--ticket <id>] [--role gating|advisory|all] [--json]");
+            error.WriteLine("Usage: build gate [--ticket <id>] [--role gating|advisory|all] [--require-checks] [--json]");
         }
         return 2;
     }
 
-    private sealed record ParsedGateOptions(string? Ticket, string Role, string? Error);
+    private sealed record ParsedGateOptions(string? Ticket, string Role, bool RequireChecks, string? Error)
+    {
+        public ParsedGateOptions(string? ticket, string role, string? error)
+            : this(ticket, role, false, error)
+        {
+        }
+    }
 }

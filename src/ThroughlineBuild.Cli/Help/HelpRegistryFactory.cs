@@ -279,17 +279,18 @@ public static class HelpRegistryFactory
         Name: "gate",
         Group: CommandGroup.Conductor,
         Summary: "Run configured review checks in the current working directory",
-        Usage: "gate [--ticket <id>] [--role gating|advisory|all] [--json]",
+        Usage: "gate [--ticket <id>] [--role gating|advisory|all] [--require-checks] [--json]",
         Options:
         [
             new("--ticket <id>", "Optional ticket identity included in the result", false),
             new("--role <role>", "Run gating, advisory, or all checks (default: all); setup always runs first", false),
+            new("--require-checks", "Fail when the selected check list is empty", false),
             new("--json", "Emit a versioned JSON envelope with typed per-check results", false),
         ],
         ExitCodes:
         [
-            new(0, "Every selected setup and gating check passed, or no checks are configured"),
-            new(1, "A setup or gating check failed or was inconclusive"),
+            new(0, "Every selected setup and gating check passed, or no checks are configured without --require-checks"),
+            new(1, "A setup or gating check failed, was inconclusive, or no checks were selected with --require-checks"),
             new(2, "Config error or bad arguments"),
         ],
         Examples:
