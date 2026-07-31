@@ -278,7 +278,8 @@ public sealed class WorktreeLeaseManager
         string? ticket,
         string? directory,
         CancellationToken ct,
-        bool force = false)
+        bool force = false,
+        string? requireMergedInto = null)
     {
         var root = Path.GetFullPath(_options.WorktreeRoot);
         WorktreeLeaseManifest manifest;
@@ -315,6 +316,11 @@ public sealed class WorktreeLeaseManager
             var proof = await ProveNoUserWorkAsync(manifest, ct).ConfigureAwait(false);
             if (!proof.Success)
                 return Failed(FailureError, proof.Message!);
+
+            var mergeProof = await ProveBranchMergedIntoAsync(
+                manifest, requireMergedInto, ct).ConfigureAwait(false);
+            if (!mergeProof.Success)
+                return Failed(FailureError, mergeProof.Message!);
         }
 
         var remove = await _git.RemoveWorktreeAsync(manifest.WorktreePath, force: true, ct)
@@ -334,15 +340,25 @@ public sealed class WorktreeLeaseManager
         WorktreeLeaseManifest manifest,
         CancellationToken ct)
     {
-        var tracked = await _git.GetTrackedChangesAsync(manifest.WorktreePath, ct)
+        var tracked = await _git.GetTrackedChangesResultAsync(manifest.WorktreePath, ct)
             .ConfigureAwait(false);
-        var untracked = await _git.GetUntrackedFilesAsync(manifest.WorktreePath, ct)
+        var untracked = await _git.GetUntrackedFilesResultAsync(manifest.WorktreePath, ct)
             .ConfigureAwait(false);
 
-        if (tracked.Count > 0)
+        if (!tracked.Success)
             return new WorktreeProof(
                 false,
-                $"worktree contains tracked changes: {string.Join(", ", tracked.Take(10))}");
+                $"could not prove worktree clean: git status --porcelain failed in '{manifest.WorktreePath}': {tracked.FailureReason}");
+
+        if (!untracked.Success)
+            return new WorktreeProof(
+                false,
+                $"could not prove worktree clean: git ls-files --others --exclude-standard failed in '{manifest.WorktreePath}': {untracked.FailureReason}");
+
+        if (tracked.Paths.Count > 0)
+            return new WorktreeProof(
+                false,
+                $"worktree contains tracked changes: {string.Join(", ", tracked.Paths.Take(10))}");
 
         var allowed = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -352,7 +368,7 @@ public sealed class WorktreeLeaseManager
             allowed.Add(seeded);
 
         var unexpected = new List<string>();
-        foreach (var path in untracked)
+        foreach (var path in untracked.Paths)
         {
             if (!TryNormalizeRelativePath(path, out var normalized) ||
                 !allowed.Contains(normalized))
@@ -363,6 +379,38 @@ public sealed class WorktreeLeaseManager
             return new WorktreeProof(
                 false,
                 $"worktree contains unexpected untracked files: {string.Join(", ", unexpected.Take(10))}");
+
+        return new WorktreeProof(true, null);
+    }
+
+    private async Task<WorktreeProof> ProveBranchMergedIntoAsync(
+        WorktreeLeaseManifest manifest,
+        string? requireMergedInto,
+        CancellationToken ct)
+    {
+        if (requireMergedInto is null)
+            return new WorktreeProof(true, null);
+        if (string.IsNullOrWhiteSpace(requireMergedInto))
+            return new WorktreeProof(
+                false,
+                "--require-merged-into requires a non-empty ref");
+
+        var target = requireMergedInto.Trim();
+        var proof = await _git.IsAncestorResultAsync(
+            manifest.Branch,
+            target,
+            manifest.MainWorktreePath,
+            ct).ConfigureAwait(false);
+
+        if (!proof.Success)
+            return new WorktreeProof(
+                false,
+                $"could not prove branch '{manifest.Branch}' is merged into '{target}': git merge-base --is-ancestor {manifest.Branch} {target} failed in '{manifest.MainWorktreePath}': {proof.FailureReason}");
+
+        if (!proof.IsAncestor)
+            return new WorktreeProof(
+                false,
+                $"branch '{manifest.Branch}' was not proven merged into '{target}'; refusing teardown before removing worktree");
 
         return new WorktreeProof(true, null);
     }

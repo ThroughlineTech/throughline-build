@@ -189,8 +189,9 @@ a caller-owned conductor: it validates collisions, seed policy, manifest
 identity, and teardown containment without constructing a worker agent. A
 per-ticket filesystem lock closes concurrent lease races, and creation rollback
 tracks branch and worktree ownership separately. The standalone `worktree`,
-`gate`, and `waves` paths load config without resolving ticketing secrets or
-constructing a Plane client.
+`gate`, and `waves` paths load only their consumed config sections without
+requiring `[ticketing]`, `[workers]`, or `[events]`, resolving ticketing
+secrets, or constructing a Plane client.
 
 `ThroughlineBuild.Verification` runs configured `CheckSpec` commands and
 returns typed `CheckResult` values. Check roles distinguish setup, gating, and

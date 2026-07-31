@@ -125,6 +125,14 @@ public class ConfigException : Exception
     public ConfigException(string message) : base(message) { }
 }
 
+public enum BuildConfigLoadMode
+{
+    Full,
+    WorktreeStandalone,
+    GateStandalone,
+    WavesStandalone
+}
+
 public static class BuildConfigLoader
 {
     public static string? FindConfigFile(string startDir)
@@ -143,7 +151,8 @@ public static class BuildConfigLoader
     public static BuildConfig Load(
         string path,
         Action<string>? warnSink = null,
-        Func<string, bool>? branchExists = null)
+        Func<string, bool>? branchExists = null,
+        BuildConfigLoadMode mode = BuildConfigLoadMode.Full)
     {
         string content;
         try
@@ -168,19 +177,45 @@ public static class BuildConfigLoader
             throw new ConfigException($"failed to parse TOML in '{path}': {ex.Message}");
         }
 
-        var ticketing = ReadTicketingSection(root);
-        ValidateTicketingFilled(ticketing, path);
+        var ticketing = mode == BuildConfigLoadMode.Full
+            ? ReadTicketingSection(root)
+            : EmptyTicketingConfig();
+        if (mode == BuildConfigLoadMode.Full)
+            ValidateTicketingFilled(ticketing, path);
         var llm = ReadLlmSection(root);
-        var workers = ReadWorkersSection(root);
-        var events = ReadEventsSection(root);
-        var review = ReadReviewSection(root);
-        var ship = ReadShipSection(root);
-        var work = ReadWorkSection(root);
-        var worktree = ReadWorktreeSection(root);
-        var waves = ReadWavesSection(root);
-        var project = ReadProjectSection(root, path);
-        var plan = ReadPlanSection(root);
-        var batch = ReadBatchSection(root);
+        var workers = mode == BuildConfigLoadMode.Full
+            ? ReadWorkersSection(root)
+            : EmptyWorkersConfig();
+        var events = mode == BuildConfigLoadMode.Full
+            ? ReadEventsSection(root)
+            : EmptyEventsConfig();
+        var review = mode is BuildConfigLoadMode.Full or BuildConfigLoadMode.GateStandalone
+            ? ReadReviewSection(root)
+            : EmptyReviewConfig();
+        var ship = mode == BuildConfigLoadMode.Full
+            ? ReadShipSection(root)
+            : EmptyShipConfig();
+        var work = mode == BuildConfigLoadMode.Full
+            ? ReadWorkSection(root)
+            : new WorkConfig(TargetBranch: null);
+        var worktree = mode is BuildConfigLoadMode.Full or BuildConfigLoadMode.WorktreeStandalone
+            ? ReadWorktreeSection(root)
+            : WorktreeConfig.Default;
+        var waves = mode is BuildConfigLoadMode.Full or BuildConfigLoadMode.WavesStandalone
+            ? ReadWavesSection(root)
+            : WavesConfig.Default;
+        var project = mode switch
+        {
+            BuildConfigLoadMode.Full => ReadProjectSection(root, path),
+            BuildConfigLoadMode.WorktreeStandalone => ReadProjectInstallCommand(root),
+            _ => ProjectContext.Empty,
+        };
+        var plan = mode == BuildConfigLoadMode.Full
+            ? ReadPlanSection(root)
+            : PlanConfig.Default;
+        var batch = mode == BuildConfigLoadMode.Full
+            ? ReadBatchSection(root)
+            : BatchConfig.Default;
 
         // Non-fatal unknown-key warning pass: emit one warning per unrecognized key.
         var warnings = new List<string>();
@@ -191,7 +226,10 @@ public static class BuildConfigLoader
         // when the configured branch does not resolve to a local git ref, mirroring the
         // unknown-key warning channel. Skipped entirely when no validator is supplied
         // (e.g. unit tests, or commands that do not touch git).
-        if (branchExists is not null && work.TargetBranch is not null && !branchExists(work.TargetBranch))
+        if (mode == BuildConfigLoadMode.Full &&
+            branchExists is not null &&
+            work.TargetBranch is not null &&
+            !branchExists(work.TargetBranch))
             warnings.Add($"warning: [work].target_branch '{work.TargetBranch}' does not resolve to a local branch - ship will block until it exists or you run 'build settarget'");
 
         var emit = warnSink ?? (w => Console.Error.WriteLine(w));
@@ -200,6 +238,38 @@ public static class BuildConfigLoader
 
         return new BuildConfig(ticketing, llm, workers, events, review, ship, work, worktree, waves, project, plan, batch);
     }
+
+    private static TicketingConfig EmptyTicketingConfig() =>
+        new(
+            BackendName: string.Empty,
+            PlaneBaseUrl: string.Empty,
+            PlaneWorkspaceSlug: string.Empty,
+            PlaneProjectId: string.Empty,
+            PlaneApiTokenEnv: string.Empty);
+
+    private static WorkersConfig EmptyWorkersConfig() =>
+        new(
+            DefaultAgent: string.Empty,
+            TimeoutMinutes: 0,
+            Agents: new Dictionary<string, AgentConfig>(StringComparer.Ordinal),
+            Phases: new Dictionary<string, string>(StringComparer.Ordinal));
+
+    private static EventsConfig EmptyEventsConfig() => new(string.Empty);
+
+    private static ReviewConfig EmptyReviewConfig() =>
+        new(
+            VerifierTimeoutMinutes: 15,
+            VerifierAllowedTools: DefaultVerifierAllowedTools,
+            Checks: Array.Empty<CheckSpec>(),
+            VerifyGateVacuity: true);
+
+    private static ShipConfig EmptyShipConfig() =>
+        new(
+            Remote: "origin",
+            BaseBranch: "main",
+            DeleteFeatureBranch: true,
+            RegressionChecks: Array.Empty<CheckSpec>(),
+            Push: true);
 
     public static string ResolveLogDirectory(string configFilePath, string rawLogDir, string cwdFallback)
     {
@@ -1095,6 +1165,17 @@ public static class BuildConfigLoader
             throw new ConfigException("key 'max_description_bytes' in [batch] must be a positive integer");
 
         return new BatchConfig(maxTickets, maxSizeScore, maxDescriptionBytes);
+    }
+
+    private static ProjectContext ReadProjectInstallCommand(TomlTable root)
+    {
+        if (!root.TryGetValue("project", out var val) || val is not TomlTable t)
+            return ProjectContext.Empty;
+
+        return ProjectContext.Empty with
+        {
+            InstallCommand = OptionalString(t, "install_command", string.Empty)
+        };
     }
 
     private static ProjectContext ReadProjectSection(TomlTable root, string configPath)

@@ -243,8 +243,10 @@ build worktree list
 build worktree teardown --ticket TLB-1
 ```
 
-`worktree`, `gate`, and `waves` load repository configuration without resolving
-ticketing secrets or constructing a Plane client.
+`worktree`, `gate`, and `waves` load only the configuration sections they use
+without requiring `[ticketing]`, `[workers]`, or `[events]`, resolving ticketing
+secrets, or constructing a Plane client. Other commands still require the full
+ticketing, worker, and event configuration.
 
 Lease prints the absolute worktree path for use as an agent working directory,
 runs `[project].install_command`, and writes a safety manifest. Configure the
@@ -253,9 +255,11 @@ and `[worktree] seed_files`. Use `--require-seed <path>` when a listed file must
 exist before lease creation. Concurrent attempts for one ticket are serialized,
 and rollback removes only branch and worktree artifacts owned by the failing
 attempt. Teardown is safe by default: it refuses tracked work and unexpected
-untracked files before removing the worktree, then deletes the helper branch
-without force. `--force` skips those protections and may permanently discard
-work. All three forms support `--json`.
+untracked files before removing the worktree. Add
+`--require-merged-into <ref>` to prove the helper branch is an ancestor of a
+named target before any removal. Branch deletion uses Git's non-force delete
+unless `--force` is present. `--force` skips those protections and may
+permanently discard work. All three forms support `--json`.
 
 Run `build gate` from the leased worktree to execute its configured
 `[[review.checks]]`. Setup checks run first. Gating and setup failures exit 1;

@@ -10,9 +10,11 @@ conductor uses the ticket CRUD verbs (`list`, `get`, `comments`, `comment`,
 `gate` verb runs the repository's configured review checks in that workspace.
 The `waves` verb plans which selected tickets can safely run concurrently.
 None of these verbs starts a worker agent.
-They load repository configuration but do not resolve ticketing secrets or
+They load only the repository configuration sections they consume and do not
+require `[ticketing]`, `[workers]`, or `[events]`, resolve ticketing secrets, or
 construct a Plane client. Missing ticketing credentials therefore do not block
-`worktree`, `gate`, or `waves`.
+`worktree`, `gate`, or `waves`. Other commands still require the full ticketing,
+worker, and event configuration.
 
 ## Configuration
 
@@ -159,6 +161,7 @@ a missing or invalid manifest is reported as unmanifested.
 ```sh
 build worktree teardown --ticket TLB-582
 build worktree teardown --dir .worktrees/conductor/tlb-582-safe-worktrees
+build worktree teardown --ticket TLB-582 --require-merged-into main
 build worktree teardown --ticket TLB-582 --force
 ```
 
@@ -170,11 +173,17 @@ allows only `.build-worktree-lease.json` and files listed in the manifest's
 `seededFiles`; tracked work or any other untracked file is refused before
 mutation.
 
+When `--require-merged-into <ref>` is supplied, Build also runs an explicit
+ancestry proof before any removal: the lease helper branch must be an ancestor
+of the named ref. If the branch is not proven merged into that ref, or the proof
+cannot be run, teardown refuses while leaving both the worktree and branch in
+place. This is the conductor-safe form when the intended merge target is known.
+
 After that proof passes, Build removes the linked worktree and deletes its lease
 helper branch with Git's non-force branch deletion. An unmerged helper branch is
 preserved and reported as a partial failure after worktree removal. `--force`
-skips the proof and may permanently discard work; it also force-deletes the
-lease helper branch.
+skips the user-work and merge-target proofs, may permanently discard work, and
+force-deletes the lease helper branch.
 
 ## Run the configured gate
 

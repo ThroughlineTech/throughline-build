@@ -388,6 +388,157 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task TeardownRefusesTrackedStatusFailureBeforeRemovingAnything()
+    {
+        var git = new FakeGit(Sha)
+        {
+            TrackedChangesFailure = "fatal: index file corrupt"
+        };
+        var manager = CreateManager(git, new FakeInstaller());
+        var leased = await manager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582"), CancellationToken.None);
+
+        var result = await manager.TeardownAsync(
+            ticket: null, directory: leased.Manifest!.WorktreePath, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(WorktreeLeaseManager.FailureError, result.ErrorCode);
+        Assert.Contains("git status --porcelain", result.Message);
+        Assert.Contains("index file corrupt", result.Message);
+        Assert.True(git.HasWorktree(leased.Manifest.WorktreePath));
+        Assert.True(git.HasBranch(leased.Manifest.Branch));
+        Assert.Empty(git.RemovedWorktrees);
+        Assert.Empty(git.DeletedBranches);
+    }
+
+    [Fact]
+    public async Task TeardownRefusesUntrackedStatusFailureBeforeRemovingAnything()
+    {
+        var git = new FakeGit(Sha)
+        {
+            UntrackedFilesFailure = "fatal: unable to read index"
+        };
+        var manager = CreateManager(git, new FakeInstaller());
+        var leased = await manager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582"), CancellationToken.None);
+
+        var result = await manager.TeardownAsync(
+            ticket: null, directory: leased.Manifest!.WorktreePath, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(WorktreeLeaseManager.FailureError, result.ErrorCode);
+        Assert.Contains("git ls-files --others --exclude-standard", result.Message);
+        Assert.Contains("unable to read index", result.Message);
+        Assert.True(git.HasWorktree(leased.Manifest.WorktreePath));
+        Assert.True(git.HasBranch(leased.Manifest.Branch));
+        Assert.Empty(git.RemovedWorktrees);
+        Assert.Empty(git.DeletedBranches);
+    }
+
+    [Fact]
+    public async Task TeardownRequireMergedIntoAllowsProvenMergedBranch()
+    {
+        var git = new FakeGit(Sha)
+        {
+            AncestorResult = new GitAncestorResult(true, true, null)
+        };
+        var manager = CreateManager(git, new FakeInstaller());
+        var leased = await manager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582"), CancellationToken.None);
+
+        var result = await manager.TeardownAsync(
+            ticket: null,
+            directory: leased.Manifest!.WorktreePath,
+            CancellationToken.None,
+            requireMergedInto: "main");
+
+        Assert.True(result.Success);
+        Assert.Equal(
+            [(leased.Manifest.Branch, "main", leased.Manifest.MainWorktreePath)],
+            git.AncestorQueries);
+        Assert.False(git.HasWorktree(leased.Manifest.WorktreePath));
+        Assert.False(git.HasBranch(leased.Manifest.Branch));
+    }
+
+    [Fact]
+    public async Task TeardownRequireMergedIntoRefusesUnmergedBranchBeforeRemovingAnything()
+    {
+        var git = new FakeGit(Sha)
+        {
+            AncestorResult = new GitAncestorResult(true, false, null)
+        };
+        var manager = CreateManager(git, new FakeInstaller());
+        var leased = await manager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582"), CancellationToken.None);
+
+        var result = await manager.TeardownAsync(
+            ticket: null,
+            directory: leased.Manifest!.WorktreePath,
+            CancellationToken.None,
+            requireMergedInto: "main");
+
+        Assert.False(result.Success);
+        Assert.Equal(WorktreeLeaseManager.FailureError, result.ErrorCode);
+        Assert.Contains(leased.Manifest.Branch, result.Message);
+        Assert.Contains("main", result.Message);
+        Assert.True(git.HasWorktree(leased.Manifest.WorktreePath));
+        Assert.True(git.HasBranch(leased.Manifest.Branch));
+        Assert.Empty(git.RemovedWorktrees);
+        Assert.Empty(git.DeletedBranches);
+    }
+
+    [Fact]
+    public async Task TeardownRequireMergedIntoRefusesAncestryFailureBeforeRemovingAnything()
+    {
+        var git = new FakeGit(Sha)
+        {
+            AncestorResult = new GitAncestorResult(false, false, "fatal: bad revision")
+        };
+        var manager = CreateManager(git, new FakeInstaller());
+        var leased = await manager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582"), CancellationToken.None);
+
+        var result = await manager.TeardownAsync(
+            ticket: null,
+            directory: leased.Manifest!.WorktreePath,
+            CancellationToken.None,
+            requireMergedInto: "missing-ref");
+
+        Assert.False(result.Success);
+        Assert.Equal(WorktreeLeaseManager.FailureError, result.ErrorCode);
+        Assert.Contains("git merge-base --is-ancestor", result.Message);
+        Assert.Contains("missing-ref", result.Message);
+        Assert.Contains("bad revision", result.Message);
+        Assert.True(git.HasWorktree(leased.Manifest.WorktreePath));
+        Assert.True(git.HasBranch(leased.Manifest.Branch));
+        Assert.Empty(git.RemovedWorktrees);
+        Assert.Empty(git.DeletedBranches);
+    }
+
+    [Fact]
+    public async Task TeardownRequireMergedIntoBlankRefRefusesBeforeRemovingAnything()
+    {
+        var git = new FakeGit(Sha);
+        var manager = CreateManager(git, new FakeInstaller());
+        var leased = await manager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582"), CancellationToken.None);
+
+        var result = await manager.TeardownAsync(
+            ticket: null,
+            directory: leased.Manifest!.WorktreePath,
+            CancellationToken.None,
+            requireMergedInto: "   ");
+
+        Assert.False(result.Success);
+        Assert.Equal(WorktreeLeaseManager.FailureError, result.ErrorCode);
+        Assert.Contains("non-empty ref", result.Message);
+        Assert.True(git.HasWorktree(leased.Manifest.WorktreePath));
+        Assert.True(git.HasBranch(leased.Manifest.Branch));
+        Assert.Empty(git.RemovedWorktrees);
+        Assert.Empty(git.DeletedBranches);
+    }
+
+    [Fact]
     public async Task TeardownForceSkipsProofAndForceDeletesBranch()
     {
         var git = new FakeGit(Sha);
@@ -406,6 +557,7 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
         Assert.True(result.Success);
         Assert.Empty(git.TrackedChangeQueries);
         Assert.Empty(git.UntrackedFileQueries);
+        Assert.Empty(git.AncestorQueries);
         Assert.Equal([true], git.RemoveWorktreeForces);
         Assert.Equal([true], git.DeleteBranchForces);
         Assert.False(git.HasWorktree(leased.Manifest.WorktreePath));
@@ -591,6 +743,10 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
         public List<string> UntrackedFiles { get; } = [];
         public List<string> TrackedChangeQueries { get; } = [];
         public List<string> UntrackedFileQueries { get; } = [];
+        public string? TrackedChangesFailure { get; set; }
+        public string? UntrackedFilesFailure { get; set; }
+        public List<(string Ancestor, string Descendant, string WorkingDirectory)> AncestorQueries { get; } = [];
+        public GitAncestorResult AncestorResult { get; set; } = new(true, true, null);
         public List<bool> RemoveWorktreeForces { get; } = [];
         public List<bool> DeleteBranchForces { get; } = [];
         public bool FailNonForceBranchDelete { get; init; }
@@ -685,18 +841,56 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
             return Task.FromResult(new GitOpResult(true, null));
         }
 
-        public Task<IReadOnlyList<string>> GetTrackedChangesAsync(
+        public Task<GitPathQueryResult> GetTrackedChangesResultAsync(
             string workingDirectory, CancellationToken ct)
         {
             TrackedChangeQueries.Add(workingDirectory);
-            return Task.FromResult<IReadOnlyList<string>>(TrackedChanges.ToList());
+            return Task.FromResult(TrackedChangesFailure is null
+                ? new GitPathQueryResult(true, TrackedChanges.ToList(), null)
+                : new GitPathQueryResult(false, Array.Empty<string>(), TrackedChangesFailure));
         }
 
-        public Task<IReadOnlyList<string>> GetUntrackedFilesAsync(
+        public async Task<IReadOnlyList<string>> GetTrackedChangesAsync(
+            string workingDirectory, CancellationToken ct)
+        {
+            var result = await GetTrackedChangesResultAsync(workingDirectory, ct);
+            return result.Success ? result.Paths : Array.Empty<string>();
+        }
+
+        public Task<GitPathQueryResult> GetUntrackedFilesResultAsync(
             string workingDirectory, CancellationToken ct)
         {
             UntrackedFileQueries.Add(workingDirectory);
-            return Task.FromResult<IReadOnlyList<string>>(UntrackedFiles.ToList());
+            return Task.FromResult(UntrackedFilesFailure is null
+                ? new GitPathQueryResult(true, UntrackedFiles.ToList(), null)
+                : new GitPathQueryResult(false, Array.Empty<string>(), UntrackedFilesFailure));
+        }
+
+        public async Task<IReadOnlyList<string>> GetUntrackedFilesAsync(
+            string workingDirectory, CancellationToken ct)
+        {
+            var result = await GetUntrackedFilesResultAsync(workingDirectory, ct);
+            return result.Success ? result.Paths : Array.Empty<string>();
+        }
+
+        public Task<GitAncestorResult> IsAncestorResultAsync(
+            string ancestor,
+            string descendant,
+            string workingDirectory,
+            CancellationToken ct)
+        {
+            AncestorQueries.Add((ancestor, descendant, workingDirectory));
+            return Task.FromResult(AncestorResult);
+        }
+
+        public async Task<bool> IsAncestorAsync(
+            string ancestor,
+            string descendant,
+            string workingDirectory,
+            CancellationToken ct)
+        {
+            var result = await IsAncestorResultAsync(ancestor, descendant, workingDirectory, ct);
+            return result.Success && result.IsAncestor;
         }
 
         public Task<IReadOnlyList<string>> GetBranchesNotMergedAsync(

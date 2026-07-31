@@ -423,10 +423,18 @@ public static class CliApplication
 
         var requiresTicketing = verbKind is not (
             CliVerbKind.Worktree or CliVerbKind.Gate or CliVerbKind.Waves);
+        var configLoadMode = verbKind switch
+        {
+            CliVerbKind.Worktree => BuildConfigLoadMode.WorktreeStandalone,
+            CliVerbKind.Gate => BuildConfigLoadMode.GateStandalone,
+            CliVerbKind.Waves => BuildConfigLoadMode.WavesStandalone,
+            _ => BuildConfigLoadMode.Full,
+        };
         var bootstrap = await CliBootstrap.CreateAsync(
             rawCwd,
             CancellationToken.None,
-            requireTicketing: requiresTicketing);
+            requireTicketing: requiresTicketing,
+            configLoadMode: configLoadMode);
         if (bootstrap.Failure is { } bootstrapFailure)
         {
             if (jsonOutput)

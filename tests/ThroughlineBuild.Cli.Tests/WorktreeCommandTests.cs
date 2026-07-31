@@ -248,6 +248,324 @@ public sealed class WorktreeCommandTests
     }
 
     [Fact]
+    public async Task TeardownDefaultCorruptIndexFailsClosedAndLeavesWorktreeAndBranch()
+    {
+        var temp = Path.Combine(
+            Path.GetTempPath(),
+            "worktree-command-tests",
+            Guid.NewGuid().ToString("N"));
+        var repository = Path.Combine(temp, "repo");
+        var root = Path.Combine(temp, "leases");
+        WorktreeLeaseResult? leased = null;
+
+        try
+        {
+            await InitializeRepositoryAsync(repository);
+            File.WriteAllText(Path.Combine(repository, "tracked.txt"), "base");
+            await RunGitAsync(repository, "add", "tracked.txt");
+            await RunGitAsync(repository, "commit", "-m", "tracked");
+            var manager = new WorktreeLeaseManager(
+                new ProcessGitClient(repository),
+                new ProcessInstallCommandRunner(),
+                new WorktreeLeaseOptions(
+                    repository,
+                    repository,
+                    root,
+                    Array.Empty<string>(),
+                    string.Empty));
+            leased = await manager.LeaseAsync(
+                new WorktreeLeaseRequest("TLB-592", "corrupt-index"),
+                CancellationToken.None);
+            Assert.True(leased.Success);
+            File.WriteAllText(Path.Combine(leased.Manifest!.WorktreePath, "tracked.txt"), "modified");
+            var gitDir = ReadLinkedWorktreeGitDirectory(leased.Manifest.WorktreePath);
+            File.WriteAllText(Path.Combine(gitDir, "index"), "not a git index");
+            var output = new StringWriter();
+
+            var exit = await WorktreeCommand.ExecuteAsync(
+                ["worktree", "teardown", "--dir", leased.Manifest.WorktreePath],
+                json: true,
+                manager,
+                output,
+                TextWriter.Null,
+                CancellationToken.None);
+
+            Assert.Equal(1, exit);
+            using var json = JsonDocument.Parse(output.ToString());
+            Assert.False(json.RootElement.GetProperty("ok").GetBoolean());
+            var error = json.RootElement.GetProperty("error");
+            Assert.Equal(WorktreeLeaseManager.FailureError, error.GetProperty("code").GetString());
+            Assert.Contains("git status --porcelain", error.GetProperty("message").GetString());
+            Assert.True(Directory.Exists(leased.Manifest.WorktreePath));
+            Assert.Contains(
+                leased.Manifest.Branch,
+                await RunGitOutputAsync(repository, "branch", "--list", leased.Manifest.Branch));
+        }
+        finally
+        {
+            await CleanupLeaseAsync(repository, leased?.Manifest);
+            TryDeleteDirectory(temp);
+        }
+    }
+
+    [Fact]
+    public async Task TeardownRequireMergedIntoSucceedsWhenLeaseBranchIsInNamedTarget()
+    {
+        var temp = Path.Combine(
+            Path.GetTempPath(),
+            "worktree-command-tests",
+            Guid.NewGuid().ToString("N"));
+        var repository = Path.Combine(temp, "repo");
+        var root = Path.Combine(temp, "leases");
+        WorktreeLeaseResult? leased = null;
+
+        try
+        {
+            await InitializeRepositoryAsync(repository);
+            var manager = CreateRealManager(repository, root);
+            leased = await manager.LeaseAsync(
+                new WorktreeLeaseRequest("TLB-592", "merged-main"),
+                CancellationToken.None);
+            Assert.True(leased.Success);
+            await CommitInLeaseAsync(leased.Manifest!, "branch-only.txt", "branch work");
+            await RunGitAsync(repository, "merge", "--ff-only", leased.Manifest!.Branch);
+            var output = new StringWriter();
+
+            var exit = await WorktreeCommand.ExecuteAsync(
+                ["worktree", "teardown", "--dir", leased.Manifest.WorktreePath, "--require-merged-into", "main"],
+                json: true,
+                manager,
+                output,
+                TextWriter.Null,
+                CancellationToken.None);
+
+            Assert.Equal(0, exit);
+            Assert.False(Directory.Exists(leased.Manifest.WorktreePath));
+            Assert.Equal(
+                string.Empty,
+                (await RunGitOutputAsync(repository, "branch", "--list", leased.Manifest.Branch)).Trim());
+        }
+        finally
+        {
+            await CleanupLeaseAsync(repository, leased?.Manifest);
+            TryDeleteDirectory(temp);
+        }
+    }
+
+    [Fact]
+    public async Task TeardownRequireMergedIntoRefusesUnmergedBranchBeforeWorktreeRemoval()
+    {
+        var temp = Path.Combine(
+            Path.GetTempPath(),
+            "worktree-command-tests",
+            Guid.NewGuid().ToString("N"));
+        var repository = Path.Combine(temp, "repo");
+        var root = Path.Combine(temp, "leases");
+        WorktreeLeaseResult? leased = null;
+
+        try
+        {
+            await InitializeRepositoryAsync(repository);
+            var manager = CreateRealManager(repository, root);
+            leased = await manager.LeaseAsync(
+                new WorktreeLeaseRequest("TLB-592", "unmerged-target"),
+                CancellationToken.None);
+            Assert.True(leased.Success);
+            var manifest = leased.Manifest!;
+            await CommitInLeaseAsync(manifest, "branch-only.txt", "branch work");
+            var output = new StringWriter();
+
+            var exit = await WorktreeCommand.ExecuteAsync(
+                ["worktree", "teardown", "--dir", manifest.WorktreePath, "--require-merged-into", "main"],
+                json: true,
+                manager,
+                output,
+                TextWriter.Null,
+                CancellationToken.None);
+
+            Assert.Equal(1, exit);
+            using var json = JsonDocument.Parse(output.ToString());
+            Assert.False(json.RootElement.GetProperty("ok").GetBoolean());
+            Assert.Contains(
+                "not proven merged into 'main'",
+                json.RootElement.GetProperty("error").GetProperty("message").GetString());
+            Assert.True(Directory.Exists(manifest.WorktreePath));
+            Assert.Contains(
+                manifest.Branch,
+                await RunGitOutputAsync(repository, "branch", "--list", manifest.Branch));
+        }
+        finally
+        {
+            await CleanupLeaseAsync(repository, leased?.Manifest);
+            TryDeleteDirectory(temp);
+        }
+    }
+
+    [Fact]
+    public async Task TeardownRequireMergedIntoRefusesBranchMergedIntoDifferentRefBeforeWorktreeRemoval()
+    {
+        var temp = Path.Combine(
+            Path.GetTempPath(),
+            "worktree-command-tests",
+            Guid.NewGuid().ToString("N"));
+        var repository = Path.Combine(temp, "repo");
+        var root = Path.Combine(temp, "leases");
+        WorktreeLeaseResult? leased = null;
+
+        try
+        {
+            await InitializeRepositoryAsync(repository);
+            var manager = CreateRealManager(repository, root);
+            leased = await manager.LeaseAsync(
+                new WorktreeLeaseRequest("TLB-592", "merged-elsewhere"),
+                CancellationToken.None);
+            Assert.True(leased.Success);
+            await CommitInLeaseAsync(leased.Manifest!, "branch-only.txt", "branch work");
+            await RunGitAsync(repository, "branch", "integration", leased.Manifest!.Branch);
+            Assert.Contains(
+                leased.Manifest.Branch,
+                await RunGitOutputAsync(repository, "branch", "--contains", "integration", "--list", leased.Manifest.Branch));
+            var output = new StringWriter();
+
+            var exit = await WorktreeCommand.ExecuteAsync(
+                ["worktree", "teardown", "--dir", leased.Manifest.WorktreePath, "--require-merged-into", "main"],
+                json: true,
+                manager,
+                output,
+                TextWriter.Null,
+                CancellationToken.None);
+
+            Assert.Equal(1, exit);
+            Assert.True(Directory.Exists(leased.Manifest.WorktreePath));
+            Assert.Contains(
+                leased.Manifest.Branch,
+                await RunGitOutputAsync(repository, "branch", "--list", leased.Manifest.Branch));
+        }
+        finally
+        {
+            try { await RunGitAsync(repository, "branch", "-D", "integration"); } catch { }
+            await CleanupLeaseAsync(repository, leased?.Manifest);
+            TryDeleteDirectory(temp);
+        }
+    }
+
+    [Fact]
+    public async Task TeardownRequireMergedIntoRefusesWhenSideBranchHeadContainsLeaseButNamedTargetDoesNot()
+    {
+        var temp = Path.Combine(
+            Path.GetTempPath(),
+            "worktree-command-tests",
+            Guid.NewGuid().ToString("N"));
+        var repository = Path.Combine(temp, "repo");
+        var root = Path.Combine(temp, "leases");
+        WorktreeLeaseResult? leased = null;
+
+        try
+        {
+            await InitializeRepositoryAsync(repository);
+            var manager = CreateRealManager(repository, root);
+            leased = await manager.LeaseAsync(
+                new WorktreeLeaseRequest("TLB-592", "side-head"),
+                CancellationToken.None);
+            Assert.True(leased.Success);
+            await CommitInLeaseAsync(leased.Manifest!, "branch-only.txt", "branch work");
+            await RunGitAsync(repository, "switch", "-c", "side-head-main");
+            await RunGitAsync(repository, "merge", "--ff-only", leased.Manifest!.Branch);
+            var output = new StringWriter();
+
+            var exit = await WorktreeCommand.ExecuteAsync(
+                ["worktree", "teardown", "--dir", leased.Manifest.WorktreePath, "--require-merged-into", "main"],
+                json: true,
+                manager,
+                output,
+                TextWriter.Null,
+                CancellationToken.None);
+
+            Assert.Equal(1, exit);
+            Assert.True(Directory.Exists(leased.Manifest.WorktreePath));
+            Assert.Contains(
+                leased.Manifest.Branch,
+                await RunGitOutputAsync(repository, "branch", "--list", leased.Manifest.Branch));
+        }
+        finally
+        {
+            try { await RunGitAsync(repository, "switch", "main"); } catch { }
+            try { await RunGitAsync(repository, "branch", "-D", "side-head-main"); } catch { }
+            await CleanupLeaseAsync(repository, leased?.Manifest);
+            TryDeleteDirectory(temp);
+        }
+    }
+
+    [Fact]
+    public async Task TeardownForceSkipsRequireMergedIntoProof()
+    {
+        var temp = Path.Combine(
+            Path.GetTempPath(),
+            "worktree-command-tests",
+            Guid.NewGuid().ToString("N"));
+        var repository = Path.Combine(temp, "repo");
+        var root = Path.Combine(temp, "leases");
+        WorktreeLeaseResult? leased = null;
+
+        try
+        {
+            await InitializeRepositoryAsync(repository);
+            var manager = CreateRealManager(repository, root);
+            leased = await manager.LeaseAsync(
+                new WorktreeLeaseRequest("TLB-592", "force-target"),
+                CancellationToken.None);
+            Assert.True(leased.Success);
+            var manifest = leased.Manifest!;
+            await CommitInLeaseAsync(manifest, "branch-only.txt", "branch work");
+            var output = new StringWriter();
+
+            var exit = await WorktreeCommand.ExecuteAsync(
+                ["worktree", "teardown", "--dir", manifest.WorktreePath, "--require-merged-into", "main", "--force"],
+                json: true,
+                manager,
+                output,
+                TextWriter.Null,
+                CancellationToken.None);
+
+            Assert.Equal(0, exit);
+            Assert.False(Directory.Exists(manifest.WorktreePath));
+            Assert.Equal(
+                string.Empty,
+                (await RunGitOutputAsync(repository, "branch", "--list", manifest.Branch)).Trim());
+        }
+        finally
+        {
+            await CleanupLeaseAsync(repository, leased?.Manifest);
+            TryDeleteDirectory(temp);
+        }
+    }
+
+    [Fact]
+    public async Task TeardownRequireMergedIntoBlankValueIsUsageError()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "worktree-command-tests", Guid.NewGuid().ToString("N"));
+        var output = new StringWriter();
+
+        var exit = await WorktreeCommand.ExecuteAsync(
+            ["worktree", "teardown", "--dir", root, "--require-merged-into", ""],
+            json: true,
+            CreateManager(root),
+            output,
+            TextWriter.Null,
+            CancellationToken.None);
+
+        Assert.Equal(2, exit);
+        using var json = JsonDocument.Parse(output.ToString());
+        Assert.False(json.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Equal(
+            "usage",
+            json.RootElement.GetProperty("error").GetProperty("code").GetString());
+        Assert.Contains(
+            "non-empty ref",
+            json.RootElement.GetProperty("error").GetProperty("message").GetString());
+    }
+
+    [Fact]
     public async Task TeardownDefaultPreservesUnmergedBranchAfterRemovingWorktree()
     {
         var temp = Path.Combine(
@@ -368,6 +686,39 @@ public sealed class WorktreeCommandTests
                 root,
                 Array.Empty<string>(),
                 string.Empty));
+    }
+
+    private static WorktreeLeaseManager CreateRealManager(string repository, string root) =>
+        new(
+            new ProcessGitClient(repository),
+            new ProcessInstallCommandRunner(),
+            new WorktreeLeaseOptions(
+                repository,
+                repository,
+                root,
+                Array.Empty<string>(),
+                string.Empty));
+
+    private static async Task CommitInLeaseAsync(
+        WorktreeLeaseManifest manifest,
+        string relativePath,
+        string message)
+    {
+        File.WriteAllText(Path.Combine(manifest.WorktreePath, relativePath), message);
+        await RunGitAsync(manifest.WorktreePath, "add", relativePath);
+        await RunGitAsync(manifest.WorktreePath, "commit", "-m", message);
+    }
+
+    private static string ReadLinkedWorktreeGitDirectory(string worktreePath)
+    {
+        var gitFile = Path.Combine(worktreePath, ".git");
+        var content = File.ReadAllText(gitFile).Trim();
+        const string prefix = "gitdir:";
+        Assert.StartsWith(prefix, content);
+        var raw = content.Substring(prefix.Length).Trim();
+        return Path.GetFullPath(Path.IsPathRooted(raw)
+            ? raw
+            : Path.Combine(worktreePath, raw));
     }
 
     private static async Task InitializeRepositoryAsync(string repository)

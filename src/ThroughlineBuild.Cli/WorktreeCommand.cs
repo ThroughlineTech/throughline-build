@@ -44,16 +44,23 @@ public static class WorktreeCommand
             }
             case "teardown":
             {
-                var parsed = ParseOptions(args, 2, ["--ticket", "--dir"], ["--force"]);
+                var parsed = ParseOptions(args, 2, ["--ticket", "--dir", "--require-merged-into"], ["--force"]);
                 if (parsed.Error is not null)
                     return Usage(json, output, error, parsed.Error);
                 var hasTicket = parsed.Values.TryGetValue("--ticket", out var ticket);
                 var hasDir = parsed.Values.TryGetValue("--dir", out var dir);
                 if (hasTicket == hasDir)
                     return Usage(json, output, error, "worktree teardown requires exactly one of --ticket or --dir");
+                parsed.Values.TryGetValue("--require-merged-into", out var requireMergedInto);
+                if (requireMergedInto is not null && string.IsNullOrWhiteSpace(requireMergedInto))
+                    return Usage(json, output, error, "--require-merged-into requires a non-empty ref");
 
                 var result = await manager.TeardownAsync(
-                    ticket, dir, ct, force: parsed.Flags.Contains("--force")).ConfigureAwait(false);
+                    ticket,
+                    dir,
+                    ct,
+                    force: parsed.Flags.Contains("--force"),
+                    requireMergedInto: requireMergedInto).ConfigureAwait(false);
                 if (!result.Success)
                     return ReportFailure(result, json, output, error);
                 if (json)
@@ -149,9 +156,10 @@ public static class WorktreeCommand
         {
             error.WriteLine($"Error: {message}");
             error.WriteLine("Usage: build worktree lease --ticket <id> [--slug <slug>] [--base <ref>] [--require-seed <path>]");
-            error.WriteLine("       build worktree teardown (--ticket <id> | --dir <path>) [--force]");
+            error.WriteLine("       build worktree teardown (--ticket <id> | --dir <path>) [--require-merged-into <ref>] [--force]");
             error.WriteLine("       build worktree list");
             error.WriteLine("       default teardown refuses tracked work and unexpected untracked files");
+            error.WriteLine("       --require-merged-into proves the helper branch is an ancestor of the named ref before removal");
             error.WriteLine("       --force skips those checks and may permanently discard work");
         }
         return 2;
