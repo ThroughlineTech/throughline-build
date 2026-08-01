@@ -243,6 +243,7 @@ Body.
         Assert.Contains("Acceptance", output);
         // Must contain Out of scope section.
         Assert.Contains("Out of scope", output);
+        Assert.DoesNotContain("**Type:** task", output);
         // No Plane calls must have been made.
         Assert.Empty(ticketing.CreateCalls);
     }

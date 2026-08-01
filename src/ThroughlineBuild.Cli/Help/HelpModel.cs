@@ -56,6 +56,7 @@ public record UsageExample(string Command, string? Annotation);
 /// Global options (shared across commands) are included with <see cref="OptionDescription.IsGlobal"/> = true
 /// so a renderer can decide whether to suppress or deduplicate them.
 /// </param>
+/// <param name="Details">Optional free-form reference sections rendered after options.</param>
 /// <param name="ExitCodes">Exit codes and their meanings, in ascending numeric order.</param>
 /// <param name="Examples">Ordered list of usage examples.</param>
 public record CommandHelp(
@@ -65,4 +66,5 @@ public record CommandHelp(
     string Usage,
     IReadOnlyList<OptionDescription> Options,
     IReadOnlyList<ExitCodeEntry> ExitCodes,
-    IReadOnlyList<UsageExample> Examples);
+    IReadOnlyList<UsageExample> Examples,
+    IReadOnlyList<string>? Details = null);

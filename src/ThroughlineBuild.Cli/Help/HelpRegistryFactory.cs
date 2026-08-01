@@ -341,10 +341,10 @@ public static class HelpRegistryFactory
         Options:
         [
             new("--title \"...\"",  "Override the ticket title",                                              false),
-            new("--type \"...\"",   "Set the work item type",                                                 false),
+            new("--type \"...\"",   "Set a backend work-item type when the configured project supports types", false),
             new("--label \"...\"",  "Add a label (may be repeated)",                                          false),
             new("--review",         "Draft mode only: open an interactive review loop before filing",         false),
-            new("--json",           "Read a strict JSON draft (title,type,description,acceptanceCriteria,labels,parent,relations[{kind,targetId}]) from stdin and emit a JSON envelope; targets resolve before create", false),
+            new("--json",           "Read a strict JSON draft from stdin and emit a JSON envelope; targets resolve before create", false),
             new("--debug",          "Draft/file mode: stream worker output when drafting and capture artifacts", false),
             new("--quiet",          "Draft mode only: suppress the worker progress digest",                   false),
             new("--print-template", "Print the body template to stdout; ignores other input forms",           false),
@@ -357,6 +357,42 @@ public static class HelpRegistryFactory
             new("new - --review", "Read draft input from stdin, then review before filing"),
             new("echo '{\"title\":\"...\"}' | new - --json", "File a structured draft and print {id,uuid,...}"),
             new("new --print-template", "Print the file-mode body template and exit"),
+        ],
+        Details:
+        [
+            """
+            Strict JSON draft contract:
+              Required:
+                title: string, non-empty.
+              Optional:
+                type: string or null. Backend-dependent work-item type assignment; omit it unless the Plane project supports work-item types.
+                description: Markdown string or null.
+                acceptanceCriteria: one Markdown string or null. Use checklist Markdown such as "- [ ] first criterion"; a JSON array is invalid.
+                labels: array of strings or null. Unknown labels are rejected before create.
+                parent: ticket id string or null. Resolved before create.
+                relations: array of objects or null. Each item is {"kind": string, "targetId": string}; targets resolve before create.
+              Unknown fields are rejected.
+              Markdown fields are rendered to Plane HTML before create.
+              Omitting type sends no explicit type assignment and performs no work-item-type lookup.
+              Offline help and --print-template do not probe Plane; type support is optional and backend-dependent.
+            """,
+            """
+            Relation kinds for JSON drafts:
+              Accepted kinds: relates_to, duplicate, blocked_by, blocking, start_before, start_after, finish_before, finish_after, implemented_by, implements.
+              Normalization matches build relate: spaces and hyphens are accepted in place of underscores.
+              A depends on B: {"kind":"blocked_by","targetId":"B"}.
+              A blocks B: {"kind":"blocking","targetId":"B"}.
+              A duplicates B: {"kind":"duplicate","targetId":"B"}.
+              A is related to B: {"kind":"relates_to","targetId":"B"}.
+              Plane may display inverse edges from the target side; the create request is written from the new ticket toward targetId.
+            """,
+            """
+            Valid minimal JSON:
+              {"title":"Fix README typo"}
+
+            Valid full JSON:
+              {"title":"Add retry telemetry","type":"Task","description":"Record retry counts.","acceptanceCriteria":"- [ ] Retry count is emitted\n- [ ] Tests cover failures","labels":["size:s"],"parent":"TLB-10","relations":[{"kind":"blocked_by","targetId":"TLB-9"}]}
+            """
         ]
     );
 

@@ -152,8 +152,13 @@ The interface covers reads, state/lifecycle transitions, comments,
 descriptions, labels, issue types, parent/child operations, and typed relation
 management.
 
-Plane queries use internal issue UUIDs for parent filtering even though operator
-commands use human-readable IDs such as `TLB-42`.
+Plane requests use internal issue UUIDs where the API requires them, but
+`PlaneTicketingClient` translates operator-facing IDs such as `TLB-42` at the
+boundary. Ticket reads and JSON envelopes return stable parent IDs and direct
+child summaries. Work-item type UUIDs are resolved through Plane's optional
+work-item-type endpoint when it is available, and 401/403 diagnostics are
+reported with repository-local config context without echoing token values or
+Plane response bodies.
 
 ### 5.4 LLM Client
 

@@ -1,7 +1,5 @@
 # <Replace with title>
 
-**Type:** task
-
 ## Description
 
 Describe the change you want to make and why. One to three paragraphs is usually enough.
@@ -18,4 +16,4 @@ Keep it factual - what problem does this solve, what constraint does it lift?
 
 ## Notes
 
-<Optional: design decisions, references, links, or anything else the investigator should know.>
+<Optional: design decisions, references, links, backend-dependent work-item type notes, or anything else the investigator should know.>

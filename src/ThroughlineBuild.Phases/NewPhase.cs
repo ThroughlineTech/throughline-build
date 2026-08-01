@@ -113,11 +113,6 @@ public class NewPhase : IWorkflowPhase
             warnings.Add("Body does not contain an 'Out of scope' section");
         }
 
-        if (!ContainsTypeField(bodyText))
-        {
-            warnings.Add("Body does not contain a Type field");
-        }
-
         // Compose create call parameters.
         var createTitle = options.OverrideTitle ?? title!;
         var createType = options.OverrideType;
@@ -198,7 +193,7 @@ public class NewPhase : IWorkflowPhase
         string? parentUuid = null;
         if (!string.IsNullOrWhiteSpace(parentId))
         {
-            var parent = await _ticketing.GetAsync(parentId!, ct).ConfigureAwait(false);
+            var parent = await _ticketing.GetRelationTicketAsync(parentId!, ct).ConfigureAwait(false);
             parentUuid = parent.Uuid;
         }
 
@@ -235,7 +230,16 @@ public class NewPhase : IWorkflowPhase
 
         if (parentUuid is not null)
         {
-            await _ticketing.SetParentAsync(ticketResult.Uuid, parentUuid, ct).ConfigureAwait(false);
+            try
+            {
+                await _ticketing.SetParentAsync(ticketResult.Uuid, parentUuid, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new InvalidOperationException(
+                    $"Ticket {ticketResult.Id} was created, but setting parent to {parentId} failed. " +
+                    $"No relation writes were attempted; inspect 'build get {ticketResult.Id}'. {ex.Message}", ex);
+            }
             await EmitAsync(EventKind.TicketWrite, new Dictionary<string, object>
             {
                 ["action"] = "set_parent",
@@ -273,7 +277,21 @@ public class NewPhase : IWorkflowPhase
             }
         }
 
-        return new NewResult(ticketResult.Id, ticketResult.Uuid, Array.Empty<string>());
+        Ticket persistedTicket;
+        try
+        {
+            persistedTicket = await _ticketing.GetAsync(ticketResult.Id, ct).ConfigureAwait(false);
+            var persistedRelations = await _ticketing.GetRelationsAsync(ticketResult.Id, ct).ConfigureAwait(false);
+            persistedTicket = persistedTicket with { Relations = persistedRelations };
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new InvalidOperationException(
+                $"Ticket {ticketResult.Id} was created and later writes may have succeeded, but final read-back failed. " +
+                $"Inspect 'build get {ticketResult.Id}' and 'build relate {ticketResult.Id} --list'. {ex.Message}", ex);
+        }
+
+        return new NewResult(ticketResult.Id, ticketResult.Uuid, Array.Empty<string>(), persistedTicket);
     }
 
     /// <summary>
@@ -328,13 +346,6 @@ public class NewPhase : IWorkflowPhase
         // Look for "Out of scope" (case-insensitive) as a heading or marker.
         return Regex.IsMatch(bodyText, @"(^|\n)\s*[#*]+\s*.*Out\s+of\s+scope.*", RegexOptions.IgnoreCase)
             || Regex.IsMatch(bodyText, @"(^|\n)\s*\*\*.*Out\s+of\s+scope.*\*\*", RegexOptions.IgnoreCase);
-    }
-
-    private bool ContainsTypeField(string bodyText)
-    {
-        // Look for a "Type:" field (case-insensitive).
-        return Regex.IsMatch(bodyText, @"\*\*Type:\*\*", RegexOptions.IgnoreCase)
-            || Regex.IsMatch(bodyText, @"^Type:", RegexOptions.IgnoreCase | RegexOptions.Multiline);
     }
 
     private async Task EmitAsync(EventKind kind, IReadOnlyDictionary<string, object> data, CancellationToken ct)

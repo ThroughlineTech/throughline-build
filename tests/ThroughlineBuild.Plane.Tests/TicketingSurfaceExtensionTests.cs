@@ -174,8 +174,8 @@ public class QueryAsyncTests
     [Fact]
     public async Task QueryAsync_TypeFilter_ResolvesNameToUuid_ReturnsOnlyMatchingType()
     {
-        // Issues carry the issue-type UUID; the query carries the human name "Task". The filter
-        // must resolve name -> UUID via the issue-types cache and compare UUIDs (not name vs UUID).
+        // Issues carry the work-item type UUID; the query carries the human name "Task". The filter
+        // must resolve name -> UUID via the work-item-types cache and compare UUIDs (not name vs UUID).
         const string bugTypeUuid = "eeeeeeee-1111-0000-0000-000000000002";
         var typedIssues = $$"""
         {

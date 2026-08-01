@@ -269,6 +269,39 @@ public class HelpRegistryFactoryTests
     }
 
     [Fact]
+    public void New_HelpDocumentsStrictJsonContractAndCapabilitySafeType()
+    {
+        var output = Tier1Renderer.Render(Registry.TryGet("new")!);
+
+        Assert.Contains("Strict JSON draft contract:", output);
+        Assert.Contains("title: string, non-empty", output);
+        Assert.Contains("acceptanceCriteria: one Markdown string", output);
+        Assert.Contains("a JSON array is invalid", output);
+        Assert.Contains("Unknown fields are rejected", output);
+        Assert.Contains("Omitting type sends no explicit type assignment", output);
+        Assert.Contains("work-item types", output);
+        Assert.DoesNotContain("\"type\":\"task\"", output);
+    }
+
+    [Fact]
+    public void New_HelpDocumentsEveryRelationKindAndIntentMapping()
+    {
+        var output = Tier1Renderer.Render(Registry.TryGet("new")!);
+
+        Assert.Contains("relates_to, duplicate, blocked_by, blocking, start_before, start_after, finish_before, finish_after, implemented_by, implements", output);
+        Assert.Contains("A depends on B", output);
+        Assert.Contains("\"kind\":\"blocked_by\"", output);
+        Assert.Contains("A blocks B", output);
+        Assert.Contains("\"kind\":\"blocking\"", output);
+        Assert.Contains("A duplicates B", output);
+        Assert.Contains("\"kind\":\"duplicate\"", output);
+        Assert.Contains("A is related to B", output);
+        Assert.Contains("\"kind\":\"relates_to\"", output);
+        Assert.Contains("spaces and hyphens", output);
+        Assert.Contains("inverse edges", output);
+    }
+
+    [Fact]
     public void Scaffold_HelpDocumentsExitOverridesAndValidationModes()
     {
         var output = Tier1Renderer.Render(Registry.TryGet("scaffold")!);

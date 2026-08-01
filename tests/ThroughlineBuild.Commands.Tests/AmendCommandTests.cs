@@ -347,6 +347,23 @@ public class AmendCommandTests
     }
 
     [Fact]
+    public async Task Parent_rejects_cross_project_alias_before_write()
+    {
+        var child = MakeTicket();
+        var parent = child with { Id = "OTHER-9", Uuid = "parent-uuid" };
+        var ticketing = new FakeTicketing(child, parent);
+        var cmd = new AmendCommand(ticketing, new FakeEventSink());
+
+        var error = await Assert.ThrowsAsync<KeyNotFoundException>(() => cmd.ExecuteAsync(
+            MakeCtx(args: new Dictionary<string, string> { ["parent"] = "OTHER-9" }),
+            CancellationToken.None));
+
+        Assert.Contains("outside configured project", error.Message);
+        Assert.Empty(ticketing.ParentUpdates);
+        Assert.Equal(["TLB-1", "OTHER-9"], ticketing.GetIds);
+    }
+
+    [Fact]
     public async Task DescriptionOnly_calls_UpdateDescriptionAsync()
     {
         var ticket = MakeTicket();
@@ -516,6 +533,17 @@ public class AmendCommandTests
         {
             GetIds.Add(id);
             return Task.FromResult(_tickets[id]);
+        }
+
+        public Task<Ticket> GetRelationTicketAsync(string id, CancellationToken ct)
+        {
+            if (id.StartsWith("OTHER-", StringComparison.OrdinalIgnoreCase))
+            {
+                GetIds.Add(id);
+                return Task.FromException<Ticket>(
+                    new KeyNotFoundException($"Ticket '{id}' is outside configured project 'TLB'"));
+            }
+            return GetAsync(id, ct);
         }
 
         public Task<IReadOnlyList<Ticket>> GetBatchAsync(IEnumerable<string> ids, CancellationToken ct) =>

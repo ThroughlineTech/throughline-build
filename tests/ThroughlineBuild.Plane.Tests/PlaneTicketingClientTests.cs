@@ -95,6 +95,23 @@ internal sealed class RoutingOkHandler : HttpMessageHandler
     }
 }
 
+internal sealed class RoutingHandler : HttpMessageHandler
+{
+    private readonly Func<HttpRequestMessage, HttpResponseMessage> _responseFor;
+    private readonly object _lock = new();
+
+    public RoutingHandler(Func<HttpRequestMessage, HttpResponseMessage> responseFor) => _responseFor = responseFor;
+
+    public List<(HttpMethod Method, string Uri)> Log { get; } = new();
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        lock (_lock)
+            Log.Add((request.Method, request.RequestUri!.ToString()));
+        return Task.FromResult(_responseFor(request));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Shared test data
 // ---------------------------------------------------------------------------
@@ -107,7 +124,11 @@ internal static class TestData
     public const string CommentUuid = "dddddddd-0000-0000-0000-000000000001";
     public const string IssueTypeUuid = "eeeeeeee-1111-0000-0000-000000000001";
 
-    public static string IssueListJson(string stateId = StateUuid, string descHtml = "<p>desc</p>", string labelIdsJson = "[]") =>
+    public static string IssueListJson(
+        string stateId = StateUuid,
+        string descHtml = "<p>desc</p>",
+        string labelIdsJson = "[]",
+        string typeJson = "null") =>
         $$"""
         {
           "results": [
@@ -119,7 +140,7 @@ internal static class TestData
               "state": "{{stateId}}",
               "labels": {{labelIdsJson}},
               "parent": null,
-              "type": null
+              "type": {{typeJson}}
             }
           ]
         }
@@ -169,8 +190,13 @@ internal static class TestData
     public static string CommentJson() =>
         $$"""{"id":"{{CommentUuid}}","comment_html":"<p>hello</p>"}""";
 
-    public static string PatchOkJson() =>
-        $$"""{"id":"{{IssueUuid}}","sequence_id":24,"name":"plane-client","description_html":"<p>desc</p><p>appended</p>","state":"{{StateUuid}}","labels":[],"parent":null,"type":null}""";
+    public static string PatchOkJson(
+        string stateId = StateUuid,
+        string name = "plane-client",
+        string descHtml = "<p>desc</p><p>appended</p>",
+        string labelIdsJson = "[]",
+        string typeJson = "null") =>
+        $$"""{"id":"{{IssueUuid}}","sequence_id":24,"name":"{{name}}","description_html":"{{descHtml}}","state":"{{stateId}}","labels":{{labelIdsJson}},"parent":null,"type":{{typeJson}}}""";
 
     public static PlaneClientOptions Options() => new()
     {
@@ -286,6 +312,88 @@ public class GetAsyncTests
     }
 
     [Fact]
+    public async Task GetAsync_ChildParentId_IsStableTicketId()
+    {
+        const string parentUuid = "ffffffff-0000-0000-0000-000000000010";
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson($$"""
+            {
+              "results": [
+                {
+                  "id": "{{TestData.IssueUuid}}",
+                  "sequence_id": 24,
+                  "name": "child",
+                  "description_html": "<p>child</p>",
+                  "state": "{{TestData.StateUuid}}",
+                  "labels": [],
+                  "parent": "{{parentUuid}}",
+                  "type": null
+                },
+                {
+                  "id": "{{parentUuid}}",
+                  "sequence_id": 10,
+                  "name": "parent",
+                  "description_html": "<p>parent</p>",
+                  "state": "{{TestData.StateUuid}}",
+                  "labels": [],
+                  "parent": null,
+                  "type": null
+                }
+              ]
+            }
+            """));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var ticket = await client.GetAsync("TLB-24", CancellationToken.None);
+
+        Assert.Equal("TLB-10", ticket.ParentId);
+    }
+
+    [Fact]
+    public async Task QueryAsync_ParentFilterAcceptsStableTicketId()
+    {
+        const string parentUuid = "ffffffff-0000-0000-0000-000000000010";
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson($$"""
+            {
+              "results": [
+                {
+                  "id": "{{parentUuid}}",
+                  "sequence_id": 10,
+                  "name": "parent",
+                  "description_html": "<p>parent</p>",
+                  "state": "{{TestData.StateUuid}}",
+                  "labels": [],
+                  "parent": null,
+                  "type": null
+                },
+                {
+                  "id": "{{TestData.IssueUuid}}",
+                  "sequence_id": 24,
+                  "name": "child",
+                  "description_html": "<p>child</p>",
+                  "state": "{{TestData.StateUuid}}",
+                  "labels": [],
+                  "parent": "{{parentUuid}}",
+                  "type": null
+                }
+              ]
+            }
+            """));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var children = await client.QueryAsync(new TicketQuery(ParentId: "TLB-10"), CancellationToken.None);
+
+        var child = Assert.Single(children);
+        Assert.Equal("TLB-24", child.Id);
+        Assert.Equal("TLB-10", child.ParentId);
+    }
+
+    [Fact]
     public async Task GetAsync_ThrowsPlaneApiException_On404()
     {
         var handler = new FakeMessageHandler();
@@ -317,15 +425,15 @@ public class GetAsyncTests
     }
 
     [Fact]
-    public async Task QueryByType_WhenIssueTypesFeatureDisabled_TranslatesTo404FeatureMessage()
+    public async Task QueryByType_WhenWorkItemTypesFeatureDisabled_TranslatesTo404FeatureMessage()
     {
-        // --type resolves the type name via the issue-types endpoint, a Plane feature that is not
+        // --type resolves the type name via the work-item-types endpoint, a Plane feature that is not
         // enabled on every deployment (it 404s when off). The snapshot loads fine first, so the 404
         // here must read as "feature not enabled", not a wrong project id or a bad type name.
         var handler = new FakeMessageHandler();
         handler.Enqueue(req => req.RequestUri!.AbsoluteUri.Contains("/issues/"),
             FakeMessageHandler.OkJson("""{"results":[]}"""));
-        handler.Enqueue(req => req.RequestUri!.AbsoluteUri.Contains("issue-types"),
+        handler.Enqueue(req => req.RequestUri!.AbsoluteUri.Contains("work-item-types"),
             FakeMessageHandler.ErrorJson(404, "Page not found."));
         var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
 
@@ -333,8 +441,56 @@ public class GetAsyncTests
             () => client.QueryAsync(new TicketQuery(Type: "Feature"), CancellationToken.None));
 
         Assert.Equal(404, ex.Status);
-        Assert.Contains("issue-types feature", ex.Message);
+        Assert.Contains("work-item types", ex.Message);
         Assert.Contains("--type", ex.Message);
+    }
+
+    [Fact]
+    public async Task GetAsync_WhenWorkItemTypesAvailable_ResolvesPersistedTypeUuidToName()
+    {
+        var handler = new RoutingHandler(req =>
+        {
+            var uri = req.RequestUri!.AbsoluteUri;
+            if (uri.Contains("/issues/") && uri.Contains("per_page=100"))
+                return FakeMessageHandler.OkJson(TestData.IssueListJson(typeJson: $"\"{TestData.IssueTypeUuid}\""));
+            if (uri.Contains("/states/"))
+                return FakeMessageHandler.OkJson(TestData.StateListJson());
+            if (uri.Contains("/labels/"))
+                return FakeMessageHandler.OkJson(TestData.LabelListJson());
+            if (uri.Contains("/work-item-types/"))
+                return FakeMessageHandler.OkJson(TestData.IssueTypeListJson());
+            return FakeMessageHandler.ErrorJson(404, "not found");
+        });
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        var ticket = await client.GetAsync("TLB-24", CancellationToken.None);
+
+        Assert.Equal("Task", ticket.Type);
+        Assert.Contains(handler.Log, r => r.Uri.Contains("/work-item-types/"));
+    }
+
+    [Fact]
+    public async Task GetAsync_WhenWorkItemTypesUnavailable_ReturnsPersistedTypeUuid()
+    {
+        var handler = new RoutingHandler(req =>
+        {
+            var uri = req.RequestUri!.AbsoluteUri;
+            if (uri.Contains("/issues/") && uri.Contains("per_page=100"))
+                return FakeMessageHandler.OkJson(TestData.IssueListJson(typeJson: $"\"{TestData.IssueTypeUuid}\""));
+            if (uri.Contains("/states/"))
+                return FakeMessageHandler.OkJson(TestData.StateListJson());
+            if (uri.Contains("/labels/"))
+                return FakeMessageHandler.OkJson(TestData.LabelListJson());
+            if (uri.Contains("/work-item-types/"))
+                return FakeMessageHandler.ErrorJson(404, "Page not found.");
+            return FakeMessageHandler.ErrorJson(404, "not found");
+        });
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+
+        var ticket = await client.GetAsync("TLB-24", CancellationToken.None);
+
+        Assert.Equal(TestData.IssueTypeUuid, ticket.Type);
+        Assert.Contains(handler.Log, r => r.Uri.Contains("/work-item-types/"));
     }
 
     [Fact]
@@ -680,7 +836,8 @@ public class ApplyLabelsAsyncTests
               ]
             }
             """));
-        handler.Enqueue(FakeMessageHandler.OkJson(TestData.PatchOkJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.PatchOkJson(
+            labelIdsJson: $"[\"{sizeLUuid}\",\"{riskLowUuid}\"]")));
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
 
         var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
@@ -727,7 +884,7 @@ public class AmendMetadataAsyncTests
     {
         var handler = new FakeMessageHandler();
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
-        handler.Enqueue(FakeMessageHandler.OkJson(TestData.PatchOkJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.PatchOkJson(name: "New title")));
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));
         var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
@@ -770,8 +927,8 @@ public class AmendMetadataAsyncTests
         await client.UpdateTypeAsync("TLB-24", "task", CancellationToken.None);
         var after = await client.GetAsync("TLB-24", CancellationToken.None);
 
-        Assert.Equal($"{{\"type\":\"{TestData.IssueTypeUuid}\"}}", handler.Requests[2].Body);
-        Assert.Equal(TestData.IssueTypeUuid, after.Type);
+        Assert.Equal($"{{\"type_id\":\"{TestData.IssueTypeUuid}\"}}", handler.Requests[2].Body);
+        Assert.Equal("Task", after.Type);
     }
 
     [Fact]
@@ -785,7 +942,7 @@ public class AmendMetadataAsyncTests
         var exception = await Assert.ThrowsAsync<ArgumentException>(
             () => client.UpdateTypeAsync("TLB-24", "Unknown", CancellationToken.None));
 
-        Assert.Contains("Issue type 'Unknown' not found", exception.Message);
+        Assert.Contains("Work item type 'Unknown' not found", exception.Message);
         Assert.DoesNotContain(handler.Requests, request => request.Method == HttpMethod.Patch);
     }
 
@@ -799,7 +956,7 @@ public class AmendMetadataAsyncTests
         var exception = await Assert.ThrowsAsync<ArgumentException>(
             () => client.ValidateTypeAsync("Unknown", CancellationToken.None));
 
-        Assert.Contains("Issue type 'Unknown' not found", exception.Message);
+        Assert.Contains("Work item type 'Unknown' not found", exception.Message);
         Assert.Single(handler.Requests);
         Assert.DoesNotContain(handler.Requests, request => request.Method == HttpMethod.Patch);
     }
@@ -1516,7 +1673,8 @@ public class IssueCacheTests
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));   // snapshot (Backlog)
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.StateListJson()));   // states cache
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.LabelListJson()));   // labels cache
-        handler.Enqueue(FakeMessageHandler.OkJson(TestData.PatchOkJson()));     // PATCH transition
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.PatchOkJson(
+            stateId: "bbbbbbbb-0000-0000-0000-000000000002")));     // PATCH transition
 
         var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
 
@@ -1545,10 +1703,20 @@ public class IssueCacheTests
         // resurrecting the stale-state class this cache exists to kill. The atomic AddOrUpdate
         // composes against the live value, so both fields must survive regardless of interleaving.
         var handler = new RoutingOkHandler(req =>
-            req.Method == HttpMethod.Patch ? TestData.PatchOkJson()
-            : req.RequestUri!.AbsolutePath.Contains("/states/") ? TestData.StateListJson()
-            : req.RequestUri!.AbsolutePath.Contains("/labels/") ? TestData.LabelListJson()
-            : TestData.IssueListJson());
+        {
+            if (req.Method == HttpMethod.Patch)
+            {
+                var body = req.Content?.ReadAsStringAsync().GetAwaiter().GetResult() ?? string.Empty;
+                if (body.Contains("\"labels\"", StringComparison.Ordinal))
+                    return TestData.PatchOkJson(labelIdsJson: $"[\"{TestData.LabelUuid}\"]");
+                if (body.Contains("\"state\"", StringComparison.Ordinal))
+                    return TestData.PatchOkJson(stateId: "bbbbbbbb-0000-0000-0000-000000000002");
+                return TestData.PatchOkJson();
+            }
+            return req.RequestUri!.AbsolutePath.Contains("/states/") ? TestData.StateListJson()
+                : req.RequestUri!.AbsolutePath.Contains("/labels/") ? TestData.LabelListJson()
+                : TestData.IssueListJson();
+        });
 
         // Uncap the throttle: it serializes HTTP sends, which would both slow this test and
         // damp the contention we want. The write-through races after the PATCH returns, so a
