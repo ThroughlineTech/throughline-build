@@ -38,7 +38,6 @@
           "ThroughlineBuild.Contracts": "[1.0.0, )"
         }
       }
-    },
-    "net10.0/osx-arm64": {}
+    }
   }
 }
