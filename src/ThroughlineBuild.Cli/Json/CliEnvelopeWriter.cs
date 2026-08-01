@@ -140,7 +140,9 @@ public static class CliEnvelopeWriter
     }
 
     /// <summary>Project a domain <see cref="Ticket"/> onto its wire shape.</summary>
-    public static TicketView ToView(Ticket ticket) => new(
+    public static TicketView ToView(
+        Ticket ticket,
+        IReadOnlyList<Ticket>? children = null) => new(
         Id: ticket.Id,
         Uuid: ticket.Uuid,
         Title: ticket.Title,
@@ -152,5 +154,8 @@ public static class CliEnvelopeWriter
         DescriptionHtml: ticket.DescriptionHtml,
         ParentId: ticket.ParentId,
         Labels: ticket.Labels,
-        Relations: ticket.Relations.Select(r => new RelationView(r.Kind, r.TargetId)).ToList());
+        Relations: ticket.Relations.Select(r => new RelationView(r.Kind, r.TargetId)).ToList(),
+        Children: (children ?? Array.Empty<Ticket>())
+            .Select(c => new TicketChildView(c.Id, c.Title, c.State))
+            .ToList());
 }

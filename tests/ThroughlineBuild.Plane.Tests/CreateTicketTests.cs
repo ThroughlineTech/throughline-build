@@ -188,7 +188,7 @@ public class CreateTicketAsyncTests
     public async Task CreateTicketAsync_WithTypeName_ResolvesUuidInRequestBody()
     {
         var handler = new FakeMessageHandler();
-        // First request: issue-types GET
+        // First request: work-item-types GET
         handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueTypeListJson()));
         // Second request: issues POST
         handler.Enqueue(FakeMessageHandler.OkJson(CreateIssueResponseJson()));
@@ -203,6 +203,8 @@ public class CreateTicketAsyncTests
 
         var postReq = handler.Requests[1];
         Assert.Equal(HttpMethod.Post, postReq.Method);
+        Assert.Contains("\"type_id\"", postReq.Body);
+        Assert.DoesNotContain("\"type\"", postReq.Body);
         Assert.Contains(TestData.IssueTypeUuid, postReq.Body);
     }
 
@@ -223,6 +225,7 @@ public class CreateTicketAsyncTests
             ct: CancellationToken.None);
 
         var postReq = handler.Requests[1];
+        Assert.Contains("\"type_id\"", postReq.Body);
         Assert.Contains(TestData.IssueTypeUuid, postReq.Body);
     }
 
@@ -243,10 +246,11 @@ public class CreateTicketAsyncTests
                 ct: CancellationToken.None));
 
         Assert.Contains("unknown-type", ex.Message);
+        Assert.Contains("Work item type", ex.Message);
         Assert.Contains("not found", ex.Message);
     }
 
-    // Fact (i): empty type string skips issue-types lookup entirely
+    // Fact (i): empty type string skips work-item-types lookup entirely
     [Fact]
     public async Task CreateTicketAsync_EmptyType_NoIssueTypeLookup()
     {
@@ -261,9 +265,10 @@ public class CreateTicketAsyncTests
             initialLabelNames: null,
             ct: CancellationToken.None);
 
-        // Only the POST -- no issue-types GET
+        // Only the POST -- no work-item-types GET
         Assert.Single(handler.Requests);
         Assert.Equal(HttpMethod.Post, handler.Requests[0].Method);
+        Assert.DoesNotContain("type_id", handler.Requests[0].Body);
     }
 }
 

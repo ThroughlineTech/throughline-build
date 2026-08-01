@@ -13,7 +13,8 @@ public record PlaneIssue(
     [property: JsonPropertyName("labels")] List<string>? LabelIds,
     [property: JsonPropertyName("parent")] string? ParentId,
     [property: JsonPropertyName("type")] string? Type,
-    [property: JsonPropertyName("priority")] string? Priority = null
+    [property: JsonPropertyName("priority")] string? Priority = null,
+    [property: JsonPropertyName("created_at")] DateTime? CreatedAt = null
 );
 
 public record PlaneState(
@@ -133,13 +134,13 @@ public record UpdatePriorityRequest(
 );
 
 public record UpdateTypeRequest(
-    [property: JsonPropertyName("type")] string Type
+    [property: JsonPropertyName("type_id")] string TypeId
 );
 
 public record CreateIssueRequest(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("description_html")] string DescriptionHtml,
-    [property: JsonPropertyName("type"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Type,
+    [property: JsonPropertyName("type_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TypeId,
     [property: JsonPropertyName("labels")] List<string> LabelIds
 )
 {
@@ -147,12 +148,6 @@ public record CreateIssueRequest(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ParentId { get; init; }
 }
-
-public record PlaneCreateIssueResponse(
-    [property: JsonPropertyName("id")] string Id,
-    [property: JsonPropertyName("sequence_id")] int SequenceId,
-    [property: JsonPropertyName("created_at")] DateTime CreatedAt
-);
 
 public record SetParentRequest(
     [property: JsonPropertyName("parent")] string Parent
@@ -235,7 +230,6 @@ public record PlaneCreateProjectResponse(
 [JsonSerializable(typeof(UpdatePriorityRequest))]
 [JsonSerializable(typeof(UpdateTypeRequest))]
 [JsonSerializable(typeof(CreateIssueRequest))]
-[JsonSerializable(typeof(PlaneCreateIssueResponse))]
 [JsonSerializable(typeof(SetParentRequest))]
 [JsonSerializable(typeof(UpdateDescriptionRequest))]
 [JsonSerializable(typeof(CreateRelationRequest))]

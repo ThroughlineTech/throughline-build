@@ -77,6 +77,7 @@ public class CliEnvelopeWriterTests
         var rel = data.GetProperty("relations").EnumerateArray().Single();
         Assert.Equal("blocked_by", rel.GetProperty("kind").GetString());
         Assert.Equal("TLB-540", rel.GetProperty("targetId").GetString());
+        Assert.Empty(data.GetProperty("children").EnumerateArray());
     }
 
     [Fact]
@@ -91,9 +92,35 @@ public class CliEnvelopeWriterTests
         Assert.Equal("body", view.Description);
         Assert.Equal("TLB-500", view.ParentId);
         Assert.Equal(2, view.Labels.Count);
+        Assert.Empty(view.Children);
         var rel = Assert.Single(view.Relations);
         Assert.Equal("blocked_by", rel.Kind);
         Assert.Equal("TLB-540", rel.TargetId);
+    }
+
+    [Fact]
+    public void ToView_MapsDirectChildren()
+    {
+        var view = CliEnvelopeWriter.ToView(SampleTicket(), new[]
+        {
+            new Ticket(
+                Id: "TLB-542",
+                Uuid: "child-uuid",
+                Title: "child",
+                Type: "Task",
+                State: TicketState.Backlog,
+                Size: Size.S,
+                Risk: Risk.Low,
+                DescriptionHtml: "",
+                Relations: Array.Empty<Relation>(),
+                Labels: Array.Empty<string>(),
+                ParentId: "541")
+        });
+
+        var child = Assert.Single(view.Children);
+        Assert.Equal("TLB-542", child.Id);
+        Assert.Equal("child", child.Title);
+        Assert.Equal(TicketState.Backlog, child.State);
     }
 
     [Fact]

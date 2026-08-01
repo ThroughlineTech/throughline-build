@@ -17,7 +17,8 @@ internal static class RelateCommand
         ITicketing ticketing,
         TextWriter output,
         TextWriter error,
-        CancellationToken ct)
+        CancellationToken ct,
+        Func<PlaneApiException, string>? planeMessageFactory = null)
     {
         string? usageError = null;
         if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]) || args[1].StartsWith("--"))
@@ -99,8 +100,9 @@ internal static class RelateCommand
         catch (PlaneApiException ex)
         {
             var code = ex.Status == 404 ? CliErrorCodes.ConfigError : CliErrorCodes.Failure;
-            if (jsonOutput) CliEnvelopeWriter.WriteError(output, code, ex.Message);
-            else error.WriteLine($"Command 'relate' failed: {ex.Message}");
+            var message = planeMessageFactory?.Invoke(ex) ?? ex.Message;
+            if (jsonOutput) CliEnvelopeWriter.WriteError(output, code, message);
+            else error.WriteLine($"Command 'relate' failed: {message}");
             return ex.Status == 404 ? 2 : 1;
         }
     }

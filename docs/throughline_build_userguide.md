@@ -106,6 +106,11 @@ Commands detect a parent by querying its direct children. The current behavior i
 | `rework` | Requires InProgress, then uses the implement path; a parent is therefore rejected by implement's child check. |
 | `amend` | Changes only the named ticket. `--parent` reparents that ticket explicitly. |
 
+Ticket reads expose the same stable IDs that operators type. `build get --json` includes a
+`children` array with each direct child's ID, title, and state, and `parentId` values are stable
+ticket IDs such as `TLB-42` rather than Plane UUIDs. `build list --parent` accepts stable ticket IDs
+and legacy Plane UUIDs.
+
 ## First Ticket Walkthrough
 
 This sequence takes a repository from zero configuration to a shipped ticket. Replace the uppercase
@@ -154,6 +159,11 @@ Plane states and labels, checks connectivity, and preflights configured Claude t
 safe to run again. Keep `.build/config.toml` ignored even when it contains only an environment
 variable name.
 
+If Plane returns 401 or 403, `build` reports the repository-local config path, repository root,
+workspace, and project that were used for the request. The message also reminds you that sibling
+repositories may select different `.build/config.toml` files and recommends rerunning connected
+`build init` for this repository. Token values and Plane response bodies are not echoed.
+
 ### 4. Create a ticket
 
 ```
@@ -163,11 +173,27 @@ build new "fix the README typo"
 You should see a ticket ID printed to stdout (e.g. `TLB-1`). Open Plane and confirm the ticket
 appears in your project with state Backlog and the title you supplied.
 
-For machine-created tickets, `build new - --json` accepts a strict JSON draft. Relations use
-`{"kind":"blocked_by","targetId":"TLB-1"}` objects. Every relation type and target is validated
-before the ticket is created, so an unknown target leaves no new ticket. Plane cannot atomically
-create a ticket and its relation edges: if a later relation POST fails, the error names the created
-ticket and earlier edges may exist. Inspect them with `build relate TLB-N --list`.
+For machine-created tickets, `build new - --json` accepts a strict JSON draft. The required field
+is `title`. Optional fields are `description`, `acceptanceCriteria`, `labels`, `parent`,
+`relations`, and `type`; unknown fields are rejected. `acceptanceCriteria` is one Markdown string,
+not an array, so use checklist Markdown such as `- [ ] first criterion`. Markdown fields are
+rendered to Plane HTML before create.
+
+`type` is optional and backend-dependent. Omitting it sends no explicit type assignment and performs
+no work-item-type lookup; there is no implicit `task` type. When supplied, it is resolved through
+Plane work-item types and the create request sends the type UUID expected by Plane. Projects that do
+not expose work-item types can still create tickets by omitting `type`.
+
+Relations use `{"kind":"blocked_by","targetId":"TLB-1"}` objects. Every relation type and target is
+validated before the ticket is created, so an unknown target leaves no new ticket. Plane cannot
+atomically create a ticket, assign a parent, and create relation edges: if a parent or later relation
+write fails, the error names the created ticket and earlier writes may exist. Inspect them with
+`build relate TLB-N --list`.
+
+Successful JSON creates return the legacy top-level `id`, `uuid`, `labels`, `parent`, and
+`relations` fields, plus `requested` for the normalized request and `ticket` for the persisted Plane
+read-back after parent and relation writes. Use `ticket` when a caller needs the canonical state,
+body, labels, type display name, parent, and relations that Plane stored.
 
 Manage existing relations explicitly:
 
@@ -180,6 +206,9 @@ build relate TLB-2 --remove RELATION-ID --json
 The list includes the stable relation ID required for exact removal. Allowed types are `relates_to`,
 `duplicate`, `blocked_by`, `blocking`, `start_before`, `start_after`, `finish_before`, `finish_after`,
 `implemented_by`, and `implements`; spaces and hyphens are accepted in place of underscores.
+For a new ticket A and target B, use `blocked_by` for "A depends on B", `blocking` for "A blocks B",
+`duplicate` for "A duplicates B", and `relates_to` for a loose relationship. Plane may display
+inverse edges from the target side; the create request is written from A toward B.
 
 ### 5. Plan the ticket
 

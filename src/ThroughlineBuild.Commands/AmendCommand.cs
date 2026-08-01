@@ -115,7 +115,7 @@ public sealed class AmendCommand : ITicketCommand
         // Resolve the parent before any mutation so a bad parent id cannot leave earlier fields
         // partially amended. SetParentAsync still receives only backend UUIDs.
         var parent = hasParent
-            ? await _ticketing.GetAsync(parentArg!, ct).ConfigureAwait(false)
+            ? await _ticketing.GetRelationTicketAsync(parentArg!, ct).ConfigureAwait(false)
             : null;
 
         List<string>? updatedLabels = null;

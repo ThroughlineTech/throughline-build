@@ -10,13 +10,20 @@ public sealed class NewCommand : ITicketCommand
     private readonly string _planeBaseUrl;
     private readonly string _planeWorkspaceSlug;
     private readonly string? _debugCaptureDir;
+    private readonly Func<Exception, string>? _errorFormatter;
 
-    public NewCommand(NewPhase phase, string planeBaseUrl, string planeWorkspaceSlug, string? debugCaptureDir = null)
+    public NewCommand(
+        NewPhase phase,
+        string planeBaseUrl,
+        string planeWorkspaceSlug,
+        string? debugCaptureDir = null,
+        Func<Exception, string>? errorFormatter = null)
     {
         _phase = phase;
         _planeBaseUrl = planeBaseUrl;
         _planeWorkspaceSlug = planeWorkspaceSlug;
         _debugCaptureDir = debugCaptureDir;
+        _errorFormatter = errorFormatter;
     }
 
     public async Task<CommandResult> ExecuteAsync(TicketCommandContext ctx, CancellationToken ct)
@@ -89,7 +96,8 @@ public sealed class NewCommand : ITicketCommand
         }
         catch (Exception ex)
         {
-            return new CommandResult(false, $"failed to create ticket: {ex.Message}");
+            var message = _errorFormatter?.Invoke(ex) ?? ex.Message;
+            return new CommandResult(false, $"failed to create ticket: {message}");
         }
     }
 

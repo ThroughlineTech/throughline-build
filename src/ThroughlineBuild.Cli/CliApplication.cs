@@ -602,7 +602,6 @@ public static class CliApplication
         {
             var sharedTicketing = cliContext.Ticketing;
 
-            var cmd = new ListCommand(sharedTicketing, Console.Out);
             var extraArgs = new Dictionary<string, string>(StringComparer.Ordinal);
             for (int i = 1; i + 1 < args.Length; i += 2)
             {
@@ -612,54 +611,42 @@ public static class CliApplication
                 extraArgs[key] = args[i + 1];
             }
 
-            // --json: emit the result as a versioned envelope instead of the human table.
-            if (jsonOutput)
+            TicketState? listState = null;
+            if (extraArgs.TryGetValue("state", out var stateArg) && !string.IsNullOrWhiteSpace(stateArg))
             {
-                TicketState? listState = null;
-                if (extraArgs.TryGetValue("state", out var stateArg) && !string.IsNullOrWhiteSpace(stateArg))
+                if (!Enum.TryParse<TicketState>(stateArg, ignoreCase: true, out var parsedState))
                 {
-                    if (!Enum.TryParse<TicketState>(stateArg, ignoreCase: true, out var parsedState))
-                    {
-                        CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, $"invalid --state value: {stateArg}");
-                        return 2;
-                    }
-                    listState = parsedState;
+                    if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, $"invalid --state value: {stateArg}");
+                    else Console.Error.WriteLine($"Error: invalid --state value: {stateArg}");
+                    return 2;
                 }
-                extraArgs.TryGetValue("parent", out var listParent);
-                extraArgs.TryGetValue("type", out var listType);
-
-                using var jsonListCts = new CancellationTokenSource();
-                Console.CancelKeyPress += (_, e) => { e.Cancel = true; jsonListCts.Cancel(); };
-                try
-                {
-                    var listed = await sharedTicketing.QueryAsync(new TicketQuery(listState, listParent, listType), jsonListCts.Token);
-                    CliEnvelopeWriter.WriteList(Console.Out, listed);
-                    return 0;
-                }
-                catch (PlaneApiException ex)
-                {
-                    return PlaneCliError.Report("list", ex, jsonOutput);
-                }
-                catch (OperationCanceledException)
-                {
-                    Console.Error.WriteLine("Cancelled.");
-                    return 1;
-                }
+                listState = parsedState;
             }
+            extraArgs.TryGetValue("parent", out var listParent);
+            extraArgs.TryGetValue("type", out var listType);
 
-            var ctx = new TicketCommandContext("", extraArgs);
-
+            using var verbCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
             try
             {
-                using var verbCts = new CancellationTokenSource();
-                Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
-                var verbResult = await cmd.ExecuteAsync(ctx, verbCts.Token);
-                if (!verbResult.Success)
+                var listed = await sharedTicketing.QueryAsync(new TicketQuery(listState, listParent, listType), verbCts.Token);
+                if (jsonOutput)
                 {
-                    Console.Error.WriteLine($"Command 'list' failed: {verbResult.Message}");
-                    return 1;
+                    CliEnvelopeWriter.WriteList(Console.Out, listed);
+                }
+                else if (listed.Count == 0)
+                {
+                    Console.WriteLine("no tickets found");
+                }
+                else
+                {
+                    RenderListTable(listed, Console.Out);
                 }
                 return 0;
+            }
+            catch (PlaneApiException ex)
+            {
+                return PlaneCliError.Report("list", ex, jsonOutput, cliContext);
             }
             catch (OperationCanceledException)
             {
@@ -692,10 +679,13 @@ public static class CliApplication
                 using var verbCts = new CancellationTokenSource();
                 Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
                 var ticket = await sharedTicketing.GetAsync(getTicketId, verbCts.Token);
+                var children = await sharedTicketing.QueryAsync(
+                    new TicketQuery(ParentId: ticket.Id),
+                    verbCts.Token).ConfigureAwait(false);
 
                 if (jsonOutput)
                 {
-                    CliEnvelopeWriter.WriteTicket(Console.Out, CliEnvelopeWriter.ToView(ticket));
+                    CliEnvelopeWriter.WriteTicket(Console.Out, CliEnvelopeWriter.ToView(ticket, children));
                 }
                 else
                 {
@@ -706,6 +696,12 @@ public static class CliApplication
                     if (ticket.ParentId is not null) Console.WriteLine($"  parent: {ticket.ParentId}");
                     if (ticket.Labels.Count > 0) Console.WriteLine($"  labels: {string.Join(", ", ticket.Labels)}");
                     foreach (var rel in ticket.Relations) Console.WriteLine($"  rel:    {rel.Kind} -> {rel.TargetId}");
+                    if (children.Count > 0)
+                    {
+                        Console.WriteLine("  children:");
+                        foreach (var child in children)
+                            Console.WriteLine($"    {child.Id}  {child.State}  {child.Title}");
+                    }
 
                     // Render the body too, reusing the same HTML->text renderer the --json
                     // path uses (CliEnvelopeWriter.ToView), so text and JSON stay in sync.
@@ -735,7 +731,7 @@ public static class CliApplication
             {
                 // A 404 here (e.g. wrong/unset project) arrives with the actionable message already set
                 // by PlaneTicketingClient; PlaneCliError preserves it instead of re-deriving from ex.Body.
-                return PlaneCliError.Report("get", ex, jsonOutput);
+                return PlaneCliError.Report("get", ex, jsonOutput, cliContext);
             }
             catch (OperationCanceledException)
             {
@@ -793,7 +789,7 @@ public static class CliApplication
             }
             catch (PlaneApiException ex)
             {
-                return PlaneCliError.Report("comments", ex, jsonOutput);
+                return PlaneCliError.Report("comments", ex, jsonOutput, cliContext);
             }
             catch (OperationCanceledException)
             {
@@ -855,7 +851,7 @@ public static class CliApplication
             }
             catch (PlaneApiException ex)
             {
-                return PlaneCliError.Report("comment", ex, jsonOutput);
+                return PlaneCliError.Report("comment", ex, jsonOutput, cliContext);
             }
             catch (OperationCanceledException)
             {
@@ -914,7 +910,7 @@ public static class CliApplication
             }
             catch (PlaneApiException ex)
             {
-                return PlaneCliError.Report("transition", ex, jsonOutput);
+                return PlaneCliError.Report("transition", ex, jsonOutput, cliContext);
             }
             catch (OperationCanceledException)
             {
@@ -933,7 +929,13 @@ public static class CliApplication
                 using var verbCts = new CancellationTokenSource();
                 Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
                 return await RelateCommand.ExecuteAsync(
-                    args, jsonOutput, sharedTicketing, Console.Out, Console.Error, verbCts.Token);
+                    args,
+                    jsonOutput,
+                    sharedTicketing,
+                    Console.Out,
+                    Console.Error,
+                    verbCts.Token,
+                    ex => PlaneCliError.MessageFor(ex, cliContext));
             }
             catch (OperationCanceledException)
             {
@@ -1114,7 +1116,7 @@ public static class CliApplication
             }
             catch (PlaneApiException ex)
             {
-                return PlaneCliError.Report(verb, ex, jsonOutput);
+                return PlaneCliError.Report(verb, ex, jsonOutput, cliContext);
             }
             catch (OperationCanceledException)
             {
@@ -1224,12 +1226,18 @@ public static class CliApplication
                     var created = await newPhase.RunFromStructuredAsync(
                         draft.Title, draft.Type, draft.Description, draft.AcceptanceCriteria,
                         draft.Labels, draft.Parent, draftRelations, jsonNewCts.Token);
+                    var requested = new NewTicketRequestedView(
+                        draft.Labels ?? Array.Empty<string>(),
+                        draft.Parent,
+                        draftRelations.Select(r => new RelationView(r.Kind, r.TargetId)).ToList());
                     CliEnvelopeWriter.WriteNewTicket(Console.Out, new NewTicketView(
                         created.Id,
                         created.Uuid,
-                        draft.Labels ?? Array.Empty<string>(),
-                        draft.Parent,
-                        draftRelations.Select(r => new RelationView(r.Kind, r.TargetId)).ToList()));
+                        requested.Labels,
+                        requested.Parent,
+                        requested.Relations,
+                        Requested: requested,
+                        Ticket: created.Ticket is null ? null : CliEnvelopeWriter.ToView(created.Ticket)));
                     return 0;
                 }
                 catch (NewPhaseValidationException ex)
@@ -1245,11 +1253,11 @@ public static class CliApplication
                 }
                 catch (PlaneApiException ex)
                 {
-                    return PlaneCliError.Report("new", ex, jsonOutput);
+                    return PlaneCliError.Report("new", ex, jsonOutput, cliContext);
                 }
                 catch (RelationEndpointUnavailableException ex)
                 {
-                    CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.ConfigError, ex.Message);
+                    CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.ConfigError, PlaneCliError.MessageFor(ex, cliContext));
                     return 2;
                 }
                 catch (RelationConfigurationException ex)
@@ -1260,7 +1268,7 @@ public static class CliApplication
                 catch (InvalidOperationException ex)
                 {
                     // e.g. an unknown label name or issue type rejected by CreateTicketAsync.
-                    CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, ex.Message);
+                    CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, PlaneCliError.MessageFor(ex, cliContext));
                     return 1;
                 }
                 catch (OperationCanceledException)
@@ -1310,7 +1318,12 @@ public static class CliApplication
             {
                 newCommandArgs["print_template"] = "true";
                 var commandContext = new TicketCommandContext("", newCommandArgs);
-                var newCommand = new NewCommand(newPhase, config.Ticketing.PlaneBaseUrl, config.Ticketing.PlaneWorkspaceSlug, newBuildOptions.DebugCaptureDirectory);
+                var newCommand = new NewCommand(
+                    newPhase,
+                    config.Ticketing.PlaneBaseUrl,
+                    config.Ticketing.PlaneWorkspaceSlug,
+                    newBuildOptions.DebugCaptureDirectory,
+                    ex => PlaneCliError.MessageFor(ex, cliContext));
                 try
                 {
                     var verbResult = await newCommand.ExecuteAsync(commandContext, verbCts.Token);
@@ -1335,7 +1348,12 @@ public static class CliApplication
             {
                 newCommandArgs["body_path"] = classification.FilePath!;
                 var commandContext = new TicketCommandContext("", newCommandArgs);
-                var newCommand = new NewCommand(newPhase, config.Ticketing.PlaneBaseUrl, config.Ticketing.PlaneWorkspaceSlug, newBuildOptions.DebugCaptureDirectory);
+                var newCommand = new NewCommand(
+                    newPhase,
+                    config.Ticketing.PlaneBaseUrl,
+                    config.Ticketing.PlaneWorkspaceSlug,
+                    newBuildOptions.DebugCaptureDirectory,
+                    ex => PlaneCliError.MessageFor(ex, cliContext));
                 try
                 {
                     var verbResult = await newCommand.ExecuteAsync(commandContext, verbCts.Token);
@@ -1462,7 +1480,12 @@ public static class CliApplication
                 newCommandArgs["body_path"] = tempBodyPath;
 
                 var reviewedDraftContext = new TicketCommandContext("", newCommandArgs);
-                var reviewedDraftCommand = new NewCommand(newPhase, config.Ticketing.PlaneBaseUrl, config.Ticketing.PlaneWorkspaceSlug, newBuildOptions.DebugCaptureDirectory);
+                var reviewedDraftCommand = new NewCommand(
+                    newPhase,
+                    config.Ticketing.PlaneBaseUrl,
+                    config.Ticketing.PlaneWorkspaceSlug,
+                    newBuildOptions.DebugCaptureDirectory,
+                    ex => PlaneCliError.MessageFor(ex, cliContext));
                 try
                 {
                     var verbResult = await reviewedDraftCommand.ExecuteAsync(reviewedDraftContext, verbCts.Token);
@@ -2715,7 +2738,8 @@ public static class CliApplication
 
         var nonSiblingIds = batchTicketIds
             .Select(id => ticketsById[id])
-            .Where(t => !string.Equals(t.ParentId, parentTicket.Uuid, StringComparison.OrdinalIgnoreCase))
+            .Where(t => !string.Equals(t.ParentId, parentTicket.Id, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(t.ParentId, parentTicket.Uuid, StringComparison.OrdinalIgnoreCase))
             .Select(t => t.Id)
             .ToList();
         if (nonSiblingIds.Count > 0)
@@ -2726,6 +2750,30 @@ public static class CliApplication
         }
 
         return (new ChainBatchImplementGroup.ExplicitList(batchTicketIds.ToArray()), null);
+    }
+
+    private static void RenderListTable(IReadOnlyList<Ticket> tickets, TextWriter output)
+    {
+        var idWidth = Math.Max(2, tickets.Max(t => t.Id.Length));
+        var titleWidth = Math.Min(50, Math.Max(5, tickets.Max(t => t.Title.Length)));
+        var stateWidth = Math.Max(5, tickets.Max(t => t.State.ToString().Length));
+        var typeWidth = Math.Max(4, tickets.Max(t => t.Type.Length));
+        var parentTickets = tickets.Where(t => t.ParentId != null).ToList();
+        var parentWidth = Math.Max(6, parentTickets.Count > 0 ? parentTickets.Max(t => (t.ParentId?.Length) ?? 0) : 0);
+
+        output.WriteLine($"{ "ID".PadRight(idWidth)} {"Title".PadRight(titleWidth)} {"State".PadRight(stateWidth)} {"Type".PadRight(typeWidth)} Parent");
+        output.WriteLine(new string('-', idWidth + 1 + titleWidth + 1 + stateWidth + 1 + typeWidth + 1 + parentWidth));
+
+        foreach (var ticket in tickets)
+        {
+            var truncatedTitle = ticket.Title.Length > 50
+                ? ticket.Title.Substring(0, 47) + "..."
+                : ticket.Title;
+
+            output.WriteLine(
+                $"{ticket.Id.PadRight(idWidth)} {truncatedTitle.PadRight(titleWidth)} " +
+                $"{ticket.State.ToString().PadRight(stateWidth)} {ticket.Type.PadRight(typeWidth)} {ticket.ParentId ?? string.Empty}");
+        }
     }
 
     // Returns the first line of ex.StackTrace, trimmed, or "(no stack trace)" when absent.

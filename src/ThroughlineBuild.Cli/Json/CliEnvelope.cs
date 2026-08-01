@@ -33,6 +33,9 @@ public sealed record ErrorEnvelope(int SchemaVersion, bool Ok, CliError Error);
 /// <summary>A relation edge on a ticket, projected for the wire.</summary>
 public sealed record RelationView(string Kind, string TargetId);
 
+/// <summary>A direct child ticket summary for hierarchy verification.</summary>
+public sealed record TicketChildView(string Id, string Title, TicketState State);
+
 /// <summary>
 /// A ticket projected for the wire. Mirrors <see cref="Ticket"/>'s scalar fields.
 /// <see cref="Description"/> is the readable plain-text rendering of the body; the raw
@@ -50,7 +53,8 @@ public sealed record TicketView(
     string DescriptionHtml,
     string? ParentId,
     IReadOnlyList<string> Labels,
-    IReadOnlyList<RelationView> Relations);
+    IReadOnlyList<RelationView> Relations,
+    IReadOnlyList<TicketChildView> Children);
 
 /// <summary>Success envelope for <c>build get --json</c>.</summary>
 public sealed record TicketEnvelope(int SchemaVersion, bool Ok, TicketView Data);
@@ -76,13 +80,21 @@ public sealed record TicketDraft(
     string? Parent = null,
     IReadOnlyList<TicketDraftRelation>? Relations = null);
 
+/// <summary>Requested identifiers echoed for compatibility with the original create payload.</summary>
+public sealed record NewTicketRequestedView(
+    IReadOnlyList<string> Labels,
+    string? Parent,
+    IReadOnlyList<RelationView> Relations);
+
 /// <summary>The data payload returned after creating a ticket.</summary>
 public sealed record NewTicketView(
     string Id,
     string Uuid,
     IReadOnlyList<string> Labels,
     string? Parent,
-    IReadOnlyList<RelationView> Relations);
+    IReadOnlyList<RelationView> Relations,
+    NewTicketRequestedView? Requested = null,
+    TicketView? Ticket = null);
 
 /// <summary>Success envelope for <c>build new - --json</c>.</summary>
 public sealed record NewTicketEnvelope(int SchemaVersion, bool Ok, NewTicketView Data);
@@ -213,8 +225,10 @@ public sealed record WavesEnvelope(int SchemaVersion, bool Ok, WavePlan Data);
     UseStringEnumConverter = true)]
 [JsonSerializable(typeof(ErrorEnvelope))]
 [JsonSerializable(typeof(TicketEnvelope))]
+[JsonSerializable(typeof(TicketChildView))]
 [JsonSerializable(typeof(TicketDraft))]
 [JsonSerializable(typeof(NewTicketEnvelope))]
+[JsonSerializable(typeof(NewTicketRequestedView))]
 [JsonSerializable(typeof(ListEnvelope))]
 [JsonSerializable(typeof(CommentsEnvelope))]
 [JsonSerializable(typeof(CommentCreatedEnvelope))]

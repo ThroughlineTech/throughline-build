@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ThroughlineBuild.Cli.Json;
+using ThroughlineBuild.Contracts.Models;
 using Xunit;
 
 namespace ThroughlineBuild.Cli.Tests;
@@ -77,6 +78,16 @@ public class TicketDraftParserTests
     }
 
     [Fact]
+    public void TryParse_AcceptanceCriteriaArray_IsRejected()
+    {
+        var ok = TicketDraftParser.TryParse("""{"title":"x","acceptanceCriteria":["one"]}""", out var draft, out var error);
+
+        Assert.False(ok);
+        Assert.Null(draft);
+        Assert.NotNull(error);
+    }
+
+    [Fact]
     public void WriteNewTicket_EmitsVersionedSuccessEnvelope()
     {
         var sw = new StringWriter();
@@ -86,7 +97,23 @@ public class TicketDraftParserTests
             Uuid: "48a6db15-331a-476d-8d3d-fdd76544fd7b",
             Labels: new[] { "build" },
             Parent: "TLB-541",
-            Relations: Array.Empty<RelationView>()));
+            Relations: Array.Empty<RelationView>(),
+            Requested: new NewTicketRequestedView(
+                new[] { "build" },
+                "TLB-541",
+                Array.Empty<RelationView>()),
+            Ticket: CliEnvelopeWriter.ToView(new Ticket(
+                Id: "554",
+                Uuid: "48a6db15-331a-476d-8d3d-fdd76544fd7b",
+                Title: "created",
+                Type: "Task",
+                State: TicketState.Backlog,
+                Size: Size.M,
+                Risk: Risk.Medium,
+                DescriptionHtml: "<p>body</p>",
+                Relations: Array.Empty<Relation>(),
+                Labels: new[] { "build" },
+                ParentId: "TLB-541"))));
 
         using var doc = JsonDocument.Parse(sw.ToString());
         var root = doc.RootElement;
@@ -98,5 +125,8 @@ public class TicketDraftParserTests
         Assert.Equal("TLB-541", data.GetProperty("parent").GetString());
         Assert.Single(data.GetProperty("labels").EnumerateArray());
         Assert.Empty(data.GetProperty("relations").EnumerateArray());
+        Assert.Equal("TLB-541", data.GetProperty("requested").GetProperty("parent").GetString());
+        Assert.Equal("created", data.GetProperty("ticket").GetProperty("title").GetString());
+        Assert.Empty(data.GetProperty("ticket").GetProperty("children").EnumerateArray());
     }
 }

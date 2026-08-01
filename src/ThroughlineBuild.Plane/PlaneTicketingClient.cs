@@ -34,6 +34,7 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
 
     // Issue-type cache: name -> uuid, lazy-loaded on first use
     private Dictionary<string, string>? _issueTypesByName;
+    private bool _issueTypesUnavailable;
     private readonly SemaphoreSlim _issueTypeLock = new(1, 1);
 
     // Operation-wide issue snapshot. Within a single run the project's issue set, the
@@ -207,8 +208,8 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
     private string LabelsBase =>
         $"api/v1/workspaces/{_options.WorkspaceSlug}/projects/{_options.ProjectId}/labels/";
 
-    private string IssueTypesBase =>
-        $"api/v1/workspaces/{_options.WorkspaceSlug}/projects/{_options.ProjectId}/issue-types/";
+    private string WorkItemTypesBase =>
+        $"api/v1/workspaces/{_options.WorkspaceSlug}/projects/{_options.ProjectId}/work-item-types/";
 
     private static int ParseSequenceId(string id)
     {
@@ -504,27 +505,24 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
     private async Task<Dictionary<string, string>> GetIssueTypesByNameAsync(CancellationToken ct)
     {
         if (_issueTypesByName is not null) return _issueTypesByName;
+        if (_issueTypesUnavailable)
+            throw IssueTypesUnavailable(null);
 
         await _issueTypeLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             if (_issueTypesByName is not null) return _issueTypesByName;
+            if (_issueTypesUnavailable)
+                throw IssueTypesUnavailable(null);
             PlaneIssueTypeList list;
             try
             {
-                list = await GetJsonAsync<PlaneIssueTypeList>(IssueTypesBase, PlaneJsonContext.Default, ct).ConfigureAwait(false);
+                list = await GetJsonAsync<PlaneIssueTypeList>(WorkItemTypesBase, PlaneJsonContext.Default, ct).ConfigureAwait(false);
             }
             catch (PlaneApiException ex) when (ex.Status == 404)
             {
-                // The issue-types endpoint is a Plane feature that is not enabled on every deployment
-                // (it returns 404 when off). Without this, `build list --type <name>` surfaces a bare
-                // "Page not found." that looks like a bad type name; name the real cause instead.
-                throw new PlaneApiException(
-                    ex.Status, ex.Body,
-                    $"Filtering by --type needs Plane's issue-types feature, which is not enabled for project " +
-                    $"'{_options.ProjectId}' in workspace '{_options.WorkspaceSlug}' (the issue-types endpoint " +
-                    $"returned 404). Drop --type, or enable issue types for this project in Plane. ({ex.Message})",
-                    ex.RetryAfter);
+                _issueTypesUnavailable = true;
+                throw IssueTypesUnavailable(ex);
             }
             _issueTypesByName = (list.Results ?? []).ToDictionary(t => t.Name, t => t.Id, StringComparer.OrdinalIgnoreCase);
             return _issueTypesByName;
@@ -534,6 +532,14 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
             _issueTypeLock.Release();
         }
     }
+
+    private PlaneApiException IssueTypesUnavailable(PlaneApiException? ex) => new(
+        404,
+        ex?.Body ?? "Plane work-item type endpoint unavailable.",
+        $"Plane work-item types are optional and unavailable for project '{_options.ProjectId}' " +
+        $"in workspace '{_options.WorkspaceSlug}' (the work-item-types endpoint returned 404). " +
+        "Omit --type, or enable/configure work-item types before using create, list --type, or amend --type.",
+        ex?.RetryAfter);
 
     private async Task<List<string>> ResolveLabelIdsAsync(IEnumerable<string> labels, CancellationToken ct)
     {
@@ -550,8 +556,39 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
     {
         var issueTypesByName = await GetIssueTypesByNameAsync(ct).ConfigureAwait(false);
         if (!issueTypesByName.TryGetValue(type, out var typeId))
-            throw new ArgumentException($"Issue type '{type}' not found in Plane project");
+            throw new ArgumentException($"Work item type '{type}' not found in Plane project");
         return typeId;
+    }
+
+    private async Task<string> ResolveIssueTypeDisplayNameAsync(string? typeId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(typeId))
+            return string.Empty;
+        if (_issueTypesUnavailable)
+            return typeId;
+
+        try
+        {
+            var issueTypesByName = await GetIssueTypesByNameAsync(ct).ConfigureAwait(false);
+            foreach (var pair in issueTypesByName)
+                if (string.Equals(pair.Value, typeId, StringComparison.OrdinalIgnoreCase))
+                    return pair.Key;
+        }
+        catch (PlaneApiException ex) when (ex.Status == 404)
+        {
+            return typeId;
+        }
+
+        return typeId;
+    }
+
+    private string? ResolveStableParentId(string? parentUuid)
+    {
+        if (string.IsNullOrWhiteSpace(parentUuid))
+            return null;
+        return _issueByUuid.TryGetValue(parentUuid, out var parent)
+            ? FormatTicketId(parent.SequenceId)
+            : parentUuid;
     }
 
     // State-name -> TicketState, derived from the canonical WorkspaceSchema so the runtime
@@ -753,17 +790,40 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
     /// </summary>
     private static string? TryReadDescription(string patchResponseBody)
     {
+        var issue = TryReadIssue(patchResponseBody);
+        return issue?.DescriptionHtml;
+    }
+
+    private static PlaneIssue? TryReadIssue(string responseBody)
+    {
         try
         {
             var issue = (PlaneIssue?)JsonSerializer.Deserialize(
-                patchResponseBody, typeof(PlaneIssue), PlaneJsonContext.Default);
-            return issue?.DescriptionHtml;
+                responseBody, typeof(PlaneIssue), PlaneJsonContext.Default);
+            return IsUsableIssue(issue) ? issue : null;
         }
         catch
         {
             return null;
         }
     }
+
+    private static bool IsUsableIssue(PlaneIssue? issue) =>
+        issue is not null
+        && !string.IsNullOrWhiteSpace(issue.Id)
+        && issue.SequenceId > 0;
+
+    private static PlaneIssue MergeIssue(PlaneIssue issue, PlaneIssue? fallback = null) => new(
+        Id: string.IsNullOrWhiteSpace(issue.Id) ? fallback?.Id ?? string.Empty : issue.Id,
+        SequenceId: issue.SequenceId > 0 ? issue.SequenceId : fallback?.SequenceId ?? 0,
+        Name: string.IsNullOrWhiteSpace(issue.Name) ? fallback?.Name ?? string.Empty : issue.Name,
+        DescriptionHtml: issue.DescriptionHtml ?? fallback?.DescriptionHtml,
+        StateId: string.IsNullOrWhiteSpace(issue.StateId) ? fallback?.StateId ?? string.Empty : issue.StateId,
+        LabelIds: issue.LabelIds ?? fallback?.LabelIds,
+        ParentId: issue.ParentId ?? fallback?.ParentId,
+        Type: issue.Type ?? fallback?.Type,
+        Priority: issue.Priority ?? fallback?.Priority,
+        CreatedAt: issue.CreatedAt ?? fallback?.CreatedAt);
 
     private void UpdateCachedIssue(string uuid, Func<PlaneIssue, PlaneIssue> update)
     {
@@ -781,6 +841,7 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
     {
         var statesTask = GetStatesByNameAsync(ct);
         var labelsTask = GetLabelsByNameAsync(ct);
+        var typeTask = ResolveIssueTypeDisplayNameAsync(issue.Type, ct);
 
         var states = await statesTask.ConfigureAwait(false);
         var statesById = states.ToDictionary(kvp => kvp.Value, kvp => new PlaneState(kvp.Value, kvp.Key, string.Empty));
@@ -816,14 +877,14 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
             Id: FormatTicketId(issue.SequenceId),
             Uuid: issue.Id,
             Title: issue.Name,
-            Type: issue.Type ?? string.Empty,
+            Type: await typeTask.ConfigureAwait(false),
             State: ticketState,
             Size: ticketSize,
             Risk: ticketRisk,
             DescriptionHtml: issue.DescriptionHtml ?? string.Empty,
             Relations: [],
             Labels: resolvedLabels.AsReadOnly(),
-            ParentId: issue.ParentId);
+            ParentId: ResolveStableParentId(issue.ParentId));
     }
 
     // ------------------------------------------------------------------ ITicketing
@@ -877,7 +938,7 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
                 return;
             }
 
-            await PatchJsonAsync(
+            var responseBody = await PatchJsonAsync(
                 $"{IssuesBase}{issue.Id}/",
                 new TransitionRequest(stateId),
                 PlaneJsonContext.Default,
@@ -885,7 +946,11 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
 
             // Write-through: keep the snapshot's state fresh so the next phase's state guard
             // reads the state this transition just wrote, not the value cached at first load.
-            UpdateCachedIssue(issue.Id, i => i with { StateId = stateId });
+            var storedStateId = TryReadIssue(responseBody)?.StateId;
+            UpdateCachedIssue(issue.Id, i => i with
+            {
+                StateId = string.IsNullOrWhiteSpace(storedStateId) ? stateId : storedStateId
+            });
             transitioned = true;
         }, ct).ConfigureAwait(false);
 
@@ -945,13 +1010,14 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
 
             var labelIds = await ResolveLabelIdsAsync(labels, token).ConfigureAwait(false);
 
-            await PatchJsonAsync(
+            var responseBody = await PatchJsonAsync(
                 $"{IssuesBase}{issue.Id}/",
                 new ApplyLabelsRequest(labelIds),
                 PlaneJsonContext.Default,
                 token).ConfigureAwait(false);
 
-            UpdateCachedIssue(issue.Id, i => i with { LabelIds = labelIds });
+            var storedLabelIds = TryReadIssue(responseBody)?.LabelIds ?? labelIds;
+            UpdateCachedIssue(issue.Id, i => i with { LabelIds = storedLabelIds });
         }, ct).ConfigureAwait(false);
     }
 
@@ -968,13 +1034,17 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
             var seq = ParseSequenceId(id);
             var issue = await FindIssueAsync(seq, token).ConfigureAwait(false);
 
-            await PatchJsonAsync(
+            var responseBody = await PatchJsonAsync(
                 $"{IssuesBase}{issue.Id}/",
                 new UpdateTitleRequest(title),
                 PlaneJsonContext.Default,
                 token).ConfigureAwait(false);
 
-            UpdateCachedIssue(issue.Id, i => i with { Name = title });
+            var storedName = TryReadIssue(responseBody)?.Name;
+            UpdateCachedIssue(issue.Id, i => i with
+            {
+                Name = string.IsNullOrWhiteSpace(storedName) ? title : storedName
+            });
         }, ct).ConfigureAwait(false);
     }
 
@@ -985,13 +1055,17 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
             var seq = ParseSequenceId(id);
             var issue = await FindIssueAsync(seq, token).ConfigureAwait(false);
 
-            await PatchJsonAsync(
+            var responseBody = await PatchJsonAsync(
                 $"{IssuesBase}{issue.Id}/",
                 new UpdatePriorityRequest(priority),
                 PlaneJsonContext.Default,
                 token).ConfigureAwait(false);
 
-            UpdateCachedIssue(issue.Id, i => i with { Priority = priority });
+            var storedPriority = TryReadIssue(responseBody)?.Priority;
+            UpdateCachedIssue(issue.Id, i => i with
+            {
+                Priority = string.IsNullOrWhiteSpace(storedPriority) ? priority : storedPriority
+            });
         }, ct).ConfigureAwait(false);
     }
 
@@ -1003,13 +1077,17 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
             var issue = await FindIssueAsync(seq, token).ConfigureAwait(false);
             var typeId = await ResolveIssueTypeIdAsync(type, token).ConfigureAwait(false);
 
-            await PatchJsonAsync(
+            var responseBody = await PatchJsonAsync(
                 $"{IssuesBase}{issue.Id}/",
                 new UpdateTypeRequest(typeId),
                 PlaneJsonContext.Default,
                 token).ConfigureAwait(false);
 
-            UpdateCachedIssue(issue.Id, i => i with { Type = typeId });
+            var storedTypeId = TryReadIssue(responseBody)?.Type;
+            UpdateCachedIssue(issue.Id, i => i with
+            {
+                Type = string.IsNullOrWhiteSpace(storedTypeId) ? typeId : storedTypeId
+            });
         }, ct).ConfigureAwait(false);
     }
 
@@ -1124,13 +1202,17 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
                 return new RollupResult(false, null, $"State '{desired}' not found in Plane project");
 
             // PATCH parent state
-            await PatchJsonAsync(
+            var parentPatchBody = await PatchJsonAsync(
                 $"{IssuesBase}{parentId}/",
                 new TransitionRequest(desiredStateId),
                 PlaneJsonContext.Default,
                 ct).ConfigureAwait(false);
 
-            UpdateCachedIssue(parentId, i => i with { StateId = desiredStateId });
+            var storedParentStateId = TryReadIssue(parentPatchBody)?.StateId;
+            UpdateCachedIssue(parentId, i => i with
+            {
+                StateId = string.IsNullOrWhiteSpace(storedParentStateId) ? desiredStateId : storedParentStateId
+            });
 
             // POST comment: [rollup] marker is load-bearing
             var commentHtml = $"<p>[rollup] {FormatTicketId(childIssue.SequenceId)} -> {childStateName}; parent -> {desired}</p>";
@@ -1178,14 +1260,17 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
             {
                 var issueTypesByName = await GetIssueTypesByNameAsync(token).ConfigureAwait(false);
                 if (!issueTypesByName.TryGetValue(type, out typeId))
-                    throw new InvalidOperationException($"Issue type '{type}' not found in Plane project");
+                    throw new InvalidOperationException($"Work item type '{type}' not found in Plane project");
             }
 
             var request = new CreateIssueRequest(
                 Name: title,
                 DescriptionHtml: descriptionHtml,
-                Type: typeId,
+                TypeId: typeId,
                 LabelIds: labelIds);
+
+            if (string.IsNullOrEmpty(_options.ProjectIdentifier) && _resolvedProjectIdentifier is null)
+                _ = await ResolveConfiguredProjectIdentifierAsync(token).ConfigureAwait(false);
 
             var responseBody = await PostJsonAsync(
                 IssuesBase,
@@ -1193,14 +1278,10 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
                 PlaneJsonContext.Default,
                 token).ConfigureAwait(false);
 
-            var response = (PlaneCreateIssueResponse?)JsonSerializer.Deserialize(
-                responseBody, typeof(PlaneCreateIssueResponse), PlaneJsonContext.Default)
-                ?? throw new InvalidOperationException("Deserialized null for PlaneCreateIssueResponse");
+            var response = TryReadIssue(responseBody)
+                ?? throw new InvalidOperationException("Deserialized null or incomplete Plane issue after create");
 
-            // Seed the snapshot so a later lookup/parent-probe on this client sees the new ticket.
-            // The create response carries no state; a new issue lands in the default (Backlog), and
-            // an empty StateId resolves to Backlog in ToTicketAsync, so leaving it empty is correct.
-            IndexIssue(new PlaneIssue(
+            var fallback = new PlaneIssue(
                 Id: response.Id,
                 SequenceId: response.SequenceId,
                 Name: title,
@@ -1208,12 +1289,14 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
                 StateId: string.Empty,
                 LabelIds: labelIds,
                 ParentId: null,
-                Type: typeId));
+                Type: typeId);
+            var stored = MergeIssue(response, fallback);
+            IndexIssue(stored);
 
             return new NewTicketResult(
-                Id: FormatTicketId(response.SequenceId),
-                Uuid: response.Id,
-                CreatedAt: response.CreatedAt);
+                Id: FormatTicketId(stored.SequenceId),
+                Uuid: stored.Id,
+                CreatedAt: stored.CreatedAt ?? DateTime.UtcNow);
         }, ct).ConfigureAwait(false);
     }
 
@@ -1221,13 +1304,17 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
     {
         await _pipeline.ExecuteAsync(async token =>
         {
-            await PatchJsonAsync(
+            var responseBody = await PatchJsonAsync(
                 $"{IssuesBase}{childUuid}/",
                 new SetParentRequest(parentUuid),
                 PlaneJsonContext.Default,
                 token).ConfigureAwait(false);
 
-            UpdateCachedIssue(childUuid, i => i with { ParentId = parentUuid });
+            var storedParentId = TryReadIssue(responseBody)?.ParentId;
+            UpdateCachedIssue(childUuid, i => i with
+            {
+                ParentId = string.IsNullOrWhiteSpace(storedParentId) ? parentUuid : storedParentId
+            });
         }, ct).ConfigureAwait(false);
     }
 
@@ -1266,14 +1353,17 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
             }
 
             if (!string.IsNullOrEmpty(query.ParentId))
-                issues = issues.Where(i => string.Equals(i.ParentId, query.ParentId, StringComparison.Ordinal));
+            {
+                var parentUuid = ResolveParentFilterUuid(query.ParentId);
+                issues = issues.Where(i => string.Equals(i.ParentId, parentUuid, StringComparison.Ordinal));
+            }
 
             if (!string.IsNullOrEmpty(query.Type))
             {
-                // query.Type is a human issue-type name (e.g. "Bug"); the cached issue carries the
-                // issue-type UUID. Resolve name -> UUID the same way CreateTicketAsync does so the
-                // comparison is UUID-vs-UUID. (Requires the issue-types feature; without it this
-                // throws, matching create-with-type. An unknown type name matches nothing.)
+                // query.Type is a human work-item type name (e.g. "Bug"); the cached issue carries
+                // the type UUID. Resolve name -> UUID the same way CreateTicketAsync does so the
+                // comparison is UUID-vs-UUID. (Requires the optional work-item-types capability;
+                // without it this throws, matching create/amend-with-type.)
                 var typesByName = await GetIssueTypesByNameAsync(token).ConfigureAwait(false);
                 issues = typesByName.TryGetValue(query.Type, out var typeUuid)
                     ? issues.Where(i => string.Equals(i.Type, typeUuid, StringComparison.Ordinal))
@@ -1286,6 +1376,26 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
 
             return (IReadOnlyList<Ticket>)tickets;
         }, ct).ConfigureAwait(false);
+    }
+
+    private string ResolveParentFilterUuid(string parentId)
+    {
+        if (_issueByUuid.ContainsKey(parentId))
+            return parentId;
+        if (Guid.TryParse(parentId, out _))
+            return parentId;
+
+        try
+        {
+            var seq = ParseSequenceId(parentId);
+            if (_seqToUuid.TryGetValue(seq, out var uuid))
+                return uuid;
+        }
+        catch (ArgumentException)
+        {
+        }
+
+        return parentId;
     }
 
     // Maximum issue-list pages to walk before giving up (guards against a server that
@@ -1402,13 +1512,17 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
                     $"Warning: Plane project has no '{stateName}' state; leaving {id} in its current state.");
                 return;
             }
-            await PatchJsonAsync(
+            var responseBody = await PatchJsonAsync(
                 $"{IssuesBase}{issue.Id}/",
                 new TransitionRequest(stateId),
                 PlaneJsonContext.Default,
                 token).ConfigureAwait(false);
 
-            UpdateCachedIssue(issue.Id, i => i with { StateId = stateId });
+            var storedStateId = TryReadIssue(responseBody)?.StateId;
+            UpdateCachedIssue(issue.Id, i => i with
+            {
+                StateId = string.IsNullOrWhiteSpace(storedStateId) ? stateId : storedStateId
+            });
         }, ct).ConfigureAwait(false);
     }
 
@@ -1468,7 +1582,7 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
                 var request = new CreateIssueRequest(
                     Name: child.Title,
                     DescriptionHtml: child.DescriptionHtml,
-                    Type: null,
+                    TypeId: null,
                     LabelIds: labelIds)
                 {
                     ParentId = parentUuid
@@ -1480,18 +1594,18 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
                     PlaneJsonContext.Default,
                     ct).ConfigureAwait(false);
 
-                var response = (PlaneCreateIssueResponse?)JsonSerializer.Deserialize(
-                    responseBody, typeof(PlaneCreateIssueResponse), PlaneJsonContext.Default);
+                var response = TryReadIssue(responseBody);
 
                 if (response is null)
                 {
-                    failures.Add($"{child.Title}: deserialized null response");
+                    failures.Add($"{child.Title}: deserialized null or incomplete response");
                     continue;
                 }
 
                 // Seed the snapshot with the new child (parented to parentUuid) so a subsequent
-                // parent-probe on this client sees it. Empty StateId -> Backlog in ToTicketAsync.
-                IndexIssue(new PlaneIssue(
+                // parent-probe on this client sees it. Prefer Plane's returned issue; fall back only
+                // for fields the response omits.
+                var fallback = new PlaneIssue(
                     Id: response.Id,
                     SequenceId: response.SequenceId,
                     Name: child.Title,
@@ -1499,7 +1613,8 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
                     StateId: string.Empty,
                     LabelIds: labelIds,
                     ParentId: parentUuid,
-                    Type: null));
+                    Type: null);
+                IndexIssue(MergeIssue(response, fallback));
 
                 created.Add(new CreatedChild(
                     Id: FormatTicketId(response.SequenceId),

@@ -67,6 +67,17 @@ public static class Tier1Renderer
             sb.Append('\n');
         }
 
+        if (help.Details is { Count: > 0 })
+        {
+            foreach (var detail in help.Details)
+            {
+                if (string.IsNullOrWhiteSpace(detail))
+                    continue;
+                sb.Append(detail.TrimEnd());
+                sb.Append("\n\n");
+            }
+        }
+
         // Exit codes section (omit when empty)
         if (help.ExitCodes.Count > 0)
         {
