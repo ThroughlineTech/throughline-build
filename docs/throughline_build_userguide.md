@@ -229,3 +229,54 @@ git log --oneline -1
 ```
 
 You should see the commit for your ticket at HEAD. Setup is complete.
+
+## Bring your own conductor
+
+To keep one long-lived agent session in charge of implementation and review, use
+the ticket CRUD verbs together with deterministic worktree leases:
+
+```
+build worktree lease --ticket TLB-1 --slug readme-fix
+build waves --input tickets.json
+build gate --ticket TLB-1
+build worktree list
+build worktree teardown --ticket TLB-1
+```
+
+`worktree`, `gate`, and `waves` load only the configuration sections they use
+without requiring `[ticketing]`, `[workers]`, or `[events]`, resolving ticketing
+secrets, or constructing a Plane client. Other commands still require the full
+ticketing, worker, and event configuration.
+
+Lease prints the absolute worktree path for use as an agent working directory,
+runs `[project].install_command`, and writes a safety manifest. Configure the
+root and the only untracked local files Build may copy with `[worktree] root`
+and `[worktree] seed_files`. Use `--require-seed <path>` when a listed file must
+exist before lease creation. Concurrent attempts for one ticket are serialized,
+and rollback removes only branch and worktree artifacts owned by the failing
+attempt. Teardown is safe by default: it refuses tracked work and unexpected
+untracked files before removing the worktree. Add
+`--require-merged-into <ref>` to prove the helper branch is an ancestor of a
+named target before any removal. Branch deletion uses Git's non-force delete
+unless `--force` is present. `--force` skips the worktree cleanliness proof and
+may permanently discard work. All three forms support `--json`.
+
+Run `build gate` from the leased worktree to execute its configured
+`[[review.checks]]`. Setup checks run first. Gating and setup failures exit 1;
+advisory failures remain visible but do not change the exit code. Use
+`--role gating|advisory|all` to select a role, and `--json` for typed per-check
+exit codes, durations, captured output, and inconclusive missing-path results.
+By default an empty selected check list exits 0 for compatibility; add
+`--require-checks` to make that condition exit 1.
+
+Use `build waves --input <path|->` before leasing worktrees to level declared
+dependencies and pack file-disjoint ready tickets up to `[waves].cap` (default
+2). Exact-file overlap and uncertain or empty file predictions serialize
+automatically. Repository-specific `global`, `cohesive-module`, and `pairwise`
+path rules belong in `[[waves.serialize]]`; no repository paths are built into
+the command. Output names the rule and path for each serialization decision
+and reports estimated speedup. JSON input and output shapes, glob semantics,
+and exit codes are documented in `docs/bring-your-own-conductor.md`.
+
+See `docs/bring-your-own-conductor.md` for the manifest safety model, exit codes,
+and a complete caller-owned conductor sequence.

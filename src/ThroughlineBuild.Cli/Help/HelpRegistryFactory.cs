@@ -35,6 +35,11 @@ public static class HelpRegistryFactory
         r.Register(Rework());
         r.Register(Decompose());
 
+        // Bring your own conductor
+        r.Register(Worktree());
+        r.Register(Gate());
+        r.Register(Waves());
+
         // Work items
         r.Register(New());
         r.Register(List());
@@ -229,6 +234,94 @@ public static class HelpRegistryFactory
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2, s_exit3, s_exit4],
         Examples: []
+    );
+
+    // ------------------------------------------------------------------
+    // Bring-your-own-conductor commands
+    // ------------------------------------------------------------------
+
+    private static CommandHelp Worktree() => new(
+        Name: "worktree",
+        Group: CommandGroup.Conductor,
+        Summary: "Lease, list, or tear down conductor-owned worktrees",
+        Usage:
+            "worktree lease --ticket <id> [--slug <slug>] [--base <ref>] [--require-seed <path>] [--json]\n" +
+            "worktree teardown (--ticket <id> | --dir <path>) [--require-merged-into <ref>] [--force] [--json]\n" +
+            "worktree list [--json]",
+        Options:
+        [
+            new("--ticket <id>", "Ticket identity used to derive and locate the helper branch", false),
+            new("--slug <slug>", "Optional readable suffix for the helper branch and directory", false),
+            new("--base <ref>", "Base ref for the new helper branch (default: HEAD)", false),
+            new("--require-seed <path>", "Fail before creation unless this allowlisted seed exists", false),
+            new("--dir <path>", "Manifest-backed worktree directory to tear down", false),
+            new("--require-merged-into <ref>", "Before teardown, prove the helper branch is an ancestor of the named ref", false),
+            new("--force", "Skip worktree cleanliness checks and permanently discard work", false),
+            new("--json", "Emit a versioned JSON envelope", false),
+        ],
+        ExitCodes:
+        [
+            new(0, "Success"),
+            new(1, "Git, install, or filesystem failure"),
+            new(2, "Config error or bad arguments"),
+            new(6, "Ticket, branch, or target-path collision"),
+            new(7, "Required seed is missing or not allowlisted"),
+            new(8, "Containment or manifest validation refusal"),
+        ],
+        Examples:
+        [
+            new("worktree lease --ticket TLB-582 --slug worktree-verbs", "Lease an isolated workspace"),
+            new("worktree list --json", "Inspect leases and unmanifested directories"),
+            new("worktree teardown --ticket TLB-582", "Safely remove a clean lease and merged helper branch"),
+        ]
+    );
+
+    private static CommandHelp Gate() => new(
+        Name: "gate",
+        Group: CommandGroup.Conductor,
+        Summary: "Run configured review checks in the current working directory",
+        Usage: "gate [--ticket <id>] [--role gating|advisory|all] [--require-checks] [--json]",
+        Options:
+        [
+            new("--ticket <id>", "Optional ticket identity included in the result", false),
+            new("--role <role>", "Run gating, advisory, or all checks (default: all); setup always runs first", false),
+            new("--require-checks", "Fail when the selected check list is empty", false),
+            new("--json", "Emit a versioned JSON envelope with typed per-check results", false),
+        ],
+        ExitCodes:
+        [
+            new(0, "Every selected setup and gating check passed, or no checks are configured without --require-checks"),
+            new(1, "A setup or gating check failed, was inconclusive, or no checks were selected with --require-checks"),
+            new(2, "Config error or bad arguments"),
+        ],
+        Examples:
+        [
+            new("gate", "Run the complete configured gate in the current tree"),
+            new("gate --ticket TLB-583 --role gating --json", "Run setup and gating checks with structured output"),
+        ]
+    );
+
+    private static CommandHelp Waves() => new(
+        Name: "waves",
+        Group: CommandGroup.Conductor,
+        Summary: "Plan dependency-safe, conflict-aware ticket waves",
+        Usage: "waves --input <path|-> [--json]",
+        Options:
+        [
+            new("--input <path|->", "Read a ticket array or wave-plan object from a file or stdin", false),
+            new("--json", "Emit the schedule, serialization reasons, and speedup verdict in a versioned envelope", false),
+        ],
+        ExitCodes:
+        [
+            new(0, "Wave schedule produced"),
+            new(2, "Config, arguments, input JSON, or dependency scope is invalid"),
+            new(5, "Selected tickets contain a dependency cycle"),
+        ],
+        Examples:
+        [
+            new("waves --input tickets.json", "Print a human-readable schedule"),
+            new("waves --input - --json", "Read JSON from stdin and emit a typed envelope"),
+        ]
     );
 
     // ------------------------------------------------------------------

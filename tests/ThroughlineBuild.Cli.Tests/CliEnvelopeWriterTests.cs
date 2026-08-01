@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ThroughlineBuild.Cli.Json;
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Helpers;
 using Xunit;
 
 namespace ThroughlineBuild.Cli.Tests;
@@ -108,5 +109,34 @@ public class CliEnvelopeWriterTests
         Assert.Equal("edge-123", relation.GetProperty("id").GetString());
         Assert.Equal("blocking", relation.GetProperty("kind").GetString());
         Assert.Equal("TLB-9", relation.GetProperty("targetId").GetString());
+    }
+
+    [Fact]
+    public void WriteWorktreeLease_UsesSourceGeneratedManifestEnvelope()
+    {
+        var manifest = new WorktreeLeaseManifest(
+            1,
+            "TLB-582",
+            "safe",
+            "lease/tlb-582-safe",
+            "0123456789abcdef0123456789abcdef01234567",
+            "C:\\repo",
+            "C:\\repo",
+            "C:\\repo\\.worktrees\\conductor",
+            "C:\\repo\\.worktrees\\conductor\\tlb-582-safe",
+            [".dev.vars"],
+            [],
+            new WorktreeInstallRecord("succeeded", 25));
+        var sw = new StringWriter();
+
+        CliEnvelopeWriter.WriteWorktreeLease(sw, manifest);
+
+        using var doc = JsonDocument.Parse(sw.ToString());
+        var root = doc.RootElement;
+        Assert.True(root.GetProperty("ok").GetBoolean());
+        var data = root.GetProperty("data");
+        Assert.Equal(manifest.WorktreePath, data.GetProperty("path").GetString());
+        Assert.Equal("TLB-582", data.GetProperty("manifest").GetProperty("ticket").GetString());
+        Assert.Equal("succeeded", data.GetProperty("manifest").GetProperty("install").GetProperty("status").GetString());
     }
 }

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Helpers;
 
 namespace ThroughlineBuild.Cli.Json;
 
@@ -94,6 +95,48 @@ public static class CliEnvelopeWriter
     {
         var envelope = new AckEnvelope(SchemaVersion, Ok: true, new AckView(ticketId, action));
         output.WriteLine(JsonSerializer.Serialize(envelope, CliJsonContext.Default.AckEnvelope));
+    }
+
+    public static void WriteWorktreeLease(TextWriter output, WorktreeLeaseManifest manifest)
+    {
+        var envelope = new WorktreeLeaseEnvelope(
+            SchemaVersion, Ok: true, new WorktreeLeaseView(manifest.WorktreePath, manifest));
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.WorktreeLeaseEnvelope));
+    }
+
+    public static void WriteWorktreeList(TextWriter output, WorktreeLeaseListResult result)
+    {
+        var envelope = new WorktreeListEnvelope(
+            SchemaVersion,
+            Ok: true,
+            new WorktreeListView(result.Leases, result.UnmanifestedDirectories));
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.WorktreeListEnvelope));
+    }
+
+    public static void WriteWorktreeTeardown(TextWriter output, WorktreeLeaseManifest manifest)
+    {
+        var envelope = new WorktreeTeardownEnvelope(
+            SchemaVersion,
+            Ok: true,
+            new WorktreeTeardownView(manifest.WorktreePath, manifest.Branch));
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.WorktreeTeardownEnvelope));
+    }
+
+    public static void WriteGate(TextWriter output, GateView result)
+    {
+        var envelope = new GateEnvelope(SchemaVersion, Ok: true, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.GateEnvelope));
+    }
+
+    public static void WriteWaves(TextWriter output, WavePlan result)
+    {
+        var envelope = new WavesEnvelope(SchemaVersion, Ok: true, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.WavesEnvelope));
     }
 
     /// <summary>Project a domain <see cref="Ticket"/> onto its wire shape.</summary>

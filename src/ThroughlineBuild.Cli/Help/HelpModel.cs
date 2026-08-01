@@ -7,6 +7,8 @@ public enum CommandGroup
 {
     /// <summary>Commands that drive the plan/implement/review/ship/chain/rework/decompose pipeline.</summary>
     Pipeline,
+    /// <summary>Deterministic primitives for a caller-owned conductor loop.</summary>
+    Conductor,
     /// <summary>Commands that create or mutate work items (tickets).</summary>
     WorkItems,
     /// <summary>Commands that manage project configuration or emit reference material.</summary>

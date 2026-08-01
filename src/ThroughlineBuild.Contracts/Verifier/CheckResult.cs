@@ -38,4 +38,8 @@ public record CheckResult(
                            // brief can tell the worker to re-run the failing check verbatim and confirm exit 0 before
                            // committing - the check is the oracle, not anyone's interpretation of its rules. Empty when
                            // the result was synthesized rather than executed.
-    string CommandLine = "");
+    string CommandLine = "",
+    // True when the command was not run because its declared required_paths were absent.
+    // This is distinct from both a command failure and a skipped/not-configured check.
+    bool Inconclusive = false,
+    IReadOnlyList<string>? MissingRequiredPaths = null);

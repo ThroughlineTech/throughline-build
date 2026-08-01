@@ -283,6 +283,30 @@ public sealed class ProcessGitClient : IGitClient
         }
     }
 
+    public async Task<GitOpResult> CreateBranchRefAsync(
+        string branch,
+        string fromRef,
+        string workingDirectory,
+        CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git") { WorkingDirectory = workingDirectory };
+            psi.ArgumentList.Add("branch");
+            psi.ArgumentList.Add(branch);
+            psi.ArgumentList.Add(fromRef);
+
+            var run = await RunGitCaptureAsync(psi, ct).ConfigureAwait(false);
+            if (run.ExitCode != 0)
+                return new GitOpResult(false, FailureDetail(run, "git branch"));
+            return new GitOpResult(true, null);
+        }
+        catch (Exception ex)
+        {
+            return new GitOpResult(false, ex.Message);
+        }
+    }
+
     public async Task<GitOpResult> SwitchBranchAsync(string branch, string worktreePath, CancellationToken ct)
     {
         try
@@ -727,7 +751,7 @@ public sealed class ProcessGitClient : IGitClient
         return new GitOpResult(false, FailureDetail(run, "git branch -d"));
     }
 
-    public async Task<IReadOnlyList<string>> GetTrackedChangesAsync(string workingDirectory, CancellationToken ct)
+    public async Task<GitPathQueryResult> GetTrackedChangesResultAsync(string workingDirectory, CancellationToken ct)
     {
         try
         {
@@ -737,7 +761,7 @@ public sealed class ProcessGitClient : IGitClient
 
             var run = await RunGitCaptureAsync(psi, ct).ConfigureAwait(false);
             if (run.ExitCode != 0)
-                return Array.Empty<string>();
+                return new GitPathQueryResult(false, Array.Empty<string>(), FailureDetail(run, "git status --porcelain"));
 
             var lines = new List<string>();
             foreach (var rawLine in run.Stdout.Split('\n'))
@@ -748,12 +772,18 @@ public sealed class ProcessGitClient : IGitClient
                 if (!line.StartsWith("??"))
                     lines.Add(line);
             }
-            return lines;
+            return new GitPathQueryResult(true, lines, null);
         }
-        catch
+        catch (Exception ex)
         {
-            return Array.Empty<string>();
+            return new GitPathQueryResult(false, Array.Empty<string>(), ex.Message);
         }
+    }
+
+    public async Task<IReadOnlyList<string>> GetTrackedChangesAsync(string workingDirectory, CancellationToken ct)
+    {
+        var result = await GetTrackedChangesResultAsync(workingDirectory, ct).ConfigureAwait(false);
+        return result.Success ? result.Paths : Array.Empty<string>();
     }
 
     public async Task<IReadOnlyList<string>> GetConflictedPathsAsync(string workingDirectory, CancellationToken ct)
@@ -966,7 +996,7 @@ public sealed class ProcessGitClient : IGitClient
         }
     }
 
-    public async Task<bool> IsAncestorAsync(string ancestor, string descendant, string workingDirectory, CancellationToken ct)
+    public async Task<GitAncestorResult> IsAncestorResultAsync(string ancestor, string descendant, string workingDirectory, CancellationToken ct)
     {
         try
         {
@@ -977,12 +1007,23 @@ public sealed class ProcessGitClient : IGitClient
             psi.ArgumentList.Add(descendant);
 
             var run = await RunGitCaptureAsync(psi, ct).ConfigureAwait(false);
-            return run.ExitCode == 0;
+            return run.ExitCode switch
+            {
+                0 => new GitAncestorResult(true, true, null),
+                1 => new GitAncestorResult(true, false, null),
+                _ => new GitAncestorResult(false, false, FailureDetail(run, "git merge-base --is-ancestor")),
+            };
         }
-        catch
+        catch (Exception ex)
         {
-            return false;
+            return new GitAncestorResult(false, false, ex.Message);
         }
+    }
+
+    public async Task<bool> IsAncestorAsync(string ancestor, string descendant, string workingDirectory, CancellationToken ct)
+    {
+        var result = await IsAncestorResultAsync(ancestor, descendant, workingDirectory, ct).ConfigureAwait(false);
+        return result.Success && result.IsAncestor;
     }
 
     public async Task<IReadOnlyList<string>> DiffStatFilesAsync(string range, string workingDirectory, CancellationToken ct)
@@ -1047,7 +1088,7 @@ public sealed class ProcessGitClient : IGitClient
         }
     }
 
-    public async Task<IReadOnlyList<string>> GetUntrackedFilesAsync(string workingDirectory, CancellationToken ct)
+    public async Task<GitPathQueryResult> GetUntrackedFilesResultAsync(string workingDirectory, CancellationToken ct)
     {
         try
         {
@@ -1058,7 +1099,7 @@ public sealed class ProcessGitClient : IGitClient
 
             var run = await RunGitCaptureAsync(psi, ct).ConfigureAwait(false);
             if (run.ExitCode != 0)
-                return Array.Empty<string>();
+                return new GitPathQueryResult(false, Array.Empty<string>(), FailureDetail(run, "git ls-files --others --exclude-standard"));
 
             var lines = new List<string>();
             foreach (var rawLine in run.Stdout.Split('\n'))
@@ -1067,12 +1108,18 @@ public sealed class ProcessGitClient : IGitClient
                 if (line.Length > 0)
                     lines.Add(line);
             }
-            return lines;
+            return new GitPathQueryResult(true, lines, null);
         }
-        catch
+        catch (Exception ex)
         {
-            return Array.Empty<string>();
+            return new GitPathQueryResult(false, Array.Empty<string>(), ex.Message);
         }
+    }
+
+    public async Task<IReadOnlyList<string>> GetUntrackedFilesAsync(string workingDirectory, CancellationToken ct)
+    {
+        var result = await GetUntrackedFilesResultAsync(workingDirectory, ct).ConfigureAwait(false);
+        return result.Success ? result.Paths : Array.Empty<string>();
     }
 
     public async Task<IReadOnlyList<string>> FilterTrackedPathsAsync(IReadOnlyList<string> paths, string workingDirectory, CancellationToken ct)

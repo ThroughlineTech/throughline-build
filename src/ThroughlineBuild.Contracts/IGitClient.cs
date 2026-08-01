@@ -13,6 +13,16 @@ public record WorktreeCreateResult(bool Success, string? FailureReason, string? 
 
 public record GitOpResult(bool Success, string? FailureReason, string? RawOutput = null);
 
+public record GitPathQueryResult(
+    bool Success,
+    IReadOnlyList<string> Paths,
+    string? FailureReason);
+
+public record GitAncestorResult(
+    bool Success,
+    bool IsAncestor,
+    string? FailureReason);
+
 public record RebaseResult(
     bool Success,
     bool HadConflicts,
@@ -77,10 +87,22 @@ public interface IGitClient
 
     // Returns the list of tracked files with uncommitted changes in workingDirectory.
     // Runs "git status --porcelain" and returns lines that are not untracked (i.e. not "??").
+    // Unlike GetTrackedChangesAsync, this result distinguishes an empty clean result from a
+    // failed git query.
+    Task<GitPathQueryResult> GetTrackedChangesResultAsync(string workingDirectory, CancellationToken ct) =>
+        Task.FromResult(new GitPathQueryResult(true, Array.Empty<string>(), null));
+
+    // Returns the list of tracked files with uncommitted changes in workingDirectory.
+    // Runs "git status --porcelain" and returns lines that are not untracked (i.e. not "??").
     // Default returns empty so existing FakeGitClients remain unchanged (TLB-131).
     // Never throws - returns empty on git failure.
     Task<IReadOnlyList<string>> GetTrackedChangesAsync(string workingDirectory, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+    // Returns true if ancestor is an ancestor of descendant (i.e., descendant is reachable from ancestor).
+    // Distinguishes a proven false result from a git-level failure.
+    Task<GitAncestorResult> IsAncestorResultAsync(string ancestor, string descendant, string workingDirectory, CancellationToken ct) =>
+        Task.FromResult(new GitAncestorResult(true, false, null));
 
     // Returns true if ancestor is an ancestor of descendant (i.e., descendant is reachable from ancestor).
     // Returns false if descendant is not reachable from ancestor OR if either ref does not exist.
@@ -127,6 +149,13 @@ public interface IGitClient
     Task<GitOpResult> CreateBranchAsync(string branch, string fromRef, string worktreePath, CancellationToken ct) =>
         Task.FromResult(new GitOpResult(false, "not implemented"));
 
+    Task<GitOpResult> CreateBranchRefAsync(
+        string branch,
+        string fromRef,
+        string workingDirectory,
+        CancellationToken ct) =>
+        Task.FromResult(new GitOpResult(false, "not implemented"));
+
     // Switches an existing worktree onto an already-existing local branch (git switch <branch>).
     // Differs from CreateBranchAsync (checkout -b, new branch) and CheckoutWorktreeAsync (new
     // worktree). Used by the batch chain ship: a warm batch session leaves the integration worktree
@@ -167,6 +196,12 @@ public interface IGitClient
     // Never throws - returns empty on git failure.
     Task<IReadOnlyList<string>> DiffStatFilesAsync(string range, string workingDirectory, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+    // Returns untracked file paths in workingDirectory (git ls-files --others --exclude-standard).
+    // Ignored files (matched by .gitignore) are excluded from the result. Unlike
+    // GetUntrackedFilesAsync, this result distinguishes no files from a failed git query.
+    Task<GitPathQueryResult> GetUntrackedFilesResultAsync(string workingDirectory, CancellationToken ct) =>
+        Task.FromResult(new GitPathQueryResult(true, Array.Empty<string>(), null));
 
     // Returns untracked file paths in workingDirectory (git ls-files --others --exclude-standard).
     // Ignored files (matched by .gitignore) are excluded from the result.

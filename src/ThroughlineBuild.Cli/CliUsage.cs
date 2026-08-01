@@ -35,6 +35,9 @@ Usage:
   build list [--state <name>] [--parent <id>] [--type <name>]     List tickets with optional filters
   build relate <ticket-id> <relation-type> <target-id> | --list | --remove <relation-id> [--json]  Create, list, or remove one exact ticket relation
   build sweep [--target <branch>] [--force]    Remove leftover chain worktrees (.worktrees/ticket-*, chain-*) and delete their branches when fully merged into the target branch; the recovery path after a 'build chain' that was interrupted or stopped before its own end-of-chain cleanup. Branch deletion is merged-gated so unshipped commits are never lost; --target overrides the merge target (default: resolved [work].target_branch); --force also removes worktrees whose branch is not yet merged (the branch itself is still kept). No worker, no Plane - pure git + filesystem.
+  build worktree lease|teardown|list [...]     Manage conductor-owned isolated workspaces
+  build gate [--ticket <id>] [--role gating|advisory|all] [--require-checks] [--json]  Run configured checks without a worker
+  build waves --input <path|-> [--json]        Plan dependency-safe, conflict-aware waves without running tickets
   build amend <ticket-id> [--title "..."] [--priority urgent|high|medium|low|none] [--type <name>]
                           [--label-add <name>]... [--label-remove <name>]... [--parent <ticket-id>]
                           [--size S|M|L] [--note "..."] [--description <path|->] [--ac <path|->]
@@ -118,5 +121,10 @@ Exit codes:
   2  Validation error (parse errors, structural errors, or missing required arg)
   3  Partial creation (some tickets created, some failed; operator must inspect/clean up)
   1  Unexpected error (exception, cancellation, or complete failure with nothing created)
+
+  For 'build waves' verb only:
+  0  Wave schedule produced
+  2  Invalid config, arguments, input JSON, or dependency scope
+  5  Dependency cycle in the selected ticket set
 """;
 }

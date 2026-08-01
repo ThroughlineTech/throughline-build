@@ -22,7 +22,12 @@ namespace ThroughlineBuild.Cli;
 
 public static class CliApplication
 {
-    public static async Task<int> RunAsync(string[] args)
+    public static Task<int> RunAsync(string[] args) =>
+        RunAsync(args, WorkerAgentBuilder.Create);
+
+    internal static async Task<int> RunAsync(
+        string[] args,
+        Func<string, AgentConfig, IWorkerAgent> workerAgentBuilder)
     {
         if (ClaudeStopHookCommand.IsMatch(args))
             return await ClaudeStopHookCommand.RunAsync(args);
@@ -416,7 +421,20 @@ public static class CliApplication
             throw new InvalidOperationException($"Pre-config verb '{registeredVerb.Name}' has no handler.");
         }
 
-        var bootstrap = await CliBootstrap.CreateAsync(rawCwd, CancellationToken.None);
+        var requiresTicketing = verbKind is not (
+            CliVerbKind.Worktree or CliVerbKind.Gate or CliVerbKind.Waves);
+        var configLoadMode = verbKind switch
+        {
+            CliVerbKind.Worktree => BuildConfigLoadMode.WorktreeStandalone,
+            CliVerbKind.Gate => BuildConfigLoadMode.GateStandalone,
+            CliVerbKind.Waves => BuildConfigLoadMode.WavesStandalone,
+            _ => BuildConfigLoadMode.Full,
+        };
+        var bootstrap = await CliBootstrap.CreateAsync(
+            rawCwd,
+            CancellationToken.None,
+            requireTicketing: requiresTicketing,
+            configLoadMode: configLoadMode);
         if (bootstrap.Failure is { } bootstrapFailure)
         {
             if (jsonOutput)
@@ -440,9 +458,100 @@ public static class CliApplication
         var resolvedCwd = cliContext.WorkingDirectory;
         var configuredCwd = cliContext.WorkingDirectory;
         var config = cliContext.Config;
-        var secrets = cliContext.Secrets;
         string ResolveLogDir(string raw) => cliContext.ResolveLogDirectory(raw);
         var sessionContext = cliContext.SessionContext;
+
+        // Standalone deterministic worktree lifecycle for caller-owned conductor loops.
+        // This path composes only git, filesystem, and the configured install command; it
+        // never constructs or invokes a worker agent.
+        if (verbKind == CliVerbKind.Worktree)
+        {
+            var worktreeRoot = Path.IsPathRooted(config.Worktree.Root)
+                ? Path.GetFullPath(config.Worktree.Root)
+                : Path.GetFullPath(Path.Combine(configuredCwd, config.Worktree.Root));
+            var worktreeManager = new WorktreeLeaseManager(
+                new ProcessGitClient(configuredCwd),
+                new ProcessInstallCommandRunner(),
+                new WorktreeLeaseOptions(
+                    RepositoryPath: configuredCwd,
+                    MainWorktreePath: configuredCwd,
+                    WorktreeRoot: worktreeRoot,
+                    SeedAllowlist: config.Worktree.SeedFiles,
+                    InstallCommand: config.Project.InstallCommand));
+            using var worktreeCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; worktreeCts.Cancel(); };
+            try
+            {
+                return await WorktreeCommand.ExecuteAsync(
+                    args, jsonOutput, worktreeManager, Console.Out, Console.Error, worktreeCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                if (jsonOutput)
+                    CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, "cancelled");
+                else
+                    Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
+        }
+
+        // Standalone configured gate for caller-owned conductor loops. Use the raw cwd
+        // so invocation from a leased worktree checks that tree, not the primary tree
+        // resolved by bootstrap. This path never constructs a worker agent.
+        if (verbKind == CliVerbKind.Gate)
+        {
+            using var gateCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; gateCts.Cancel(); };
+            try
+            {
+                return await GateCommand.ExecuteAsync(
+                    args,
+                    jsonOutput,
+                    config.Review.Checks,
+                    rawCwd,
+                    new AutomatedChecksRunner(),
+                    Console.Out,
+                    Console.Error,
+                    gateCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                if (jsonOutput)
+                    CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, "cancelled");
+                else
+                    Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
+        }
+
+        // Standalone dependency-safe wave planner for caller-owned conductor loops.
+        // It reads only JSON input and config, and never constructs a worker or ticket client.
+        if (verbKind == CliVerbKind.Waves)
+        {
+            using var wavesCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; wavesCts.Cancel(); };
+            try
+            {
+                return await WavesCommand.ExecuteAsync(
+                    args,
+                    jsonOutput,
+                    config.Waves,
+                    Console.In,
+                    Console.Out,
+                    Console.Error,
+                    wavesCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                if (jsonOutput)
+                    CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, "cancelled");
+                else
+                    Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
+        }
+
+        var secrets = cliContext.Secrets;
 
         // 'build sweep' removes leftover chain worktrees and merged branches that a prior
         // 'build chain' left behind - the recovery path when a chain was interrupted or
@@ -1534,7 +1643,7 @@ public static class CliApplication
                 throw new ConfigException($"missing [workers.{agentName}] sub-table in config");
             var capturedCfg = aCfg;
             var capturedName = agentName;
-            factoryEntries[agentName] = () => WorkerAgentBuilder.Create(capturedName, capturedCfg);
+            factoryEntries[agentName] = () => workerAgentBuilder(capturedName, capturedCfg);
         }
         var workerFactory = new WorkerAgentFactory(factoryEntries);
 

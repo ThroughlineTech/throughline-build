@@ -1,5 +1,6 @@
 using ThroughlineBuild.Briefs;
 using ThroughlineBuild.Cli;
+using ThroughlineBuild.Helpers;
 using Xunit;
 
 namespace ThroughlineBuild.Cli.Tests;
@@ -97,6 +98,129 @@ plane_project_url = "https://plane.example.com/workspace/browse/PROJ/"
             Assert.Equal(string.Empty, config.Project.DevCommand);
             Assert.Equal(string.Empty, config.Project.PlaneProjectUrl);
             Assert.Equal(string.Empty, config.Project.Notes);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Load_WorktreeSectionPopulatesRootAndSeedAllowlist()
+    {
+        var toml = BaseToml + """
+
+[worktree]
+root = ".leases"
+seed_files = [".dev.vars", ".npmrc"]
+""";
+        var path = WriteToml(toml, out var dir);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            Assert.Equal(".leases", config.Worktree.Root);
+            Assert.Equal([".dev.vars", ".npmrc"], config.Worktree.SeedFiles);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Load_MissingWorktreeSectionUsesSafeDefaults()
+    {
+        var path = WriteToml(BaseToml, out var dir);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            Assert.Equal(".worktrees/conductor", config.Worktree.Root);
+            Assert.Empty(config.Worktree.SeedFiles);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Load_WavesSectionPopulatesCapAndSerializationRules()
+    {
+        var toml = BaseToml + """
+
+[waves]
+cap = 3
+
+[[waves.serialize]]
+kind = "global"
+paths = ["package.json", "*.lock", "migrations/**"]
+
+[[waves.serialize]]
+kind = "cohesive-module"
+paths = ["src/admin", "src/owner"]
+
+[[waves.serialize]]
+kind = "pairwise"
+paths = ["src/contract.ts", "share-contract.md"]
+""";
+        var path = WriteToml(toml, out var dir);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            Assert.Equal(3, config.Waves.Cap);
+            Assert.Equal(
+                [
+                    WaveSerializeKind.Global,
+                    WaveSerializeKind.CohesiveModule,
+                    WaveSerializeKind.Pairwise,
+                ],
+                config.Waves.Serialize.Select(rule => rule.Kind));
+            Assert.Equal(
+                ["package.json", "*.lock", "migrations/**"],
+                config.Waves.Serialize[0].Paths);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Load_MissingWavesSectionUsesSafeDefaults()
+    {
+        var path = WriteToml(BaseToml, out var dir);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+
+            Assert.Equal(WavePlanner.DefaultCap, config.Waves.Cap);
+            Assert.Empty(config.Waves.Serialize);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("unknown")]
+    [InlineData("")]
+    public void Load_InvalidWavesRuleKindFailsConfig(string kind)
+    {
+        var toml = BaseToml + $"""
+
+[waves]
+[[waves.serialize]]
+kind = "{kind}"
+paths = ["src"]
+""";
+        var path = WriteToml(toml, out var dir);
+        try
+        {
+            Assert.Throws<ConfigException>(() => BuildConfigLoader.Load(path));
         }
         finally
         {

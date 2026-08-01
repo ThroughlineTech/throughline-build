@@ -45,6 +45,28 @@ public class ProcessGitClientStatusTests : IDisposable
         }
     }
 
+    private static string RunGitOutput(string workingDirectory, params string[] args)
+    {
+        var psi = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+        using var proc = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start git");
+        var stdout = proc.StandardOutput.ReadToEnd();
+        var stderr = proc.StandardError.ReadToEnd();
+        proc.WaitForExit();
+        if (proc.ExitCode != 0)
+            throw new InvalidOperationException($"git {string.Join(" ", args)} failed: {stderr}");
+        return stdout.Trim();
+    }
+
     [Fact]
     public async Task GetTrackedChangesAsync_ModifiedTrackedFile_ReturnsOneEntry()
     {
@@ -70,6 +92,20 @@ public class ProcessGitClientStatusTests : IDisposable
         var changes = await client.GetTrackedChangesAsync(repoDir, CancellationToken.None);
 
         Assert.Empty(changes);
+    }
+
+    [Fact]
+    public async Task GetTrackedChangesResultAsync_CorruptIndex_ReturnsFailure()
+    {
+        var repoDir = CreateTempGitRepo();
+        File.WriteAllText(Path.Combine(repoDir, "file.txt"), "modified content");
+        File.WriteAllText(Path.Combine(repoDir, ".git", "index"), "not a git index");
+        var client = new ProcessGitClient(repoDir);
+
+        var result = await client.GetTrackedChangesResultAsync(repoDir, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("index", result.FailureReason, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -109,6 +145,70 @@ public class ProcessGitClientStatusTests : IDisposable
         var untracked = await client.GetUntrackedFilesAsync(repoDir, CancellationToken.None);
 
         Assert.Empty(untracked);
+    }
+
+    [Fact]
+    public async Task GetUntrackedFilesResultAsync_CorruptIndex_ReturnsFailure()
+    {
+        var repoDir = CreateTempGitRepo();
+        File.WriteAllText(Path.Combine(repoDir, ".git", "index"), "not a git index");
+        var client = new ProcessGitClient(repoDir);
+
+        var result = await client.GetUntrackedFilesResultAsync(repoDir, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("index", result.FailureReason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task IsAncestorResultAsync_Ancestor_ReturnsTrue()
+    {
+        var repoDir = CreateTempGitRepo();
+        var first = RunGitOutput(repoDir, "rev-parse", "HEAD");
+        File.WriteAllText(Path.Combine(repoDir, "second.txt"), "second");
+        RunGit(repoDir, "add", "second.txt");
+        RunGit(repoDir, "commit", "-m", "second");
+        var client = new ProcessGitClient(repoDir);
+
+        var result = await client.IsAncestorResultAsync(first, "HEAD", repoDir, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.True(result.IsAncestor);
+    }
+
+    [Fact]
+    public async Task IsAncestorResultAsync_NotAncestor_ReturnsFalseSuccess()
+    {
+        var repoDir = CreateTempGitRepo();
+        var baseBranch = RunGitOutput(repoDir, "rev-parse", "--abbrev-ref", "HEAD");
+        RunGit(repoDir, "switch", "-c", "side");
+        File.WriteAllText(Path.Combine(repoDir, "side.txt"), "side");
+        RunGit(repoDir, "add", "side.txt");
+        RunGit(repoDir, "commit", "-m", "side");
+        RunGit(repoDir, "switch", baseBranch);
+        File.WriteAllText(Path.Combine(repoDir, "main.txt"), "main");
+        RunGit(repoDir, "add", "main.txt");
+        RunGit(repoDir, "commit", "-m", "main");
+        var client = new ProcessGitClient(repoDir);
+
+        var result = await client.IsAncestorResultAsync("main", "side", repoDir, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.False(result.IsAncestor);
+        Assert.Null(result.FailureReason);
+    }
+
+    [Fact]
+    public async Task IsAncestorResultAsync_BadRef_ReturnsFailure()
+    {
+        var repoDir = CreateTempGitRepo();
+        var client = new ProcessGitClient(repoDir);
+
+        var result = await client.IsAncestorResultAsync("refs/heads/does-not-exist", "HEAD", repoDir, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.False(result.IsAncestor);
+        Assert.NotNull(result.FailureReason);
     }
 
     [Fact]

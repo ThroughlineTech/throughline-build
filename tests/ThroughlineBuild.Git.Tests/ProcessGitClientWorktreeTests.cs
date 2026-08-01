@@ -113,6 +113,23 @@ public class ProcessGitClientWorktreeTests : IDisposable
     }
 
     [Fact]
+    public async Task CreateBranchRefAsyncCreatesBranchWithoutSwitchingMainWorktree()
+    {
+        var repoDir = CreateTempGitRepo();
+        var client = new ProcessGitClient(repoDir);
+
+        var result = await client.CreateBranchRefAsync(
+            "lease/test-branch", "HEAD", repoDir, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Contains(
+            "lease/test-branch",
+            await client.ListLocalBranchesAsync(
+                "lease/test-branch", repoDir, CancellationToken.None));
+        Assert.Equal("main", await client.CurrentBranchAsync(repoDir, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task HeadShaAsync_ReturnsFortyCharSha()
     {
         var repoDir = CreateTempGitRepo();

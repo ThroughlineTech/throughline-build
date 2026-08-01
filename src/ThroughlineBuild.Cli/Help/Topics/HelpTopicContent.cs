@@ -47,6 +47,13 @@ Notes:
     public const string Config = """
 build help config
 
+This is not the full TOML schema; use build <command> --help for command contracts and the generated config template/current docs for command-specific config sections.
+
+Section scoping:
+  [ticketing], [workers], and [events] are required for ticketing and worker-backed commands.
+  build worktree, build gate, and build waves are standalone deterministic commands. They load only the sections they consume and do not require [ticketing], [workers], or [events].
+  This is config validation scoping only; it is not a credential or security boundary.
+
 [plan] schema:
   [plan]
   mode = "promote"

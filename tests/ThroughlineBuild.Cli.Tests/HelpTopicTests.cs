@@ -43,6 +43,7 @@ public class HelpTopicTests
 
         Assert.Contains("[plan] schema:", output);
         Assert.Contains("mode = \"promote\"", output);
+        Assert.Contains("This is not the full TOML schema; use build <command> --help for command contracts", output);
         Assert.Contains("investigate", output);
         Assert.Contains("[plan].mode controls only the plan phase within build chain", output);
         Assert.Contains("Direct build plan always investigates", output);
