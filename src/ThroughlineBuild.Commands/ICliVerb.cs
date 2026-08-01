@@ -19,6 +19,7 @@ public enum CliVerbKind
     OpDoc,
     Models,
     Sweep,
+    Candidate,
     Worktree,
     Gate,
     Waves,

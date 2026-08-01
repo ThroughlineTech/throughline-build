@@ -128,6 +128,7 @@ public class ConfigException : Exception
 public enum BuildConfigLoadMode
 {
     Full,
+    CandidateStandalone,
     WorktreeStandalone,
     GateStandalone,
     WavesStandalone

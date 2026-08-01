@@ -268,14 +268,15 @@ the ticket CRUD verbs together with deterministic worktree leases:
 build worktree lease --ticket TLB-1 --slug readme-fix
 build waves --input tickets.json
 build gate --ticket TLB-1
+build candidate status --ticket TLB-1 --base main --json
 build worktree list
 build worktree teardown --ticket TLB-1
 ```
 
-`worktree`, `gate`, and `waves` load only the configuration sections they use
-without requiring `[ticketing]`, `[workers]`, or `[events]`, resolving ticketing
-secrets, or constructing a Plane client. Other commands still require the full
-ticketing, worker, and event configuration.
+`worktree`, `gate`, `waves`, and `candidate status` load only the configuration
+sections they use without requiring `[ticketing]`, `[workers]`, or `[events]`,
+resolving ticketing secrets, or constructing a Plane client. Other commands
+still require the full ticketing, worker, and event configuration.
 
 Lease prints the absolute worktree path for use as an agent working directory,
 runs `[project].install_command`, and writes a safety manifest. Configure the
@@ -297,6 +298,18 @@ advisory failures remain visible but do not change the exit code. Use
 exit codes, durations, captured output, and inconclusive missing-path results.
 By default an empty selected check list exits 0 for compatibility; add
 `--require-checks` to make that condition exit 1.
+
+Run `build candidate status --ticket <id> --base <ref> --json` from the
+candidate worktree after implementation and review checkpoints. The JSON
+envelope reports the resolved base SHA, HEAD SHA, tracked diff hash,
+cached/index diff hash, untracked-file hash, touched paths, dirty state, and
+lease manifest metadata when present. The untracked hash includes sorted
+repository-relative paths, Git-style regular-file modes, and file content
+hashes. Missing base refs, non-git directories, conflicted worktrees, invalid
+lease manifests, unreadable paths, untracked directories, and untracked
+symlink/reparse-point paths fail with a nonzero JSON error envelope. The command
+reads git state only; it does not mutate tickets, branches, commits, pushes,
+workers, or worktree lifecycle state.
 
 Use `build waves --input <path|->` before leasing worktrees to level declared
 dependencies and pack file-disjoint ready tickets up to `[waves].cap` (default
