@@ -1,0 +1,4 @@
+interface:
+  display_name: "Run Backlog"
+  short_description: "Implement and review backlog tickets safely"
+  default_prompt: "Use $run-backlog to work through this repository backlog safely, using Build-backed parallel fan-out only when the repo declares and configures it."

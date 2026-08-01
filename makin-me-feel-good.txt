@@ -1,0 +1,27 @@
+give me an idea of how much the build command is saving us. Is it much?
+
+
+
+
+
+
+9:59 PM
+
+
+
+
+
+
+Worked for 25s
+
+
+
+Assuming you mean the build ticket CLI, not dotnet build: yes, it is probably saving a lot.
+Current repo AGENTS.md spends about 392 words on ticket commands, or 546 words if we include the two “this repo edits its own ticket tool” hazards. That is roughly 600-800 tokens.
+Without build, agents would need repeated instructions for Plane auth, project/workspace lookup, issue ID mapping, state IDs, comments, transitions, relations, lifecycle states, JSON shapes, retry/error handling, and “never touch secrets/direct APIs” safety rules. That would easily be 1,500-3,000+ words, maybe 2k-4.5k tokens per context.
+Napkin estimate:
+Current build-based ticket guidance: ~600-800 tokens/context
+Raw Plane/API guidance equivalent:   ~2,500-5,000 tokens/context
+Savings:                            ~1,700-4,200 tokens/context
+For a conductor + implementer + reviewer ticket, that compounds to maybe 5k-12k tokens saved per ticket. For backlog runs, it is absolutely meaningful.
+The bigger win is reliability: build turns a messy mutable backend into a tiny command surface with exit codes and JSON envelopes. So agents spend less context remembering backend ritual, and make fewer expensive mistakes.

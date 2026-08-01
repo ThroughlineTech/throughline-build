@@ -1,0 +1,7 @@
+.agent-instruction-compaction/00-before-step-1 6513
+.agent-instruction-compaction/01-after-rule-inventory 6513
+.agent-instruction-compaction/02-after-root-agents 6084
+.agent-instruction-compaction/03-after-nested-agents 5624
+.agent-instruction-compaction/04-after-skill-router 5692
+.agent-instruction-compaction/05-after-skill-references 5653
+.agent-instruction-compaction/06-after-validation 5653

@@ -1,0 +1,88 @@
+diff -ru .agent-instruction-compaction/04-after-skill-router/files/run-backlog/references/parallel-fan-out.md .agent-instruction-compaction/05-after-skill-references/files/run-backlog/references/parallel-fan-out.md
+--- .agent-instruction-compaction/04-after-skill-router/files/run-backlog/references/parallel-fan-out.md	2026-07-31 22:26:46.842867000 -0700
++++ .agent-instruction-compaction/05-after-skill-references/files/run-backlog/references/parallel-fan-out.md	2026-07-31 22:28:25.228973800 -0700
+@@ -12,10 +12,11 @@
+ 
+ ## Preconditions
+ 
+-Run all CLI commands with Bash and quote path variables.
++Inherit the shell contract, conductor ownership, worker boundaries, and authorization bans from
++`SKILL.md`.
+ 
+-Fan-out is opt-in. Use it only when the user requests it or the repository declares it, and when
+-the current `.build/config.toml` provides Build-backed fan-out config:
++Fan-out is opt-in. Use it only when the user requests it or the repository declares it and the
++current `.build/config.toml` provides Build-backed fan-out config:
+ 
+ - ticket read/mutation commands;
+ - source roots used to predict changed files;
+@@ -23,9 +24,8 @@
+ - `[worktree]` root plus explicit ignored-file `seed_files`;
+ - `[waves]` cap and `[[waves.serialize]]` always-serial paths/modules.
+ 
+-If Build fan-out config is absent, incomplete, or contradicted by stale repo-local script
+-instructions, stay serial and report the stale declaration. Never copy ignored directories or
+-secrets wholesale.
++If config is absent, incomplete, or contradicted by stale repo-local script instructions, stay
++serial and report the stale declaration. Never copy ignored directories or secrets wholesale.
+ 
+ ## Wave planning
+ 
+@@ -46,10 +46,9 @@
+ 
+ ## Worktree leasing
+ 
+-The conductor owns lifecycle. Before leasing the first wave, create or switch to the local shared
+-run branch according to `SKILL.md` run branch bootstrap and record its full ref
+-(`refs/heads/<branch>`). Do not require the human to provide `INTEGRATION_TARGET` when this can be
+-derived safely.
++The conductor owns lifecycle. Before leasing the first wave, use `SKILL.md` run branch bootstrap to
++create or switch to the local shared run branch and record its full ref (`refs/heads/<branch>`). Do
++not require the human to provide `INTEGRATION_TARGET` when this can be derived safely.
+ 
+ For each ticket in one wave:
+ 
+@@ -95,7 +94,7 @@
+   integrated worktrees, where `<shared-branch>` is the full local ref of the conductor-created run
+   branch unless the caller supplied a validated override.
+ - Use `--force` only with explicit human approval.
+-- Never deploy, push, merge to the primary branch, or ship as an implicit fan-out step.
++- The `SKILL.md` deploy/push/merge/ship authorization ban applies to fan-out.
+ 
+ ## Planner input
+ 
+diff -ru .agent-instruction-compaction/04-after-skill-router/files/run-backlog/references/repo-adaptation.md .agent-instruction-compaction/05-after-skill-references/files/run-backlog/references/repo-adaptation.md
+--- .agent-instruction-compaction/04-after-skill-router/files/run-backlog/references/repo-adaptation.md	2026-07-31 22:26:46.849801900 -0700
++++ .agent-instruction-compaction/05-after-skill-references/files/run-backlog/references/repo-adaptation.md	2026-07-31 22:28:25.234505200 -0700
+@@ -2,25 +2,13 @@
+ 
+ ## Contents
+ 
+-1. Establish the Bash context
+-2. Discover repository inputs
+-3. Configure Build fan-out primitives
+-4. Declare fan-out inputs
+-5. Apply agent adapters
+-6. Validate without real tickets
+-
+-## Establish the Bash context
+-
+-Run all commands in Bash. On Windows use Git Bash. Do not translate snippets to PowerShell.
+-
+-Start from any directory inside the target repository:
+-
+-```bash
+-set -euo pipefail
+-REPO_ROOT="$(git rev-parse --show-toplevel)"
+-cd "$REPO_ROOT"
+-```
++1. Discover repository inputs
++2. Configure Build fan-out primitives
++3. Declare fan-out inputs
++4. Apply agent adapters
++5. Validate without real tickets
+ 
++Inherit the shell contract, conductor invariants, and real-ticket mutation ban from `SKILL.md`.
+ Inspect repository instructions and preserve unrelated changes before editing.
+ 
+ ## Discover repository inputs
