@@ -1,0 +1,19 @@
+ M AGENTS.md
+ M src/AGENTS.md
+ M src/ThroughlineBuild.Briefs/Templates/AGENTS.md
+ M src/ThroughlineBuild.ClaudeCode/AGENTS.md
+ M src/ThroughlineBuild.Cli/AGENTS.md
+ M src/ThroughlineBuild.Contracts/AGENTS.md
+ M src/ThroughlineBuild.Phases/AGENTS.md
+ M src/ThroughlineBuild.Plane/AGENTS.md
+ M src/ThroughlineBuild.Scaffold/AGENTS.md
+ M src/ThroughlineBuild.Verification/AGENTS.md
+ M src/ThroughlineBuild.Workers.ClaudeCode/AGENTS.md
+ M src/ThroughlineBuild.Workers.Common/AGENTS.md
+ M tests/AGENTS.md
+?? .agent-instruction-compaction/
+?? agent-instruction-compaction-plan.md
+?? backlog-optimization-ticket-handoff.md
+?? backlog-run-analysis-report.md
+?? backlog-transcript.txt
+?? makin-me-feel-good.txt

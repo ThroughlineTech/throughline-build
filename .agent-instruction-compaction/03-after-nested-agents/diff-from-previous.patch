@@ -1,0 +1,510 @@
+diff -ru .agent-instruction-compaction/02-after-root-agents/files/repo/src/AGENTS.md .agent-instruction-compaction/03-after-nested-agents/files/repo/src/AGENTS.md
+--- .agent-instruction-compaction/02-after-root-agents/files/repo/src/AGENTS.md	2026-07-31 22:21:18.305379200 -0700
++++ .agent-instruction-compaction/03-after-nested-agents/files/repo/src/AGENTS.md	2026-07-31 22:24:38.084156800 -0700
+@@ -5,19 +5,14 @@
+ [docs/throughline-build-architecture.md](../docs/throughline-build-architecture.md).
+ 
+ Dependency order (leaf -> root):
+-`Contracts`, `ModelClient` (leaves) -> `Git`, `Helpers`, `EventLog`, `Plane`,
++`Contracts`, `ModelClient` -> `Git`, `Helpers`, `EventLog`, `Plane`,
+ `JudgmentSlots`, `Scaffold`, `Workers.Common` -> `Briefs`, `Anthropic`,
+ `Workers.{ClaudeCode,Codex,Gemini,Copilot}` -> `ThroughlineBuild.ClaudeCode`
+-(public facade), `Verification` -> `Phases` ->
+-`Commands` -> `Cli`.
++(public facade), `Verification` -> `Phases` -> `Commands` -> `Cli`.
+ 
+-The sln (`throughline-build.sln`) is the source of truth for what is a project:
+-directories not in it (e.g. untracked `ThroughlineBuild.Linear/`) are local
+-debris, not projects.
++Root `AGENTS.md` owns the AOT, source-generated JSON, Contracts I/O-free, and
++solution-file rules. Local reminder: only projects in `throughline-build.sln`
++are real; untracked source directories are debris.
+ 
+-AOT discipline: `Cli` sets `PublishAot=true`. Use source-generated
+-`JsonSerializerContext` for anything serialized; do not rely on reflection-based
+-serialization. Keep `Contracts` I/O-free.
+-
+-Trust the code over the docs. The state-of-the-system set is a historical
+-snapshot; the architecture document describes the current tree.
++Trust code over docs. The architecture doc describes the current tree; the
++state-of-the-system set is historical.
+diff -ru .agent-instruction-compaction/02-after-root-agents/files/repo/src/ThroughlineBuild.Briefs/Templates/AGENTS.md .agent-instruction-compaction/03-after-nested-agents/files/repo/src/ThroughlineBuild.Briefs/Templates/AGENTS.md
+--- .agent-instruction-compaction/02-after-root-agents/files/repo/src/ThroughlineBuild.Briefs/Templates/AGENTS.md	2026-07-31 22:21:18.504922400 -0700
++++ .agent-instruction-compaction/03-after-nested-agents/files/repo/src/ThroughlineBuild.Briefs/Templates/AGENTS.md	2026-07-31 22:24:38.699789500 -0700
+@@ -1,22 +1,18 @@
+ # Briefs/Templates - per-agent brief templates
+ 
+-Per-agent subdirectories (`claude-code/`, `codex/`, `copilot/`, `gemini/`)
+-each hold 7 templates: `plan.md`, `implement.md`, `review.md`, `draft.md`,
+-`decompose.md`, `batch-implement.md`, `batch-review.md`. `shared/` holds
+-agent-agnostic fragments (WORKER_RESULT sections, obsolete-detection blocks,
+-patch-fetch directives) loaded via `TemplateLoader.LoadShared`. The builders
+-in the parent project (`PlanBriefBuilder`, `BatchImplementBriefBuilder`, ...)
+-fill `{{placeholders}}` (incl. `{{preloaded_context_section}}`).
++Per-agent directories (`claude-code/`, `codex/`, `copilot/`, `gemini/`) hold
++`plan.md`, `implement.md`, `review.md`, `draft.md`, `decompose.md`,
++`batch-implement.md`, and `batch-review.md`. `shared/` fragments are loaded by
++`TemplateLoader.LoadShared`; parent builders fill `{{placeholders}}`, including
++`{{preloaded_context_section}}`.
+ 
+-GOTCHA - embedded resources: the csproj globs `Templates\**\*.md` as
+-EmbeddedResource; edits need a rebuild to take effect, new files are picked up
+-automatically.
++GOTCHA - embedded resources: the csproj embeds `Templates\**\*.md`; rebuild
++after edits. New files are picked up automatically.
+ 
+-GOTCHA - git-state bans (op-29): `implement.md` forbids `git stash` (stash
+-stack is repo-global, leaks across worktrees); `review.md` is read-only with
+-respect to git - no stash/checkout/reset/rebase. Keep these when editing.
++GOTCHA - git-state bans (op-29): `implement.md` forbids `git stash` because the
++stash stack is repo-global; `review.md` is git read-only with no
++stash/checkout/reset/rebase. Keep these bans.
+ 
+ GOTCHA - line endings: `.gitattributes` pins `Templates/**/*.md` to `eol=lf`.
+-Snapshot tests in `tests/ThroughlineBuild.Briefs.Tests` compare exact bytes,
+-so a CRLF edit on Windows breaks snapshots. Edit as LF, then run Briefs.Tests
+-and update `Snapshots/` if the diff is intended.
++Snapshot tests compare exact bytes. Edit as LF, run Briefs.Tests, and update
++`Snapshots/` only for intended diffs.
+diff -ru .agent-instruction-compaction/02-after-root-agents/files/repo/src/ThroughlineBuild.ClaudeCode/AGENTS.md .agent-instruction-compaction/03-after-nested-agents/files/repo/src/ThroughlineBuild.ClaudeCode/AGENTS.md
+--- .agent-instruction-compaction/02-after-root-agents/files/repo/src/ThroughlineBuild.ClaudeCode/AGENTS.md	2026-07-31 22:21:18.670080400 -0700
++++ .agent-instruction-compaction/03-after-nested-agents/files/repo/src/ThroughlineBuild.ClaudeCode/AGENTS.md	2026-07-31 22:24:38.835250900 -0700
+@@ -1,14 +1,13 @@
+ # ThroughlineBuild.ClaudeCode - reusable public facade
+ 
+-This project is the supported public API over
+-`ThroughlineBuild.Workers.ClaudeCode`. Keep the surface small and
+-consumer-oriented: `ClaudeCodeClient`, immutable option records, transport
+-mode, and the optional `WORKER_RESULT` instruction contract.
++This is the supported public API over `ThroughlineBuild.Workers.ClaudeCode`.
++Keep the surface small and consumer-oriented: `ClaudeCodeClient`, immutable
++options, transport mode, and the optional `WORKER_RESULT` instruction contract.
+ 
+-Do not duplicate transport or transcript logic here; delegate to
+-`ClaudeCodeAgent`. Preserve AOT-safe serialization and the string overload's
+-idempotent contract append. The advanced `Brief` overload must remain usable
+-without modifying caller instructions.
++Do not duplicate transport or transcript logic; delegate to `ClaudeCodeAgent`.
++Preserve AOT-safe serialization, the string overload's idempotent contract
++append, and the advanced `Brief` overload's ability to leave caller
++instructions untouched.
+ 
+-The project has NuGet metadata, but repository CI does not currently pack or
+-publish it. Tests live in `tests/ThroughlineBuild.ClaudeCode.Tests`.
++NuGet metadata exists, but CI does not pack or publish. Tests live in
++`tests/ThroughlineBuild.ClaudeCode.Tests`.
+diff -ru .agent-instruction-compaction/02-after-root-agents/files/repo/src/ThroughlineBuild.Cli/AGENTS.md .agent-instruction-compaction/03-after-nested-agents/files/repo/src/ThroughlineBuild.Cli/AGENTS.md
+--- .agent-instruction-compaction/02-after-root-agents/files/repo/src/ThroughlineBuild.Cli/AGENTS.md	2026-07-31 22:21:18.788738400 -0700
++++ .agent-instruction-compaction/03-after-nested-agents/files/repo/src/ThroughlineBuild.Cli/AGENTS.md	2026-07-31 22:24:38.997322000 -0700
+@@ -1,28 +1,26 @@
+ # ThroughlineBuild.Cli - the `build` entry point
+ 
+-`Program.cs` is the three-line process entry point. `CliApplication` owns argument
+-pre-passes, bootstrap coordination, registry dispatch, and top-level error handling.
+-`CliVerbRegistryFactory` registers all 28 action verbs and marks the five verbs that
+-must run before config load. `CliBootstrap` creates the immutable `CliContext`, including
+-the one shared `HttpClient` and `PlaneTicketingClient` used by configured verbs. The newer
+-ticket-facing surface is `get`, `comments`, `comment`, `transition`, and `relate`;
+-supported ticket verbs also accept `--json`. Unknown token -> exit 2.
++`Program.cs` stays tiny. `CliApplication` owns argument pre-passes, bootstrap
++coordination, registry dispatch, and top-level error handling. `CliBootstrap`
++creates immutable `CliContext`, including the shared `HttpClient` and
++`PlaneTicketingClient`. `CliVerbRegistryFactory` registers 28 action verbs and
++marks the five pre-config verbs. New ticket-facing verbs are `get`, `comments`,
++`comment`, `transition`, and `relate`; supported ticket verbs accept `--json`.
++Unknown tokens exit 2.
+ 
+-Argument pre-passes live in `CliArgParser`: bare bool flags are stripped;
+-`--agent` / `--agent-<phase>` pairs are extracted; chain traversal and batch flags
+-are extracted; ticket IDs are extracted for phase verbs.
++`CliArgParser` owns pre-passes: bare bool flags, `--agent` /
++`--agent-<phase>`, chain traversal and batch flags, and ticket IDs for phase
++verbs.
+ 
+-Help is the `Help/` subsystem: `Tier0Renderer` (verb list), `Tier1Renderer`
+-(`build <verb> --help`), topics in `Help/Topics/`, all fed by
+-`HelpRegistryFactory`. `CliUsage.cs` is legacy (tests only). `models` and
+-`sweep` are not in the 24-entry help registry. To add a verb: add the registry
+-entry in `CliVerbRegistryFactory` and the corresponding dispatch in
+-`CliApplication`; add its help entry in `Help/HelpRegistryFactory.cs` when the
+-verb belongs on the tiered help surface.
++Help lives under `Help/`: `Tier0Renderer`, `Tier1Renderer` (`build <verb>
++--help`), topics, and `HelpRegistryFactory`. `CliUsage.cs` is legacy tests-only.
++`models` and `sweep` are not in the 24-entry help registry. To add a verb, add
++registry, dispatch, and, when tiered help should expose it, `HelpRegistryFactory`
++help metadata.
+ 
+ `init`, `settarget`, `user-guide`, `op-doc`, and `models refresh` have
+-`RunsBeforeConfig = true` registry entries. Worker wiring: config agent names -> `WorkerAgentBuilder.Create`
+-(name -> vendor class lives THERE, not in Program.cs), resolved via
+-`WorkerAgentFactory`. `ChainPhaseComposition` is the test-coverable seam that
+-news up `ChainPhase`; `ChainExitCodeMapper` maps outcomes to exit codes.
+-Verb-by-verb detail: [../../docs/state-of-the-system/01-inventory.md](../../docs/state-of-the-system/01-inventory.md).
++`RunsBeforeConfig = true`. Worker wiring belongs in
++`WorkerAgentBuilder.Create`/`WorkerAgentFactory`, not `Program.cs`.
++`ChainPhaseComposition` news up `ChainPhase`; `ChainExitCodeMapper` maps
++outcomes to exits. Verb detail:
++[../../docs/state-of-the-system/01-inventory.md](../../docs/state-of-the-system/01-inventory.md).
+diff -ru .agent-instruction-compaction/02-after-root-agents/files/repo/src/ThroughlineBuild.Contracts/AGENTS.md .agent-instruction-compaction/03-after-nested-agents/files/repo/src/ThroughlineBuild.Contracts/AGENTS.md
+--- .agent-instruction-compaction/02-after-root-agents/files/repo/src/ThroughlineBuild.Contracts/AGENTS.md	2026-07-31 22:21:18.893123500 -0700
++++ .agent-instruction-compaction/03-after-nested-agents/files/repo/src/ThroughlineBuild.Contracts/AGENTS.md	2026-07-31 22:24:39.127245100 -0700
+@@ -1,21 +1,16 @@
+ # ThroughlineBuild.Contracts - interfaces, records, enums
+ 
+-Pure abstractions only. NO I/O, no process spawning, no HTTP, no file access.
+-Everything here is referenced by nearly every other project, so keep it leaf.
++Pure abstractions only: no I/O, process spawning, HTTP, or file access. Nearly
++every project references this one, so keep it leaf.
+ 
+-Key interfaces: `IWorkerAgent` / `IWorkerAgentFactory`, `ITicketing` (+
+-`ITicketingProvisioner`, `ITicketingConnectivity`, `IProjectDiscovery`,
+-`IProjectResolver`), `ILlmClient`, `IGitClient`, `IEventSink`,
+-`IWorkflowPhase`, `IWorkerProgressDigester`, `IReviewFeedbackRetriever`;
+-`IVerifier` / `IObsoleteRatifier` live in `Verifier/`.
++Key interfaces include worker, ticketing/provisioning/connectivity/discovery,
++LLM, git, event sink, workflow phase, progress digester, review feedback, and
++verifier/obsolete-ratifier contracts.
+ 
+-Models live in `Models/` (e.g. `ChainOutcome`, `Verdict`, `WorkerResult`,
+-`BatchWorkerResult`, `Ticket`, `Brief`, `Phase`, `WorkerSize`,
+-`CompletionClaim`, `ProviderError`). `TicketingUnavailableException` marks a
+-failure as environmental so orchestration skips siblings instead of reworking.
+-One data-carrying exception to "interfaces only": `WorkspaceSchema` is the
+-static canonical state/label set shared by the Plane client and `build setup`
+-so the two cannot drift.
++Models live in `Models/`. `TicketingUnavailableException` marks environmental
++failure so orchestration skips siblings instead of reworking. The one
++data-carrying exception to "interfaces only" is `WorkspaceSchema`, the canonical
++state/label set shared by Plane and `build setup`.
+ 
+-Contract details and which implementations satisfy each:
++Contract details:
+ [../../docs/state-of-the-system/07-contracts.md](../../docs/state-of-the-system/07-contracts.md).
+diff -ru .agent-instruction-compaction/02-after-root-agents/files/repo/src/ThroughlineBuild.Phases/AGENTS.md .agent-instruction-compaction/03-after-nested-agents/files/repo/src/ThroughlineBuild.Phases/AGENTS.md
+--- .agent-instruction-compaction/02-after-root-agents/files/repo/src/ThroughlineBuild.Phases/AGENTS.md	2026-07-31 22:21:19.005516400 -0700
++++ .agent-instruction-compaction/03-after-nested-agents/files/repo/src/ThroughlineBuild.Phases/AGENTS.md	2026-07-31 22:24:39.271012300 -0700
+@@ -1,37 +1,34 @@
+ # ThroughlineBuild.Phases - workflow phases + orchestration
+ 
+-Ten phase classes: `PlanPhase`, `ImplementPhase`, `GatePhase`, `ReviewPhase`,
+-`ShipPhase`, `ChainPhase`, `ReworkPhase`, `DecomposePhase`, `NewPhase`,
+-`DraftPhase`. `GatePhase` runs between implement and review in the chain loop;
+-its check running, vacuity proof, and base-ref control run live in
+-`Verification`. Multi-ticket orchestration: `ParallelDispatcher` (concurrency
+-pinned to 1), `TicketGraph` (+ `TopologicalSorter` in the same file),
+-`AncestorSkipFilter`, `EarlyExitManifest`, `ReworkRoundManifest` (--debug
+-side-channel), `BatchCommitVerifier` (re-derives batch commit attribution
+-from git state - never trust worker-reported SHAs).
+-Explicit multi-ticket chains use `ChainDependencyGraph` to normalize bare and
+-project-prefixed IDs and order typed relation edges.
++Ten phases live here: plan, implement, gate, review, ship, chain, rework,
++decompose, new, and draft. `GatePhase` sits between implement and review; check
++running, vacuity proof, and base-ref control live in `Verification`.
++
++Multi-ticket orchestration owns `ParallelDispatcher` (concurrency pinned to 1),
++`TicketGraph`/`TopologicalSorter`, `AncestorSkipFilter`, debug manifests, and
++`BatchCommitVerifier`, which re-derives commit attribution from git. Never trust
++worker-reported SHAs. `ChainDependencyGraph` normalizes bare/project-prefixed
++IDs and orders typed relation edges.
+ 
+ Things that bite:
+-- Everything is SERIAL. Parent chains run children level-by-level in
+-  dependency order inside ONE shared integration worktree on `chain/{slug}`;
+-  a reused integration branch is refreshed against its base ref first
+-  (TLB-546). Children cut `ticket/{id}` branches in place; root landing
+-  rebases + fast-forwards the integration branch onto the target.
+-- `--batch-implement` sends all Ready/Backlog LEAF children to one worker
+-  session; internal nodes fall through to per-child parent recursion.
+-- Implement->review rework loop caps at `MaxReworkRounds = 2`. Environmental
+-  failures (gate control run, ticketing unavailable) skip remaining siblings.
+-- `ShipPhase` mutates and PUSHES the target branch in the main worktree, with
+-  `WorkingTreeHygieneGate` preflights (also pre-implement and chain preflight).
+-- `ChainPhase` construction lives in Cli's `ChainPhaseComposition`.
++
++- Everything is serial. Parent chains run children level-by-level in one shared
++  integration worktree on `chain/{slug}`; reused integration branches refresh
++  against base first (TLB-546). Children cut `ticket/{id}` in place; root landing
++  rebases and fast-forwards the integration branch onto the target.
++- `--batch-implement` sends Ready/Backlog leaf children to one worker session;
++  internal nodes use per-child parent recursion.
++- Implement-review rework caps at `MaxReworkRounds = 2`. Environmental failures
++  such as gate control run or ticketing unavailable skip remaining siblings.
++- `ShipPhase` mutates and pushes the target branch in the main worktree, with
++  `WorkingTreeHygieneGate` preflights also used before implement and chain.
++- `ChainPhase` construction belongs in Cli's `ChainPhaseComposition`.
+ - Informational Plane writes go through `TicketingWritePolicy`; lifecycle
+   transitions and resume markers remain hard writes.
+-- Phase code does not read or write `Console` directly. Operator output and
+-  diagnostics are explicit `TextWriter` dependencies supplied by the CLI
+-  composition root; chain progress that represents a phase step uses
+-  `ChainPhaseOptions.OnStep`. Keep normal output on the output writer and
+-  refusals, warnings, and recovery diagnostics on the diagnostics writer so
+-  structured stdout modes remain uncontaminated.
++- Phase code uses injected `TextWriter`s, not `Console`. Keep normal output on
++  the output writer, and refusals/warnings/recovery diagnostics on diagnostics
++  so structured stdout stays clean. Phase-step progress uses
++  `ChainPhaseOptions.OnStep`.
+ 
+-Lifecycle detail: [../../docs/state-of-the-system/10-lifecycle-orchestration.md](../../docs/state-of-the-system/10-lifecycle-orchestration.md).
++Lifecycle detail:
++[../../docs/state-of-the-system/10-lifecycle-orchestration.md](../../docs/state-of-the-system/10-lifecycle-orchestration.md).
+diff -ru .agent-instruction-compaction/02-after-root-agents/files/repo/src/ThroughlineBuild.Plane/AGENTS.md .agent-instruction-compaction/03-after-nested-agents/files/repo/src/ThroughlineBuild.Plane/AGENTS.md
+--- .agent-instruction-compaction/02-after-root-agents/files/repo/src/ThroughlineBuild.Plane/AGENTS.md	2026-07-31 22:21:19.132507900 -0700
++++ .agent-instruction-compaction/03-after-nested-agents/files/repo/src/ThroughlineBuild.Plane/AGENTS.md	2026-07-31 22:24:39.386864000 -0700
+@@ -1,28 +1,27 @@
+ # ThroughlineBuild.Plane - the ticketing backend
+ 
+-`PlaneTicketingClient` is the SOLE `ITicketing` implementation (it also
+-implements `ITicketingProvisioner`, `ITicketingConnectivity`, and
+-`IProjectDiscovery`). No GitHub or Linear adapter exists. `ProjectResolver`
+-resolves/creates a project from raw credentials, pre-config (used by setup).
++`PlaneTicketingClient` is the sole `ITicketing` implementation and also owns
++provisioning, connectivity, and project discovery. No GitHub or Linear adapter
++exists. `ProjectResolver` resolves/creates projects from raw credentials
++pre-config.
+ 
+-Key behaviors to know before touching it:
+-- Per-run issue snapshot cache: the whole project is paginated once into
+-  `_seqToUuid` + `_issueByUuid`; `FindIssueAsync`/`QueryAsync` answer from
+-  memory, with write-through `AddOrUpdate` on every PATCH (TLB-366). If you add
+-  a mutation, keep the cache write-through or lookups go stale within a run.
+-- `RequestThrottle` caps requests/min per process (default 40, configurable);
+-  Polly retries HTTP 429/5xx honoring Retry-After.
+-- All HTTP goes through `SendWithTransportRetryAsync` (TLB-545): fresh request
+-  per attempt, throttle re-acquired; exhausted transport failures surface as
+-  `TicketingUnavailableException` so orchestration classifies them as
+-  environmental instead of crashing or reworking.
+-- State-name and label-name maps are lazily cached; the canonical set lives in
+-  `Contracts.WorkspaceSchema` (shared with `build setup`).
++Key behaviors:
++
++- Per-run issue snapshot cache paginates the project once into `_seqToUuid` and
++  `_issueByUuid`; reads answer from memory. Mutations must keep write-through
++  `AddOrUpdate` or same-run lookups go stale (TLB-366).
++- `RequestThrottle` caps requests/min per process; Polly retries 429/5xx with
++  Retry-After.
++- All HTTP uses `SendWithTransportRetryAsync` (TLB-545): fresh request per
++  attempt, throttle re-acquired, exhausted transport failures surfaced as
++  `TicketingUnavailableException` so orchestration treats them as environmental.
++- State/label maps are lazy; the canonical set is `Contracts.WorkspaceSchema`,
++  shared with `build setup`.
+ - Typed relations use Plane's `issue-relation` endpoint. Chain reads use a
+-  per-issue relation cache; explicit CLI list/create/remove operations surface
+-  endpoint/configuration errors and invalidate source/target cache entries.
+-- AOT: JSON via source-generated context - no reflection serialization.
++  per-issue cache; CLI list/create/remove surfaces endpoint/config errors and
++  invalidates source/target cache entries.
++- JSON uses source-generated AOT context, never reflection serialization.
+ 
+-External-dependency and state detail:
++Details:
+ [../../docs/state-of-the-system/03-external-dependencies.md](../../docs/state-of-the-system/03-external-dependencies.md),
+ [../../docs/state-of-the-system/05-state-and-persistence.md](../../docs/state-of-the-system/05-state-and-persistence.md).
+diff -ru .agent-instruction-compaction/02-after-root-agents/files/repo/src/ThroughlineBuild.Scaffold/AGENTS.md .agent-instruction-compaction/03-after-nested-agents/files/repo/src/ThroughlineBuild.Scaffold/AGENTS.md
+--- .agent-instruction-compaction/02-after-root-agents/files/repo/src/ThroughlineBuild.Scaffold/AGENTS.md	2026-07-31 22:21:19.260438600 -0700
++++ .agent-instruction-compaction/03-after-nested-agents/files/repo/src/ThroughlineBuild.Scaffold/AGENTS.md	2026-07-31 22:24:39.565365600 -0700
+@@ -1,24 +1,22 @@
+ # ThroughlineBuild.Scaffold - op-doc -> ticket tree
+ 
+-`ScaffoldPhase` parses an op-doc markdown file (`OpDocParser`, hand-rolled and
+-line-oriented; errors gathered, not thrown), validates it (`OpDocValidator`;
+-warnings block unless `--accept-warnings`), and creates the plan-ticket +
+-brief-ticket tree in Plane. `--dry-run` previews with zero API calls.
+-`OpDocSkeletonGenerator` backs `build op-doc new`.
++`ScaffoldPhase` parses op-doc markdown with hand-rolled, line-oriented
++`OpDocParser` (errors gathered), validates with `OpDocValidator` (warnings block
++unless `--accept-warnings`), and creates the plan-ticket plus brief-ticket tree
++in Plane. `--dry-run` makes zero API calls. `OpDocSkeletonGenerator` backs
++`build op-doc new`.
+ 
+-`ScaffoldProfileDeriver` is the LLM step: a worker agent reads the op-doc and
+-emits the project's toolchain profile (commands + review checks) as a
+-`PROJECT_PROFILE` fenced block under the standard WORKER_RESULT envelope;
+-parsing is then deterministic. Driven from Cli's `ScaffoldProfileRunner`,
+-written by `ConfigProfileWriter`.
++`ScaffoldProfileDeriver` is the LLM step: a worker emits a `PROJECT_PROFILE`
++fenced block inside the standard `WORKER_RESULT`; parsing then becomes
++deterministic. Cli's `ScaffoldProfileRunner` drives it and `ConfigProfileWriter`
++writes it.
+ 
+ GOTCHA - embedded out-of-tree docs: the csproj embeds
+-`docs/op-docs/op-doc-spec.md` from OUTSIDE this project as a resource. The
+-canonical example is fenced inside the spec and extracted by
+-`OpDocDocsLoader.LoadExample`. Editing the guide changes binary behavior
+-(`build op-doc spec` output and validation examples) only after a rebuild.
++`docs/op-docs/op-doc-spec.md` from outside this project. The canonical example is
++fenced inside the spec and extracted by `OpDocDocsLoader.LoadExample`; editing
++the guide changes `build op-doc spec` output and validation examples only after
++rebuild.
+ 
+-GOTCHA - `Templates/*.md` (skeleton fragments + derive-profile prompt) are
+-EmbeddedResource and LF-pinned via `.gitattributes` - edit as LF, rebuild to
+-pick up changes. Tests: `tests/ThroughlineBuild.Scaffold.Tests` (some flip
+-the AOT reflection switch off - keep that pattern).
++GOTCHA - `Templates/*.md` are EmbeddedResource and LF-pinned. Edit as LF and
++rebuild. Tests live in `tests/ThroughlineBuild.Scaffold.Tests`; some flip the
++AOT reflection switch off, and that pattern must remain.
+diff -ru .agent-instruction-compaction/02-after-root-agents/files/repo/src/ThroughlineBuild.Verification/AGENTS.md .agent-instruction-compaction/03-after-nested-agents/files/repo/src/ThroughlineBuild.Verification/AGENTS.md
+--- .agent-instruction-compaction/02-after-root-agents/files/repo/src/ThroughlineBuild.Verification/AGENTS.md	2026-07-31 22:21:19.452601600 -0700
++++ .agent-instruction-compaction/03-after-nested-agents/files/repo/src/ThroughlineBuild.Verification/AGENTS.md	2026-07-31 22:24:39.727665300 -0700
+@@ -1,25 +1,21 @@
+ # ThroughlineBuild.Verification - gate checks + review verification
+ 
+-Stack-agnostic by construction: everything here runs configured `CheckSpec`
+-commands and inspects exit codes/output as data. Never teach this project a
+-language or tool - stack knowledge belongs in config/derived data.
++Stack-agnostic by construction: run configured `CheckSpec` commands and inspect
++exit codes/output as data. Never teach this project a language or tool; stack
++knowledge belongs in config/derived data.
+ 
+-- `AutomatedChecksRunner` / `PreComputedChecksRunner`: run the configured
+-  checks (Gating roles hard-fail; lint/format/smoke are advisory).
+-- `GateVacuityProver`: proves a GREEN gating check CAN fail by materializing
+-  the check's declared canary file and asserting the re-run fails. A vacuous
+-  gate hard-fails the chain WITHOUT rework (it is gate integrity, not a code
+-  defect). Proven-once set is per chain run.
+-- `GateControlProber` (TLB-538): after a gate hard-fail, re-runs the failed
+-  checks against the untouched base ref in a throwaway worktree; if the base
+-  also fails, the failure is ENVIRONMENTAL - chain stops, siblings skipped,
+-  no rework rounds burned. Costs nothing on the green path.
+-- `ObsoleteRatifier` (`IObsoleteRatifier`): verifies an obsolete-escalation
+-  claim - cited commit exists, cited files exist at HEAD, then a model-driven
+-  check that the prior work satisfies the brief's acceptance criteria.
+-- `WorkerAgentReviewer` adapts a worker agent as the review `IVerifier`;
+-  Cli's `VerifierToolEnforcement` warns when the configured allowed-tools
+-  list cannot be enforced for the chosen review agent.
++- `AutomatedChecksRunner` / `PreComputedChecksRunner`: run configured checks.
++  Gating roles hard-fail; lint/format/smoke are advisory.
++- `GateVacuityProver`: proves a green gate can fail by materializing the
++  declared canary and requiring the re-run to fail. Vacuity hard-fails the chain
++  without rework; proven-once state is per chain run.
++- `GateControlProber` (TLB-538): after gate hard-fail, re-runs failed checks
++  against untouched base in a throwaway worktree. Base failure is environmental:
++  stop chain, skip siblings, burn no rework rounds. Green path costs nothing.
++- `ObsoleteRatifier`: verifies obsolete-escalation claims by cited commit, cited
++  files at HEAD, then model check against acceptance criteria.
++- `WorkerAgentReviewer` adapts a worker as review `IVerifier`; Cli's
++  `VerifierToolEnforcement` warns when allowed-tools cannot be enforced.
+ 
+-`Templates/ratify-obsolete-prompt.md` is EmbeddedResource and LF-pinned via
+-`.gitattributes` - rebuild after edits, edit as LF.
++`Templates/ratify-obsolete-prompt.md` is EmbeddedResource and LF-pinned; edit as
++LF and rebuild after changes.
+diff -ru .agent-instruction-compaction/02-after-root-agents/files/repo/src/ThroughlineBuild.Workers.ClaudeCode/AGENTS.md .agent-instruction-compaction/03-after-nested-agents/files/repo/src/ThroughlineBuild.Workers.ClaudeCode/AGENTS.md
+--- .agent-instruction-compaction/02-after-root-agents/files/repo/src/ThroughlineBuild.Workers.ClaudeCode/AGENTS.md	2026-07-31 22:21:19.590642800 -0700
++++ .agent-instruction-compaction/03-after-nested-agents/files/repo/src/ThroughlineBuild.Workers.ClaudeCode/AGENTS.md	2026-07-31 22:24:39.891649300 -0700
+@@ -1,18 +1,18 @@
+ # ThroughlineBuild.Workers.ClaudeCode - Claude worker implementation
+ 
+-`ClaudeCodeAgent : IWorkerAgent` selects one of two transports. Product config
+-defaults to `interactive-hook`; `print` is the explicit rollback.
++`ClaudeCodeAgent : IWorkerAgent` selects transport. Product config defaults to
++`interactive-hook`; `print` is the explicit rollback.
+ 
+-Interactive runs use ConPTY plus a mandatory job object on Windows and a PTY
+-plus process-group containment on Unix. Completion is synthesized from the
+-persisted Claude transcript; the correlated Stop hook is best effort only.
+-`ClaudeCodePreflight` requires Claude CLI 2.1.177 or newer and never silently
+-falls back to print. Trust, run-directory, and worktree-lock state is outside
+-the repository except for the gitignored `.build/brief.md`.
++Interactive runs use ConPTY plus mandatory job object on Windows and PTY plus
++process-group containment on Unix. Completion is synthesized from the persisted
++Claude transcript; the correlated Stop hook is best effort only.
++`ClaudeCodePreflight` requires Claude CLI 2.1.177+ and never silently falls back
++to print. Trust, run-directory, and worktree-lock state live outside the repo
++except gitignored `.build/brief.md`.
+ 
+-Keep parsing AOT-safe and route final output through the shared
+-`WorkerResultParser`. The reusable public API lives in the sibling
+-`ThroughlineBuild.ClaudeCode` facade; this project owns transport internals.
++Keep parsing AOT-safe and route final output through shared `WorkerResultParser`.
++The sibling `ThroughlineBuild.ClaudeCode` facade owns public API; this project
++owns transport internals.
+ 
+ Agent-layer detail:
+ [../../docs/state-of-the-system/11-llm-architecture.md](../../docs/state-of-the-system/11-llm-architecture.md).
+diff -ru .agent-instruction-compaction/02-after-root-agents/files/repo/src/ThroughlineBuild.Workers.Common/AGENTS.md .agent-instruction-compaction/03-after-nested-agents/files/repo/src/ThroughlineBuild.Workers.Common/AGENTS.md
+--- .agent-instruction-compaction/02-after-root-agents/files/repo/src/ThroughlineBuild.Workers.Common/AGENTS.md	2026-07-31 22:21:19.744386100 -0700
++++ .agent-instruction-compaction/03-after-nested-agents/files/repo/src/ThroughlineBuild.Workers.Common/AGENTS.md	2026-07-31 22:24:40.024224100 -0700
+@@ -1,22 +1,21 @@
+ # ThroughlineBuild.Workers.Common - shared worker contract
+ 
+-Code every vendor worker (ClaudeCode/Codex/Gemini/Copilot) depends on.
++Every vendor worker depends on this project.
+ 
+-`WorkerResultParser` extracts the `WORKER_RESULT` JSON envelope by REVERSE
+-scan, so the LAST envelope wins; the payload is the first complete JSON value
+-after the marker (trailing narration ignored). Metadata is an AOT-safe
++`WorkerResultParser` reverse-scans for `WORKER_RESULT`, so the last envelope
++wins; the payload is the first complete JSON value after the marker, with
++trailing narration ignored. Metadata is AOT-safe
+ `Dictionary<string, JsonElement>`. A fenced-block pre-pass captures
+-`<<<NAME_START` / `<<<NAME_END` blocks up to the LAST marker (duplicate names
+-last-wins); `FencedBlockResolver.TryResolveRef` resolves a metadata `*_ref` to
+-its block body. Batch envelopes (`BatchWorkerResultDto`) share the file.
+-Protocol spec: [../../docs/build-worker-result-envelope.md](../../docs/build-worker-result-envelope.md)
+-and [../../docs/op-docs/examples/op-27-worker-result-fenced-payloads.md](../../docs/op-docs/examples/op-27-worker-result-fenced-payloads.md).
++`<<<NAME_START` / `<<<NAME_END` blocks up to the last marker with duplicate
++names last-wins; `FencedBlockResolver.TryResolveRef` resolves metadata `*_ref`.
++Batch envelopes share the file.
+ 
+-Also here: `CompletionClaimParser` (gate-phase completion claims),
+-`ProviderErrorClassifier` (pattern-matches vendor quota/rate/auth failures
+-into one transient classification), `ProcessStreamEncoding` (pins child
+-stdout/stderr to UTF-8 - without it .NET decodes with the OEM code page),
+-`WorkerDiagnostics` (stderr diagnostic sink; tests mute it via a
+-ModuleInitializer), and `MarkdownRenderer` (hand-rolled AOT-safe md->HTML for
+-Plane; do not swap in a reflection-based lib). AOT regression coverage lives
+-in this project's tests and `Workers.ClaudeCode.Tests`.
++Specs:
++[../../docs/build-worker-result-envelope.md](../../docs/build-worker-result-envelope.md),
++[../../docs/op-docs/examples/op-27-worker-result-fenced-payloads.md](../../docs/op-docs/examples/op-27-worker-result-fenced-payloads.md).
++
++Also here: `CompletionClaimParser`, `ProviderErrorClassifier` for transient
++vendor quota/rate/auth failures, `ProcessStreamEncoding` for UTF-8 child
++stdout/stderr, `WorkerDiagnostics`, and hand-rolled AOT-safe `MarkdownRenderer`
++for Plane. Do not swap in a reflection-based Markdown library. AOT regression
++coverage lives here and in `Workers.ClaudeCode.Tests`.
+diff -ru .agent-instruction-compaction/02-after-root-agents/files/repo/tests/AGENTS.md .agent-instruction-compaction/03-after-nested-agents/files/repo/tests/AGENTS.md
+--- .agent-instruction-compaction/02-after-root-agents/files/repo/tests/AGENTS.md	2026-07-31 22:21:18.410077400 -0700
++++ .agent-instruction-compaction/03-after-nested-agents/files/repo/tests/AGENTS.md	2026-07-31 22:24:38.307864100 -0700
+@@ -1,25 +1,20 @@
+ # tests/ - xUnit test suites
+ 
+-One test project mirrors each `src/` project (20 in the solution), all net10.0,
+-with about 2,450 `[Fact]`/`[Theory]` declarations across about 230 C# files. Run
+-all: `dotnet test` (tests/Directory.Build.props defaults to test.runsettings:
+-quiet on green, full output on failure).
++One net10.0 test project mirrors each `src/` project. Run all with `dotnet test`;
++`tests/Directory.Build.props` uses `test.runsettings` for quiet green output and
++full failure output.
+ 
+-AOT discipline: test projects do NOT inherit `PublishAot=true`, so
+-AOT-sensitive paths flip reflection off explicitly first:
++Test projects do not inherit `PublishAot=true`. AOT-sensitive parser and
++serialization tests must flip reflection off first:
+ `AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false)`.
+-Keep this when adding parser/serialization tests, or they pass under
+-reflection and miss the AOT regression they exist to catch.
++Keep that pattern or AOT regressions pass under reflection.
+ 
+-Doubles are per-project copies, not a shared library: most projects carry
+-their own `FakeTicketing`, `FakeEventSink`, `FakeGitClient`,
+-`FakeWorkerAgent`, etc. Reuse the project-local ones. Some suites still mute
+-console/diagnostic noise assembly-wide via `[ModuleInitializer]`
+-(`TestConsoleSilencer`, `TestDiagnosticsSilencer`). Phases tests instead pass
+-`TextWriter.Null` or a local `StringWriter` through the production injection
+-points; do not restore process-global console redirection there.
++Doubles are per-project, not shared: reuse each suite's local `FakeTicketing`,
++`FakeEventSink`, `FakeGitClient`, `FakeWorkerAgent`, etc. Some suites still mute
++console/diagnostic noise with `[ModuleInitializer]`; Phases tests use injected
++`TextWriter.Null` or `StringWriter` and must not restore process-global console
++redirection.
+ 
+-Snapshot infrastructure lives in `ThroughlineBuild.Briefs.Tests` (`Snapshots/`
+-+ `Templates/`, LF-pinned via `.gitattributes`) - template changes need a
+-snapshot update. Fable stream-json NDJSON fixtures live in
+-`Workers.ClaudeCode.Tests/Fixtures/`.
++Brief snapshots live in `ThroughlineBuild.Briefs.Tests` (`Snapshots/` +
++`Templates/`, LF-pinned); template changes need snapshot updates. Fable
++stream-json NDJSON fixtures live in `Workers.ClaudeCode.Tests/Fixtures/`.
