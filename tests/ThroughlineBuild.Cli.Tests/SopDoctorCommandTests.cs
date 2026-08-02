@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ThroughlineBuild.Cli.Json;
+using ThroughlineBuild.Contracts.Models;
 using Xunit;
 
 namespace ThroughlineBuild.Cli.Tests;
@@ -126,6 +127,161 @@ public sealed class SopDoctorCommandTests
         finally
         {
             TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task CliSopList_ReportsEmbeddedSopsVersionsAndCatalogPaths()
+    {
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+        var repo = CreateRepo();
+        var (exit, stdout, stderr) = await RunCliInDirectoryAsync(repo, ["sop", "list", "--json"]);
+
+        try
+        {
+            Assert.Equal(0, exit);
+            Assert.Equal(string.Empty, stderr);
+            using var doc = JsonDocument.Parse(stdout);
+            var rows = doc.RootElement.GetProperty("data").EnumerateArray().ToList();
+            Assert.Contains(rows, row =>
+                row.GetProperty("name").GetString() == "run-backlog" &&
+                row.GetProperty("version").GetString() == BuildVersion.Current);
+            var runBacklog = rows.Single(row => row.GetProperty("name").GetString() == "run-backlog");
+            var ownedPaths = runBacklog.GetProperty("ownedPaths").EnumerateArray().ToList();
+            Assert.Contains(ownedPaths, path =>
+                path.GetProperty("path").GetString() == ".claude/commands/run-backlog.md" &&
+                path.GetProperty("class").GetString() == "emitted" &&
+                !string.IsNullOrWhiteSpace(path.GetProperty("expectedContentHash").GetString()));
+            Assert.Contains(ownedPaths, path =>
+                path.GetProperty("path").GetString() == ".build/conductor.toml" &&
+                path.GetProperty("class").GetString() == "scaffolded" &&
+                !path.TryGetProperty("expectedContentHash", out _));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task CliSopBrief_RunBacklog_EmitsProcedureConductorVersionsAndDoctor()
+    {
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+        var repo = CreateRepo();
+        var (exit, stdout, stderr) = await RunCliInDirectoryAsync(repo, ["sop", "brief", "run-backlog", "--json"]);
+
+        try
+        {
+            Assert.Equal(0, exit);
+            Assert.Equal(string.Empty, stderr);
+            using var doc = JsonDocument.Parse(stdout);
+            var root = doc.RootElement;
+            Assert.True(root.GetProperty("ok").GetBoolean());
+            var data = root.GetProperty("data");
+            Assert.True(data.GetProperty("ready").GetBoolean());
+            Assert.Equal(SopBundleCatalog.SchemaVersion, data.GetProperty("sopSchemaVersion").GetInt32());
+            Assert.Equal(BuildVersion.Current, data.GetProperty("sopVersion").GetString());
+            Assert.Equal(BuildVersion.Current, data.GetProperty("binaryVersion").GetString());
+            Assert.Equal("TLB", data.GetProperty("conductor").GetProperty("ticketPrefix").GetString());
+            Assert.True(data.GetProperty("doctor").GetProperty("passed").GetBoolean());
+
+            var text = data.GetProperty("sopText").GetString();
+            Assert.Contains("# The ticket transaction (universal)", text);
+            Assert.Contains("`build waves` accepts `verifiedExternalDeps` as an ASSERTION", text);
+            Assert.Contains("Re-check this at the start of each wave", text);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task CliSopBrief_CrossImpact_EmitsCrossImpactProcedure()
+    {
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+        var repo = CreateRepo();
+        var (exit, stdout, stderr) = await RunCliInDirectoryAsync(repo, ["sop", "brief", "cross-impact"]);
+
+        try
+        {
+            Assert.Equal(0, exit);
+            Assert.Equal(string.Empty, stderr);
+            using var doc = JsonDocument.Parse(stdout);
+            var text = doc.RootElement.GetProperty("data").GetProperty("sopText").GetString();
+            Assert.Contains("# Cross-impact", text);
+            Assert.Contains("DRAFT - not silently create", text);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task CliSopBrief_InvalidDoctor_FailsClosedWithoutSopText()
+    {
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+        var conductor = ValidConductorToml.Replace(
+            "min_build_version = \"0.1.0\"",
+            "min_build_version = \"9.0.0\"");
+        var repo = CreateRepo(conductor);
+        var (exit, stdout, stderr) = await RunCliInDirectoryAsync(repo, ["sop", "brief", "run-backlog", "--json"]);
+
+        try
+        {
+            Assert.Equal(1, exit);
+            Assert.Equal(string.Empty, stderr);
+            using var doc = JsonDocument.Parse(stdout);
+            var data = doc.RootElement.GetProperty("data");
+            Assert.False(data.GetProperty("ready").GetBoolean());
+            Assert.False(data.TryGetProperty("sopText", out _));
+            Assert.False(data.GetProperty("doctor").GetProperty("passed").GetBoolean());
+            Assert.Contains(
+                "conductor.min_build_version.newer_than_binary",
+                FindingCodes(data.GetProperty("doctor")));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task CliSopBrief_UnknownSop_UsesDistinctExitCodeAndJsonError()
+    {
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+        var repo = CreateRepo();
+        var (exit, stdout, stderr) = await RunCliInDirectoryAsync(repo, ["sop", "brief", "missing", "--json"]);
+
+        try
+        {
+            Assert.Equal(SopCommand.UnknownSopExitCode, exit);
+            Assert.Equal(string.Empty, stderr);
+            using var doc = JsonDocument.Parse(stdout);
+            Assert.False(doc.RootElement.GetProperty("ok").GetBoolean());
+            Assert.Equal("unknown_sop", doc.RootElement.GetProperty("error").GetProperty("code").GetString());
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void Catalog_EmittedPathHashesMatchEmbeddedResources()
+    {
+        foreach (var entry in SopBundleCatalog.All)
+        {
+            foreach (var ownedPath in entry.OwnedPaths.Where(path => path.Class == SopBundleCatalog.EmittedPathClass))
+            {
+                Assert.False(string.IsNullOrWhiteSpace(ownedPath.ResourceName));
+                Assert.False(string.IsNullOrWhiteSpace(ownedPath.ExpectedContentHash));
+                var content = SopResourceLoader.LoadResource(ownedPath.ResourceName!);
+                Assert.Equal(
+                    ownedPath.ExpectedContentHash,
+                    SopResourceLoader.ComputeSha256(content));
+            }
         }
     }
 

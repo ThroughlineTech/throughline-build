@@ -278,6 +278,29 @@ sections they use without requiring `[ticketing]`, `[workers]`, or `[events]`,
 resolving ticketing secrets, or constructing a Plane client. Other commands
 still require the full ticketing, worker, and event configuration.
 
+Repositories that use binary-hosted SOPs also track `.build/conductor.toml`.
+Run `build sop list [--json]` to report embedded SOPs and their binary versions.
+Run `build sop doctor [--json]` to validate that conductor data and the local
+review-check contract are present. Run `build sop brief <name>` to emit the
+embedded SOP text plus resolved conductor data, the SOP schema version, SOP
+version, binary version, doctor result, and owned catalog paths. The brief
+always emits a JSON envelope; `--json` is accepted for consistency. It runs
+doctor first; if doctor fails, including when `min_build_version` is newer than
+the running binary, it exits 1 and omits SOP text. Unknown SOP names exit 9.
+
+The sop commands read `.build/conductor.toml` without loading ticketing, worker,
+or event configuration; if `.build/config.toml` is absent, doctor reports the
+missing `[[review.checks]]` as a validation finding instead of a bootstrap
+error. Review invariants in conductor.toml are structured prose: doctor checks
+ids, non-empty statements, optional paths, and optional `blocks_done` shape only.
+It does not judge whether the statements are true. Unknown conductor keys are
+findings, so misspelled fields cannot silently drop contract data. The local
+`[[review.checks]]` list must include at least one setup or gating check with a
+non-empty executable; advisory-only checks do not make the gate capable of
+blocking Done. No `sop` verb starts a worker agent. Exit 0 means the requested
+SOP operation passed, exit 1 means validation findings were reported or brief
+refused, and exit 2 means bad arguments.
+
 Lease prints the absolute worktree path for use as an agent working directory,
 runs `[project].install_command`, and writes a safety manifest. Configure the
 root and the only untracked local files Build may copy with `[worktree] root`

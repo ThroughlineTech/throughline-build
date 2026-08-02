@@ -18,7 +18,7 @@ Help lives under `Help/`: `Tier0Renderer`, `Tier1Renderer` (`build <verb>
 registry, dispatch, and, when tiered help should expose it, `HelpRegistryFactory`
 help metadata.
 
-`init`, `settarget`, `user-guide`, `op-doc`, `models refresh`, and `sop doctor`
+`init`, `settarget`, `user-guide`, `op-doc`, `models refresh`, and `sop`
 have `RunsBeforeConfig = true`. Worker wiring belongs in
 `WorkerAgentBuilder.Create`/`WorkerAgentFactory`, not `Program.cs`.
 `ChainPhaseComposition` news up `ChainPhase`; `ChainExitCodeMapper` maps

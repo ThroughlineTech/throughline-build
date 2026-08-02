@@ -39,7 +39,9 @@ Usage:
   build worktree lease|teardown|list [...]     Manage conductor-owned isolated workspaces
   build gate [--ticket <id>] [--role gating|advisory|all] [--require-checks] [--json]  Run configured checks without a worker
   build waves --input <path|-> [--json]        Plan dependency-safe, conflict-aware waves without running tickets
+  build sop list [--json]                      List embedded SOPs and their binary versions
   build sop doctor [--json]                    Validate .build/conductor.toml and [[review.checks]] without loading ticketing, workers, or events
+  build sop brief <name> [--json]              Emit one SOP brief envelope with procedure text, conductor data, versions, doctor result, and owned catalog paths
   build amend <ticket-id> [--title "..."] [--priority urgent|high|medium|low|none] [--type <name>]
                           [--label-add <name>]... [--label-remove <name>]... [--parent <ticket-id>]
                           [--size S|M|L] [--note "..."] [--description <path|->] [--ac <path|->]
@@ -129,9 +131,10 @@ Exit codes:
   2  Invalid config, arguments, input JSON, or dependency scope
   5  Dependency cycle in the selected ticket set
 
-  For 'build sop doctor' verb only:
-  0  Conductor config and review-check contract are valid
-  1  Invalid conductor data or missing/unrunnable review checks
+  For 'build sop' verb only:
+  0  SOP listed, doctor passed, or brief emitted with a passing doctor result
+  1  Invalid conductor data, missing/unrunnable review checks, or brief refused
   2  Bad arguments
+  9  Unknown SOP name for build sop brief
 """;
 }

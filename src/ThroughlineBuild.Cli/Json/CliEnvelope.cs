@@ -27,6 +27,7 @@ public static class CliErrorCodes
     public const string NotGitRepository = "not_git_repository";
     public const string InvalidWorktreeState = "invalid_worktree_state";
     public const string UnhashablePath = "unhashable_path";
+    public const string UnknownSop = "unknown_sop";
 }
 
 /// <summary>A machine-readable error: a stable <paramref name="Code"/> plus a human message.</summary>
@@ -257,6 +258,28 @@ public sealed record WavesEnvelope(int SchemaVersion, bool Ok, WavePlan Data);
 
 public sealed record SopDoctorEnvelope(int SchemaVersion, bool Ok, SopDoctorView Data);
 
+// ---- build sop list / brief -------------------------------------------------------
+
+public sealed record SopListItemView(
+    string Name,
+    string Version,
+    IReadOnlyList<SopOwnedPath> OwnedPaths);
+
+public sealed record SopListEnvelope(int SchemaVersion, bool Ok, IReadOnlyList<SopListItemView> Data);
+
+public sealed record SopBriefView(
+    string Name,
+    int SopSchemaVersion,
+    string SopVersion,
+    string BinaryVersion,
+    bool Ready,
+    string? SopText,
+    ConductorConfig? Conductor,
+    SopDoctorView Doctor,
+    IReadOnlyList<SopOwnedPath> OwnedPaths);
+
+public sealed record SopBriefEnvelope(int SchemaVersion, bool Ok, SopBriefView Data);
+
 // Source-generated context keeps the --json path statically analyzable under PublishAot=true
 // (reflection-based serialization trips IL2026/IL3050). UseStringEnumConverter renders
 // State/Size/Risk as their names rather than integers. Mirrors PhaseSummaryJsonContext.
@@ -289,4 +312,8 @@ public sealed record SopDoctorEnvelope(int SchemaVersion, bool Ok, SopDoctorView
 [JsonSerializable(typeof(WavesEnvelope))]
 [JsonSerializable(typeof(ConductorConfig))]
 [JsonSerializable(typeof(SopDoctorEnvelope))]
+[JsonSerializable(typeof(SopOwnedPath))]
+[JsonSerializable(typeof(SopListItemView))]
+[JsonSerializable(typeof(SopListEnvelope))]
+[JsonSerializable(typeof(SopBriefEnvelope))]
 internal partial class CliJsonContext : JsonSerializerContext { }

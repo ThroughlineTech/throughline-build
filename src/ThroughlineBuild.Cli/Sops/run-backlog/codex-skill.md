@@ -1,0 +1,10 @@
+---
+name: run-backlog
+description: Drive a repository backlog through the binary-hosted run-backlog SOP. Use when asked to run, finish, or adapt backlog work.
+---
+
+# run-backlog
+
+Run `build sop brief run-backlog --json` from the repository you are operating on and follow the returned SOP text exactly.
+
+If `build` is missing, exits nonzero, reports an unknown SOP, reports that doctor failed, or omits `data.sopText`, stop and report the failure. Do not use cached prose and do not improvise a fallback.

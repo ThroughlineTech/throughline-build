@@ -11,13 +11,13 @@ conductor uses the ticket CRUD verbs (`list`, `get`, `comments`, `comment`,
 The `waves` verb plans which selected tickets can safely run concurrently.
 The `candidate status` command fingerprints the current candidate worktree so a
 conductor can prove the reviewed tree is the tree it is about to commit.
-The `sop doctor` command validates tracked conductor data and the review-check
-contract for binary-hosted SOPs.
+The `sop` command family lists binary-hosted SOPs, validates tracked conductor
+data, and emits the brief envelope that host stubs consume.
 None of these verbs starts a worker agent.
 They load only the repository configuration sections they consume and do not
 require `[ticketing]`, `[workers]`, or `[events]`, resolve ticketing secrets, or
 construct a Plane client. Missing ticketing credentials therefore do not block
-`worktree`, `gate`, `waves`, `candidate status`, or `sop doctor`. Other commands
+`worktree`, `gate`, `waves`, `candidate status`, or `sop`. Other commands
 still require the full ticketing, worker, and event configuration.
 
 ## Configuration
@@ -51,12 +51,22 @@ contract_authority = "src/ThroughlineBuild.Contracts"
 `.build/conductor.toml` is tracked and contains no secrets. It carries the
 minimum Build version, branch and ticket prefixes, source roots, architecture
 map, review invariants, review escalation rule, rework cap, and constellation.
-Run `build sop doctor [--json]` to validate it. Review invariants are structured
-prose: doctor validates id uniqueness, non-empty statements, optional paths, and
-optional `blocks_done` shape only. It does not judge whether a statement is
-true. Unknown keys in conductor.toml are findings. Doctor also requires local
-`[[review.checks]]` to include at least one setup or gating check with a
-non-empty executable; advisory-only checks cannot make a gate block Done.
+Run `build sop list [--json]` to report available embedded SOPs and their binary
+versions. Run `build sop doctor [--json]` to validate conductor.toml. Review
+invariants are structured prose: doctor validates id uniqueness, non-empty
+statements, optional paths, and optional `blocks_done` shape only. It does not
+judge whether a statement is true. Unknown keys in conductor.toml are findings.
+Doctor also requires local `[[review.checks]]` to include at least one setup or
+gating check with a non-empty executable; advisory-only checks cannot make a gate
+block Done.
+
+Run `build sop brief <name>` to emit one JSON envelope containing SOP text,
+resolved conductor data, the SOP schema version, SOP version, binary version,
+doctor result, and the SOP's owned catalog paths. `--json` is accepted for
+consistency. Brief runs doctor first and fails closed: if conductor.toml is
+invalid, review checks are missing, or `min_build_version` is newer than the
+running binary, it exits 1 and omits SOP text. There is no override flag.
+Unknown SOP names exit 9 with the JSON error code `unknown_sop`.
 
 Add an optional section to `.build/config.toml`:
 

@@ -206,7 +206,10 @@ public class HelpRegistryFactoryTests
     {
         var output = Tier1Renderer.Render(Registry.TryGet("sop")!);
 
+        Assert.Contains("sop list", output);
         Assert.Contains("sop doctor", output);
+        Assert.Contains("sop brief <name>", output);
+        Assert.Contains("Unknown SOP name", output);
         Assert.Contains("Review invariants are structured prose", output);
         Assert.Contains("does not evaluate whether a statement is true", output);
     }

@@ -420,7 +420,7 @@ public static class CliApplication
 
             if (verbKind == CliVerbKind.Sop)
             {
-                return SopDoctorCommand.Execute(
+                return SopCommand.Execute(
                     args,
                     jsonOutput,
                     rawCwd,

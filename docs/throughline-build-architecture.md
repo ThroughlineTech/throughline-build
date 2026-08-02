@@ -93,7 +93,7 @@ build (ThroughlineBuild.Cli)
 ### Invocation flow
 
 1. Pre-configuration verbs such as `--help`, `init`, `user-guide`, and
-   `sop doctor` are dispatched before config loading.
+   `sop` are dispatched before config loading.
 2. Most configured verbs find `.build/config.toml` by walking upward from the
    working directory, load it, and compose the configured Plane, git, worker,
    event, and verification services.
@@ -197,13 +197,14 @@ per-ticket filesystem lock closes concurrent lease races, and creation rollback
 tracks branch and worktree ownership separately. The standalone `worktree`,
 `gate`, `waves`, and `candidate status` paths load only their consumed config
 sections without requiring `[ticketing]`, `[workers]`, or `[events]`, resolving
-ticketing secrets, or constructing a Plane client. `build sop doctor` runs in
-the same no-worker/no-ticketing band, but reads tracked `.build/conductor.toml`
-directly and only consults local `.build/config.toml` for `[[review.checks]]`.
-It can therefore report an absent local config file as a doctor finding instead
-of failing before conductor data is loaded. Unknown keys in conductor TOML are
-findings, and the local check list must include at least one setup or gating
-check so an advisory-only list cannot satisfy the gate contract.
+ticketing secrets, or constructing a Plane client. `build sop` runs in the same
+no-worker/no-ticketing band. `sop doctor` reads tracked `.build/conductor.toml`
+directly and only consults local `.build/config.toml` for `[[review.checks]]`;
+`sop brief` runs doctor first, then emits embedded SOP text and the resolved
+conductor data. Doctor can therefore report an absent local config file as a
+finding instead of failing before conductor data is loaded. Unknown keys in
+conductor TOML are findings, and the local check list must include at least one
+setup or gating check so an advisory-only list cannot satisfy the gate contract.
 
 `ThroughlineBuild.Verification` runs configured `CheckSpec` commands and
 returns typed `CheckResult` values. Check roles distinguish setup, gating, and

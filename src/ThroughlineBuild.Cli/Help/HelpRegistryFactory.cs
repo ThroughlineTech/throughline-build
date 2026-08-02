@@ -368,25 +368,34 @@ public static class HelpRegistryFactory
     private static CommandHelp Sop() => new(
         Name: "sop",
         Group: CommandGroup.Conductor,
-        Summary: "Validate the tracked conductor configuration",
-        Usage: "sop doctor [--json]",
+        Summary: "Inspect binary-hosted SOPs and validate conductor configuration",
+        Usage:
+            "sop list [--json]\n" +
+            "sop doctor [--json]\n" +
+            "sop brief <name> [--json]",
         Options:
         [
-            new("--json", "Emit a versioned JSON envelope with typed doctor findings", false),
+            new("--json", "Emit a versioned JSON envelope", false),
         ],
         ExitCodes:
         [
-            new(0, "Conductor config and review-check contract are valid"),
-            new(1, "Doctor found invalid conductor data or missing/unrunnable review checks"),
+            new(0, "SOP listed, doctor passed, or brief emitted with a passing doctor result"),
+            new(1, "Doctor found invalid conductor data, missing/unrunnable review checks, or brief refused"),
             new(2, "Bad arguments"),
+            new(SopCommand.UnknownSopExitCode, "Unknown SOP name for build sop brief"),
         ],
         Examples:
         [
+            new("sop list --json", "List available embedded SOPs and their binary versions"),
             new("sop doctor --json", "Validate .build/conductor.toml and [[review.checks]] without loading ticketing, workers, or events"),
+            new("sop brief run-backlog --json", "Emit the run-backlog procedure plus resolved conductor data"),
         ],
         Details:
         [
             """
+            `sop list` reports every SOP embedded in the binary. The SOP version is the running
+            binary version; replacing the binary is the SOP upgrade path.
+
             `sop doctor` reads tracked .build/conductor.toml independently of .build/config.toml.
             It only looks at .build/config.toml for [[review.checks]], so missing ticketing
             credentials, worker configuration, and event configuration do not block it.
@@ -398,6 +407,13 @@ public static class HelpRegistryFactory
 
             Review checks must contain at least one setup or gating check with a non-empty executable.
             Advisory-only checks are visible, but they do not make the gate capable of blocking Done.
+
+            `sop brief <name>` always emits a JSON envelope; --json is accepted for consistency
+            with other machine-readable verbs. It runs doctor first. If doctor fails, including when
+            conductor.min_build_version is newer than the running binary, the brief exits nonzero
+            and does not include SOP text. There is no override flag. A successful brief envelope
+            includes the SOP text, conductor data, SOP schema version, SOP version, binary version,
+            doctor result, and owned catalog paths. No sop verb starts a worker agent.
             """
         ]
     );
