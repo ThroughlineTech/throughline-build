@@ -429,11 +429,12 @@ public static class HelpRegistryFactory
             are never overwritten after creation and are validated as structured conductor data.
 
             Install is idempotent and restores missing catalog paths from the binary. Upgrade rewrites
-            only emitted files that still match prior catalog content; local edits are reported and
-            preserved. Uninstall removes only catalog-owned emitted regular files that still match the
-            current catalog. Status reports missing catalog paths as drift. Every target and the SOP
-            manifest path are resolved below the repository root and refused when a symlink or reparse
-            point is encountered before any write or delete. No sop verb starts a worker agent.
+            only emitted files that still match trusted previous catalog hashes embedded in the current
+            binary; local edits are reported and preserved. Uninstall removes only catalog-owned
+            emitted regular files that still match the current catalog. Status reports missing catalog
+            paths as drift. Every target and the SOP manifest path are resolved below the repository
+            root and refused when a symlink or reparse point is encountered before any write or delete.
+            No sop verb starts a worker agent.
             """
         ]
     );

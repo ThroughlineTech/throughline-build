@@ -34,12 +34,14 @@ public static class SopBundleCatalog
                 ".claude/commands/run-backlog.md",
                 EmittedPathClass,
                 "3c5a332a7504fa59cdd6653fe525a7e9e888bc4b0fe1a42e255f18914d689231",
-                RunBacklogClaudeCommandResource),
+                RunBacklogClaudeCommandResource,
+                []),
             new(
                 ".agents/skills/run-backlog/SKILL.md",
                 EmittedPathClass,
                 "ab63e2b4e8ded304152970cb1c3e47cbe97570736946db4f72c5d28453133f77",
-                RunBacklogCodexSkillResource),
+                RunBacklogCodexSkillResource,
+                []),
             new(
                 ".build/conductor.toml",
                 ScaffoldedPathClass,
@@ -56,12 +58,14 @@ public static class SopBundleCatalog
                 ".claude/commands/cross-impact.md",
                 EmittedPathClass,
                 "48bceacc9b28d3f6f8dcdd7776716344936038473f001b545055ec12be23b86a",
-                CrossImpactClaudeCommandResource),
+                CrossImpactClaudeCommandResource,
+                []),
             new(
                 ".agents/skills/cross-impact/SKILL.md",
                 EmittedPathClass,
                 "ba33b78666fcb9cf0745c6f42dde0d48e60d72830ffe8e45908f6620dfa0c764",
-                CrossImpactCodexSkillResource),
+                CrossImpactCodexSkillResource,
+                []),
             new(
                 ".build/conductor.toml",
                 ScaffoldedPathClass,

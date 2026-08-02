@@ -10,6 +10,33 @@ namespace ThroughlineBuild.Cli.Tests;
 public sealed class SopInstallCommandTests
 {
     [Fact]
+    public void Catalog_EmittedPathHashChangesRequireTrustedPreviousHistory()
+    {
+        var pinnedCurrentHashes = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [".claude/commands/run-backlog.md"] = "3c5a332a7504fa59cdd6653fe525a7e9e888bc4b0fe1a42e255f18914d689231",
+            [".agents/skills/run-backlog/SKILL.md"] = "ab63e2b4e8ded304152970cb1c3e47cbe97570736946db4f72c5d28453133f77",
+            [".claude/commands/cross-impact.md"] = "48bceacc9b28d3f6f8dcdd7776716344936038473f001b545055ec12be23b86a",
+            [".agents/skills/cross-impact/SKILL.md"] = "ba33b78666fcb9cf0745c6f42dde0d48e60d72830ffe8e45908f6620dfa0c764",
+        };
+
+        foreach (var path in SopBundleCatalog.All.SelectMany(entry => entry.OwnedPaths)
+                     .Where(path => path.Class == SopBundleCatalog.EmittedPathClass))
+        {
+            Assert.True(
+                pinnedCurrentHashes.TryGetValue(path.Path, out var pinnedHash),
+                $"pin a release-history guard hash for {path.Path}");
+            Assert.NotNull(path.PreviousContentHashes);
+            if (!string.Equals(path.ExpectedContentHash, pinnedHash, StringComparison.Ordinal))
+            {
+                Assert.Contains(
+                    pinnedHash,
+                    path.PreviousContentHashes);
+            }
+        }
+    }
+
+    [Fact]
     public async Task Install_IsIdempotentAndReportsNoChangeOnSecondRun()
     {
         AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
@@ -238,8 +265,49 @@ public sealed class SopInstallCommandTests
             var statuses = ResultStatuses(doc.RootElement.GetProperty("data"));
             Assert.Contains("modified", statuses);
             Assert.Contains("removed", statuses);
+            Assert.True(doc.RootElement.GetProperty("data").GetProperty("changed").GetBoolean());
             Assert.True(File.Exists(edited));
             Assert.False(File.Exists(clean));
+
+            var manifestPaths = ManifestPaths(repo, "run-backlog");
+            Assert.Contains(".claude/commands/run-backlog.md", manifestPaths);
+            Assert.Contains(".build/conductor.toml", manifestPaths);
+            Assert.DoesNotContain(".agents/skills/run-backlog/SKILL.md", manifestPaths);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Uninstall_IsIdempotentAfterCleanRemoval()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            Assert.Equal(0, (await RunCliInDirectoryAsync(repo, ["sop", "install", "--sop", "run-backlog", "--json"])).Exit);
+
+            var first = await RunCliInDirectoryAsync(repo, ["sop", "uninstall", "--sop", "run-backlog", "--json"]);
+
+            Assert.Equal(0, first.Exit);
+            using (var firstDoc = JsonDocument.Parse(first.Stdout))
+            {
+                var firstData = firstDoc.RootElement.GetProperty("data");
+                Assert.True(firstData.GetProperty("changed").GetBoolean());
+                Assert.Contains("removed", ResultStatuses(firstData));
+            }
+
+            var second = await RunCliInDirectoryAsync(repo, ["sop", "uninstall", "--sop", "run-backlog", "--json"]);
+
+            Assert.Equal(0, second.Exit);
+            using var secondDoc = JsonDocument.Parse(second.Stdout);
+            var secondData = secondDoc.RootElement.GetProperty("data");
+            Assert.True(secondDoc.RootElement.GetProperty("ok").GetBoolean());
+            Assert.False(secondData.GetProperty("changed").GetBoolean());
+            Assert.Contains("already_absent", ResultStatuses(secondData));
+            Assert.Contains("preserved_scaffolded", ResultStatuses(secondData));
         }
         finally
         {
@@ -408,7 +476,8 @@ public sealed class SopInstallCommandTests
         var repository = Path.Combine(
             Path.GetTempPath(),
             "sop-install-tests",
-            Guid.NewGuid().ToString("N"));
+            Guid.NewGuid().ToString("N"),
+            "repo");
         Directory.CreateDirectory(repository);
         Directory.CreateDirectory(Path.Combine(repository, ".git"));
         return repository;
@@ -445,6 +514,14 @@ public sealed class SopInstallCommandTests
         File.WriteAllText(
             manifestPath,
             JsonSerializer.Serialize(manifest, CliJsonContext.Default.SopManifest) + Environment.NewLine);
+    }
+
+    private static IReadOnlyList<string> ManifestPaths(string repository, string sop)
+    {
+        var manifest = JsonSerializer.Deserialize(
+            File.ReadAllText(PathFor(repository, ".build/sop-manifest.json")),
+            CliJsonContext.Default.SopManifest)!;
+        return manifest.Sops.Single(row => row.Name == sop).Paths.Select(path => path.Path).ToList();
     }
 
     private static async Task<(int Exit, string Stdout, string Stderr)> RunCliInDirectoryAsync(
@@ -486,7 +563,12 @@ public sealed class SopInstallCommandTests
         try
         {
             if (Directory.Exists(path))
-                Directory.Delete(path, recursive: true);
+            {
+                var target = Path.GetFileName(path) == "repo"
+                    ? Directory.GetParent(path)?.FullName ?? path
+                    : path;
+                Directory.Delete(target, recursive: true);
+            }
         }
         catch
         {

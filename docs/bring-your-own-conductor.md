@@ -56,9 +56,10 @@ versions. Run `build sop install [--sop <name>] [--json]` to emit host stubs,
 scaffold a missing `.build/conductor.toml`, and write `.build/sop-manifest.json`.
 Run `build sop status [--json]` to report catalog drift, including missing
 installed paths. Run `build sop upgrade [--sop <name>] [--json]` after replacing
-the binary; it rewrites only emitted files that still match previous catalog
-content. Run `build sop uninstall [--sop <name>] [--json]` to remove only emitted
-regular files that still match the current catalog.
+the binary; it rewrites only emitted files that still match trusted previous
+catalog hashes embedded in the current binary. Run
+`build sop uninstall [--sop <name>] [--json]` to remove only emitted regular
+files that still match the current catalog.
 
 The embedded catalog is the authority. `.build/sop-manifest.json` is a cache of
 prior writes, not permission to touch arbitrary paths. Emitted files are stubs

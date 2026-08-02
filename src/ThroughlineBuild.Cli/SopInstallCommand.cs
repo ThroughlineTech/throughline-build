@@ -257,7 +257,7 @@ internal static class SopInstaller
             var resolved = resolutions[target.Path];
             if (target.IsEmitted)
             {
-                changed |= UpgradeEmitted(target, resolved, manifest, results);
+                changed |= UpgradeEmitted(target, resolved, results);
                 continue;
             }
 
@@ -311,13 +311,10 @@ internal static class SopInstaller
             results.Add(Result(target, "invalid_class", $"unknown catalog path class '{target.Class}'"));
         }
 
-        if (HasBlockingFindings(results))
-            return changed;
-
         if (manifest is not null)
         {
-            var updated = BuildManifestAfterUninstall(manifest, scopeEntries, buildVersion, now);
-            if (updated is null)
+            var (updated, manifestChanged) = BuildManifestAfterUninstall(manifest, scopeEntries, buildVersion, now, results);
+            if (manifestChanged && updated is null)
             {
                 if (File.Exists(manifestPath))
                 {
@@ -325,7 +322,7 @@ internal static class SopInstaller
                     changed = true;
                 }
             }
-            else
+            else if (manifestChanged && updated is not null)
             {
                 WriteManifest(manifestPath, updated);
                 changed = true;
@@ -422,7 +419,6 @@ internal static class SopInstaller
     private static bool UpgradeEmitted(
         SopInstallTarget target,
         ResolvedCatalogPath resolved,
-        SopManifest? manifest,
         List<SopPathResultView> results)
     {
         if (!TryLoadEmittedContent(target, results, out var content, out var newHash))
@@ -468,7 +464,7 @@ internal static class SopInstaller
     {
         if (!File.Exists(resolved.AbsolutePath) && !Directory.Exists(resolved.AbsolutePath))
         {
-            results.Add(Result(target, "missing", "emitted catalog path is already absent"));
+            results.Add(Result(target, "already_absent", "emitted catalog path is already absent"));
             return false;
         }
 
@@ -637,19 +633,70 @@ internal static class SopInstaller
         return new SopManifest(ManifestSchemaVersion, buildVersion, now, rows);
     }
 
-    private static SopManifest? BuildManifestAfterUninstall(
+    private static (SopManifest? Manifest, bool Changed) BuildManifestAfterUninstall(
         SopManifest existing,
         IReadOnlyList<SopCatalogEntry> scopeEntries,
         string buildVersion,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        IReadOnlyList<SopPathResultView> results)
     {
         var selected = new HashSet<string>(scopeEntries.Select(entry => entry.Name), StringComparer.Ordinal);
-        var rows = existing.Sops
-            .Where(row => row is not null && !selected.Contains(row.Name))
-            .ToList();
-        return rows.Count == 0
-            ? null
-            : new SopManifest(ManifestSchemaVersion, buildVersion, now, rows);
+        var changed = false;
+        var rows = new List<SopManifestSop>();
+        foreach (var row in existing.Sops)
+        {
+            if (row is null)
+            {
+                changed = true;
+                continue;
+            }
+
+            if (!selected.Contains(row.Name))
+            {
+                rows.Add(row);
+                continue;
+            }
+
+            var keptPaths = row.Paths
+                .Where(path => path is not null && KeepManifestPathAfterUninstall(row.Name, path.Path, results))
+                .ToList();
+            var rowChanged = keptPaths.Count != row.Paths.Count;
+            if (rowChanged || keptPaths.Count == 0)
+                changed = true;
+            if (keptPaths.Count > 0)
+            {
+                rows.Add(rowChanged
+                    ? row with
+                    {
+                        InstalledByBuildVersion = buildVersion,
+                        InstalledAtUtc = now,
+                        Paths = keptPaths,
+                    }
+                    : row);
+            }
+        }
+
+        if (!changed)
+            return (existing, false);
+
+        return (
+            rows.Count == 0
+                ? null
+                : new SopManifest(ManifestSchemaVersion, buildVersion, now, rows),
+            true);
+    }
+
+    private static bool KeepManifestPathAfterUninstall(
+        string sopName,
+        string path,
+        IReadOnlyList<SopPathResultView> results)
+    {
+        var normalizedPath = path.Replace('\\', '/');
+        var result = results.FirstOrDefault(item =>
+            item.Sops.Contains(sopName, StringComparer.Ordinal) &&
+            PathsEqual(item.Path, normalizedPath));
+        return result is null ||
+               result.Status is "modified" or "not_regular" or "preserved_scaffolded";
     }
 
     private static SopManifestSop BuildManifestSop(

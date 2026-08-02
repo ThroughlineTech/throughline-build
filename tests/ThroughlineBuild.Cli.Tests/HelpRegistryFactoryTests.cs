@@ -215,7 +215,8 @@ public class HelpRegistryFactoryTests
         Assert.Contains("sop status", output);
         Assert.Contains("Unknown SOP name", output);
         Assert.Contains("The embedded catalog is the authority", output);
-        Assert.Contains("Status reports missing catalog paths as drift", output);
+        Assert.Contains("Status reports missing catalog", output);
+        Assert.Contains("paths as drift", output);
         Assert.Contains("Review invariants are structured prose", output);
         Assert.Contains("does not evaluate whether a statement is true", output);
     }
