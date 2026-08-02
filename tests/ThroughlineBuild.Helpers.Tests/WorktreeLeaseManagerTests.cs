@@ -100,6 +100,73 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task RollbackPreservesHelperBranchThatAdvancedPastRecordedBase()
+    {
+        const string moved = "fedcba9876543210fedcba9876543210fedcba98";
+        var branch = "lease/tlb-582";
+        var git = new FakeGit(Sha);
+        git.RefTips[branch] = moved;
+        var manager = CreateManager(git, new ThrowingInstaller());
+
+        var result = await manager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582"), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Empty(git.DeletedBranches);
+        Assert.True(git.HasBranch(branch));
+        Assert.Contains("was preserved", result.Message);
+        Assert.Contains(moved, result.Message);
+    }
+
+    [Fact]
+    public async Task RollbackPreservesHelperBranchWhenItsTipCannotBeResolved()
+    {
+        var branch = "lease/tlb-582";
+        var git = new FakeGit(Sha);
+        git.UnresolvableRefs.Add(branch);
+        var manager = CreateManager(git, new ThrowingInstaller());
+
+        var result = await manager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582"), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Empty(git.DeletedBranches);
+        Assert.True(git.HasBranch(branch));
+        Assert.Contains("was preserved", result.Message);
+    }
+
+    [Fact]
+    public async Task RollbackDeletesHelperBranchWithoutForce()
+    {
+        var git = new FakeGit(Sha);
+        var manager = CreateManager(git, new ThrowingInstaller());
+
+        var result = await manager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582"), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("lease/tlb-582", git.DeletedBranches);
+        Assert.Equal([false], git.DeleteBranchForces);
+    }
+
+    [Fact]
+    public async Task RollbackPreservesHelperBranchWhenNonForceDeleteRefuses()
+    {
+        var branch = "lease/tlb-582";
+        var git = new FakeGit(Sha) { FailNonForceBranchDelete = true };
+        var manager = CreateManager(git, new ThrowingInstaller());
+
+        var result = await manager.LeaseAsync(
+            new WorktreeLeaseRequest("TLB-582"), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Empty(git.DeletedBranches);
+        Assert.True(git.HasBranch(branch));
+        Assert.Contains("was preserved", result.Message);
+        Assert.Contains("not fully merged", result.Message);
+    }
+
+    [Fact]
     public async Task SetupFailureRollsBackOnlyBranchAndWorktreeCreatedByAttempt()
     {
         var git = new FakeGit(Sha);
@@ -869,9 +936,19 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
             _worktrees.Any(w => string.Equals(
                 w.Path, path, StringComparison.OrdinalIgnoreCase));
 
+        /// <summary>Per-ref resolutions; any ref not listed resolves to the fake's base sha.</summary>
+        public Dictionary<string, string> RefTips { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>Refs whose resolution throws, simulating a ref git cannot read.</summary>
+        public HashSet<string> UnresolvableRefs { get; } = new(StringComparer.Ordinal);
+
         public Task<string> RevParseAsync(
-            string refspec, string workingDirectory, CancellationToken ct) =>
-            Task.FromResult(sha);
+            string refspec, string workingDirectory, CancellationToken ct)
+        {
+            if (UnresolvableRefs.Contains(refspec))
+                throw new InvalidOperationException($"git rev-parse {refspec} failed (exit 128)");
+            return Task.FromResult(RefTips.TryGetValue(refspec, out var tip) ? tip : sha);
+        }
 
         public Task<IReadOnlyList<WorktreeInfo>> ListWorktreesAsync(CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<WorktreeInfo>>(_worktrees.AsReadOnly());
