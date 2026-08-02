@@ -52,14 +52,17 @@ contract_authority = "src/ThroughlineBuild.Contracts"
 minimum Build version, branch and ticket prefixes, source roots, architecture
 map, review invariants, review escalation rule, rework cap, and constellation.
 Run `build sop list [--json]` to report available embedded SOPs and their binary
-versions. Run `build sop install [--sop <name>] [--json]` to emit host stubs,
-scaffold a missing `.build/conductor.toml`, and write `.build/sop-manifest.json`.
-Run `build sop status [--json]` to report catalog drift, including missing
-installed paths. Run `build sop upgrade [--sop <name>] [--json]` after replacing
-the binary; it rewrites only emitted files that still match trusted previous
-catalog hashes embedded in the current binary. Run
-`build sop uninstall [--sop <name>] [--json]` to remove only emitted regular
-files that still match the current catalog.
+versions. Run `build sop install [--sop <name>] [--host claude|codex] [--json]`
+to emit host stubs, scaffold a missing `.build/conductor.toml`, and write
+`.build/sop-manifest.json`. By default install emits every known host stub;
+`--host` narrows emitted stubs to Claude or Codex while still including shared
+scaffolded paths. Run `build sop status [--json]` to report catalog drift,
+including missing installed paths. Run
+`build sop upgrade [--sop <name>] [--host claude|codex] [--json]` after
+replacing the binary; it rewrites only emitted files that still match trusted
+previous catalog hashes embedded in the current binary. Run
+`build sop uninstall [--sop <name>] [--host claude|codex] [--json]` to remove
+only emitted regular files that still match the current catalog.
 
 The embedded catalog is the authority. `.build/sop-manifest.json` is a cache of
 prior writes, not permission to touch arbitrary paths. Emitted files are stubs
@@ -70,12 +73,15 @@ comparing it with a template. Before any write or delete, every target path and
 the manifest path must resolve strictly below the repository root and must not
 cross a symlink or reparse point.
 
-Run `build sop doctor [--json]` to validate conductor.toml. Review invariants
-are structured prose: doctor validates id uniqueness, non-empty statements,
-optional paths, and optional `blocks_done` shape only. It does not judge whether
-a statement is true. Unknown keys in conductor.toml are findings. Doctor also
-requires local `[[review.checks]]` to include at least one setup or gating check
-with a non-empty executable; advisory-only checks cannot make a gate block Done.
+Run `build sop doctor [--json]` to validate conductor.toml, emitted host stubs,
+and review checks. Doctor validates emitted stubs byte-for-byte against the
+catalog and reports missing, modified, non-regular, or unsafe stub paths as
+drift. Review invariants are structured prose: doctor validates id uniqueness,
+non-empty statements, optional paths, and optional `blocks_done` shape only. It
+does not judge whether a statement is true. Unknown keys in conductor.toml are
+findings. Doctor also requires local `[[review.checks]]` to include at least one
+setup or gating check with a non-empty executable; advisory-only checks cannot
+make a gate block Done.
 
 Run `build sop brief <name>` to emit one JSON envelope containing SOP text,
 resolved conductor data, the SOP schema version, SOP version, binary version,

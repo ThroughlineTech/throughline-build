@@ -16,7 +16,7 @@ internal static class SopInstallCommand
         TextWriter error)
     {
         var operation = args[1];
-        if (!TryParseScope(args, json, output, error, out var entries, out var exitCode))
+        if (!TryParseScope(args, json, output, error, out var entries, out var host, out var exitCode))
             return exitCode;
 
         var result = SopInstaller.Run(
@@ -24,7 +24,8 @@ internal static class SopInstallCommand
             startDirectory,
             entries,
             BuildVersion.Current,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            host);
 
         if (json)
             CliEnvelopeWriter.WriteSopOperation(output, result);
@@ -40,33 +41,60 @@ internal static class SopInstallCommand
         TextWriter output,
         TextWriter error,
         out IReadOnlyList<SopCatalogEntry> entries,
+        out string? host,
         out int exitCode)
     {
         entries = SopBundleCatalog.All;
+        host = null;
         exitCode = 0;
         string? sopName = null;
 
         for (var i = 2; i < args.Count; i++)
         {
-            if (!string.Equals(args[i], "--sop", StringComparison.Ordinal))
+            if (string.Equals(args[i], "--sop", StringComparison.Ordinal))
             {
-                exitCode = Usage(json, output, error, $"unknown argument for sop {args[1]}: {args[i]}");
-                return false;
+                if (sopName is not null)
+                {
+                    exitCode = Usage(json, output, error, "--sop may be supplied only once");
+                    return false;
+                }
+
+                if (i + 1 >= args.Count)
+                {
+                    exitCode = Usage(json, output, error, "--sop requires a SOP name");
+                    return false;
+                }
+
+                sopName = args[++i];
+                continue;
             }
 
-            if (sopName is not null)
+            if (string.Equals(args[i], "--host", StringComparison.Ordinal))
             {
-                exitCode = Usage(json, output, error, "--sop may be supplied only once");
-                return false;
+                if (host is not null)
+                {
+                    exitCode = Usage(json, output, error, "--host may be supplied only once");
+                    return false;
+                }
+
+                if (i + 1 >= args.Count)
+                {
+                    exitCode = Usage(json, output, error, "--host requires a host name");
+                    return false;
+                }
+
+                host = args[++i];
+                if (!SopInstaller.IsKnownHost(host))
+                {
+                    exitCode = Usage(json, output, error, $"unknown SOP host: {host}");
+                    return false;
+                }
+
+                continue;
             }
 
-            if (i + 1 >= args.Count)
-            {
-                exitCode = Usage(json, output, error, "--sop requires a SOP name");
-                return false;
-            }
-
-            sopName = args[++i];
+            exitCode = Usage(json, output, error, $"unknown argument for sop {args[1]}: {args[i]}");
+            return false;
         }
 
         if (sopName is null)
@@ -96,7 +124,7 @@ internal static class SopInstallCommand
         else
         {
             error.WriteLine($"Error: {message}");
-            error.WriteLine("Usage: build sop install|upgrade|uninstall|status [--sop <name>] [--json]");
+            error.WriteLine("Usage: build sop install|upgrade|uninstall|status [--sop <name>] [--host claude|codex] [--json]");
         }
 
         return 2;
@@ -118,18 +146,28 @@ internal static class SopInstaller
 {
     private const int ManifestSchemaVersion = 1;
     private const string ManifestRelativePath = ".build/sop-manifest.json";
+    private const string ClaudeHost = "claude";
+    private const string CodexHost = "codex";
     private static readonly UTF8Encoding Utf8NoBom = new(false);
+
+    public static bool IsKnownHost(string host) =>
+        string.Equals(host, ClaudeHost, StringComparison.Ordinal) ||
+        string.Equals(host, CodexHost, StringComparison.Ordinal);
 
     public static SopOperationView Run(
         string operation,
         string startDirectory,
         IReadOnlyList<SopCatalogEntry> scopeEntries,
         string buildVersion,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        string? host = null)
     {
+        if (host is not null && !IsKnownHost(host))
+            throw new ArgumentException($"unknown SOP host: {host}", nameof(host));
+
         var repositoryRoot = ResolveRepositoryRoot(startDirectory);
         var manifestPath = Path.Combine(repositoryRoot, ".build", "sop-manifest.json");
-        var targets = BuildTargets(scopeEntries);
+        var targets = BuildTargets(scopeEntries, host);
         var results = new List<SopPathResultView>();
 
         if (!TryResolvePath(repositoryRoot, ManifestRelativePath, out var manifestResolution, out var manifestError))
@@ -200,6 +238,38 @@ internal static class SopInstaller
         return View(operation, repositoryRoot, manifestResolution.AbsolutePath, buildVersion, scopeEntries, changed, results);
     }
 
+    internal static IReadOnlyList<SopPathResultView> InspectEmittedStubs(
+        string startDirectory,
+        IReadOnlyList<SopCatalogEntry> scopeEntries,
+        string? host = null)
+    {
+        if (host is not null && !IsKnownHost(host))
+            throw new ArgumentException($"unknown SOP host: {host}", nameof(host));
+
+        var repositoryRoot = ResolveRepositoryRoot(startDirectory);
+        var targets = BuildTargets(scopeEntries, host)
+            .Where(target => target.IsEmitted)
+            .ToList();
+        var results = new List<SopPathResultView>();
+        foreach (var target in targets)
+        {
+            if (!TryResolvePath(repositoryRoot, target.Path, out var resolution, out var error))
+            {
+                results.Add(Result(
+                    target.Sops,
+                    target.Path,
+                    target.Class,
+                    "unsafe_path",
+                    error));
+                continue;
+            }
+
+            StatusEmitted(target, resolution, results);
+        }
+
+        return results;
+    }
+
     private static bool RunInstall(
         IReadOnlyList<SopInstallTarget> targets,
         IReadOnlyDictionary<string, ResolvedCatalogPath> resolutions,
@@ -232,9 +302,9 @@ internal static class SopInstaller
         if (HasBlockingFindings(results))
             return changed;
 
-        if (changed || !ManifestCovers(manifest, scopeEntries))
+        if (changed || !ManifestCovers(manifest, scopeEntries, targets))
         {
-            WriteManifest(manifestPath, BuildUpdatedManifest(manifest, scopeEntries, buildVersion, now));
+            WriteManifest(manifestPath, BuildUpdatedManifest(manifest, scopeEntries, targets, buildVersion, now));
             changed = true;
         }
 
@@ -274,7 +344,7 @@ internal static class SopInstaller
             return changed;
 
         if (changed)
-            WriteManifest(manifestPath, BuildUpdatedManifest(manifest, scopeEntries, buildVersion, now));
+            WriteManifest(manifestPath, BuildUpdatedManifest(manifest, scopeEntries, targets, buildVersion, now));
 
         return changed;
     }
@@ -622,6 +692,7 @@ internal static class SopInstaller
     private static SopManifest BuildUpdatedManifest(
         SopManifest? existing,
         IReadOnlyList<SopCatalogEntry> scopeEntries,
+        IReadOnlyList<SopInstallTarget> targets,
         string buildVersion,
         DateTimeOffset now)
     {
@@ -629,7 +700,13 @@ internal static class SopInstaller
         var rows = existing?.Sops
             .Where(row => row is not null && !selected.Contains(row.Name))
             .ToList() ?? [];
-        rows.AddRange(scopeEntries.Select(entry => BuildManifestSop(entry, buildVersion, now)));
+        foreach (var entry in scopeEntries)
+        {
+            var existingRow = existing?.Sops.SingleOrDefault(
+                row => row is not null && string.Equals(row.Name, entry.Name, StringComparison.Ordinal));
+            rows.Add(BuildManifestSop(entry, existingRow, targets, buildVersion, now));
+        }
+
         return new SopManifest(ManifestSchemaVersion, buildVersion, now, rows);
     }
 
@@ -701,20 +778,46 @@ internal static class SopInstaller
 
     private static SopManifestSop BuildManifestSop(
         SopCatalogEntry entry,
+        SopManifestSop? existingRow,
+        IReadOnlyList<SopInstallTarget> targets,
         string buildVersion,
         DateTimeOffset now)
     {
-        var paths = entry.OwnedPaths
-            .Select(path => new SopManifestPath(
-                path.Path,
-                path.Class,
-                path.Class == SopBundleCatalog.EmittedPathClass ? path.ExpectedContentHash : null,
-                path.ResourceName))
-            .ToList();
+        var paths = new List<SopManifestPath>();
+        foreach (var owned in entry.OwnedPaths)
+        {
+            var selectedTarget = targets.FirstOrDefault(target =>
+                target.Sops.Contains(entry.Name, StringComparer.Ordinal) &&
+                PathsEqual(target.Path, owned.Path));
+            if (selectedTarget is not null)
+            {
+                paths.Add(BuildManifestPath(selectedTarget));
+                continue;
+            }
+
+            var existingPath = existingRow?.Paths.FirstOrDefault(path =>
+                path is not null &&
+                PathsEqual(path.Path, owned.Path) &&
+                string.Equals(path.Class, owned.Class, StringComparison.Ordinal) &&
+                string.Equals(path.ResourceName, owned.ResourceName, StringComparison.Ordinal) &&
+                string.Equals(path.ContentHash, owned.ExpectedContentHash, StringComparison.Ordinal));
+            if (existingPath is not null)
+                paths.Add(existingPath);
+        }
+
         return new SopManifestSop(entry.Name, buildVersion, now, paths);
     }
 
-    private static bool ManifestCovers(SopManifest? manifest, IReadOnlyList<SopCatalogEntry> scopeEntries)
+    private static SopManifestPath BuildManifestPath(SopInstallTarget target) => new(
+        target.Path,
+        target.Class,
+        target.IsEmitted ? target.ExpectedContentHash : null,
+        target.ResourceName);
+
+    private static bool ManifestCovers(
+        SopManifest? manifest,
+        IReadOnlyList<SopCatalogEntry> scopeEntries,
+        IReadOnlyList<SopInstallTarget> targets)
     {
         if (manifest is null || manifest.SchemaVersion != ManifestSchemaVersion)
             return false;
@@ -728,18 +831,18 @@ internal static class SopInstaller
                 return false;
             var row = matchingSops[0];
 
-            foreach (var owned in entry.OwnedPaths)
+            foreach (var target in targets.Where(target => target.Sops.Contains(entry.Name, StringComparer.Ordinal)))
             {
                 var matchingPaths = row.Paths
-                    .Where(item => item is not null && PathsEqual(item.Path, owned.Path))
+                    .Where(item => item is not null && PathsEqual(item.Path, target.Path))
                     .ToList();
                 if (matchingPaths.Count != 1)
                     return false;
                 var path = matchingPaths[0];
                 if (path is null ||
-                    !string.Equals(path.Class, owned.Class, StringComparison.Ordinal) ||
-                    !string.Equals(path.ResourceName, owned.ResourceName, StringComparison.Ordinal) ||
-                    !string.Equals(path.ContentHash, owned.ExpectedContentHash, StringComparison.Ordinal))
+                    !string.Equals(path.Class, target.Class, StringComparison.Ordinal) ||
+                    !string.Equals(path.ResourceName, target.ResourceName, StringComparison.Ordinal) ||
+                    !string.Equals(path.ContentHash, target.ExpectedContentHash, StringComparison.Ordinal))
                     return false;
             }
         }
@@ -935,13 +1038,18 @@ internal static class SopInstaller
         return Path.GetFullPath(startDirectory);
     }
 
-    private static IReadOnlyList<SopInstallTarget> BuildTargets(IReadOnlyList<SopCatalogEntry> entries)
+    private static IReadOnlyList<SopInstallTarget> BuildTargets(
+        IReadOnlyList<SopCatalogEntry> entries,
+        string? host = null)
     {
         var rows = new List<SopInstallTarget>();
         foreach (var entry in entries)
         {
             foreach (var owned in entry.OwnedPaths)
             {
+                if (!PathMatchesHost(owned.Path, host))
+                    continue;
+
                 var existing = rows.FirstOrDefault(row => PathsEqual(row.Path, owned.Path));
                 if (existing is null)
                 {
@@ -965,6 +1073,25 @@ internal static class SopInstaller
         }
 
         return rows;
+    }
+
+    private static bool PathMatchesHost(string catalogPath, string? host)
+    {
+        if (host is null)
+            return true;
+
+        var pathHost = HostForCatalogPath(catalogPath);
+        return pathHost is null || string.Equals(pathHost, host, StringComparison.Ordinal);
+    }
+
+    private static string? HostForCatalogPath(string catalogPath)
+    {
+        var normalized = catalogPath.Replace('\\', '/');
+        if (normalized.StartsWith(".claude/commands/", StringComparison.Ordinal))
+            return ClaudeHost;
+        if (normalized.StartsWith(".agents/skills/", StringComparison.Ordinal))
+            return CodexHost;
+        return null;
     }
 
     private static SopOperationView View(

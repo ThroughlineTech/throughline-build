@@ -42,10 +42,10 @@ Usage:
   build sop list [--json]                      List embedded SOPs and their binary versions
   build sop doctor [--json]                    Validate .build/conductor.toml and [[review.checks]] without loading ticketing, workers, or events
   build sop brief <name> [admission <absolute-inspection-root> <inspection-sha>] [--json]  Emit one SOP brief envelope with procedure text, conductor data, versions, doctor result, owned catalog paths, and run mode
-  build sop install [--sop <name>] [--json]    Emit host stubs, scaffold missing conductor.toml, and write the SOP manifest cache
-  build sop upgrade [--sop <name>] [--json]    Rewrite only emitted files that still match prior catalog content
-  build sop uninstall [--sop <name>] [--json]  Remove only emitted files that still match the current catalog
-  build sop status [--sop <name>] [--json]     Report catalog drift, including missing installed paths
+  build sop install [--sop <name>] [--host claude|codex] [--json]    Emit host stubs, scaffold missing conductor.toml, and write the SOP manifest cache
+  build sop upgrade [--sop <name>] [--host claude|codex] [--json]    Rewrite only emitted files that still match prior catalog content
+  build sop uninstall [--sop <name>] [--host claude|codex] [--json]  Remove only emitted files that still match the current catalog
+  build sop status [--sop <name>] [--host claude|codex] [--json]     Report catalog drift, including missing installed paths
   build amend <ticket-id> [--title "..."] [--priority urgent|high|medium|low|none] [--type <name>]
                           [--label-add <name>]... [--label-remove <name>]... [--parent <ticket-id>]
                           [--size S|M|L] [--note "..."] [--description <path|->] [--ac <path|->]

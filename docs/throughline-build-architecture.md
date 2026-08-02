@@ -198,8 +198,9 @@ tracks branch and worktree ownership separately. The standalone `worktree`,
 `gate`, `waves`, and `candidate status` paths load only their consumed config
 sections without requiring `[ticketing]`, `[workers]`, or `[events]`, resolving
 ticketing secrets, or constructing a Plane client. `build sop` runs in the same
-no-worker/no-ticketing band. `sop doctor` reads tracked `.build/conductor.toml`
-directly and only consults local `.build/config.toml` for `[[review.checks]]`;
+no-worker/no-ticketing band. `sop doctor` reads tracked `.build/conductor.toml`,
+validates emitted stubs byte-for-byte against the catalog, and only consults
+local `.build/config.toml` for `[[review.checks]]`;
 standard `sop brief` runs doctor first, then emits embedded SOP text and the
 resolved conductor data, owned catalog paths, and run mode. Admission-only
 inspection is a brief run mode with a validated absolute inspection root, a full
@@ -216,10 +217,12 @@ advisory-only list cannot satisfy the gate contract. Review invariants remain
 structured prose: doctor validates their shape and surfacing data, not the truth
 of their statements.
 `sop install`, `upgrade`, `uninstall`, and `status` use the embedded catalog as
-the authority and treat `.build/sop-manifest.json` as a cache only. Emitted stub
-files are content-compared against the current catalog and, for upgrade, against
-trusted previous hashes embedded in the current catalog. Scaffolded conductor
-data is validated by shape and is never overwritten after creation. Every
+the authority and treat `.build/sop-manifest.json` as a cache only. Install emits
+stubs for every known host by default; `--host` narrows emitted stubs to Claude
+or Codex while preserving shared scaffolded paths. Emitted stub files are
+content-compared against the current catalog and, for upgrade, against trusted
+previous hashes embedded in the current catalog. Scaffolded conductor data is
+validated by shape and is never overwritten after creation. Every
 catalog target and the manifest path are resolved strictly below the repository
 root and are refused if any existing segment is a symlink or reparse point
 before a write or delete is attempted.

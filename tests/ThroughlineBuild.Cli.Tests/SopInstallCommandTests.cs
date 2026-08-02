@@ -55,6 +55,8 @@ public sealed class SopInstallCommandTests
             }
 
             Assert.True(File.Exists(PathFor(repo, ".claude/commands/run-backlog.md")));
+            Assert.True(File.Exists(PathFor(repo, ".agents/skills/run-backlog/SKILL.md")));
+            Assert.True(File.Exists(PathFor(repo, ".claude/commands/cross-impact.md")));
             Assert.True(File.Exists(PathFor(repo, ".agents/skills/cross-impact/SKILL.md")));
             Assert.True(File.Exists(PathFor(repo, ".build/conductor.toml")));
             Assert.True(File.Exists(PathFor(repo, ".build/sop-manifest.json")));
@@ -77,6 +79,29 @@ public sealed class SopInstallCommandTests
     }
 
     [Fact]
+    public void StubResources_AreThinFailClosedAndHostBodiesMatch()
+    {
+        var runBacklogClaude = SopResourceLoader.LoadResource(SopBundleCatalog.RunBacklogClaudeCommandResource);
+        var runBacklogCodex = SopResourceLoader.LoadResource(SopBundleCatalog.RunBacklogCodexSkillResource);
+        var crossImpactClaude = SopResourceLoader.LoadResource(SopBundleCatalog.CrossImpactClaudeCommandResource);
+        var crossImpactCodex = SopResourceLoader.LoadResource(SopBundleCatalog.CrossImpactCodexSkillResource);
+
+        Assert.Equal(runBacklogClaude, StripCodexFrontmatter(runBacklogCodex));
+        Assert.Equal(crossImpactClaude, StripCodexFrontmatter(crossImpactCodex));
+        AssertThinFailClosedStub(runBacklogClaude, "run-backlog");
+        AssertThinFailClosedStub(crossImpactClaude, "cross-impact");
+
+        Assert.Contains(SopBundleCatalog.RunBacklog.OwnedPaths, path =>
+            path.Path == ".claude/commands/run-backlog.md" &&
+            path.Class == SopBundleCatalog.EmittedPathClass);
+        Assert.DoesNotContain(SopBundleCatalog.RunBacklog.OwnedPaths, path =>
+            path.Path.StartsWith(".claude/skills/", StringComparison.Ordinal));
+        Assert.Contains(SopBundleCatalog.RunBacklog.OwnedPaths, path =>
+            path.Path == ".agents/skills/run-backlog/SKILL.md" &&
+            path.Class == SopBundleCatalog.EmittedPathClass);
+    }
+
+    [Fact]
     public async Task Install_NeverOverwritesExistingScaffoldedFile()
     {
         var repo = CreateRepo();
@@ -95,6 +120,31 @@ public sealed class SopInstallCommandTests
             var statuses = ResultStatuses(doc.RootElement.GetProperty("data"));
             Assert.Contains("preserved_scaffolded", statuses);
             Assert.DoesNotContain("scaffolded", statuses);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Status_ReportsModifiedCatalogStubAsDrift()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            Assert.Equal(0, (await RunCliInDirectoryAsync(repo, ["sop", "install", "--sop", "run-backlog", "--json"])).Exit);
+            var stub = PathFor(repo, ".agents/skills/run-backlog/SKILL.md");
+            File.WriteAllText(stub, "locally changed\n");
+
+            var status = await RunCliInDirectoryAsync(repo, ["sop", "status", "--sop", "run-backlog", "--json"]);
+
+            Assert.Equal(1, status.Exit);
+            using var doc = JsonDocument.Parse(status.Stdout);
+            var data = doc.RootElement.GetProperty("data");
+            Assert.False(data.GetProperty("passed").GetBoolean());
+            Assert.Contains("modified", ResultStatuses(data));
         }
         finally
         {
@@ -342,6 +392,64 @@ public sealed class SopInstallCommandTests
     }
 
     [Fact]
+    public async Task HostOptionNarrowsEmittedStubsButKeepsSharedScaffold()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunCliInDirectoryAsync(
+                repo,
+                ["sop", "install", "--sop", "run-backlog", "--host", "claude", "--json"]);
+
+            Assert.Equal(0, result.Exit);
+            Assert.True(File.Exists(PathFor(repo, ".claude/commands/run-backlog.md")));
+            Assert.False(File.Exists(PathFor(repo, ".agents/skills/run-backlog/SKILL.md")));
+            Assert.True(File.Exists(PathFor(repo, ".build/conductor.toml")));
+
+            var manifestPaths = ManifestPaths(repo, "run-backlog");
+            Assert.Contains(".claude/commands/run-backlog.md", manifestPaths);
+            Assert.Contains(".build/conductor.toml", manifestPaths);
+            Assert.DoesNotContain(".agents/skills/run-backlog/SKILL.md", manifestPaths);
+
+            var second = await RunCliInDirectoryAsync(
+                repo,
+                ["sop", "install", "--sop", "run-backlog", "--host", "codex", "--json"]);
+
+            Assert.Equal(0, second.Exit);
+            Assert.True(File.Exists(PathFor(repo, ".agents/skills/run-backlog/SKILL.md")));
+            var mergedManifestPaths = ManifestPaths(repo, "run-backlog");
+            Assert.Contains(".claude/commands/run-backlog.md", mergedManifestPaths);
+            Assert.Contains(".agents/skills/run-backlog/SKILL.md", mergedManifestPaths);
+            Assert.Contains(".build/conductor.toml", mergedManifestPaths);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task UnknownHostOptionFailsUsage()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunCliInDirectoryAsync(repo, ["sop", "install", "--host", "vim", "--json"]);
+
+            Assert.Equal(2, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            Assert.False(doc.RootElement.GetProperty("ok").GetBoolean());
+            Assert.Equal("usage", doc.RootElement.GetProperty("error").GetProperty("code").GetString());
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public async Task SymlinkedCatalogPathIsRefusedBeforeAnyWrite()
     {
         var repo = CreateRepo();
@@ -373,6 +481,44 @@ public sealed class SopInstallCommandTests
             Assert.False(data.GetProperty("changed").GetBoolean());
             Assert.Contains("unsafe_path", ResultStatuses(data));
             Assert.False(File.Exists(PathFor(repo, ".agents/skills/run-backlog/SKILL.md")));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task StatusRefusesSymlinkedCatalogPathRatherThanFollowingIt()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            Assert.Equal(0, (await RunCliInDirectoryAsync(repo, ["sop", "install", "--sop", "run-backlog", "--json"])).Exit);
+            var linkPath = PathFor(repo, ".claude/commands/run-backlog.md");
+            var targetPath = Path.Combine(repo, "outside-target.md");
+            File.Delete(linkPath);
+            File.WriteAllText(targetPath, "target\n");
+
+            try
+            {
+                File.CreateSymbolicLink(linkPath, targetPath);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return;
+            }
+            catch (IOException)
+            {
+                return;
+            }
+
+            var result = await RunCliInDirectoryAsync(repo, ["sop", "status", "--sop", "run-backlog", "--json"]);
+
+            Assert.Equal(1, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            Assert.Contains("unsafe_path", ResultStatuses(doc.RootElement.GetProperty("data")));
         }
         finally
         {
@@ -522,6 +668,34 @@ public sealed class SopInstallCommandTests
             File.ReadAllText(PathFor(repository, ".build/sop-manifest.json")),
             CliJsonContext.Default.SopManifest)!;
         return manifest.Sops.Single(row => row.Name == sop).Paths.Select(path => path.Path).ToList();
+    }
+
+    private static string StripCodexFrontmatter(string content)
+    {
+        if (!content.StartsWith("---\n", StringComparison.Ordinal))
+            return content;
+
+        var end = content.IndexOf("\n---\n", 4, StringComparison.Ordinal);
+        Assert.True(end >= 0, "Codex skill frontmatter must have a closing marker");
+        return content[(end + "\n---\n".Length)..].TrimStart('\r', '\n');
+    }
+
+    private static void AssertThinFailClosedStub(string content, string sopName)
+    {
+        Assert.Contains($"build sop brief {sopName} --json", content);
+        Assert.Contains("missing from PATH", content);
+        Assert.Contains("is not executable", content);
+        Assert.Contains("exits nonzero", content);
+        Assert.Contains("unknown SOP", content);
+        Assert.Contains("conductor.min_build_version", content);
+        Assert.Contains("doctor failed", content);
+        Assert.Contains("data.sopText", content);
+        Assert.Contains("Do not use cached prose", content);
+        Assert.DoesNotContain("# The ticket transaction", content);
+        Assert.DoesNotContain("## Conductor", content);
+        Assert.DoesNotContain("[conductor]", content);
+        Assert.DoesNotContain("C:\\", content);
+        Assert.DoesNotContain("/Users/", content);
     }
 
     private static async Task<(int Exit, string Stdout, string Stderr)> RunCliInDirectoryAsync(

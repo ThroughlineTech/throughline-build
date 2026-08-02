@@ -374,14 +374,15 @@ public static class HelpRegistryFactory
             "sop doctor [--json]\n" +
             "sop brief <name> [--json]\n" +
             "sop brief <name> admission <absolute-inspection-root> <inspection-sha> [--json]\n" +
-            "sop install [--sop <name>] [--json]\n" +
-            "sop upgrade [--sop <name>] [--json]\n" +
-            "sop uninstall [--sop <name>] [--json]\n" +
-            "sop status [--sop <name>] [--json]",
+            "sop install [--sop <name>] [--host claude|codex] [--json]\n" +
+            "sop upgrade [--sop <name>] [--host claude|codex] [--json]\n" +
+            "sop uninstall [--sop <name>] [--host claude|codex] [--json]\n" +
+            "sop status [--sop <name>] [--host claude|codex] [--json]",
         Options:
         [
             new("--json", "Emit a versioned JSON envelope", false),
             new("--sop <name>", "Limit install, upgrade, uninstall, or status to one embedded SOP", false),
+            new("--host claude|codex", "Limit install, upgrade, uninstall, or status to one host's stubs plus shared scaffolded paths", false),
         ],
         ExitCodes:
         [
@@ -396,7 +397,7 @@ public static class HelpRegistryFactory
             new("sop doctor --json", "Validate .build/conductor.toml and [[review.checks]] without loading ticketing, workers, or events"),
             new("sop brief run-backlog --json", "Emit the run-backlog procedure plus resolved conductor data"),
             new("sop brief run-backlog admission /repo 0123456789abcdef0123456789abcdef01234567 --json", "Emit an admission-only brief envelope for a pinned inspection tree"),
-            new("sop install --sop run-backlog --json", "Install only the run-backlog host stubs and conductor scaffold"),
+            new("sop install --sop run-backlog --host claude --json", "Install only the run-backlog Claude command and conductor scaffold"),
             new("sop status --json", "Report catalog drift, including missing installed paths"),
         ],
         Details:
@@ -405,7 +406,8 @@ public static class HelpRegistryFactory
             `sop list` reports every SOP embedded in the binary. The SOP version is the running
             binary version; replacing the binary is the SOP upgrade path.
 
-            `sop doctor` reads tracked .build/conductor.toml independently of .build/config.toml.
+            `sop doctor` reads tracked .build/conductor.toml independently of .build/config.toml
+            and validates emitted host stubs byte-for-byte against the embedded catalog.
             It only looks at .build/config.toml for [[review.checks]], so missing ticketing
             credentials, worker configuration, and event configuration do not block it.
             Unknown keys in conductor.toml are reported as findings so misspelled contract
@@ -439,6 +441,8 @@ public static class HelpRegistryFactory
             writes, not permission to touch arbitrary paths. Emitted files are host stubs and are
             compared byte-for-byte with the catalog. Scaffolded files, currently .build/conductor.toml,
             are never overwritten after creation and are validated as structured conductor data.
+            By default install emits every known host stub; --host narrows emitted stubs to Claude
+            or Codex while still including shared scaffolded paths.
 
             Install is idempotent and restores missing catalog paths from the binary. Upgrade rewrites
             only emitted files that still match trusted previous catalog hashes embedded in the current

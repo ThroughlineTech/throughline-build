@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using ThroughlineBuild.Cli.Json;
+using ThroughlineBuild.Contracts.Models;
 using Xunit;
 
 namespace ThroughlineBuild.Cli.Tests;
@@ -428,7 +429,20 @@ public sealed class SopAdmissionTests
             File.WriteAllText(Path.Combine(buildDir, "conductor.toml"), conductorToml);
         if (configToml is not null)
             File.WriteAllText(Path.Combine(buildDir, "config.toml"), configToml);
+        WriteCatalogStubs(repository);
         return repository;
+    }
+
+    private static void WriteCatalogStubs(string repository)
+    {
+        foreach (var ownedPath in SopBundleCatalog.All
+                     .SelectMany(entry => entry.OwnedPaths)
+                     .Where(path => path.Class == SopBundleCatalog.EmittedPathClass))
+        {
+            var path = Path.Combine(repository, ownedPath.Path.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, SopResourceLoader.LoadResource(ownedPath.ResourceName!));
+        }
     }
 
     private static async Task InitializeGitRepositoryAsync(string repository)

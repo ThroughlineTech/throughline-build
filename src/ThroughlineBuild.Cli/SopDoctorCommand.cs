@@ -1,4 +1,5 @@
 using ThroughlineBuild.Cli.Json;
+using ThroughlineBuild.Contracts.Models;
 using Tomlyn;
 using Tomlyn.Model;
 
@@ -131,15 +132,16 @@ internal static class SopDoctorCommand
     }
 
     internal static SopDoctorView RunDoctor(string startDirectory, string runningBuildVersion) =>
-        RunDoctor(startDirectory, runningBuildVersion, validateReviewChecks: true);
+        RunDoctor(startDirectory, runningBuildVersion, validateReviewChecks: true, validateStubs: true);
 
     internal static SopDoctorView RunConductorOnlyDoctor(string startDirectory, string runningBuildVersion) =>
-        RunDoctor(startDirectory, runningBuildVersion, validateReviewChecks: false);
+        RunDoctor(startDirectory, runningBuildVersion, validateReviewChecks: false, validateStubs: false);
 
     private static SopDoctorView RunDoctor(
         string startDirectory,
         string runningBuildVersion,
-        bool validateReviewChecks)
+        bool validateReviewChecks,
+        bool validateStubs)
     {
         var findings = new List<SopDoctorFinding>();
         var conductorPath = FindConductorFile(startDirectory);
@@ -163,6 +165,8 @@ internal static class SopDoctorCommand
         var configPath = Path.Combine(repositoryRoot, ".build", "config.toml");
         if (validateReviewChecks)
             ValidateReviewChecks(configPath, findings);
+        if (validateStubs)
+            ValidateEmittedStubs(repositoryRoot, findings);
 
         return new SopDoctorView(
             RepositoryRoot: repositoryRoot,
@@ -174,6 +178,30 @@ internal static class SopDoctorCommand
             Conductor: conductor,
             Findings: findings.AsReadOnly());
     }
+
+    private static void ValidateEmittedStubs(string repositoryRoot, List<SopDoctorFinding> findings)
+    {
+        foreach (var result in SopInstaller.InspectEmittedStubs(repositoryRoot, SopBundleCatalog.All))
+        {
+            if (string.Equals(result.Status, "clean", StringComparison.Ordinal))
+                continue;
+
+            findings.Add(new SopDoctorFinding(
+                StubFindingCode(result.Status),
+                result.Path,
+                $"emitted stub drift: {result.Message}"));
+        }
+    }
+
+    private static string StubFindingCode(string status) => status switch
+    {
+        "missing" => "sop.stub.missing",
+        "modified" => "sop.stub.modified",
+        "not_regular" => "sop.stub.not_regular",
+        "unsafe_path" => "sop.stub.unsafe_path",
+        "invalid_catalog" => "sop.stub.invalid_catalog",
+        _ => "sop.stub.drift",
+    };
 
     internal static string? FindConductorFile(string startDirectory)
     {

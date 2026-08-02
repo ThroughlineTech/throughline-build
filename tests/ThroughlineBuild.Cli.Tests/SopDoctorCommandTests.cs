@@ -499,6 +499,85 @@ public sealed class SopDoctorCommandTests
     }
 
     [Fact]
+    public void Doctor_FailsWhenCatalogStubIsMissing()
+    {
+        var repo = CreateRepo();
+        File.Delete(PathFor(repo, ".claude/commands/run-backlog.md"));
+
+        try
+        {
+            var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+
+            Assert.False(report.Passed);
+            Assert.Contains(report.Findings, finding =>
+                finding.Code == "sop.stub.missing" &&
+                finding.Path == ".claude/commands/run-backlog.md");
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void Doctor_FailsWhenCatalogStubIsModified()
+    {
+        var repo = CreateRepo();
+        File.WriteAllText(PathFor(repo, ".agents/skills/run-backlog/SKILL.md"), "local edit\n");
+
+        try
+        {
+            var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+
+            Assert.False(report.Passed);
+            Assert.Contains(report.Findings, finding =>
+                finding.Code == "sop.stub.modified" &&
+                finding.Path == ".agents/skills/run-backlog/SKILL.md");
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void Doctor_RefusesSymlinkedCatalogStub()
+    {
+        var repo = CreateRepo();
+        var linkPath = PathFor(repo, ".claude/commands/run-backlog.md");
+        var targetPath = Path.Combine(repo, "outside-target.md");
+        File.Delete(linkPath);
+        File.WriteAllText(targetPath, "target\n");
+
+        try
+        {
+            try
+            {
+                File.CreateSymbolicLink(linkPath, targetPath);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return;
+            }
+            catch (IOException)
+            {
+                return;
+            }
+
+            var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+
+            Assert.False(report.Passed);
+            Assert.Contains(report.Findings, finding =>
+                finding.Code == "sop.stub.unsafe_path" &&
+                finding.Path == ".claude/commands/run-backlog.md");
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public void WriteSopDoctor_UsesSourceGeneratedEnvelope()
     {
         AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
@@ -555,6 +634,7 @@ public sealed class SopDoctorCommandTests
         File.WriteAllText(Path.Combine(buildDir, "conductor.toml"), conductorToml);
         if (configToml is not null)
             File.WriteAllText(Path.Combine(buildDir, "config.toml"), configToml);
+        WriteCatalogStubs(repository);
         return repository;
     }
 
@@ -568,8 +648,24 @@ public sealed class SopDoctorCommandTests
         Directory.CreateDirectory(buildDir);
         if (configToml is not null)
             File.WriteAllText(Path.Combine(buildDir, "config.toml"), configToml);
+        WriteCatalogStubs(repository);
         return repository;
     }
+
+    private static void WriteCatalogStubs(string repository)
+    {
+        foreach (var ownedPath in SopBundleCatalog.All
+                     .SelectMany(entry => entry.OwnedPaths)
+                     .Where(path => path.Class == SopBundleCatalog.EmittedPathClass))
+        {
+            var path = PathFor(repository, ownedPath.Path);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, SopResourceLoader.LoadResource(ownedPath.ResourceName!));
+        }
+    }
+
+    private static string PathFor(string repository, string relativePath) =>
+        Path.Combine(repository, relativePath.Replace('/', Path.DirectorySeparatorChar));
 
     private static async Task<(int Exit, string Stdout, string Stderr)> RunCliInDirectoryAsync(
         string directory,
