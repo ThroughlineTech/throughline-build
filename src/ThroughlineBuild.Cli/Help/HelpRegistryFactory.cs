@@ -390,9 +390,14 @@ public static class HelpRegistryFactory
             `sop doctor` reads tracked .build/conductor.toml independently of .build/config.toml.
             It only looks at .build/config.toml for [[review.checks]], so missing ticketing
             credentials, worker configuration, and event configuration do not block it.
+            Unknown keys in conductor.toml are reported as findings so misspelled contract
+            fields cannot be silently discarded.
 
             Review invariants are structured prose. Doctor validates ids, statements, optional
             paths, and optional blocks_done shape only. It does not evaluate whether a statement is true.
+
+            Review checks must contain at least one setup or gating check with a non-empty executable.
+            Advisory-only checks are visible, but they do not make the gate capable of blocking Done.
             """
         ]
     );

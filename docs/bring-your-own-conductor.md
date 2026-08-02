@@ -54,7 +54,9 @@ map, review invariants, review escalation rule, rework cap, and constellation.
 Run `build sop doctor [--json]` to validate it. Review invariants are structured
 prose: doctor validates id uniqueness, non-empty statements, optional paths, and
 optional `blocks_done` shape only. It does not judge whether a statement is
-true.
+true. Unknown keys in conductor.toml are findings. Doctor also requires local
+`[[review.checks]]` to include at least one setup or gating check with a
+non-empty executable; advisory-only checks cannot make a gate block Done.
 
 Add an optional section to `.build/config.toml`:
 

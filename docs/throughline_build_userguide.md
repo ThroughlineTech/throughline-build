@@ -286,8 +286,11 @@ is absent, doctor reports the missing `[[review.checks]]` as a validation
 finding instead of a bootstrap error. Review invariants in conductor.toml are
 structured prose: doctor checks ids, non-empty statements, optional paths, and
 optional `blocks_done` shape only. It does not judge whether the statements are
-true. Exit 0 means the doctor passed, exit 1 means validation findings were
-reported, and exit 2 means bad arguments.
+true. Unknown conductor keys are findings, so misspelled fields cannot silently
+drop contract data. The local `[[review.checks]]` list must include at least one
+setup or gating check with a non-empty executable; advisory-only checks do not
+make the gate capable of blocking Done. Exit 0 means the doctor passed, exit 1
+means validation findings were reported, and exit 2 means bad arguments.
 
 Lease prints the absolute worktree path for use as an agent working directory,
 runs `[project].install_command`, and writes a safety manifest. Configure the

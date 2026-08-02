@@ -175,6 +175,31 @@ public sealed class SopDoctorCommandTests
         }
     }
 
+    [Fact]
+    public void Doctor_FailsOnUnknownConductorKeysIncludingMisspelledBlocksDone()
+    {
+        var conductor = ValidConductorToml
+            .Replace("source_roots = [\"src\", \"tests\", \"docs\"]", "source_roots = [\"src\", \"tests\", \"docs\"]\nsource_rootz = [\"oops\"]")
+            .Replace("blocks_done = true", "blocks-done = true");
+        var repo = CreateRepo(conductor);
+        var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+
+        try
+        {
+            Assert.False(report.Passed);
+            Assert.Contains(report.Findings, finding =>
+                finding.Code == "conductor.unknown_key" &&
+                finding.Path == "conductor.source_rootz");
+            Assert.Contains(report.Findings, finding =>
+                finding.Code == "conductor.unknown_key" &&
+                finding.Path == "conductor.review.invariants[0].blocks-done");
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
     [Theory]
     [InlineData("# no review checks", "review.checks.empty")]
     [InlineData("[review]\n\n[[review.checks]]\nname = \"unit\"\nexecutable = \"   \"", "review.checks.command.missing")]
@@ -198,6 +223,32 @@ public sealed class SopDoctorCommandTests
     }
 
     [Fact]
+    public void Doctor_FailsWhenReviewChecksHaveNoSetupOrGatingRole()
+    {
+        var repo = CreateRepo(configToml:
+            """
+            [review]
+
+            [[review.checks]]
+            name = "lint"
+            executable = "dotnet"
+            arguments = ["--info"]
+            role = "advisory"
+            """);
+        var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+
+        try
+        {
+            Assert.False(report.Passed);
+            Assert.Contains(report.Findings, finding => finding.Code == "review.checks.no_gating");
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public void Doctor_FailsWhenReworkCapLoosensBinaryDefault()
     {
         var conductor = ValidConductorToml.Replace("rework_cap = 3", "rework_cap = 4");
@@ -212,6 +263,28 @@ public sealed class SopDoctorCommandTests
         finally
         {
             TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void Doctor_UsesDistinctCodesForMissingConductorFileAndMissingConductorTable()
+    {
+        var withoutFile = CreateRepoWithoutConductor();
+        var missingFile = SopDoctorCommand.RunDoctor(withoutFile, "0.1.0+test");
+        var emptyFile = CreateRepo(conductorToml: "");
+        var missingTable = SopDoctorCommand.RunDoctor(emptyFile, "0.1.0+test");
+
+        try
+        {
+            Assert.Contains(missingFile.Findings, finding => finding.Code == "conductor.file.missing");
+            Assert.DoesNotContain(missingFile.Findings, finding => finding.Code == "conductor.missing");
+            Assert.Contains(missingTable.Findings, finding => finding.Code == "conductor.missing");
+            Assert.DoesNotContain(missingTable.Findings, finding => finding.Code == "conductor.file.missing");
+        }
+        finally
+        {
+            TryDeleteDirectory(withoutFile);
+            TryDeleteDirectory(emptyFile);
         }
     }
 
@@ -270,6 +343,19 @@ public sealed class SopDoctorCommandTests
         var buildDir = Path.Combine(repository, ".build");
         Directory.CreateDirectory(buildDir);
         File.WriteAllText(Path.Combine(buildDir, "conductor.toml"), conductorToml);
+        if (configToml is not null)
+            File.WriteAllText(Path.Combine(buildDir, "config.toml"), configToml);
+        return repository;
+    }
+
+    private static string CreateRepoWithoutConductor(string? configToml = ValidReviewChecksToml)
+    {
+        var repository = Path.Combine(
+            Path.GetTempPath(),
+            "sop-doctor-tests",
+            Guid.NewGuid().ToString("N"));
+        var buildDir = Path.Combine(repository, ".build");
+        Directory.CreateDirectory(buildDir);
         if (configToml is not null)
             File.WriteAllText(Path.Combine(buildDir, "config.toml"), configToml);
         return repository;

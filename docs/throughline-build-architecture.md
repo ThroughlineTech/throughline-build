@@ -201,7 +201,9 @@ ticketing secrets, or constructing a Plane client. `build sop doctor` runs in
 the same no-worker/no-ticketing band, but reads tracked `.build/conductor.toml`
 directly and only consults local `.build/config.toml` for `[[review.checks]]`.
 It can therefore report an absent local config file as a doctor finding instead
-of failing before conductor data is loaded.
+of failing before conductor data is loaded. Unknown keys in conductor TOML are
+findings, and the local check list must include at least one setup or gating
+check so an advisory-only list cannot satisfy the gate contract.
 
 `ThroughlineBuild.Verification` runs configured `CheckSpec` commands and
 returns typed `CheckResult` values. Check roles distinguish setup, gating, and

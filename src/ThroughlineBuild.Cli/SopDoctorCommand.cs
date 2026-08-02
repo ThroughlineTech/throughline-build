@@ -62,6 +62,50 @@ internal static class SopDoctorCommand
         "medium",
         "large",
     };
+    private static readonly HashSet<string> KnownRootKeys = new(StringComparer.Ordinal)
+    {
+        "conductor",
+        "constellation",
+    };
+    private static readonly HashSet<string> KnownConductorKeys = new(StringComparer.Ordinal)
+    {
+        "min_build_version",
+        "branch_prefix",
+        "ticket_prefix",
+        "source_roots",
+        "architecture_map",
+        "rework_cap",
+        "review",
+    };
+    private static readonly HashSet<string> KnownConductorReviewKeys = new(StringComparer.Ordinal)
+    {
+        "invariants",
+        "escalation",
+    };
+    private static readonly HashSet<string> KnownInvariantKeys = new(StringComparer.Ordinal)
+    {
+        "id",
+        "statement",
+        "paths",
+        "blocks_done",
+    };
+    private static readonly HashSet<string> KnownEscalationKeys = new(StringComparer.Ordinal)
+    {
+        "model_size",
+        "paths",
+    };
+    private static readonly HashSet<string> KnownConstellationKeys = new(StringComparer.Ordinal)
+    {
+        "platform",
+        "contract_authority",
+        "siblings",
+    };
+    private static readonly HashSet<string> KnownSiblingKeys = new(StringComparer.Ordinal)
+    {
+        "platform",
+        "path",
+        "ticket_prefix",
+    };
 
     public static int Execute(
         IReadOnlyList<string> args,
@@ -98,7 +142,7 @@ internal static class SopDoctorCommand
         if (conductorPath is null)
         {
             findings.Add(new SopDoctorFinding(
-                "conductor.missing",
+                "conductor.file.missing",
                 "conductor",
                 "missing .build/conductor.toml"));
         }
@@ -179,8 +223,12 @@ internal static class SopDoctorCommand
             return null;
         }
 
+        AddUnknownKeyFindings(root, string.Empty, KnownRootKeys, findings);
+
         if (!TryGetTable(root, "conductor", "conductor", findings, out var conductor))
             return null;
+
+        AddUnknownKeyFindings(conductor, "conductor", KnownConductorKeys, findings);
 
         var minBuildVersion = RequiredString(conductor, "min_build_version", "conductor.min_build_version", findings);
         if (minBuildVersion is not null)
@@ -218,6 +266,8 @@ internal static class SopDoctorCommand
                 new ConductorReviewEscalation(string.Empty, Array.Empty<string>()));
         }
 
+        AddUnknownKeyFindings(review, "conductor.review", KnownConductorReviewKeys, findings);
+
         var invariants = ReadInvariants(review, findings);
         var escalation = ReadEscalation(review, findings);
         return new ConductorReviewConfig(invariants, escalation);
@@ -251,6 +301,7 @@ internal static class SopDoctorCommand
         {
             var entry = array[i];
             var path = $"conductor.review.invariants[{i}]";
+            AddUnknownKeyFindings(entry, path, KnownInvariantKeys, findings);
             var id = RequiredString(entry, "id", $"{path}.id", findings);
             var statement = RequiredString(entry, "statement", $"{path}.statement", findings);
             if (id is not null && !seen.Add(id))
@@ -279,6 +330,8 @@ internal static class SopDoctorCommand
     {
         if (!TryGetTable(review, "escalation", "conductor.review.escalation", findings, out var escalation))
             return new ConductorReviewEscalation(string.Empty, Array.Empty<string>());
+
+        AddUnknownKeyFindings(escalation, "conductor.review.escalation", KnownEscalationKeys, findings);
 
         var modelSize = RequiredString(
             escalation,
@@ -311,6 +364,8 @@ internal static class SopDoctorCommand
     {
         if (!TryGetTable(root, "constellation", "constellation", findings, out var constellation))
             return new ConstellationConfig(string.Empty, string.Empty, Array.Empty<ConstellationSibling>());
+
+        AddUnknownKeyFindings(constellation, "constellation", KnownConstellationKeys, findings);
 
         var platform = RequiredString(constellation, "platform", "constellation.platform", findings);
         var contractAuthority = RequiredString(
@@ -346,6 +401,7 @@ internal static class SopDoctorCommand
         {
             var entry = array[i];
             var path = $"constellation.siblings[{i}]";
+            AddUnknownKeyFindings(entry, path, KnownSiblingKeys, findings);
             var platform = RequiredString(entry, "platform", $"{path}.platform", findings);
             var siblingPath = RequiredString(entry, "path", $"{path}.path", findings);
             var ticketPrefix = RequiredString(entry, "ticket_prefix", $"{path}.ticket_prefix", findings);
@@ -451,6 +507,7 @@ internal static class SopDoctorCommand
             return;
         }
 
+        var hasBlockingCheck = false;
         for (var i = 0; i < checks.Count; i++)
         {
             var check = checks[i];
@@ -463,6 +520,64 @@ internal static class SopDoctorCommand
                     $"review.checks[{i}].executable",
                     "review check has no runnable command; set executable to a non-empty command name"));
             }
+
+            var rolePath = $"review.checks[{i}].role";
+            if (!check.TryGetValue("role", out var roleRaw))
+            {
+                hasBlockingCheck = true;
+            }
+            else if (roleRaw is not string role || string.IsNullOrWhiteSpace(role))
+            {
+                findings.Add(new SopDoctorFinding(
+                    "review.checks.role.invalid",
+                    rolePath,
+                    "review check role must be gating, advisory, or setup"));
+            }
+            else
+            {
+                switch (role.Trim().ToLowerInvariant())
+                {
+                    case "gating":
+                    case "setup":
+                        hasBlockingCheck = true;
+                        break;
+                    case "advisory":
+                        break;
+                    default:
+                        findings.Add(new SopDoctorFinding(
+                            "review.checks.role.invalid",
+                            rolePath,
+                            "review check role must be gating, advisory, or setup"));
+                        break;
+                }
+            }
+        }
+
+        if (!hasBlockingCheck)
+        {
+            findings.Add(new SopDoctorFinding(
+                "review.checks.no_gating",
+                "review.checks",
+                "[[review.checks]] must include at least one setup or gating check"));
+        }
+    }
+
+    private static void AddUnknownKeyFindings(
+        TomlTable table,
+        string path,
+        HashSet<string> knownKeys,
+        List<SopDoctorFinding> findings)
+    {
+        foreach (var key in table.Keys)
+        {
+            if (knownKeys.Contains(key))
+                continue;
+
+            var fullPath = string.IsNullOrEmpty(path) ? key : $"{path}.{key}";
+            findings.Add(new SopDoctorFinding(
+                "conductor.unknown_key",
+                fullPath,
+                $"unknown key '{fullPath}' in .build/conductor.toml"));
         }
     }
 
