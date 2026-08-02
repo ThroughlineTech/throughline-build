@@ -1,6 +1,14 @@
 # SOP bundle: binary-hosted agent workflows
 
-Status: proposal. Written 2026-08-01. Not a shipped commitment.
+Status: proposal, revision 2. Written 2026-08-01, revised the same day after an
+adversarial review. Not a shipped commitment.
+
+Revision 2 changed the design in five places: a version contract in
+`.build/conductor.toml`, a fail-closed stub protocol, the embedded catalog rather
+than the manifest as install authority, admission as a run mode rather than a
+flag, and a third column in the rules table separating rules Build enforces from
+rules the brief states. The review that produced these is summarized under
+[Review outcomes](#review-outcomes).
 
 This proposes moving the agent-facing workflow bundle (`run-backlog`, `cross-impact`)
 out of loose markdown and JavaScript on disk and into Build as embedded resources
@@ -66,6 +74,33 @@ The consequences are the point of the design:
 - Portability is copying one binary. No kit directory, no archive, no sync step.
 - Upgrading is replacing the binary and running one verb.
 
+### What embedding does not fix
+
+Embedding removes kit-versus-archive drift. It does not remove binary-versus-repo
+drift. Two machines with different Build versions can still run different
+procedures against the same repository, because the committed stub invokes
+whatever `build` is on `PATH` at call time.
+
+The bundle therefore needs an explicit version contract that fails closed.
+`.build/conductor.toml` declares the minimum Build version the repository's SOPs
+require:
+
+```toml
+[conductor]
+min_build_version = "0.9.0"
+```
+
+`build sop brief` refuses to emit when the running binary is older than the
+declared minimum. The declaration lives in the tracked conductor file rather than
+in the stub for two reasons: the stub stays inert and never needs upgrading, which
+is the property that makes upgrade equal to replacing the binary; and the version
+contract is then typed data that `build sop doctor` validates alongside everything
+else, rather than a string in prose that has to be maintained by hand.
+
+The accepted cost: an urgent procedure fix requires publishing a binary. There is
+no override path, because an override is a second artifact and a second artifact is
+the failure mode this design exists to remove.
+
 ### Layer 1: per-host stubs
 
 Claude and Codex discover capabilities differently and cannot share one file.
@@ -87,6 +122,18 @@ procedure changes. Upgrade is therefore genuinely just the binary.
 
 Stubs are committed to each repository. They contain no machine-specific paths,
 so a fresh clone on any machine works without an install step.
+
+The stub must fail closed. Its instruction to the agent is: run the brief, and if
+`build` is missing, not executable, exits nonzero, does not recognize the SOP, or
+reports that the repository's `min_build_version` is unsatisfied, then stop and
+report the failure. There is no fallback to cached prose and no degraded mode. An
+agent that cannot obtain the current procedure must not improvise one.
+
+A committed stub is repository content, so after installation it is editable by
+anyone with commit access. `build sop doctor` and `build sop status` therefore
+validate every emitted stub byte-for-byte against the embedded catalog and report
+any difference as drift. Stubs are deliberately not customizable; the whole point
+of a stub is that it carries no decisions.
 
 ### Layer 2: per-repository data
 
@@ -130,16 +177,23 @@ Sketch, not final. `build sop doctor` is the authority once implemented.
 
 ```toml
 [conductor]
+min_build_version = "0.9.0"
 branch_prefix = "bkfk2"
 ticket_prefix = "BKFK2"
 source_roots = ["apps/api/src", "apps/web/src", "packages/contracts"]
 architecture_map = "docs/state-of-the-system/00-index.md"
 
-[conductor.review]
-invariants = [
-  "packages/contracts/openapi.yaml is the single wire authority",
-  "a D1 migration ships with db/types.ts in lockstep",
-]
+[[conductor.review.invariants]]
+id = "wire-contract-authority"
+statement = "packages/contracts/openapi.yaml is the single wire authority; a shape change updates the YAML, regenerates generated.ts, and stays back-compatible"
+paths = ["packages/contracts/**"]
+blocks_done = true
+
+[[conductor.review.invariants]]
+id = "migration-types-lockstep"
+statement = "a D1 migration ships with apps/api/src/db/types.ts in lockstep"
+paths = ["migrations/**", "apps/api/src/db/types.ts"]
+blocks_done = true
 
 [conductor.review.escalation]
 model_size = "large"
@@ -162,23 +216,58 @@ Gates are not duplicated here. They remain `[[review.checks]]`, which
 runnable command, which closes the empty-gate hazard by construction rather than
 by vigilance.
 
-## Manifest semantics
+Review invariants are structured prose, not typed values. The `statement` is a
+sentence of judgment and no schema can evaluate its truth. What the schema buys is
+real but bounded: `doctor` can require that invariants exist, that each has an id
+and a non-empty statement, and that `blocks_done` entries are surfaced in the
+brief; and `paths` lets the brief tell a reviewer which invariants a given diff
+actually implicates. The design should not claim more than that. Pretending
+judgment is data is how the current prose-based system fails; over-schematizing it
+would fail the same way with more ceremony.
 
-`build sop install` writes `.build/sop-manifest.json` recording, for every emitted
-path: the path, a content hash, the SOP that owns it, and the binary version that
-wrote it.
+## Install semantics
 
-- **install** is idempotent. A path whose hash matches its manifest entry is left
-  alone. Re-running install never changes a correctly installed repository.
-- **upgrade** rewrites only paths whose embedded content changed since the recorded
-  version. A path whose on-disk hash does not match its manifest entry was edited
-  locally; upgrade reports it and does not overwrite it.
-- **uninstall** removes only manifested paths whose on-disk hash still matches.
-  Anything edited locally is reported and left in place. Nothing unexpected is
-  ever deleted.
+**The embedded catalog is the authority. The manifest is a cache.** The catalog is
+compiled into the binary and lists, per SOP, every path the SOP owns, its class,
+and for emitted files the expected content hash. `.build/sop-manifest.json` records
+what a past install actually wrote and which binary version wrote it. A manifest is
+mutable repository content and can be edited to bless modified files, so no
+decision is ever taken on the manifest alone. Every comparison is against the
+catalog; the manifest supplies history, not permission.
 
-Deleting the stub directories and `.build/conductor.toml` by hand is equivalent
-to uninstall, minus the report.
+Installed paths come in two classes, and conflating them was a defect in the first
+revision of this design.
+
+- **Emitted.** Stubs. Catalog-owned, content-validated byte-for-byte, never
+  customizable. A difference from the catalog is drift, not a customization.
+- **Scaffolded.** `.build/conductor.toml`. Catalog-owned as a path, schema-validated
+  as content, expected to be hand-edited. Never content-compared against the catalog
+  after the initial scaffold.
+
+Given that split:
+
+- **install** is idempotent. An emitted path whose hash matches the catalog is left
+  alone; a scaffolded path that already exists is never overwritten. A second run on
+  an unchanged repository writes nothing and reports no change.
+- **upgrade** rewrites only emitted paths whose catalog content changed since the
+  recorded version. An emitted path that differs from both the old and new catalog
+  content was edited locally: upgrade reports it and does not overwrite it. Scaffolded
+  paths are schema-checked and never rewritten.
+- **uninstall** removes only catalog-owned paths that are regular files, are not
+  symlinks or reparse points, and whose content still matches the catalog. Anything
+  else is reported and left in place.
+- **status** reports missing catalog paths as drift rather than treating absence as
+  clean, so a hand-deleted stub is visible instead of silently absent.
+
+Before writing or removing any path, `build sop` resolves it and refuses symlinks,
+reparse points, and any target not strictly below the repository root. The worktree
+code already implements this shape of containment check and should be the model:
+see `IsStrictlyBelow` and the manifest validation in
+[WorktreeLeaseManager.cs](../../src/ThroughlineBuild.Helpers/WorktreeLeaseManager.cs).
+
+Deleting the stub directories and `.build/conductor.toml` by hand still works as a
+removal, and leaves a stale manifest; `status` reports the result as drift and
+`install` restores from the catalog.
 
 ## Initial SOP catalog
 
@@ -203,30 +292,92 @@ run in production across a web, iOS, and Android trio.
 Adding a third SOP is an embedded resource plus a schema section, not a new
 distribution mechanism.
 
-## Rules ported from the existing validator
+## Rules and their enforcement
 
-The JavaScript validator's rules are retained. The file is not. Each rule becomes
-C# with tests.
+The rules are retained. The loose files are not. The third column matters as much
+as the second: a rule Build can mechanically enforce should not live only in
+embedded prose, because prose is advice to an agent and code is a refusal.
 
-| Rule | Disposition |
+### From the JavaScript validator
+
+| Rule | Disposition | Enforced by |
+| --- | --- | --- |
+| Dependency-first topological scheduling; reject cycles | Already in `build waves` (`dependency_cycle`, exit 5) | binary |
+| Reject unverified deps outside the selected scope | Present but weaker than assumed; see below | binary + brief |
+| Conservative serialization when predicted files are uncertain | Already in `build waves` (`uncertain`, empty `files`) | binary |
+| Strict containment below a declared worktree root | Already in `build worktree teardown` (exit 8) | binary |
+| Manifest-backed teardown; reject unmanifested directories | Already in `build worktree` | binary |
+| Existing branch, path, and manifest collision rejection | Already in `build worktree lease` (exit 6) | binary |
+| Required-seed failure before any mutation | Already in `build worktree lease --require-seed` (exit 7) | binary |
+| Partial-lease rollback deletes only what the attempt created | Already in `build worktree lease` | binary |
+| Rollback deletes helper branches only at the recorded base SHA | **Absent. Port.** See below | binary |
+| Live availability checks for leased resources such as TCP ports | Port; not currently in Build | binary |
+| Admission-only inspection | Port as a run mode, not a flag; see below | binary |
+| One ticket per serial invocation; no parent or epic expansion | Port | binary |
+| `RUN_BACKLOG_CONTRACT_VERSION` fence-aware markdown scan | Replaced by the `min_build_version` schema check | binary |
+| Entry-point symlink escape check | Retained in a different form; see below | binary |
+
+Two rows changed on review and are worth stating plainly.
+
+**Rollback branch deletion is a real defect, not a parity question.**
+`RollBackCreatedLeaseAsync` deletes the helper branch guarded only by a
+`branchCreated` flag, and passes `force: true`, which defeats Git's unmerged-branch
+protection. It never re-reads the branch tip. If the branch moved between creation
+and rollback, work is destroyed silently. The fix: resolve the helper branch and
+delete only when it still equals the lease attempt's recorded base SHA; otherwise
+preserve it and report. This is independently worth fixing regardless of the rest
+of this proposal.
+
+**The symlink check is not dropped, it moves.** The original concern was an
+untrusted markdown entry file, and Build emitting the stub does remove that
+specific input. But a committed stub is repository content that a later commit can
+replace, including with a symlink, and install and uninstall both write and delete
+paths. The containment and link refusal described under
+[Install semantics](#install-semantics) is the same concern relocated to where it
+still applies.
+
+**Admission is a run mode, not a flag.** A flag qualifies one invocation. It is not
+part of the scope identity, does not propagate into a spawned subagent, is not
+carried in the ticket audit trail, and can simply be omitted from the next call.
+Admission must instead appear in the SOP brief envelope as a mode carrying the
+resolved SHA and an explicit verb policy: read-only verbs allowed; no parent or
+epic expansion; no worktree lease or teardown; no ticket transition or comment; no
+commit, branch, or push. Every mutating stage refuses while the mode is active.
+
+**`build waves` does not verify dependencies.** `verifiedExternalDeps` is asserted
+by the caller. Build never reads the ticket system to prove a dependency is Done,
+and supplying an id is not evidence. Conductor-side dependency verification, and
+re-checking dependents before each wave rather than once at plan time, stay rules
+in the brief. This row is not fully subsumed by the binary and the table should not
+imply it is.
+
+### From the lifecycle document
+
+These are enforced today only as prose in `ticket-transaction.md`, which this design
+embeds verbatim. Embedding preserves them, but several are mechanizable and should
+migrate into the binary rather than remain advice.
+
+| Rule | Enforced by |
 | --- | --- |
-| Dependency-first topological scheduling; reject cycles | Already in `build waves` (`dependency_cycle`, exit 5). Verify parity. |
-| Reject unverified dependencies outside the selected scope | Already in `build waves` (`verifiedExternalDeps`). Verify parity. |
-| Conservative serialization when predicted files are uncertain | Already in `build waves` (`uncertain`, empty `files`). Verify parity. |
-| Strict containment below a declared worktree root | Already in `build worktree teardown` (exit 8). Verify parity. |
-| Manifest-backed teardown; reject unmanifested directories | Already in `build worktree`. Verify parity. |
-| Existing branch, path, and manifest collision rejection | Already in `build worktree lease` (exit 6). Verify parity. |
-| Required-seed failure before any mutation | Already in `build worktree lease --require-seed` (exit 7). Verify parity. |
-| Partial-lease rollback deletes only what the attempt created | Already in `build worktree lease`. Verify parity. |
-| Delete helper branches during rollback only at the recorded base SHA | Verify; port if absent. |
-| Live availability checks for leased resources such as TCP ports | Port. Not currently in Build. |
-| Admission-only inspection: pinned SHA, mutations hard-blocked | Port as a flag with a resolved-SHA precondition, not a scope-string dialect. |
-| One ticket per serial invocation; parent and epic expansion disabled | Port into `build sop doctor` or the run-backlog brief. |
-| `RUN_BACKLOG_CONTRACT_VERSION` fence-aware markdown scan | Drop. Replaced by a TOML schema Build reads directly. |
-| Entry-point symlink escape check | Drop. Build emits the stub; there is no untrusted entry file to resolve. |
+| Clean primary worktree, no protected branch, no interrupted merge or rebase before any ticket mutation | binary (`sop doctor` precondition) |
+| Baseline gate green and `checksConfigured` true before claim; claim only after lease and baseline | binary (`gate --require-checks`) |
+| Candidate immutability across review, over tracked, cached, and untracked hashes | binary (`candidate status` exists as the primitive) |
+| Explicit-path commit only; never `git add -A`, `git add .`, or `git commit -a` | binary (worker deny contract) |
+| Worker deny contract: workers do not commit, branch, mutate tickets, or manage worktrees | binary where the host allows, brief otherwise |
+| Serial integration by rebase plus fast-forward, never cherry-pick; merged-tree gate before Done | brief |
+| Finalization invariants block Done exactly like a red gate | binary (`blocks_done` invariants) |
+| Transaction-keyed ledger comments; comments from a prior run are not evidence for this one | brief |
+| Declared surface is the scope fence; expansion is a scheduling decision | brief |
+| Rework contract: numbered blocking findings, closed first-round list, cap of three rounds | binary (cap) + brief |
 
-The two dropped items are dropped because the design removes the problem they
-solved, not because the concern was invalid.
+### Not yet audited
+
+The validator's own rules remain unaudited. The review that produced this revision
+ran on a machine where `run-backlog-candidate.mjs` is absent, so the reviewer
+substituted rules from the lifecycle document. The list above is therefore a floor,
+not a ceiling. A second pass with the validator present is required before the
+rules table can be called complete, and TLB-610 should not be closed on the current
+list.
 
 ## Retired on adoption
 
@@ -254,15 +405,50 @@ distribution model.
 This proposal removes four of the five artifacts. If adopted, those criteria
 should be replaced rather than satisfied.
 
-## Open questions
+## Resolved questions
 
-1. Should `build sop install` write stubs for every host it knows about, or only
-   for hosts named on the command line? Writing both by default is simpler and
-   the stubs are inert to the host that ignores them.
-2. Does `build sop brief` emit one document per SOP, or a document plus the
-   repository's resolved conductor data as a single JSON envelope? The second is
-   fewer round trips and is probably correct.
-3. Where does the run-backlog rework cap live: embedded procedure, or
-   `[conductor]` so a repository can tighten it?
-4. Should `build sop doctor` run as a precondition inside `build sop brief`, so an
-   invocation cannot begin against an invalid configuration?
+The four open questions from revision 1 were settled by the review.
+
+1. **Host stubs.** `build sop install` writes stubs for every host it knows about
+   by default, with `--host` to narrow. A stub is inert to the host that ignores it.
+2. **Brief output.** `build sop brief` emits a single JSON envelope: the SOP text,
+   the repository's resolved conductor data, the schema version, the SOP and binary
+   versions, and the doctor result. One round trip, and the agent cannot act on the
+   procedure without also receiving the configuration it applies to.
+3. **Rework cap.** The binary default is three rounds. A repository may tighten it
+   in `[conductor]` and may not loosen it.
+4. **Doctor as precondition.** Yes. `build sop brief` runs doctor first and fails
+   closed. An invocation cannot begin against an invalid configuration.
+
+## Review outcomes
+
+Revision 1 was reviewed adversarially on 2026-08-01 with a mandate to disagree. The
+review was substantially correct and changed the design. Recorded here so the same
+ground is not re-argued.
+
+Accepted and incorporated:
+
+- Embedding does not eliminate binary-versus-repo drift; a version contract is
+  required and must fail closed.
+- Review invariants are structured prose, not typed values, and the schema must
+  not pretend to validate judgment.
+- Stub behavior on a missing, old, or SOP-unaware binary was unspecified, and the
+  correct specification is fail-closed with no cached fallback.
+- The manifest cannot be the install authority; the embedded catalog is.
+- The symlink and containment concern survives, relocated to install and uninstall.
+- Admission must be a run mode carried in the brief envelope, not a per-invocation
+  flag.
+- `build waves` does not verify dependencies against the ticket system, so
+  conductor-side verification and per-wave recheck remain brief rules.
+- Rollback branch deletion does not prove the recorded base SHA. Verified against
+  the source and confirmed; it also passes `force: true`.
+
+Modified rather than accepted: the version contract lives in
+`.build/conductor.toml` as `min_build_version` rather than in the stub. Putting a
+version string in a committed markdown stub reintroduces a hand-maintained artifact
+and forfeits the property that stubs never need upgrading.
+
+Settled and not to be relitigated: embedded resources as the distribution
+mechanism, thin stubs, separate Claude and Codex adapters, gates staying in
+`[[review.checks]]`, and retiring the loose archive kit once the contracts above
+are ported.
