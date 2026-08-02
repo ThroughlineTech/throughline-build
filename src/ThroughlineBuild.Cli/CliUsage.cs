@@ -42,6 +42,10 @@ Usage:
   build sop list [--json]                      List embedded SOPs and their binary versions
   build sop doctor [--json]                    Validate .build/conductor.toml and [[review.checks]] without loading ticketing, workers, or events
   build sop brief <name> [--json]              Emit one SOP brief envelope with procedure text, conductor data, versions, doctor result, and owned catalog paths
+  build sop install [--sop <name>] [--json]    Emit host stubs, scaffold missing conductor.toml, and write the SOP manifest cache
+  build sop upgrade [--sop <name>] [--json]    Rewrite only emitted files that still match prior catalog content
+  build sop uninstall [--sop <name>] [--json]  Remove only emitted files that still match the current catalog
+  build sop status [--sop <name>] [--json]     Report catalog drift, including missing installed paths
   build amend <ticket-id> [--title "..."] [--priority urgent|high|medium|low|none] [--type <name>]
                           [--label-add <name>]... [--label-remove <name>]... [--parent <ticket-id>]
                           [--size S|M|L] [--note "..."] [--description <path|->] [--ac <path|->]
@@ -132,9 +136,9 @@ Exit codes:
   5  Dependency cycle in the selected ticket set
 
   For 'build sop' verb only:
-  0  SOP listed, doctor passed, or brief emitted with a passing doctor result
-  1  Invalid conductor data, missing/unrunnable review checks, or brief refused
+  0  SOP operation passed; status found no drift
+  1  Invalid conductor data, missing/unrunnable review checks, brief refused, drift, or safety finding
   2  Bad arguments
-  9  Unknown SOP name for build sop brief
+  9  Unknown SOP name
 """;
 }

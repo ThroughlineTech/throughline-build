@@ -167,6 +167,13 @@ public static class CliEnvelopeWriter
             envelope, CliJsonContext.Default.SopBriefEnvelope));
     }
 
+    public static void WriteSopOperation(TextWriter output, SopOperationView result)
+    {
+        var envelope = new SopOperationEnvelope(SchemaVersion, Ok: result.Passed, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.SopOperationEnvelope));
+    }
+
     /// <summary>Project a domain <see cref="Ticket"/> onto its wire shape.</summary>
     public static TicketView ToView(
         Ticket ticket,

@@ -280,6 +280,23 @@ still require the full ticketing, worker, and event configuration.
 
 Repositories that use binary-hosted SOPs also track `.build/conductor.toml`.
 Run `build sop list [--json]` to report embedded SOPs and their binary versions.
+Run `build sop install [--sop <name>] [--json]` to emit host stubs, scaffold a
+missing `.build/conductor.toml`, and write `.build/sop-manifest.json`. Run
+`build sop status [--json]` to report catalog drift, including missing installed
+paths. Run `build sop upgrade [--sop <name>] [--json]` after replacing the
+binary; it rewrites only emitted files that still match previous catalog
+content. Run `build sop uninstall [--sop <name>] [--json]` to remove only emitted
+regular files that still match the current catalog.
+
+The embedded catalog is the authority. `.build/sop-manifest.json` is a cache of
+prior writes, not permission to touch arbitrary paths. Emitted files are stubs
+and are validated byte-for-byte against the catalog. Scaffolded files are owned
+as paths, not content: install never overwrites an existing scaffolded file, and
+status validates `.build/conductor.toml` as structured conductor data instead of
+comparing it with a template. Before any write or delete, every target path and
+the manifest path must resolve strictly below the repository root and must not
+cross a symlink or reparse point.
+
 Run `build sop doctor [--json]` to validate that conductor data and the local
 review-check contract are present. Run `build sop brief <name>` to emit the
 embedded SOP text plus resolved conductor data, the SOP schema version, SOP
@@ -298,8 +315,9 @@ findings, so misspelled fields cannot silently drop contract data. The local
 `[[review.checks]]` list must include at least one setup or gating check with a
 non-empty executable; advisory-only checks do not make the gate capable of
 blocking Done. No `sop` verb starts a worker agent. Exit 0 means the requested
-SOP operation passed, exit 1 means validation findings were reported or brief
-refused, and exit 2 means bad arguments.
+SOP operation passed and status found no drift, exit 1 means validation findings,
+brief refusal, drift, or a safety finding, exit 2 means bad arguments, and exit
+9 means an unknown SOP name.
 
 Lease prints the absolute worktree path for use as an agent working directory,
 runs `[project].install_command`, and writes a safety manifest. Configure the

@@ -89,4 +89,5 @@ public sealed record SopOwnedPath(
     string Path,
     string Class,
     string? ExpectedContentHash,
-    string? ResourceName);
+    string? ResourceName,
+    IReadOnlyList<string>? PreviousContentHashes = null);

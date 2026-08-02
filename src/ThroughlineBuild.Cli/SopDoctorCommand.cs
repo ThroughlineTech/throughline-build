@@ -130,7 +130,16 @@ internal static class SopDoctorCommand
         return report.Passed ? 0 : 1;
     }
 
-    internal static SopDoctorView RunDoctor(string startDirectory, string runningBuildVersion)
+    internal static SopDoctorView RunDoctor(string startDirectory, string runningBuildVersion) =>
+        RunDoctor(startDirectory, runningBuildVersion, validateReviewChecks: true);
+
+    internal static SopDoctorView RunConductorOnlyDoctor(string startDirectory, string runningBuildVersion) =>
+        RunDoctor(startDirectory, runningBuildVersion, validateReviewChecks: false);
+
+    private static SopDoctorView RunDoctor(
+        string startDirectory,
+        string runningBuildVersion,
+        bool validateReviewChecks)
     {
         var findings = new List<SopDoctorFinding>();
         var conductorPath = FindConductorFile(startDirectory);
@@ -152,7 +161,8 @@ internal static class SopDoctorCommand
         }
 
         var configPath = Path.Combine(repositoryRoot, ".build", "config.toml");
-        ValidateReviewChecks(configPath, findings);
+        if (validateReviewChecks)
+            ValidateReviewChecks(configPath, findings);
 
         return new SopDoctorView(
             RepositoryRoot: repositoryRoot,
@@ -170,9 +180,13 @@ internal static class SopDoctorCommand
         var current = new DirectoryInfo(Path.GetFullPath(startDirectory));
         while (current is not null)
         {
-            var candidate = Path.Combine(current.FullName, ".build", "conductor.toml");
+            var buildDirectory = Path.Combine(current.FullName, ".build");
+            var candidate = Path.Combine(buildDirectory, "conductor.toml");
             if (File.Exists(candidate))
                 return candidate;
+            var gitPath = Path.Combine(current.FullName, ".git");
+            if (Directory.Exists(buildDirectory) || Directory.Exists(gitPath) || File.Exists(gitPath))
+                return null;
             current = current.Parent;
         }
 

@@ -258,7 +258,7 @@ public sealed record WavesEnvelope(int SchemaVersion, bool Ok, WavePlan Data);
 
 public sealed record SopDoctorEnvelope(int SchemaVersion, bool Ok, SopDoctorView Data);
 
-// ---- build sop list / brief -------------------------------------------------------
+// ---- build sop list / brief / install / status ------------------------------------
 
 public sealed record SopListItemView(
     string Name,
@@ -279,6 +279,44 @@ public sealed record SopBriefView(
     IReadOnlyList<SopOwnedPath> OwnedPaths);
 
 public sealed record SopBriefEnvelope(int SchemaVersion, bool Ok, SopBriefView Data);
+
+public sealed record SopPathResultView(
+    IReadOnlyList<string> Sops,
+    string Path,
+    string Class,
+    string Status,
+    string Message);
+
+public sealed record SopOperationView(
+    string Operation,
+    string RepositoryRoot,
+    string ManifestPath,
+    int SopSchemaVersion,
+    string BinaryVersion,
+    IReadOnlyList<string> ScopeSops,
+    bool Changed,
+    bool Passed,
+    IReadOnlyList<SopPathResultView> Results);
+
+public sealed record SopOperationEnvelope(int SchemaVersion, bool Ok, SopOperationView Data);
+
+public sealed record SopManifest(
+    int SchemaVersion,
+    string InstalledByBuildVersion,
+    DateTimeOffset UpdatedAtUtc,
+    IReadOnlyList<SopManifestSop> Sops);
+
+public sealed record SopManifestSop(
+    string Name,
+    string InstalledByBuildVersion,
+    DateTimeOffset InstalledAtUtc,
+    IReadOnlyList<SopManifestPath> Paths);
+
+public sealed record SopManifestPath(
+    string Path,
+    string Class,
+    string? ContentHash,
+    string? ResourceName);
 
 // Source-generated context keeps the --json path statically analyzable under PublishAot=true
 // (reflection-based serialization trips IL2026/IL3050). UseStringEnumConverter renders
@@ -316,4 +354,7 @@ public sealed record SopBriefEnvelope(int SchemaVersion, bool Ok, SopBriefView D
 [JsonSerializable(typeof(SopListItemView))]
 [JsonSerializable(typeof(SopListEnvelope))]
 [JsonSerializable(typeof(SopBriefEnvelope))]
+[JsonSerializable(typeof(SopPathResultView))]
+[JsonSerializable(typeof(SopOperationEnvelope))]
+[JsonSerializable(typeof(SopManifest))]
 internal partial class CliJsonContext : JsonSerializerContext { }

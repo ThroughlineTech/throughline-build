@@ -205,6 +205,13 @@ conductor data. Doctor can therefore report an absent local config file as a
 finding instead of failing before conductor data is loaded. Unknown keys in
 conductor TOML are findings, and the local check list must include at least one
 setup or gating check so an advisory-only list cannot satisfy the gate contract.
+`sop install`, `upgrade`, `uninstall`, and `status` use the embedded catalog as
+the authority and treat `.build/sop-manifest.json` as a cache only. Emitted stub
+files are content-compared against the catalog. Scaffolded conductor data is
+validated by shape and is never overwritten after creation. Every catalog target
+and the manifest path are resolved strictly below the repository root and are
+refused if any existing segment is a symlink or reparse point before a write or
+delete is attempted.
 
 `ThroughlineBuild.Verification` runs configured `CheckSpec` commands and
 returns typed `CheckResult` values. Check roles distinguish setup, gating, and

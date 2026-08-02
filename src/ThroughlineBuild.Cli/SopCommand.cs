@@ -22,6 +22,8 @@ internal static class SopCommand
             "doctor" => SopDoctorCommand.Execute(args, json, startDirectory, output, error),
             "list" => SopListCommand.Execute(args, json, output, error),
             "brief" => SopBriefCommand.Execute(args, json, startDirectory, output, error),
+            "install" or "upgrade" or "uninstall" or "status" =>
+                SopInstallCommand.Execute(args, json, startDirectory, output, error),
             _ => Usage(json, output, error, $"unknown sop subcommand: {args[1]}"),
         };
     }
@@ -33,7 +35,7 @@ internal static class SopCommand
         else
         {
             error.WriteLine($"Error: {message}");
-            error.WriteLine("Usage: build sop <doctor|list|brief> ...");
+            error.WriteLine("Usage: build sop <doctor|list|brief|install|upgrade|uninstall|status> ...");
         }
 
         return 2;
