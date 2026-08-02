@@ -189,6 +189,10 @@ public sealed class SopDoctorCommandTests
             Assert.Contains("# The ticket transaction (universal)", text);
             Assert.Contains("`build waves` accepts `verifiedExternalDeps` as an ASSERTION", text);
             Assert.Contains("Re-check this at the start of each wave", text);
+            Assert.DoesNotContain("](ticket-transaction.md)", text);
+            Assert.DoesNotContain("](fan-out-scheduling.md)", text);
+            Assert.Equal(2, CountOccurrences(text!, "](#sop-resource-ticket-transaction-md)"));
+            Assert.Equal(2, CountOccurrences(text!, "](#sop-resource-fan-out-scheduling-md)"));
         }
         finally
         {
@@ -600,6 +604,20 @@ public sealed class SopDoctorCommandTests
             .EnumerateArray()
             .Select(item => item.GetProperty("code").GetString() ?? string.Empty)
             .ToList();
+
+    private static int CountOccurrences(string value, string needle)
+    {
+        var count = 0;
+        var start = 0;
+        while (true)
+        {
+            var index = value.IndexOf(needle, start, StringComparison.Ordinal);
+            if (index < 0)
+                return count;
+            count++;
+            start = index + needle.Length;
+        }
+    }
 
     private static void TryDeleteDirectory(string path)
     {
