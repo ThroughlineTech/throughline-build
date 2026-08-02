@@ -10,7 +10,7 @@ public sealed class CliVerbRegistryFactoryTests
         string[] expected =
         [
             "init", "settarget", "user-guide", "op-doc", "models",
-            "sweep", "worktree", "gate", "waves", "list", "get", "comments", "comment", "transition",
+            "sweep", "candidate", "worktree", "gate", "waves", "list", "get", "comments", "comment", "transition",
             "relate", "setup", "amend", "close", "defer", "reopen", "new",
             "scaffold", "rework", "decompose", "plan", "implement", "review",
             "ship", "chain",
@@ -41,6 +41,7 @@ public sealed class CliVerbRegistryFactoryTests
     [InlineData("worktree")]
     [InlineData("gate")]
     [InlineData("waves")]
+    [InlineData("candidate")]
     [InlineData("setup")]
     [InlineData("chain")]
     public void BuildMarksConfiguredVerbsForPostConfigDispatch(string name)

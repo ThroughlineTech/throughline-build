@@ -9,12 +9,14 @@ conductor uses the ticket CRUD verbs (`list`, `get`, `comments`, `comment`,
 `worktree` verb is the isolated-workspace primitive for that topology. The
 `gate` verb runs the repository's configured review checks in that workspace.
 The `waves` verb plans which selected tickets can safely run concurrently.
+The `candidate status` command fingerprints the current candidate worktree so a
+conductor can prove the reviewed tree is the tree it is about to commit.
 None of these verbs starts a worker agent.
 They load only the repository configuration sections they consume and do not
 require `[ticketing]`, `[workers]`, or `[events]`, resolve ticketing secrets, or
 construct a Plane client. Missing ticketing credentials therefore do not block
-`worktree`, `gate`, or `waves`. Other commands still require the full ticketing,
-worker, and event configuration.
+`worktree`, `gate`, `waves`, or `candidate status`. Other commands still require
+the full ticketing, worker, and event configuration.
 
 ## Configuration
 
@@ -208,6 +210,30 @@ duration, stdout, stderr, and missing required paths. If no review checks are
 configured or selected, the command clearly reports that and exits 0 by default.
 Use `--require-checks` when automation should treat an empty gate as a failure.
 
+## Fingerprint a candidate
+
+Run the status command from the candidate worktree:
+
+```sh
+build candidate status --ticket TLB-583 --base main --json
+```
+
+The JSON envelope includes the ticket, base ref, resolved base SHA, current
+HEAD SHA, branch, working directory, tracked diff hash, cached/index diff hash,
+untracked-file hash, touched paths, untracked paths, dirty state, and lease
+manifest metadata when `.build-worktree-lease.json` is present. The tracked diff
+hash fingerprints `git diff --binary --full-index --no-ext-diff --no-textconv
+<base> --`; the cached/index hash fingerprints `git diff --cached --binary
+--full-index --no-ext-diff --no-textconv <base> --`; the untracked hash is
+computed from sorted repository-relative paths, Git-style regular-file modes,
+and file content hashes.
+
+Missing base refs, non-git directories, conflicted worktrees, invalid lease
+manifests, unreadable paths, untracked directories, and untracked
+symlink/reparse-point paths fail with a nonzero JSON error envelope. The command
+reads git and filesystem state only. It does not mutate ticket state, branches,
+commits, pushes, workers, or worktree lifecycle state.
+
 ## Suggested conductor sequence
 
 For each selected ticket, a caller-owned conductor can:
@@ -216,8 +242,8 @@ For each selected ticket, a caller-owned conductor can:
 2. For each ticket in the next wave, lease a worktree and pass the printed path as the implementation agent's
    working directory.
 3. Run its own implementation agent in that directory.
-4. Run `build gate` in that directory, then run the conductor's own review
-   agent with the gate evidence.
+4. Run `build gate` and `build candidate status` in that directory, then run the
+   conductor's own review agent with the gate and fingerprint evidence.
 5. Record evidence with `build comment` and move workflow state with
    `build transition`.
 6. Tear down the lease only after the branch no longer needs to be preserved.

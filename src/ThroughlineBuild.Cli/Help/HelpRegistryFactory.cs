@@ -39,6 +39,7 @@ public static class HelpRegistryFactory
         r.Register(Worktree());
         r.Register(Gate());
         r.Register(Waves());
+        r.Register(Candidate());
 
         // Work items
         r.Register(New());
@@ -321,6 +322,45 @@ public static class HelpRegistryFactory
         [
             new("waves --input tickets.json", "Print a human-readable schedule"),
             new("waves --input - --json", "Read JSON from stdin and emit a typed envelope"),
+        ]
+    );
+
+    private static CommandHelp Candidate() => new(
+        Name: "candidate",
+        Group: CommandGroup.Conductor,
+        Summary: "Fingerprint the current candidate worktree",
+        Usage: "candidate status --ticket <id> --base <ref> [--json]",
+        Options:
+        [
+            new("--ticket <id>", "Ticket identity echoed in the result and compared with any lease manifest", false),
+            new("--base <ref>", "Base commit/ref used for tracked and cached/index diff fingerprints", false),
+            new("--json", "Emit a versioned JSON envelope with source-generated candidate status data", false),
+        ],
+        ExitCodes:
+        [
+            new(0, "Candidate status produced"),
+            new(1, "Git failure, missing base ref, invalid worktree state, or unhashable path"),
+            new(2, "Config error or bad arguments"),
+        ],
+        Examples:
+        [
+            new("candidate status --ticket TLB-600 --base main --json", "Emit base/head SHAs, diff hashes, touched paths, dirty state, and lease metadata"),
+        ],
+        Details:
+        [
+            """
+            JSON data fields include:
+              ticket, baseRef, baseSha, headSha, branch, workingDirectory,
+              trackedDiffHash, cachedDiffHash, untrackedHash, touchedPaths,
+              untrackedPaths, lease, and dirtyState.
+
+            The tracked diff hash is the SHA-256 fingerprint of `git diff --binary --full-index --no-ext-diff --no-textconv <base> --`.
+            The cached/index diff hash is the SHA-256 fingerprint of `git diff --cached --binary --full-index --no-ext-diff --no-textconv <base> --`.
+            The untracked hash is computed from sorted untracked repository-relative paths, Git-style regular-file
+            modes, and file-content hashes. Missing base refs, non-git directories, conflicted worktrees, invalid
+            lease manifests, unreadable paths, untracked directories, and untracked symlink/reparse-point paths fail
+            with a JSON error envelope.
+            """
         ]
     );
 

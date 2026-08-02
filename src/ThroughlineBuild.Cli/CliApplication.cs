@@ -422,9 +422,10 @@ public static class CliApplication
         }
 
         var requiresTicketing = verbKind is not (
-            CliVerbKind.Worktree or CliVerbKind.Gate or CliVerbKind.Waves);
+            CliVerbKind.Candidate or CliVerbKind.Worktree or CliVerbKind.Gate or CliVerbKind.Waves);
         var configLoadMode = verbKind switch
         {
+            CliVerbKind.Candidate => BuildConfigLoadMode.CandidateStandalone,
             CliVerbKind.Worktree => BuildConfigLoadMode.WorktreeStandalone,
             CliVerbKind.Gate => BuildConfigLoadMode.GateStandalone,
             CliVerbKind.Waves => BuildConfigLoadMode.WavesStandalone,
@@ -460,6 +461,28 @@ public static class CliApplication
         var config = cliContext.Config;
         string ResolveLogDir(string raw) => cliContext.ResolveLogDirectory(raw);
         var sessionContext = cliContext.SessionContext;
+
+        // Standalone candidate fingerprinting for caller-owned conductor loops.
+        // This path reads only git state and an optional lease manifest in the invocation
+        // worktree; it never constructs a worker agent or touches ticketing.
+        if (verbKind == CliVerbKind.Candidate)
+        {
+            using var candidateCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; candidateCts.Cancel(); };
+            try
+            {
+                return await CandidateStatusCommand.ExecuteAsync(
+                    args, jsonOutput, rawCwd, Console.Out, Console.Error, candidateCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                if (jsonOutput)
+                    CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, "cancelled");
+                else
+                    Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
+        }
 
         // Standalone deterministic worktree lifecycle for caller-owned conductor loops.
         // This path composes only git, filesystem, and the configured install command; it

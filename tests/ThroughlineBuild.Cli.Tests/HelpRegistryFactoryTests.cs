@@ -23,6 +23,7 @@ public class HelpRegistryFactoryTests
     [InlineData("chain")]
     [InlineData("rework")]
     [InlineData("decompose")]
+    [InlineData("candidate")]
     [InlineData("worktree")]
     [InlineData("gate")]
     [InlineData("waves")]
@@ -69,8 +70,10 @@ public class HelpRegistryFactoryTests
     }
 
     [Theory]
+    [InlineData("candidate")]
     [InlineData("worktree")]
     [InlineData("gate")]
+    [InlineData("waves")]
     public void DeterministicCommands_AreGroupedForCallerOwnedConductors(string verb)
     {
         Assert.Equal(CommandGroup.Conductor, Registry.TryGet(verb)!.Group);
@@ -112,8 +115,10 @@ public class HelpRegistryFactoryTests
     [InlineData("chain")]
     [InlineData("rework")]
     [InlineData("decompose")]
+    [InlineData("candidate")]
     [InlineData("worktree")]
     [InlineData("gate")]
+    [InlineData("waves")]
     [InlineData("new")]
     [InlineData("list")]
     [InlineData("amend")]
@@ -178,6 +183,19 @@ public class HelpRegistryFactoryTests
 
         Assert.Contains("--require-checks", help.Usage);
         Assert.Contains(help.Options, o => o.Flag == "--require-checks" && !o.IsGlobal);
+    }
+
+    [Fact]
+    public void Candidate_HelpDocumentsStatusFingerprintFields()
+    {
+        var output = Tier1Renderer.Render(Registry.TryGet("candidate")!);
+
+        Assert.Contains("candidate status --ticket <id> --base <ref>", output);
+        Assert.Contains("trackedDiffHash", output);
+        Assert.Contains("cachedDiffHash", output);
+        Assert.Contains("untrackedHash", output);
+        Assert.Contains("lease", output);
+        Assert.Contains("dirtyState", output);
     }
 
     [Fact]
@@ -388,6 +406,10 @@ public class HelpRegistryFactoryTests
     [InlineData("chain")]
     [InlineData("rework")]
     [InlineData("decompose")]
+    [InlineData("candidate")]
+    [InlineData("worktree")]
+    [InlineData("gate")]
+    [InlineData("waves")]
     [InlineData("new")]
     [InlineData("list")]
     [InlineData("amend")]

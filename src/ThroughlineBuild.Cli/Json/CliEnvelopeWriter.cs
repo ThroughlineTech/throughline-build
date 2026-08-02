@@ -125,6 +125,13 @@ public static class CliEnvelopeWriter
             envelope, CliJsonContext.Default.WorktreeTeardownEnvelope));
     }
 
+    public static void WriteCandidateStatus(TextWriter output, CandidateStatusView result)
+    {
+        var envelope = new CandidateStatusEnvelope(SchemaVersion, Ok: true, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.CandidateStatusEnvelope));
+    }
+
     public static void WriteGate(TextWriter output, GateView result)
     {
         var envelope = new GateEnvelope(SchemaVersion, Ok: true, result);

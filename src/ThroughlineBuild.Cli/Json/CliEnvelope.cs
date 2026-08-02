@@ -22,6 +22,10 @@ public static class CliErrorCodes
     public const string NotFound = "not_found";
     public const string Failure = "failure";
     public const string DependencyCycle = "dependency_cycle";
+    public const string MissingBase = "missing_base";
+    public const string NotGitRepository = "not_git_repository";
+    public const string InvalidWorktreeState = "invalid_worktree_state";
+    public const string UnhashablePath = "unhashable_path";
 }
 
 /// <summary>A machine-readable error: a stable <paramref name="Code"/> plus a human message.</summary>
@@ -175,6 +179,39 @@ public sealed record WorktreeListEnvelope(int SchemaVersion, bool Ok, WorktreeLi
 public sealed record WorktreeTeardownView(string Path, string Branch);
 public sealed record WorktreeTeardownEnvelope(int SchemaVersion, bool Ok, WorktreeTeardownView Data);
 
+// ---- build candidate ---------------------------------------------------------------
+
+public sealed record CandidateDirtyStateView(
+    bool IsDirty,
+    bool HasTrackedChanges,
+    bool HasStagedChanges,
+    bool HasUnstagedChanges,
+    bool HasUntrackedFiles,
+    bool HasConflicts);
+
+public sealed record CandidateLeaseView(
+    bool Present,
+    string Path,
+    bool? TicketMatches,
+    WorktreeLeaseManifest? Manifest);
+
+public sealed record CandidateStatusView(
+    string Ticket,
+    string BaseRef,
+    string BaseSha,
+    string HeadSha,
+    string? Branch,
+    string WorkingDirectory,
+    string TrackedDiffHash,
+    string CachedDiffHash,
+    string UntrackedHash,
+    IReadOnlyList<string> TouchedPaths,
+    IReadOnlyList<string> UntrackedPaths,
+    CandidateLeaseView Lease,
+    CandidateDirtyStateView DirtyState);
+
+public sealed record CandidateStatusEnvelope(int SchemaVersion, bool Ok, CandidateStatusView Data);
+
 // ---- build gate -------------------------------------------------------------------
 
 public sealed record GateCheckView(
@@ -237,8 +274,10 @@ public sealed record WavesEnvelope(int SchemaVersion, bool Ok, WavePlan Data);
 [JsonSerializable(typeof(RelateEnvelope))]
 [JsonSerializable(typeof(AckEnvelope))]
 [JsonSerializable(typeof(WorktreeLeaseEnvelope))]
+[JsonSerializable(typeof(WorktreeLeaseManifest))]
 [JsonSerializable(typeof(WorktreeListEnvelope))]
 [JsonSerializable(typeof(WorktreeTeardownEnvelope))]
+[JsonSerializable(typeof(CandidateStatusEnvelope))]
 [JsonSerializable(typeof(GateEnvelope))]
 [JsonSerializable(typeof(WavesInput))]
 [JsonSerializable(typeof(WaveTicketInput[]))]
