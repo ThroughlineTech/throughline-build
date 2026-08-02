@@ -79,11 +79,25 @@ with a non-empty executable; advisory-only checks cannot make a gate block Done.
 
 Run `build sop brief <name>` to emit one JSON envelope containing SOP text,
 resolved conductor data, the SOP schema version, SOP version, binary version,
-doctor result, and the SOP's owned catalog paths. `--json` is accepted for
-consistency. Brief runs doctor first and fails closed: if conductor.toml is
-invalid, review checks are missing, or `min_build_version` is newer than the
-running binary, it exits 1 and omits SOP text. There is no override flag.
-Unknown SOP names exit 9 with the JSON error code `unknown_sop`.
+doctor result, the SOP's owned catalog paths, and run mode. `--json` is accepted
+for consistency. Standard briefs run doctor first and fail closed: if
+conductor.toml is invalid, review checks are missing, or `min_build_version` is
+newer than the running binary, the command exits 1 and omits SOP text. Admission
+briefs validate inspection inputs before doctor reads conductor data, then run
+doctor. There is no override flag. Unknown SOP names exit 9 with the JSON error
+code `unknown_sop`.
+
+Admission-only inspection enters through the brief mode syntax:
+`build sop brief <name> admission <absolute-inspection-root> <inspection-sha>`.
+The root must be absolute. The SHA must be a full 40-character commit SHA that
+resolves in that worktree; relative roots, short SHAs, and unresolvable SHAs are
+refused before conductor data is read. The emitted `runMode` carries the resolved
+inspection root, normalized inspection SHA, inherited `BUILD_SOP_*` environment
+values, and an explicit verb policy. With `BUILD_SOP_RUN_MODE=admission` active,
+mutating verbs refuse with JSON error code `sop_admission_refused`; read-only
+inspection verbs remain available. Admission forbids worktree lease and teardown,
+ticket comments and transitions, commits, branches, pushes, and parent or epic
+expansion.
 
 Add an optional section to `.build/config.toml`:
 

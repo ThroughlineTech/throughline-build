@@ -41,7 +41,7 @@ Usage:
   build waves --input <path|-> [--json]        Plan dependency-safe, conflict-aware waves without running tickets
   build sop list [--json]                      List embedded SOPs and their binary versions
   build sop doctor [--json]                    Validate .build/conductor.toml and [[review.checks]] without loading ticketing, workers, or events
-  build sop brief <name> [--json]              Emit one SOP brief envelope with procedure text, conductor data, versions, doctor result, and owned catalog paths
+  build sop brief <name> [admission <absolute-inspection-root> <inspection-sha>] [--json]  Emit one SOP brief envelope with procedure text, conductor data, versions, doctor result, owned catalog paths, and run mode
   build sop install [--sop <name>] [--json]    Emit host stubs, scaffold missing conductor.toml, and write the SOP manifest cache
   build sop upgrade [--sop <name>] [--json]    Rewrite only emitted files that still match prior catalog content
   build sop uninstall [--sop <name>] [--json]  Remove only emitted files that still match the current catalog
@@ -137,7 +137,7 @@ Exit codes:
 
   For 'build sop' verb only:
   0  SOP operation passed; status found no drift
-  1  Invalid conductor data, missing/unrunnable review checks, brief refused, drift, or safety finding
+  1  Invalid conductor data, missing/unrunnable review checks, brief refused, admission mutation refused, drift, or safety finding
   2  Bad arguments
   9  Unknown SOP name
 """;

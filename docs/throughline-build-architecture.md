@@ -200,11 +200,19 @@ sections without requiring `[ticketing]`, `[workers]`, or `[events]`, resolving
 ticketing secrets, or constructing a Plane client. `build sop` runs in the same
 no-worker/no-ticketing band. `sop doctor` reads tracked `.build/conductor.toml`
 directly and only consults local `.build/config.toml` for `[[review.checks]]`;
-`sop brief` runs doctor first, then emits embedded SOP text and the resolved
-conductor data. Doctor can therefore report an absent local config file as a
-finding instead of failing before conductor data is loaded. Unknown keys in
-conductor TOML are findings, and the local check list must include at least one
-setup or gating check so an advisory-only list cannot satisfy the gate contract.
+standard `sop brief` runs doctor first, then emits embedded SOP text and the
+resolved conductor data, owned catalog paths, and run mode. Admission-only
+inspection is a brief run mode with a validated absolute inspection root, a full
+40-character inspection SHA, inherited `BUILD_SOP_*` environment values, and an
+explicit verb policy; admission input validation happens before doctor reads
+conductor data. With admission active, mutating verbs refuse before config
+bootstrap with the JSON error code `sop_admission_refused`. Doctor can therefore
+report an absent local config file as a finding instead of failing before
+conductor data is loaded. Unknown keys in conductor TOML are findings, and the
+local check list must include at least one setup or gating check so an
+advisory-only list cannot satisfy the gate contract. Review invariants remain
+structured prose: doctor validates their shape and surfacing data, not the truth
+of their statements.
 `sop install`, `upgrade`, `uninstall`, and `status` use the embedded catalog as
 the authority and treat `.build/sop-manifest.json` as a cache only. Emitted stub
 files are content-compared against the current catalog and, for upgrade, against

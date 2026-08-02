@@ -301,10 +301,24 @@ cross a symlink or reparse point.
 Run `build sop doctor [--json]` to validate that conductor data and the local
 review-check contract are present. Run `build sop brief <name>` to emit the
 embedded SOP text plus resolved conductor data, the SOP schema version, SOP
-version, binary version, doctor result, and owned catalog paths. The brief
-always emits a JSON envelope; `--json` is accepted for consistency. It runs
-doctor first; if doctor fails, including when `min_build_version` is newer than
-the running binary, it exits 1 and omits SOP text. Unknown SOP names exit 9.
+version, binary version, doctor result, owned catalog paths, and run mode. The
+brief always emits a JSON envelope; `--json` is accepted for consistency.
+Standard briefs run doctor first; if doctor fails, including when
+`min_build_version` is newer than the running binary, the command exits 1 and
+omits SOP text. Admission briefs validate inspection inputs before doctor reads
+conductor data, then run doctor. Unknown SOP names exit 9.
+
+Admission-only inspection enters through the brief mode syntax:
+`build sop brief <name> admission <absolute-inspection-root> <inspection-sha>`.
+The root must be absolute. The SHA must be a full 40-character commit SHA that
+resolves in that worktree; relative roots, short SHAs, and unresolvable SHAs are
+refused before conductor data is read. The emitted `runMode` carries the resolved
+inspection root, normalized inspection SHA, inherited `BUILD_SOP_*` environment
+values, and an explicit verb policy. With `BUILD_SOP_RUN_MODE=admission` active,
+mutating verbs refuse with JSON error code `sop_admission_refused`; read-only
+inspection verbs remain available. Admission forbids worktree lease and teardown,
+ticket comments and transitions, commits, branches, pushes, and parent or epic
+expansion.
 
 The sop commands read `.build/conductor.toml` without loading ticketing, worker,
 or event configuration; if `.build/config.toml` is absent, doctor reports the
@@ -317,8 +331,8 @@ findings, so misspelled fields cannot silently drop contract data. The local
 non-empty executable; advisory-only checks do not make the gate capable of
 blocking Done. No `sop` verb starts a worker agent. Exit 0 means the requested
 SOP operation passed and status found no drift, exit 1 means validation findings,
-brief refusal, drift, or a safety finding, exit 2 means bad arguments, and exit
-9 means an unknown SOP name.
+brief refusal, admission mutation refusal, drift, or a safety finding, exit 2
+means bad arguments, and exit 9 means an unknown SOP name.
 
 Lease prints the absolute worktree path for use as an agent working directory,
 runs `[project].install_command`, and writes a safety manifest. Configure the

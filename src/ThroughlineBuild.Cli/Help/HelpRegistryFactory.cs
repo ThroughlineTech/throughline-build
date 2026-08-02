@@ -373,6 +373,7 @@ public static class HelpRegistryFactory
             "sop list [--json]\n" +
             "sop doctor [--json]\n" +
             "sop brief <name> [--json]\n" +
+            "sop brief <name> admission <absolute-inspection-root> <inspection-sha> [--json]\n" +
             "sop install [--sop <name>] [--json]\n" +
             "sop upgrade [--sop <name>] [--json]\n" +
             "sop uninstall [--sop <name>] [--json]\n" +
@@ -394,6 +395,7 @@ public static class HelpRegistryFactory
             new("sop list --json", "List available embedded SOPs and their binary versions"),
             new("sop doctor --json", "Validate .build/conductor.toml and [[review.checks]] without loading ticketing, workers, or events"),
             new("sop brief run-backlog --json", "Emit the run-backlog procedure plus resolved conductor data"),
+            new("sop brief run-backlog admission /repo 0123456789abcdef0123456789abcdef01234567 --json", "Emit an admission-only brief envelope for a pinned inspection tree"),
             new("sop install --sop run-backlog --json", "Install only the run-backlog host stubs and conductor scaffold"),
             new("sop status --json", "Report catalog drift, including missing installed paths"),
         ],
@@ -416,11 +418,20 @@ public static class HelpRegistryFactory
             Advisory-only checks are visible, but they do not make the gate capable of blocking Done.
 
             `sop brief <name>` always emits a JSON envelope; --json is accepted for consistency
-            with other machine-readable verbs. It runs doctor first. If doctor fails, including when
-            conductor.min_build_version is newer than the running binary, the brief exits nonzero
-            and does not include SOP text. There is no override flag. A successful brief envelope
-            includes the SOP text, conductor data, SOP schema version, SOP version, binary version,
-            doctor result, and owned catalog paths.
+            with other machine-readable verbs. Standard briefs run doctor first. Admission briefs
+            validate the inspection root and SHA before doctor reads conductor data, then run doctor.
+            If doctor fails, including when conductor.min_build_version is newer than the running
+            binary, the brief exits nonzero and does not include SOP text. There is no override flag.
+            A successful brief envelope includes the SOP text, conductor data, SOP schema version,
+            SOP version, binary version, doctor result, owned catalog paths, and runMode.
+
+            Admission-only inspection is a brief run mode, not a per-verb mutation flag:
+            `sop brief <name> admission <absolute-inspection-root> <inspection-sha>`. The root
+            must be absolute, and the SHA must be a full 40-character commit that resolves in that
+            worktree before doctor reads conductor data. The admission runMode carries the resolved
+            inspection root, normalized inspection SHA, inherited BUILD_SOP_* environment values,
+            and an explicit verb policy. While BUILD_SOP_RUN_MODE=admission is active, mutating
+            verbs refuse with JSON error code sop_admission_refused.
 
             `sop install`, `sop upgrade`, `sop uninstall`, and `sop status` are catalog-driven.
             The embedded catalog is the authority; .build/sop-manifest.json is a cache of prior

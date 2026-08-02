@@ -417,12 +417,17 @@ The four open questions from revision 1 were settled by the review.
    by default, with `--host` to narrow. A stub is inert to the host that ignores it.
 2. **Brief output.** `build sop brief` emits a single JSON envelope: the SOP text,
    the repository's resolved conductor data, the schema version, the SOP and binary
-   versions, and the doctor result. One round trip, and the agent cannot act on the
-   procedure without also receiving the configuration it applies to.
+   versions, the doctor result, owned catalog paths, and `runMode`. Admission
+   `runMode` carries the resolved inspection root, inspection SHA, inherited
+   environment values, and explicit verb policy. One round trip, and the agent
+   cannot act on the procedure without also receiving the configuration and mode
+   it applies to.
 3. **Rework cap.** The binary default is three rounds. A repository may tighten it
    in `[conductor]` and may not loosen it.
-4. **Doctor as precondition.** Yes. `build sop brief` runs doctor first and fails
-   closed. An invocation cannot begin against an invalid configuration.
+4. **Doctor as precondition.** Yes. `build sop brief` fails closed. Standard
+   briefs run doctor first; admission briefs validate their pinned inspection
+   root and SHA before doctor reads conductor data. An invocation cannot begin
+   against invalid configuration or invalid admission identity.
 
 ## Review outcomes
 

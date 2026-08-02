@@ -28,6 +28,7 @@ public static class CliErrorCodes
     public const string InvalidWorktreeState = "invalid_worktree_state";
     public const string UnhashablePath = "unhashable_path";
     public const string UnknownSop = "unknown_sop";
+    public const string SopAdmissionRefused = "sop_admission_refused";
 }
 
 /// <summary>A machine-readable error: a stable <paramref name="Code"/> plus a human message.</summary>
@@ -276,7 +277,30 @@ public sealed record SopBriefView(
     string? SopText,
     ConductorConfig? Conductor,
     SopDoctorView Doctor,
-    IReadOnlyList<SopOwnedPath> OwnedPaths);
+    IReadOnlyList<SopOwnedPath> OwnedPaths,
+    SopRunModeView RunMode);
+
+public sealed record SopEnvironmentVariableView(string Name, string Value);
+
+public sealed record SopVerbPolicyView(
+    bool ReadOnlyVerbsAllowed,
+    bool WorktreeLeaseAllowed,
+    bool WorktreeTeardownAllowed,
+    bool TicketTransitionAllowed,
+    bool TicketCommentAllowed,
+    bool CommitAllowed,
+    bool BranchAllowed,
+    bool PushAllowed,
+    bool ParentOrEpicExpansionAllowed,
+    IReadOnlyList<string> AllowedBuildVerbs,
+    IReadOnlyList<string> RefusedBuildVerbs);
+
+public sealed record SopRunModeView(
+    string Mode,
+    string? InspectionSha,
+    string? InspectionRoot,
+    IReadOnlyList<SopEnvironmentVariableView> Environment,
+    SopVerbPolicyView VerbPolicy);
 
 public sealed record SopBriefEnvelope(int SchemaVersion, bool Ok, SopBriefView Data);
 
@@ -354,6 +378,9 @@ public sealed record SopManifestPath(
 [JsonSerializable(typeof(SopListItemView))]
 [JsonSerializable(typeof(SopListEnvelope))]
 [JsonSerializable(typeof(SopBriefEnvelope))]
+[JsonSerializable(typeof(SopRunModeView))]
+[JsonSerializable(typeof(SopVerbPolicyView))]
+[JsonSerializable(typeof(SopEnvironmentVariableView))]
 [JsonSerializable(typeof(SopPathResultView))]
 [JsonSerializable(typeof(SopOperationEnvelope))]
 [JsonSerializable(typeof(SopManifest))]

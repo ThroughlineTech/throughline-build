@@ -96,8 +96,8 @@ internal static class SopBriefCommand
     {
         if (args.Count < 3)
             return Usage(json, output, error, "sop name is required");
-        if (args.Count > 3)
-            return Usage(json, output, error, $"unknown argument for sop brief: {args[3]}");
+        if (!TryParseRunMode(args, output, error, out var runMode, out var usageExit))
+            return usageExit;
 
         var sopName = args[2];
         var catalogEntry = SopBundleCatalog.Find(sopName);
@@ -110,7 +110,7 @@ internal static class SopBriefCommand
         var doctor = SopDoctorCommand.RunDoctor(startDirectory, BuildVersion.Current);
         if (!doctor.Passed)
         {
-            var failed = BuildView(catalogEntry, doctor, sopText: null);
+            var failed = BuildView(catalogEntry, doctor, sopText: null, runMode);
             CliEnvelopeWriter.WriteSopBrief(output, failed);
             return 1;
         }
@@ -126,11 +126,53 @@ internal static class SopBriefCommand
             return 1;
         }
 
-        CliEnvelopeWriter.WriteSopBrief(output, BuildView(catalogEntry, doctor, text));
+        CliEnvelopeWriter.WriteSopBrief(output, BuildView(catalogEntry, doctor, text, runMode));
         return 0;
     }
 
-    private static SopBriefView BuildView(SopCatalogEntry entry, SopDoctorView doctor, string? sopText) => new(
+    private static bool TryParseRunMode(
+        IReadOnlyList<string> args,
+        TextWriter output,
+        TextWriter error,
+        out SopRunModeView runMode,
+        out int usageExit)
+    {
+        runMode = SopAdmission.StandardRunMode();
+        usageExit = 0;
+        if (args.Count == 3)
+        {
+            if (!SopAdmission.IsActiveFromEnvironment())
+                return true;
+
+            if (SopAdmission.TryCreateAdmissionRunModeFromEnvironment(out runMode, out var environmentError))
+                return true;
+
+            usageExit = Usage(json: true, output, error, environmentError);
+            return false;
+        }
+
+        if (args.Count == 6 && string.Equals(args[3], SopAdmission.ModeName, StringComparison.Ordinal))
+        {
+            if (SopAdmission.TryCreateAdmissionRunMode(args[4], args[5], out runMode, out var admissionError))
+                return true;
+
+            usageExit = Usage(json: true, output, error, admissionError);
+            return false;
+        }
+
+        usageExit = Usage(
+            json: true,
+            output,
+            error,
+            $"unknown argument for sop brief: {args[3]}");
+        return false;
+    }
+
+    private static SopBriefView BuildView(
+        SopCatalogEntry entry,
+        SopDoctorView doctor,
+        string? sopText,
+        SopRunModeView runMode) => new(
         Name: entry.Name,
         SopSchemaVersion: SopBundleCatalog.SchemaVersion,
         SopVersion: BuildVersion.Current,
@@ -139,7 +181,8 @@ internal static class SopBriefCommand
         SopText: sopText,
         Conductor: doctor.Conductor,
         Doctor: doctor,
-        OwnedPaths: entry.OwnedPaths);
+        OwnedPaths: entry.OwnedPaths,
+        RunMode: runMode);
 
     private static int Usage(bool json, TextWriter output, TextWriter error, string message)
     {
