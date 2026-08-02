@@ -511,6 +511,16 @@ internal static class SopDoctorCommand
         for (var i = 0; i < checks.Count; i++)
         {
             var check = checks[i];
+            if (!check.TryGetValue("name", out var nameRaw) ||
+                nameRaw is not string name ||
+                string.IsNullOrEmpty(name))
+            {
+                findings.Add(new SopDoctorFinding(
+                    "review.checks.name.invalid",
+                    $"review.checks[{i}].name",
+                    "review check must have a non-empty name"));
+            }
+
             if (!check.TryGetValue("executable", out var executableRaw) ||
                 executableRaw is not string executable ||
                 string.IsNullOrWhiteSpace(executable))
@@ -535,7 +545,7 @@ internal static class SopDoctorCommand
             }
             else
             {
-                switch (role.Trim().ToLowerInvariant())
+                switch (role.ToLowerInvariant())
                 {
                     case "gating":
                     case "setup":

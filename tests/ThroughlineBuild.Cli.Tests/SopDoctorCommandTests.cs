@@ -249,6 +249,55 @@ public sealed class SopDoctorCommandTests
     }
 
     [Fact]
+    public void Doctor_FailsWhenReviewCheckHasNoName()
+    {
+        var repo = CreateRepo(configToml:
+            """
+            [review]
+
+            [[review.checks]]
+            executable = "dotnet"
+            role = "gating"
+            """);
+        var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+
+        try
+        {
+            Assert.False(report.Passed);
+            Assert.Contains(report.Findings, finding => finding.Code == "review.checks.name.invalid");
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void Doctor_FailsWhenReviewCheckRoleHasWhitespace()
+    {
+        var repo = CreateRepo(configToml:
+            """
+            [review]
+
+            [[review.checks]]
+            name = "unit"
+            executable = "dotnet"
+            role = " gating "
+            """);
+        var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+
+        try
+        {
+            Assert.False(report.Passed);
+            Assert.Contains(report.Findings, finding => finding.Code == "review.checks.role.invalid");
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public void Doctor_FailsWhenReworkCapLoosensBinaryDefault()
     {
         var conductor = ValidConductorToml.Replace("rework_cap = 3", "rework_cap = 4");
