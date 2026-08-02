@@ -310,7 +310,7 @@ embedded prose, because prose is advice to an agent and code is a refusal.
 | Existing branch, path, and manifest collision rejection | Already in `build worktree lease` (exit 6) | binary |
 | Required-seed failure before any mutation | Already in `build worktree lease --require-seed` (exit 7) | binary |
 | Partial-lease rollback deletes only what the attempt created | Already in `build worktree lease` | binary |
-| Rollback deletes helper branches only at the recorded base SHA | **Absent. Port.** See below | binary |
+| Rollback deletes helper branches only at the recorded base SHA | Was absent; fixed under TLB-611 | binary |
 | Live availability checks for leased resources such as TCP ports | Port; not currently in Build | binary |
 | Admission-only inspection | Port as a run mode, not a flag; see below | binary |
 | One ticket per serial invocation; no parent or epic expansion | Port | binary |
@@ -319,14 +319,18 @@ embedded prose, because prose is advice to an agent and code is a refusal.
 
 Two rows changed on review and are worth stating plainly.
 
-**Rollback branch deletion is a real defect, not a parity question.**
-`RollBackCreatedLeaseAsync` deletes the helper branch guarded only by a
-`branchCreated` flag, and passes `force: true`, which defeats Git's unmerged-branch
-protection. It never re-reads the branch tip. If the branch moved between creation
-and rollback, work is destroyed silently. The fix: resolve the helper branch and
-delete only when it still equals the lease attempt's recorded base SHA; otherwise
-preserve it and report. This is independently worth fixing regardless of the rest
-of this proposal.
+**Rollback branch deletion was a real defect, not a parity question.**
+`RollBackCreatedLeaseAsync` deleted the helper branch guarded only by a
+`branchCreated` flag and passed `force: true`, which defeats Git's unmerged-branch
+protection. It never re-read the branch tip, so a branch that moved between creation
+and rollback lost that work silently. Fixed under TLB-611: rollback now resolves the
+branch tip and deletes only when it still equals the attempt's recorded base SHA,
+using a non-force delete as a second barrier, and otherwise preserves the branch and
+names it in the failure message.
+
+`ChainWorktreeSweeper` uses the same `force: true` shape in two places. It was left
+out of TLB-611's scope deliberately and still needs its own assessment of whether a
+sweeper is entitled to discard unmerged work.
 
 **The symlink check is not dropped, it moves.** The original concern was an
 untrusted markdown entry file, and Build emitting the stub does remove that
