@@ -39,6 +39,7 @@ Usage:
   build worktree lease|teardown|list [...]     Manage conductor-owned isolated workspaces
   build gate [--ticket <id>] [--role gating|advisory|all] [--require-checks] [--json]  Run configured checks without a worker
   build waves --input <path|-> [--json]        Plan dependency-safe, conflict-aware waves without running tickets
+  build sop doctor [--json]                    Validate .build/conductor.toml and [[review.checks]] without loading ticketing, workers, or events
   build amend <ticket-id> [--title "..."] [--priority urgent|high|medium|low|none] [--type <name>]
                           [--label-add <name>]... [--label-remove <name>]... [--parent <ticket-id>]
                           [--size S|M|L] [--note "..."] [--description <path|->] [--ac <path|->]
@@ -127,5 +128,10 @@ Exit codes:
   0  Wave schedule produced
   2  Invalid config, arguments, input JSON, or dependency scope
   5  Dependency cycle in the selected ticket set
+
+  For 'build sop doctor' verb only:
+  0  Conductor config and review-check contract are valid
+  1  Invalid conductor data or missing/unrunnable review checks
+  2  Bad arguments
 """;
 }

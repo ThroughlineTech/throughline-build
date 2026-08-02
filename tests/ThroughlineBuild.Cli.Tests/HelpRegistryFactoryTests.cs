@@ -12,7 +12,7 @@ public class HelpRegistryFactoryTests
     private static readonly HelpRegistry Registry = HelpRegistryFactory.Build();
 
     // ------------------------------------------------------------------
-    // All 18 known commands must be registered.
+    // All known commands must be registered.
     // ------------------------------------------------------------------
 
     [Theory]
@@ -27,6 +27,7 @@ public class HelpRegistryFactoryTests
     [InlineData("worktree")]
     [InlineData("gate")]
     [InlineData("waves")]
+    [InlineData("sop")]
     [InlineData("new")]
     [InlineData("list")]
     [InlineData("amend")]
@@ -74,6 +75,7 @@ public class HelpRegistryFactoryTests
     [InlineData("worktree")]
     [InlineData("gate")]
     [InlineData("waves")]
+    [InlineData("sop")]
     public void DeterministicCommands_AreGroupedForCallerOwnedConductors(string verb)
     {
         Assert.Equal(CommandGroup.Conductor, Registry.TryGet(verb)!.Group);
@@ -119,6 +121,7 @@ public class HelpRegistryFactoryTests
     [InlineData("worktree")]
     [InlineData("gate")]
     [InlineData("waves")]
+    [InlineData("sop")]
     [InlineData("new")]
     [InlineData("list")]
     [InlineData("amend")]
@@ -196,6 +199,16 @@ public class HelpRegistryFactoryTests
         Assert.Contains("untrackedHash", output);
         Assert.Contains("lease", output);
         Assert.Contains("dirtyState", output);
+    }
+
+    [Fact]
+    public void Sop_HelpDocumentsDoctorShapeOnlyInvariantValidation()
+    {
+        var output = Tier1Renderer.Render(Registry.TryGet("sop")!);
+
+        Assert.Contains("sop doctor", output);
+        Assert.Contains("Review invariants are structured prose", output);
+        Assert.Contains("does not evaluate whether a statement is true", output);
     }
 
     [Fact]

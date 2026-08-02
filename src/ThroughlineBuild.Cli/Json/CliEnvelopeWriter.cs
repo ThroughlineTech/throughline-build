@@ -146,6 +146,13 @@ public static class CliEnvelopeWriter
             envelope, CliJsonContext.Default.WavesEnvelope));
     }
 
+    public static void WriteSopDoctor(TextWriter output, SopDoctorView result)
+    {
+        var envelope = new SopDoctorEnvelope(SchemaVersion, Ok: true, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.SopDoctorEnvelope));
+    }
+
     /// <summary>Project a domain <see cref="Ticket"/> onto its wire shape.</summary>
     public static TicketView ToView(
         Ticket ticket,

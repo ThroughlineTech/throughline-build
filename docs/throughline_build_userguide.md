@@ -278,6 +278,17 @@ sections they use without requiring `[ticketing]`, `[workers]`, or `[events]`,
 resolving ticketing secrets, or constructing a Plane client. Other commands
 still require the full ticketing, worker, and event configuration.
 
+Repositories that use binary-hosted SOPs also track `.build/conductor.toml`.
+Run `build sop doctor [--json]` to validate that conductor data and the local
+review-check contract are present. The command reads `.build/conductor.toml`
+without loading ticketing, worker, or event configuration; if `.build/config.toml`
+is absent, doctor reports the missing `[[review.checks]]` as a validation
+finding instead of a bootstrap error. Review invariants in conductor.toml are
+structured prose: doctor checks ids, non-empty statements, optional paths, and
+optional `blocks_done` shape only. It does not judge whether the statements are
+true. Exit 0 means the doctor passed, exit 1 means validation findings were
+reported, and exit 2 means bad arguments.
+
 Lease prints the absolute worktree path for use as an agent working directory,
 runs `[project].install_command`, and writes a safety manifest. Configure the
 root and the only untracked local files Build may copy with `[worktree] root`

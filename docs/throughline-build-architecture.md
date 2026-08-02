@@ -42,7 +42,8 @@ lives under `.build/`.
 - There is no daemon or server. Each invocation loads state, performs work, and
   exits.
 - `.build/config.toml` is local configuration and may contain credentials; it
-  must remain ignored.
+  must remain ignored. `.build/conductor.toml` is tracked repository data for
+  binary-hosted SOPs and must contain no secrets.
 
 ### Non-Goals
 
@@ -91,11 +92,11 @@ build (ThroughlineBuild.Cli)
 
 ### Invocation flow
 
-1. Pre-configuration verbs such as `--help`, `init`, and `user-guide` are
-   dispatched before config loading.
-2. Other verbs find `.build/config.toml` by walking upward from the working
-   directory, load it, and compose the configured Plane, git, worker, event,
-   and verification services.
+1. Pre-configuration verbs such as `--help`, `init`, `user-guide`, and
+   `sop doctor` are dispatched before config loading.
+2. Most configured verbs find `.build/config.toml` by walking upward from the
+   working directory, load it, and compose the configured Plane, git, worker,
+   event, and verification services.
 3. A ticket phase fetches the current ticket and runs its state and repository
    preconditions.
 4. LLM-bearing phases build a provider-specific brief and execute the selected
@@ -196,7 +197,11 @@ per-ticket filesystem lock closes concurrent lease races, and creation rollback
 tracks branch and worktree ownership separately. The standalone `worktree`,
 `gate`, `waves`, and `candidate status` paths load only their consumed config
 sections without requiring `[ticketing]`, `[workers]`, or `[events]`, resolving
-ticketing secrets, or constructing a Plane client.
+ticketing secrets, or constructing a Plane client. `build sop doctor` runs in
+the same no-worker/no-ticketing band, but reads tracked `.build/conductor.toml`
+directly and only consults local `.build/config.toml` for `[[review.checks]]`.
+It can therefore report an absent local config file as a doctor finding instead
+of failing before conductor data is loaded.
 
 `ThroughlineBuild.Verification` runs configured `CheckSpec` commands and
 returns typed `CheckResult` values. Check roles distinguish setup, gating, and

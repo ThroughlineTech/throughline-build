@@ -40,6 +40,7 @@ public static class HelpRegistryFactory
         r.Register(Gate());
         r.Register(Waves());
         r.Register(Candidate());
+        r.Register(Sop());
 
         // Work items
         r.Register(New());
@@ -360,6 +361,38 @@ public static class HelpRegistryFactory
             modes, and file-content hashes. Missing base refs, non-git directories, conflicted worktrees, invalid
             lease manifests, unreadable paths, untracked directories, and untracked symlink/reparse-point paths fail
             with a JSON error envelope.
+            """
+        ]
+    );
+
+    private static CommandHelp Sop() => new(
+        Name: "sop",
+        Group: CommandGroup.Conductor,
+        Summary: "Validate the tracked conductor configuration",
+        Usage: "sop doctor [--json]",
+        Options:
+        [
+            new("--json", "Emit a versioned JSON envelope with typed doctor findings", false),
+        ],
+        ExitCodes:
+        [
+            new(0, "Conductor config and review-check contract are valid"),
+            new(1, "Doctor found invalid conductor data or missing/unrunnable review checks"),
+            new(2, "Bad arguments"),
+        ],
+        Examples:
+        [
+            new("sop doctor --json", "Validate .build/conductor.toml and [[review.checks]] without loading ticketing, workers, or events"),
+        ],
+        Details:
+        [
+            """
+            `sop doctor` reads tracked .build/conductor.toml independently of .build/config.toml.
+            It only looks at .build/config.toml for [[review.checks]], so missing ticketing
+            credentials, worker configuration, and event configuration do not block it.
+
+            Review invariants are structured prose. Doctor validates ids, statements, optional
+            paths, and optional blocks_done shape only. It does not evaluate whether a statement is true.
             """
         ]
     );

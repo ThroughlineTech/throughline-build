@@ -11,14 +11,50 @@ conductor uses the ticket CRUD verbs (`list`, `get`, `comments`, `comment`,
 The `waves` verb plans which selected tickets can safely run concurrently.
 The `candidate status` command fingerprints the current candidate worktree so a
 conductor can prove the reviewed tree is the tree it is about to commit.
+The `sop doctor` command validates tracked conductor data and the review-check
+contract for binary-hosted SOPs.
 None of these verbs starts a worker agent.
 They load only the repository configuration sections they consume and do not
 require `[ticketing]`, `[workers]`, or `[events]`, resolve ticketing secrets, or
 construct a Plane client. Missing ticketing credentials therefore do not block
-`worktree`, `gate`, `waves`, or `candidate status`. Other commands still require
-the full ticketing, worker, and event configuration.
+`worktree`, `gate`, `waves`, `candidate status`, or `sop doctor`. Other commands
+still require the full ticketing, worker, and event configuration.
 
 ## Configuration
+
+Binary-hosted SOPs use tracked repository data:
+
+```toml
+[conductor]
+min_build_version = "0.1.0"
+branch_prefix = "ticket"
+ticket_prefix = "TLB"
+source_roots = ["src", "tests", "docs"]
+architecture_map = "docs/throughline-build-architecture.md"
+rework_cap = 3
+
+[[conductor.review.invariants]]
+id = "aot-json"
+statement = "CLI JSON output uses source-generated JsonSerializerContext."
+paths = ["src/ThroughlineBuild.Cli/**"]
+blocks_done = true
+
+[conductor.review.escalation]
+model_size = "large"
+paths = ["src/ThroughlineBuild.Cli/**"]
+
+[constellation]
+platform = "dotnet-cli"
+contract_authority = "src/ThroughlineBuild.Contracts"
+```
+
+`.build/conductor.toml` is tracked and contains no secrets. It carries the
+minimum Build version, branch and ticket prefixes, source roots, architecture
+map, review invariants, review escalation rule, rework cap, and constellation.
+Run `build sop doctor [--json]` to validate it. Review invariants are structured
+prose: doctor validates id uniqueness, non-empty statements, optional paths, and
+optional `blocks_done` shape only. It does not judge whether a statement is
+true.
 
 Add an optional section to `.build/config.toml`:
 

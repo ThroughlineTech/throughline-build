@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using ThroughlineBuild.Cli;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Helpers;
 
@@ -252,6 +253,10 @@ public sealed record WavesInput(
 
 public sealed record WavesEnvelope(int SchemaVersion, bool Ok, WavePlan Data);
 
+// ---- build sop doctor -------------------------------------------------------------
+
+public sealed record SopDoctorEnvelope(int SchemaVersion, bool Ok, SopDoctorView Data);
+
 // Source-generated context keeps the --json path statically analyzable under PublishAot=true
 // (reflection-based serialization trips IL2026/IL3050). UseStringEnumConverter renders
 // State/Size/Risk as their names rather than integers. Mirrors PhaseSummaryJsonContext.
@@ -282,4 +287,6 @@ public sealed record WavesEnvelope(int SchemaVersion, bool Ok, WavePlan Data);
 [JsonSerializable(typeof(WavesInput))]
 [JsonSerializable(typeof(WaveTicketInput[]))]
 [JsonSerializable(typeof(WavesEnvelope))]
+[JsonSerializable(typeof(ConductorConfig))]
+[JsonSerializable(typeof(SopDoctorEnvelope))]
 internal partial class CliJsonContext : JsonSerializerContext { }

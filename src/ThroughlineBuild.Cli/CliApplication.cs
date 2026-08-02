@@ -418,6 +418,16 @@ public static class CliApplication
                     () => new CodexModelProbe().ProbeAsync().GetAwaiter().GetResult());
             }
 
+            if (verbKind == CliVerbKind.Sop)
+            {
+                return SopDoctorCommand.Execute(
+                    args,
+                    jsonOutput,
+                    rawCwd,
+                    Console.Out,
+                    Console.Error);
+            }
+
             throw new InvalidOperationException($"Pre-config verb '{registeredVerb.Name}' has no handler.");
         }
 
