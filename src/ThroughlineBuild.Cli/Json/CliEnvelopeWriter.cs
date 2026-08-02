@@ -162,7 +162,7 @@ public static class CliEnvelopeWriter
 
     public static void WriteSopBrief(TextWriter output, SopBriefView result)
     {
-        var envelope = new SopBriefEnvelope(SchemaVersion, Ok: true, result);
+        var envelope = new SopBriefEnvelope(SchemaVersion, Ok: result.Ready, result);
         output.WriteLine(JsonSerializer.Serialize(
             envelope, CliJsonContext.Default.SopBriefEnvelope));
     }

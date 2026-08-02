@@ -233,6 +233,7 @@ public sealed class SopDoctorCommandTests
             Assert.Equal(1, exit);
             Assert.Equal(string.Empty, stderr);
             using var doc = JsonDocument.Parse(stdout);
+            Assert.False(doc.RootElement.GetProperty("ok").GetBoolean());
             var data = doc.RootElement.GetProperty("data");
             Assert.False(data.GetProperty("ready").GetBoolean());
             Assert.False(data.TryGetProperty("sopText", out _));
@@ -256,7 +257,7 @@ public sealed class SopDoctorCommandTests
 
         try
         {
-            Assert.Equal(SopCommand.UnknownSopExitCode, exit);
+            Assert.Equal(9, exit);
             Assert.Equal(string.Empty, stderr);
             using var doc = JsonDocument.Parse(stdout);
             Assert.False(doc.RootElement.GetProperty("ok").GetBoolean());
