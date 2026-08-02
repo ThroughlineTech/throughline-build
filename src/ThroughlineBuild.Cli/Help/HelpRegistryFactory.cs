@@ -427,8 +427,9 @@ public static class HelpRegistryFactory
 
             Admission-only inspection is a brief run mode, not a per-verb mutation flag:
             `sop brief <name> admission <absolute-inspection-root> <inspection-sha>`. The root
-            must be absolute, and the SHA must be a full 40-character commit that resolves in that
-            worktree before doctor reads conductor data. The admission runMode carries the resolved
+            must be the absolute git worktree root for the invoking repository; subdirectories and
+            unrelated repositories are refused. The SHA must be a full 40-character commit that
+            resolves in that worktree before doctor reads conductor data. The admission runMode carries the resolved
             inspection root, normalized inspection SHA, inherited BUILD_SOP_* environment values,
             and an explicit verb policy. While BUILD_SOP_RUN_MODE=admission is active, mutating
             verbs refuse with JSON error code sop_admission_refused.

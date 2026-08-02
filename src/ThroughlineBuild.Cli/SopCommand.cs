@@ -96,7 +96,7 @@ internal static class SopBriefCommand
     {
         if (args.Count < 3)
             return Usage(json, output, error, "sop name is required");
-        if (!TryParseRunMode(args, output, error, out var runMode, out var usageExit))
+        if (!TryParseRunMode(args, startDirectory, output, error, out var runMode, out var usageExit))
             return usageExit;
 
         var sopName = args[2];
@@ -132,6 +132,7 @@ internal static class SopBriefCommand
 
     private static bool TryParseRunMode(
         IReadOnlyList<string> args,
+        string startDirectory,
         TextWriter output,
         TextWriter error,
         out SopRunModeView runMode,
@@ -144,7 +145,10 @@ internal static class SopBriefCommand
             if (!SopAdmission.IsActiveFromEnvironment())
                 return true;
 
-            if (SopAdmission.TryCreateAdmissionRunModeFromEnvironment(out runMode, out var environmentError))
+            if (SopAdmission.TryCreateAdmissionRunModeFromEnvironment(
+                startDirectory,
+                out runMode,
+                out var environmentError))
                 return true;
 
             usageExit = Usage(json: true, output, error, environmentError);
@@ -153,7 +157,12 @@ internal static class SopBriefCommand
 
         if (args.Count == 6 && string.Equals(args[3], SopAdmission.ModeName, StringComparison.Ordinal))
         {
-            if (SopAdmission.TryCreateAdmissionRunMode(args[4], args[5], out runMode, out var admissionError))
+            if (SopAdmission.TryCreateAdmissionRunMode(
+                args[4],
+                args[5],
+                startDirectory,
+                out runMode,
+                out var admissionError))
                 return true;
 
             usageExit = Usage(json: true, output, error, admissionError);

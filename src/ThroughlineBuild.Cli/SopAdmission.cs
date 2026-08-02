@@ -92,6 +92,7 @@ internal static partial class SopAdmission
     public static bool TryCreateAdmissionRunMode(
         string inspectionRoot,
         string inspectionSha,
+        string invocationDirectory,
         out SopRunModeView runMode,
         out string error)
     {
@@ -117,14 +118,31 @@ internal static partial class SopAdmission
             return false;
         }
 
-        var topLevel = RunGit(fullRoot, "rev-parse", "--show-toplevel");
-        if (topLevel.ExitCode != 0 || string.IsNullOrWhiteSpace(topLevel.Stdout))
+        if (!TryResolveGitWorktree(fullRoot, out var inspectionIdentity, out var inspectionError))
         {
-            error = $"admission inspection root is not a git worktree: {TrimProcessError(topLevel)}";
+            error = $"admission inspection root is not a git worktree: {inspectionError}";
             return false;
         }
 
-        var resolvedRoot = Path.GetFullPath(topLevel.Stdout.Trim());
+        var resolvedRoot = inspectionIdentity.TopLevel;
+        if (!PathsEqual(fullRoot, resolvedRoot))
+        {
+            error = $"admission inspection root must be the git worktree root, not a subdirectory: {fullRoot}";
+            return false;
+        }
+
+        if (!TryResolveGitWorktree(invocationDirectory, out var invocationIdentity, out var invocationError))
+        {
+            error = $"admission mode must be invoked from a git worktree: {invocationError}";
+            return false;
+        }
+
+        if (!PathsEqual(inspectionIdentity.CommonDirectory, invocationIdentity.CommonDirectory))
+        {
+            error = "admission inspection root must belong to the invoking repository; cross-repository admission is not supported";
+            return false;
+        }
+
         var commit = RunGit(resolvedRoot, "rev-parse", "--verify", $"{inspectionSha}^{{commit}}");
         if (commit.ExitCode != 0)
         {
@@ -154,6 +172,7 @@ internal static partial class SopAdmission
     }
 
     public static bool TryCreateAdmissionRunModeFromEnvironment(
+        string invocationDirectory,
         out SopRunModeView runMode,
         out string error)
     {
@@ -174,7 +193,7 @@ internal static partial class SopAdmission
             return false;
         }
 
-        return TryCreateAdmissionRunMode(root, sha, out runMode, out error);
+        return TryCreateAdmissionRunMode(root, sha, invocationDirectory, out runMode, out error);
     }
 
     public static bool IsActiveFromEnvironment() =>
@@ -280,10 +299,60 @@ internal static partial class SopAdmission
         return message.Trim();
     }
 
+    private static bool TryResolveGitWorktree(
+        string workingDirectory,
+        out GitWorktreeIdentity identity,
+        out string error)
+    {
+        identity = default;
+        var topLevel = RunGit(workingDirectory, "rev-parse", "--show-toplevel");
+        if (topLevel.ExitCode != 0 || string.IsNullOrWhiteSpace(topLevel.Stdout))
+        {
+            error = TrimProcessError(topLevel);
+            return false;
+        }
+
+        var commonDirectory = RunGit(workingDirectory, "rev-parse", "--git-common-dir");
+        if (commonDirectory.ExitCode != 0 || string.IsNullOrWhiteSpace(commonDirectory.Stdout))
+        {
+            error = TrimProcessError(commonDirectory);
+            return false;
+        }
+
+        identity = new GitWorktreeIdentity(
+            Path.GetFullPath(topLevel.Stdout.Trim()),
+            NormalizeGitPath(workingDirectory, commonDirectory.Stdout.Trim()));
+        error = string.Empty;
+        return true;
+    }
+
+    private static string NormalizeGitPath(string workingDirectory, string path)
+    {
+        var rooted = Path.IsPathFullyQualified(path)
+            ? path
+            : Path.Combine(workingDirectory, path);
+        return TrimEndingSeparator(Path.GetFullPath(rooted));
+    }
+
+    private static bool PathsEqual(string left, string right)
+    {
+        var comparer = OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+        return comparer.Equals(
+            TrimEndingSeparator(Path.GetFullPath(left)),
+            TrimEndingSeparator(Path.GetFullPath(right)));
+    }
+
+    private static string TrimEndingSeparator(string path) =>
+        Path.TrimEndingDirectorySeparator(path);
+
     [GeneratedRegex("^[0-9a-fA-F]{40}$")]
     private static partial Regex FullShaRegex();
 
     private readonly record struct ProcessResult(int ExitCode, string Stdout, string Stderr);
+
+    private readonly record struct GitWorktreeIdentity(string TopLevel, string CommonDirectory);
 }
 
 internal readonly record struct SopAdmissionRefusal(string Category, string Message);

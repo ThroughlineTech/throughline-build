@@ -122,6 +122,104 @@ public sealed class SopAdmissionTests
     }
 
     [Fact]
+    public async Task SopBrief_AdmissionMode_RefusesInspectionRootFromDifferentRepository()
+    {
+        var inspectionRepo = CreateRepo();
+        var invokingRepo = CreateRepo();
+        await InitializeGitRepositoryAsync(inspectionRepo);
+        await InitializeGitRepositoryAsync(invokingRepo);
+        var inspectionSha = await RunGitOutputAsync(inspectionRepo, "rev-parse", "HEAD");
+
+        try
+        {
+            var result = await RunCliInDirectoryAsync(
+                invokingRepo,
+                ["sop", "brief", "run-backlog", "admission", inspectionRepo, inspectionSha, "--json"]);
+
+            Assert.Equal(2, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            Assert.Equal(CliErrorCodes.Usage, ErrorCode(doc));
+            Assert.Contains("cross-repository admission is not supported", ErrorMessage(doc), StringComparison.Ordinal);
+            Assert.False(doc.RootElement.TryGetProperty("data", out _));
+        }
+        finally
+        {
+            TryDeleteDirectory(inspectionRepo);
+            TryDeleteDirectory(invokingRepo);
+        }
+    }
+
+    [Fact]
+    public async Task SopBrief_AdmissionMode_AllowsLinkedWorktreeFromSameRepository()
+    {
+        var repo = CreateRepo();
+        var linkedWorktree = Path.Combine(
+            Path.GetTempPath(),
+            "sop-admission-linked-worktree-tests",
+            Guid.NewGuid().ToString("N"));
+        await InitializeGitRepositoryAsync(repo);
+        var sha = await RunGitOutputAsync(repo, "rev-parse", "HEAD");
+        await RunGitAsync(repo, "worktree", "add", "--detach", linkedWorktree, sha);
+
+        try
+        {
+            var result = await RunCliInDirectoryAsync(
+                repo,
+                ["sop", "brief", "run-backlog", "admission", linkedWorktree, sha, "--json"]);
+
+            Assert.Equal(0, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            var data = doc.RootElement.GetProperty("data");
+            Assert.True(data.GetProperty("ready").GetBoolean());
+            var runMode = data.GetProperty("runMode");
+            Assert.Equal("admission", runMode.GetProperty("mode").GetString());
+            Assert.Equal(Path.GetFullPath(linkedWorktree), runMode.GetProperty("inspectionRoot").GetString());
+            Assert.Equal("TLB", data.GetProperty("conductor").GetProperty("ticketPrefix").GetString());
+        }
+        finally
+        {
+            try
+            {
+                await RunGitAsync(repo, "worktree", "remove", "--force", linkedWorktree);
+            }
+            catch
+            {
+                // Best-effort cleanup; the temp deletion retry below handles already-removed paths.
+            }
+
+            TryDeleteDirectory(linkedWorktree);
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task SopBrief_AdmissionMode_RefusesSubdirectoryInspectionRoot()
+    {
+        var repo = CreateRepo();
+        await InitializeGitRepositoryAsync(repo);
+        var sha = await RunGitOutputAsync(repo, "rev-parse", "HEAD");
+        var subdirectory = Path.Combine(repo, "sub");
+        Directory.CreateDirectory(subdirectory);
+
+        try
+        {
+            var result = await RunCliInDirectoryAsync(
+                repo,
+                ["sop", "brief", "run-backlog", "admission", subdirectory, sha, "--json"]);
+
+            Assert.Equal(2, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            Assert.Equal(CliErrorCodes.Usage, ErrorCode(doc));
+            Assert.Contains("git worktree root", ErrorMessage(doc), StringComparison.Ordinal);
+            Assert.False(doc.RootElement.TryGetProperty("data", out _));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public async Task SopBrief_AdmissionMode_RefusesRelativeRootBeforeDoctorReads()
     {
         var repo = CreateRepoWithoutConductor();
@@ -278,6 +376,42 @@ public sealed class SopAdmissionTests
         }
     }
 
+    [Theory]
+    [InlineData("sop list", null)]
+    [InlineData("sop doctor", null)]
+    [InlineData("sop status", null)]
+    [InlineData("worktree list", null)]
+    [InlineData("candidate status --ticket TLB-616 --base main", null)]
+    [InlineData("waves --input -", "[]")]
+    public async Task AdmissionEnvironment_AllowsReadOnlyInspectionVerbs(
+        string command,
+        string? stdin)
+    {
+        var repo = CreateRepo();
+        await InitializeGitRepositoryAsync(repo);
+        var sha = await RunGitOutputAsync(repo, "rev-parse", "HEAD");
+
+        try
+        {
+            using var _ = SetAdmissionEnvironment(repo, sha);
+            var args = SplitCommand(command).Append("--json").ToArray();
+            var result = await RunCliInDirectoryAsync(repo, args, stdin);
+
+            using var doc = JsonDocument.Parse(result.Stdout);
+            if (doc.RootElement.GetProperty("ok").GetBoolean())
+                return;
+
+            if (doc.RootElement.TryGetProperty("error", out var _error))
+                Assert.NotEqual(CliErrorCodes.SopAdmissionRefused, ErrorCode(doc));
+            else
+                Assert.True(doc.RootElement.TryGetProperty("data", out var _data));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
     private static string CreateRepo() => CreateRepo(ValidConductorToml, ValidReviewChecksToml);
 
     private static string CreateRepoWithoutConductor() => CreateRepo(null, ValidReviewChecksToml);
@@ -309,11 +443,13 @@ public sealed class SopAdmissionTests
 
     private static async Task<(int Exit, string Stdout, string Stderr)> RunCliInDirectoryAsync(
         string directory,
-        string[] args)
+        string[] args,
+        string? stdin = null)
     {
         var originalDirectory = Directory.GetCurrentDirectory();
         var originalOut = Console.Out;
         var originalErr = Console.Error;
+        var originalIn = Console.In;
         var stdout = new StringWriter();
         var stderr = new StringWriter();
 
@@ -322,6 +458,8 @@ public sealed class SopAdmissionTests
             Directory.SetCurrentDirectory(directory);
             Console.SetOut(stdout);
             Console.SetError(stderr);
+            if (stdin is not null)
+                Console.SetIn(new StringReader(stdin));
             var exit = await CliApplication.RunAsync(
                 args,
                 (_, _) => throw new InvalidOperationException("worker must not be constructed"));
@@ -331,6 +469,7 @@ public sealed class SopAdmissionTests
         {
             Console.SetOut(originalOut);
             Console.SetError(originalErr);
+            Console.SetIn(originalIn);
             Directory.SetCurrentDirectory(originalDirectory);
         }
     }

@@ -310,15 +310,16 @@ conductor data, then run doctor. Unknown SOP names exit 9.
 
 Admission-only inspection enters through the brief mode syntax:
 `build sop brief <name> admission <absolute-inspection-root> <inspection-sha>`.
-The root must be absolute. The SHA must be a full 40-character commit SHA that
-resolves in that worktree; relative roots, short SHAs, and unresolvable SHAs are
-refused before conductor data is read. The emitted `runMode` carries the resolved
-inspection root, normalized inspection SHA, inherited `BUILD_SOP_*` environment
-values, and an explicit verb policy. With `BUILD_SOP_RUN_MODE=admission` active,
-mutating verbs refuse with JSON error code `sop_admission_refused`; read-only
-inspection verbs remain available. Admission forbids worktree lease and teardown,
-ticket comments and transitions, commits, branches, pushes, and parent or epic
-expansion.
+The root must be the absolute git worktree root for the invoking repository;
+subdirectories and unrelated repositories are refused. The SHA must be a full
+40-character commit SHA that resolves in that worktree; relative roots, short
+SHAs, and unresolvable SHAs are refused before conductor data is read. The
+emitted `runMode` carries the resolved inspection root, normalized inspection
+SHA, inherited `BUILD_SOP_*` environment values, and an explicit verb policy.
+With `BUILD_SOP_RUN_MODE=admission` active, mutating verbs refuse with JSON error
+code `sop_admission_refused`; read-only inspection verbs remain available.
+Admission forbids worktree lease and teardown, ticket comments and transitions,
+commits, branches, pushes, and parent or epic expansion.
 
 The sop commands read `.build/conductor.toml` without loading ticketing, worker,
 or event configuration; if `.build/config.toml` is absent, doctor reports the

@@ -347,6 +347,9 @@ Admission must instead appear in the SOP brief envelope as a mode carrying the
 resolved SHA and an explicit verb policy: read-only verbs allowed; no parent or
 epic expansion; no worktree lease or teardown; no ticket transition or comment; no
 commit, branch, or push. Every mutating stage refuses while the mode is active.
+Until cross-repository policy is designed, admission inspection roots must belong
+to the invoking repository so one repository's tree is not judged against another
+repository's conductor rules.
 
 **`build waves` does not verify dependencies.** `verifiedExternalDeps` is asserted
 by the caller. Build never reads the ticket system to prove a dependency is Done,
@@ -419,9 +422,10 @@ The four open questions from revision 1 were settled by the review.
    the repository's resolved conductor data, the schema version, the SOP and binary
    versions, the doctor result, owned catalog paths, and `runMode`. Admission
    `runMode` carries the resolved inspection root, inspection SHA, inherited
-   environment values, and explicit verb policy. One round trip, and the agent
-   cannot act on the procedure without also receiving the configuration and mode
-   it applies to.
+   environment values, and explicit verb policy. Admission roots are constrained
+   to the invoking repository until cross-repository conductor policy is designed.
+   One round trip, and the agent cannot act on the procedure without also
+   receiving the configuration and mode it applies to.
 3. **Rework cap.** The binary default is three rounds. A repository may tighten it
    in `[conductor]` and may not loosen it.
 4. **Doctor as precondition.** Yes. `build sop brief` fails closed. Standard
