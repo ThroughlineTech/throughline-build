@@ -24,6 +24,7 @@ public class HelpRegistryFactoryTests
     [InlineData("rework")]
     [InlineData("decompose")]
     [InlineData("candidate")]
+    [InlineData("worker")]
     [InlineData("worktree")]
     [InlineData("gate")]
     [InlineData("waves")]
@@ -71,6 +72,7 @@ public class HelpRegistryFactoryTests
 
     [Theory]
     [InlineData("candidate")]
+    [InlineData("worker")]
     [InlineData("worktree")]
     [InlineData("gate")]
     [InlineData("waves")]
@@ -116,6 +118,7 @@ public class HelpRegistryFactoryTests
     [InlineData("rework")]
     [InlineData("decompose")]
     [InlineData("candidate")]
+    [InlineData("worker")]
     [InlineData("worktree")]
     [InlineData("gate")]
     [InlineData("waves")]

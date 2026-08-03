@@ -11,6 +11,8 @@ conductor uses the ticket CRUD verbs (`list`, `get`, `comments`, `comment`,
 The `waves` verb plans which selected tickets can safely run concurrently.
 The `candidate status` command fingerprints the current candidate worktree so a
 conductor can prove the reviewed tree is the tree it is about to commit.
+The `worker brief` command materializes a role-specific Markdown artifact from
+ticket and worktree evidence for an agent to inspect.
 None of these verbs starts a worker agent.
 They load only the repository configuration sections they consume and do not
 require `[ticketing]`, `[workers]`, or `[events]`, resolve ticketing secrets, or
@@ -209,6 +211,30 @@ directory, overall result, and each check's name, role, status, exit code,
 duration, stdout, stderr, and missing required paths. If no review checks are
 configured or selected, the command clearly reports that and exits 0 by default.
 Use `--require-checks` when automation should treat an empty gate as a failure.
+
+## Create a worker brief artifact
+
+Create a role-specific brief after leasing or selecting the worktree:
+
+```sh
+build worker brief --ticket TLB-583 --role implement --worktree .worktrees/conductor/tlb-583-safe-worktrees --output .build/tlb-583-implement.md
+build worker brief --ticket TLB-583 --role review --worktree .worktrees/conductor/tlb-583-safe-worktrees --output .build/tlb-583-review.md --json
+build worker brief --ticket TLB-583 --role rework --worktree .worktrees/conductor/tlb-583-safe-worktrees --output .build/tlb-583-rework.md
+```
+
+The command reads the ticket body, the supplied worktree branch and status, and
+the resolved base diff. Review briefs carry that evidence and instruct the
+reviewer to make an independent judgment; they do not treat an implementer
+summary as a verdict. Rework briefs read the prior blocking review or gate
+finding and keep the same worktree and branch semantics. The artifact includes
+the exact `build gate --ticket <id> --role gating --json` command and the
+configured check commands, but does not run them.
+
+`--json` emits the standard versioned envelope with the source ticket ID,
+absolute output path, role, workspace, branch, base and HEAD SHAs, changed
+paths, and current status paths. The command writes only the requested output
+file. It does not spawn a worker or mutate tickets, commits, branches,
+worktrees, deployments, or other files.
 
 ## Fingerprint a candidate
 

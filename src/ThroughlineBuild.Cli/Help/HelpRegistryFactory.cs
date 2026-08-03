@@ -36,6 +36,7 @@ public static class HelpRegistryFactory
         r.Register(Decompose());
 
         // Bring your own conductor
+        r.Register(Worker());
         r.Register(Worktree());
         r.Register(Gate());
         r.Register(Waves());
@@ -240,6 +241,37 @@ public static class HelpRegistryFactory
     // ------------------------------------------------------------------
     // Bring-your-own-conductor commands
     // ------------------------------------------------------------------
+
+    private static CommandHelp Worker() => new(
+        Name: "worker",
+        Group: CommandGroup.Conductor,
+        Summary: "Create an inspectable role-specific worker brief artifact",
+        Usage: "worker brief --ticket <id> --role implement|review|rework --worktree <path> --output <path> [--json]",
+        Options:
+        [
+            new("--ticket <id>", "Source ticket whose body and acceptance criteria are included", false),
+            new("--role <role>", "Worker role: implement, review, or rework", false),
+            new("--worktree <path>", "Existing workspace whose branch, diff, and status are read", false),
+            new("--output <path>", "Markdown artifact path; its parent directory must already exist", false),
+            new("--json", "Emit a versioned envelope with source ticket and output metadata", false),
+        ],
+        ExitCodes:
+        [
+            new(0, "Brief artifact written"),
+            new(1, "Ticket, git, worktree, or output failure"),
+            new(2, "Config error or bad arguments"),
+            new(3, "Missing ticketing secret"),
+        ],
+        Examples:
+        [
+            new("worker brief --ticket TLB-602 --role implement --worktree . --output .build/worker-brief.md", "Write an implementation brief without starting a worker"),
+            new("worker brief --ticket TLB-602 --role review --worktree .worktrees/tlb-602 --output review.md --json", "Write a review artifact and emit machine-readable metadata"),
+        ],
+        Details:
+        [
+            "The command reads the ticket and supplied worktree, then writes one Markdown artifact. It does not spawn a worker or mutate tickets, git history, branches, worktrees, or deployments. Review artifacts include the current diff and status as evidence; rework artifacts preserve the supplied worktree and include prior blocking findings."
+        ]
+    );
 
     private static CommandHelp Worktree() => new(
         Name: "worktree",

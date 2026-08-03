@@ -268,6 +268,7 @@ the ticket CRUD verbs together with deterministic worktree leases:
 build worktree lease --ticket TLB-1 --slug readme-fix
 build waves --input tickets.json
 build gate --ticket TLB-1
+build worker brief --ticket TLB-1 --role review --worktree <path> --output .build/review.md
 build candidate status --ticket TLB-1 --base main --json
 build worktree list
 build worktree teardown --ticket TLB-1
@@ -298,6 +299,16 @@ advisory failures remain visible but do not change the exit code. Use
 exit codes, durations, captured output, and inconclusive missing-path results.
 By default an empty selected check list exits 0 for compatibility; add
 `--require-checks` to make that condition exit 1.
+
+Use `build worker brief --ticket <id> --role implement|review|rework
+--worktree <path> --output <path>` to write a compact, inspectable Markdown
+brief for a caller-owned worker. The artifact includes ticket context, role
+boundaries, the exact gate command, and worktree evidence. Review uses actual
+diff/status inputs and an independent-verdict instruction; rework includes
+prior blocking findings and keeps the supplied worktree and branch. The
+command does not spawn a worker or mutate tickets, git history, branches,
+worktrees, deployments, or other files. Add `--json` for source ticket and
+output metadata.
 
 Run `build candidate status --ticket <id> --base <ref> --json` from the
 candidate worktree after implementation and review checkpoints. The JSON

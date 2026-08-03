@@ -20,6 +20,7 @@ public enum CliVerbKind
     Models,
     Sweep,
     Candidate,
+    Worker,
     Worktree,
     Gate,
     Waves,

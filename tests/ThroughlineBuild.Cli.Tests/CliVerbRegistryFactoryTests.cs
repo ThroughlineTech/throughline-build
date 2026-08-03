@@ -10,7 +10,7 @@ public sealed class CliVerbRegistryFactoryTests
         string[] expected =
         [
             "init", "settarget", "user-guide", "op-doc", "models",
-            "sweep", "candidate", "worktree", "gate", "waves", "list", "get", "comments", "comment", "transition",
+            "sweep", "candidate", "worker", "worktree", "gate", "waves", "list", "get", "comments", "comment", "transition",
             "relate", "setup", "amend", "close", "defer", "reopen", "new",
             "scaffold", "rework", "decompose", "plan", "implement", "review",
             "ship", "chain",
