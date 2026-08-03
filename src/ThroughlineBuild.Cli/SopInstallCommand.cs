@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using ThroughlineBuild.Cli.Json;
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Git;
 
 namespace ThroughlineBuild.Cli;
 
@@ -270,30 +271,44 @@ internal static class SopInstaller
             resolutions.Add(target.Path, resolution);
         }
 
-        var installedHosts = targets
-            .Where(target => resolutions.ContainsKey(target.Path))
-            .Where(target => CatalogLeafExistsOrIsLink(repositoryRoot, target.Path))
-            .Select(target => HostForCatalogPath(target.Path))
-            .Where(host => host is not null)
-            .ToHashSet(StringComparer.Ordinal);
+        var trackedTargets = manifest is null
+            ? GetTrackedCatalogTargets(repositoryRoot, targets)
+            : new HashSet<string>(PathComparer);
         foreach (var target in targets)
         {
             if (!resolutions.TryGetValue(target.Path, out var resolution))
                 continue;
 
-            var targetHost = HostForCatalogPath(target.Path);
-            var isScopedByPresentHost = manifest is null &&
-                targetHost is not null &&
-                installedHosts.Contains(targetHost);
             if (!ManifestRecordsTarget(manifest, target) &&
                 !CatalogLeafExistsOrIsLink(repositoryRoot, target.Path) &&
-                !isScopedByPresentHost)
+                !trackedTargets.Contains(target.Path))
                 continue;
 
             StatusEmitted(target, resolution, results);
         }
 
         return results;
+    }
+
+    private static HashSet<string> GetTrackedCatalogTargets(
+        string repositoryRoot,
+        IReadOnlyList<SopInstallTarget> targets)
+    {
+        try
+        {
+            var tracked = new ProcessGitClient(repositoryRoot)
+                .FilterTrackedPathsAsync(
+                    targets.Select(target => target.Path).ToList(),
+                    repositoryRoot,
+                    CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+            return tracked.ToHashSet(PathComparer);
+        }
+        catch
+        {
+            return new HashSet<string>(PathComparer);
+        }
     }
 
     private static SopManifest? ReadManifestCacheSilently(string manifestPath)

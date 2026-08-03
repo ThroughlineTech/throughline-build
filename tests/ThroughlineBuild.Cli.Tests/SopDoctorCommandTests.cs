@@ -632,6 +632,7 @@ public sealed class SopDoctorCommandTests
         {
             var install = await RunCliInDirectoryAsync(repo, ["sop", "install", "--json"]);
             Assert.Equal(0, install.Exit);
+            await TrackEmittedStubsAsync(repo);
             File.Delete(PathFor(repo, ".build/sop-manifest.json"));
             File.Delete(PathFor(repo, ".claude/commands/run-backlog.md"));
 
@@ -676,15 +677,54 @@ public sealed class SopDoctorCommandTests
                 repo,
                 ["sop", "install", "--sop", "run-backlog", "--host", "claude", "--json"]);
             Assert.Equal(0, install.Exit);
+            await TrackEmittedStubsAsync(repo, ".claude/commands/run-backlog.md");
             File.Delete(PathFor(repo, ".build/sop-manifest.json"));
 
             var doctor = await RunCliInDirectoryAsync(repo, ["sop", "doctor", "--json"]);
 
-            Assert.Equal(1, doctor.Exit);
+            Assert.Equal(0, doctor.Exit);
             using var doctorDoc = JsonDocument.Parse(doctor.Stdout);
             var findings = doctorDoc.RootElement.GetProperty("data").GetProperty("findings").EnumerateArray();
             Assert.DoesNotContain(findings, finding =>
                 finding.GetProperty("path").GetString()?.StartsWith(".agents/skills/", StringComparison.Ordinal) == true);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task CliSopDoctorAndBrief_FailForTrackedWholeHostDeletionWithoutManifest()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            Assert.Equal(0, (await RunCliInDirectoryAsync(repo, ["sop", "install", "--json"])).Exit);
+            await TrackEmittedStubsAsync(repo);
+            File.Delete(PathFor(repo, ".build/sop-manifest.json"));
+            Directory.Delete(PathFor(repo, ".claude"), recursive: true);
+
+            var doctor = await RunCliInDirectoryAsync(repo, ["sop", "doctor", "--json"]);
+            var status = await RunCliInDirectoryAsync(repo, ["sop", "status", "--json"]);
+            var brief = await RunCliInDirectoryAsync(repo, ["sop", "brief", "run-backlog", "--json"]);
+
+            Assert.Equal(1, doctor.Exit);
+            Assert.Equal(1, status.Exit);
+            Assert.Equal(1, brief.Exit);
+            using var doctorDoc = JsonDocument.Parse(doctor.Stdout);
+            var findings = doctorDoc.RootElement.GetProperty("data").GetProperty("findings").EnumerateArray().ToList();
+            Assert.Contains(findings, finding =>
+                finding.GetProperty("code").GetString() == "sop.stub.missing" &&
+                finding.GetProperty("path").GetString() == ".claude/commands/run-backlog.md");
+            Assert.Contains(findings, finding =>
+                finding.GetProperty("code").GetString() == "sop.stub.missing" &&
+                finding.GetProperty("path").GetString() == ".claude/commands/cross-impact.md");
+            using var briefDoc = JsonDocument.Parse(brief.Stdout);
+            var briefData = briefDoc.RootElement.GetProperty("data");
+            Assert.False(briefData.GetProperty("ready").GetBoolean());
+            Assert.False(briefData.TryGetProperty("sopText", out _));
         }
         finally
         {
@@ -854,6 +894,44 @@ public sealed class SopDoctorCommandTests
             Console.SetError(originalErr);
             Directory.SetCurrentDirectory(originalDirectory);
         }
+    }
+
+    private static async Task TrackEmittedStubsAsync(string repository, params string[] paths)
+    {
+        await RunGitAsync(repository, "init");
+        await RunGitAsync(repository, "config", "user.email", "sop-doctor-tests@example.test");
+        await RunGitAsync(repository, "config", "user.name", "Sop Doctor Tests");
+        var trackedPaths = paths.Length == 0
+            ? SopBundleCatalog.All
+                .SelectMany(entry => entry.OwnedPaths)
+                .Where(path => path.Class == SopBundleCatalog.EmittedPathClass)
+                .Select(path => path.Path)
+                .ToArray()
+            : paths;
+        await RunGitAsync(repository, ["add", "--", .. trackedPaths]);
+        await RunGitAsync(repository, "commit", "-m", "track emitted stubs");
+    }
+
+    private static async Task RunGitAsync(string workingDirectory, params string[] args)
+    {
+        var startInfo = new System.Diagnostics.ProcessStartInfo("git")
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in args)
+            startInfo.ArgumentList.Add(arg);
+
+        using var process = System.Diagnostics.Process.Start(startInfo)!;
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        Assert.True(
+            process.ExitCode == 0,
+            $"git {string.Join(" ", args)} failed: {await stderr}; stdout: {await stdout}");
     }
 
     private static IReadOnlyList<string> FindingCodes(JsonElement data) =>
