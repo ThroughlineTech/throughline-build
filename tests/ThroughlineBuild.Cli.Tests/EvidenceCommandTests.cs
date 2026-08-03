@@ -103,41 +103,26 @@ public sealed class EvidenceCommandTests
         Assert.DoesNotContain("verdict: <code>pass</code>", html);
     }
 
-    [Fact]
-    public async Task MissingKindSpecificField_IsUsageAndDoesNotWrite()
+    [Theory]
+    [InlineData("claim", "--claim")]
+    [InlineData("claim", "--candidate-sha")]
+    [InlineData("review", "--run-head-sha")]
+    [InlineData("review", "--verdict")]
+    [InlineData("gate", "--gate-result")]
+    [InlineData("final", "--fingerprint")]
+    public async Task MissingKindSpecificField_IsUsageAndDoesNotWrite(
+        string kind,
+        string omittedField)
     {
         var fake = new FakeTicketing();
 
-        var (exit, json) = await RunAsync(
-            [
-                "evidence", "add", "--ticket", "TLB-604", "--kind", "review",
-                "--run-head-sha", "head-123", "--fingerprint", "finger-456"
-            ],
-            fake);
+        var (exit, json) = await RunAsync(Omit(ValidArgs(kind), omittedField), fake);
 
         Assert.Equal(2, exit);
         Assert.Equal(CliErrorCodes.Usage, ErrorCode(json));
-        Assert.Contains("--verdict", json);
+        Assert.Contains(omittedField, json);
         Assert.Empty(fake.Created);
         Assert.Equal(0, fake.GetCommentsCalls);
-    }
-
-    [Fact]
-    public async Task MissingCandidateSha_IsUsageAndDoesNotWrite()
-    {
-        var fake = new FakeTicketing();
-
-        var (exit, json) = await RunAsync(
-            [
-                "evidence", "add", "--ticket", "TLB-604", "--kind", "claim",
-                "--claim", "the claim", "--fingerprint", "finger-456"
-            ],
-            fake);
-
-        Assert.Equal(2, exit);
-        Assert.Equal(CliErrorCodes.Usage, ErrorCode(json));
-        Assert.Contains("--candidate-sha", json);
-        Assert.Empty(fake.Created);
     }
 
     [Fact]
@@ -212,6 +197,28 @@ public sealed class EvidenceCommandTests
     }
 
     [Fact]
+    public async Task ReadBackMissing_ReportsCreatedIdAndNeverPostsAgain()
+    {
+        var fake = new FakeTicketing
+        {
+            ReadBackComments =
+            [
+                new TicketComment("different-comment", "<p>older evidence</p>", CreatedAt)
+            ]
+        };
+
+        var (exit, json) = await RunAsync(ValidArgs("integrate"), fake);
+
+        Assert.Equal(1, exit);
+        Assert.Equal(CliErrorCodes.Failure, ErrorCode(json));
+        Assert.Contains("comment-1", json);
+        Assert.Contains("not present in the read-back comment list", json);
+        Assert.Contains("do not retry", json);
+        Assert.Single(fake.Created);
+        Assert.Equal(1, fake.GetCommentsCalls);
+    }
+
+    [Fact]
     public void HelpDocumentsKindsAndSeparateLifecycle()
     {
         var help = HelpRegistryFactory.Build().TryGet("evidence");
@@ -220,6 +227,7 @@ public sealed class EvidenceCommandTests
         Assert.Contains("claim|review|commit|integrate|gate|final", help.Usage);
         Assert.Contains(help.Details!, detail => detail.Contains("never closes", StringComparison.Ordinal));
         Assert.Contains(help.Details!, detail => detail.Contains("read-back", StringComparison.Ordinal));
+        Assert.Contains(help.Details!, detail => detail.Contains("does not compare stored comment content", StringComparison.Ordinal));
     }
 
     private static string[] ValidArgs(string kind) => kind switch
@@ -261,6 +269,15 @@ public sealed class EvidenceCommandTests
         ],
         _ => throw new ArgumentOutOfRangeException(nameof(kind))
     };
+
+    private static string[] Omit(string[] args, string option)
+    {
+        var index = Array.IndexOf(args, option);
+        if (index < 0 || index + 1 >= args.Length)
+            throw new ArgumentException($"option not found in valid arguments: {option}", nameof(option));
+
+        return args.Where((_, candidateIndex) => candidateIndex != index && candidateIndex != index + 1).ToArray();
+    }
 
     private static async Task<(int Exit, string Json)> RunAsync(
         string[] args,

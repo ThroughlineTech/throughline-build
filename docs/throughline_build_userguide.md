@@ -124,9 +124,11 @@ build evidence add --ticket TLB-541 --kind review --run-head-sha SHA --verdict P
 Supported kinds are `claim`, `review`, `commit`, `integrate`, `gate`, and
 `final`. Kind-specific fields are validated before any backend write. A
 successful invocation posts exactly one comment, reads it back by id, and
-reports the read-back evidence. If the post succeeds but read-back fails, the
-command reports the comment id and does not retry; inspect `build comments` before
-trying again.
+reports the read-back evidence. `readBackVerified: true` means only that the
+returned id is present in the read-back list; it does not compare stored comment
+content with the submitted body. If the post succeeds but read-back fails, the
+command reports the comment id and does not retry; inspect `build comments`
+before trying again.
 
 This command is an audit entry only. It never closes, defers, reopens, or
 transitions a ticket. Use explicit lifecycle commands separately, and never use
