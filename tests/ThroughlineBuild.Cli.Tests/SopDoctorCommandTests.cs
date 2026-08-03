@@ -499,19 +499,116 @@ public sealed class SopDoctorCommandTests
     }
 
     [Fact]
-    public void Doctor_FailsWhenCatalogStubIsMissing()
+    public async Task CliSopBrief_AfterClaudeOnlyInstall_DoesNotRequireUninstalledHostOrSopStubs()
     {
         var repo = CreateRepo();
-        File.Delete(PathFor(repo, ".claude/commands/run-backlog.md"));
 
         try
         {
+            var install = await RunCliInDirectoryAsync(
+                repo,
+                ["sop", "install", "--sop", "run-backlog", "--host", "claude", "--json"]);
+            Assert.Equal(0, install.Exit);
+            Assert.True(File.Exists(PathFor(repo, ".claude/commands/run-backlog.md")));
+            Assert.False(File.Exists(PathFor(repo, ".agents/skills/run-backlog/SKILL.md")));
+            Assert.False(File.Exists(PathFor(repo, ".claude/commands/cross-impact.md")));
+
+            var doctor = await RunCliInDirectoryAsync(repo, ["sop", "doctor", "--json"]);
+            var brief = await RunCliInDirectoryAsync(repo, ["sop", "brief", "run-backlog", "--json"]);
+
+            Assert.Equal(0, doctor.Exit);
+            Assert.Equal(0, brief.Exit);
+            using var doctorDoc = JsonDocument.Parse(doctor.Stdout);
+            Assert.True(doctorDoc.RootElement.GetProperty("data").GetProperty("passed").GetBoolean());
+            using var briefDoc = JsonDocument.Parse(brief.Stdout);
+            Assert.True(briefDoc.RootElement.GetProperty("data").GetProperty("ready").GetBoolean());
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task CliSopBrief_AfterRunBacklogOnlyInstall_DoesNotRequireOtherSopStubs()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var install = await RunCliInDirectoryAsync(repo, ["sop", "install", "--sop", "run-backlog", "--json"]);
+            Assert.Equal(0, install.Exit);
+            Assert.True(File.Exists(PathFor(repo, ".claude/commands/run-backlog.md")));
+            Assert.True(File.Exists(PathFor(repo, ".agents/skills/run-backlog/SKILL.md")));
+            Assert.False(File.Exists(PathFor(repo, ".claude/commands/cross-impact.md")));
+            Assert.False(File.Exists(PathFor(repo, ".agents/skills/cross-impact/SKILL.md")));
+
+            var doctor = await RunCliInDirectoryAsync(repo, ["sop", "doctor", "--json"]);
+            var brief = await RunCliInDirectoryAsync(repo, ["sop", "brief", "run-backlog", "--json"]);
+
+            Assert.Equal(0, doctor.Exit);
+            Assert.Equal(0, brief.Exit);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task CliSopBrief_AfterHostUninstall_DoesNotRequireRemovedHostStub()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            Assert.Equal(0, (await RunCliInDirectoryAsync(repo, ["sop", "install", "--sop", "run-backlog", "--json"])).Exit);
+            var uninstall = await RunCliInDirectoryAsync(
+                repo,
+                ["sop", "uninstall", "--sop", "run-backlog", "--host", "codex", "--json"]);
+            Assert.Equal(0, uninstall.Exit);
+            Assert.True(File.Exists(PathFor(repo, ".claude/commands/run-backlog.md")));
+            Assert.False(File.Exists(PathFor(repo, ".agents/skills/run-backlog/SKILL.md")));
+
+            var doctor = await RunCliInDirectoryAsync(repo, ["sop", "doctor", "--json"]);
+            var brief = await RunCliInDirectoryAsync(repo, ["sop", "brief", "run-backlog", "--json"]);
+
+            Assert.Equal(0, doctor.Exit);
+            Assert.Equal(0, brief.Exit);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void Doctor_FailsWhenManifestRecordedCatalogStubIsMissing()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var install = SopInstaller.Run(
+                "install",
+                repo,
+                [SopBundleCatalog.RunBacklog],
+                "0.1.0+test",
+                DateTimeOffset.UtcNow,
+                host: "claude");
+            Assert.True(install.Passed);
+            File.Delete(PathFor(repo, ".claude/commands/run-backlog.md"));
+
             var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
 
             Assert.False(report.Passed);
             Assert.Contains(report.Findings, finding =>
                 finding.Code == "sop.stub.missing" &&
                 finding.Path == ".claude/commands/run-backlog.md");
+            Assert.DoesNotContain(report.Findings, finding =>
+                finding.Path == ".agents/skills/run-backlog/SKILL.md");
+            Assert.DoesNotContain(report.Findings, finding =>
+                finding.Path.Contains("cross-impact", StringComparison.Ordinal));
         }
         finally
         {
@@ -523,7 +620,9 @@ public sealed class SopDoctorCommandTests
     public void Doctor_FailsWhenCatalogStubIsModified()
     {
         var repo = CreateRepo();
-        File.WriteAllText(PathFor(repo, ".agents/skills/run-backlog/SKILL.md"), "local edit\n");
+        var stubPath = PathFor(repo, ".agents/skills/run-backlog/SKILL.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(stubPath)!);
+        File.WriteAllText(stubPath, "local edit\n");
 
         try
         {
@@ -546,7 +645,7 @@ public sealed class SopDoctorCommandTests
         var repo = CreateRepo();
         var linkPath = PathFor(repo, ".claude/commands/run-backlog.md");
         var targetPath = Path.Combine(repo, "outside-target.md");
-        File.Delete(linkPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(linkPath)!);
         File.WriteAllText(targetPath, "target\n");
 
         try
@@ -634,7 +733,6 @@ public sealed class SopDoctorCommandTests
         File.WriteAllText(Path.Combine(buildDir, "conductor.toml"), conductorToml);
         if (configToml is not null)
             File.WriteAllText(Path.Combine(buildDir, "config.toml"), configToml);
-        WriteCatalogStubs(repository);
         return repository;
     }
 
@@ -648,20 +746,7 @@ public sealed class SopDoctorCommandTests
         Directory.CreateDirectory(buildDir);
         if (configToml is not null)
             File.WriteAllText(Path.Combine(buildDir, "config.toml"), configToml);
-        WriteCatalogStubs(repository);
         return repository;
-    }
-
-    private static void WriteCatalogStubs(string repository)
-    {
-        foreach (var ownedPath in SopBundleCatalog.All
-                     .SelectMany(entry => entry.OwnedPaths)
-                     .Where(path => path.Class == SopBundleCatalog.EmittedPathClass))
-        {
-            var path = PathFor(repository, ownedPath.Path);
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, SopResourceLoader.LoadResource(ownedPath.ResourceName!));
-        }
     }
 
     private static string PathFor(string repository, string relativePath) =>

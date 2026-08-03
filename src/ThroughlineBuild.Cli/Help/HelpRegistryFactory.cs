@@ -407,7 +407,7 @@ public static class HelpRegistryFactory
             binary version; replacing the binary is the SOP upgrade path.
 
             `sop doctor` reads tracked .build/conductor.toml independently of .build/config.toml
-            and validates emitted host stubs byte-for-byte against the embedded catalog.
+            and validates manifest-recorded or present emitted host stubs byte-for-byte against the embedded catalog.
             It only looks at .build/config.toml for [[review.checks]], so missing ticketing
             credentials, worker configuration, and event configuration do not block it.
             Unknown keys in conductor.toml are reported as findings so misspelled contract
@@ -447,7 +447,8 @@ public static class HelpRegistryFactory
             Install is idempotent and restores missing catalog paths from the binary. Upgrade rewrites
             only emitted files that still match trusted previous catalog hashes embedded in the current
             binary; local edits are reported and preserved. Uninstall removes only catalog-owned
-            emitted regular files that still match the current catalog. Status reports missing catalog
+            emitted regular files that still match the current catalog. To restore a locally modified
+            emitted stub, delete it and rerun `build sop install`. Status reports missing catalog
             paths as drift. Every target and the SOP manifest path are resolved below the repository
             root and refused when a symlink or reparse point is encountered before any write or delete.
             No sop verb starts a worker agent.

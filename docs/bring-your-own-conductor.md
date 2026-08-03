@@ -69,19 +69,21 @@ prior writes, not permission to touch arbitrary paths. Emitted files are stubs
 and are validated byte-for-byte against the catalog. Scaffolded files are owned
 as paths, not content: install never overwrites an existing scaffolded file, and
 status validates `.build/conductor.toml` as structured conductor data instead of
-comparing it with a template. Before any write or delete, every target path and
-the manifest path must resolve strictly below the repository root and must not
-cross a symlink or reparse point.
+comparing it with a template. A locally modified emitted stub is intentionally
+preserved by install, upgrade, and uninstall; delete the local stub and rerun
+`build sop install` to restore catalog content. Before any write or delete,
+every target path and the manifest path must resolve strictly below the
+repository root and must not cross a symlink or reparse point.
 
-Run `build sop doctor [--json]` to validate conductor.toml, emitted host stubs,
-and review checks. Doctor validates emitted stubs byte-for-byte against the
-catalog and reports missing, modified, non-regular, or unsafe stub paths as
-drift. Review invariants are structured prose: doctor validates id uniqueness,
-non-empty statements, optional paths, and optional `blocks_done` shape only. It
-does not judge whether a statement is true. Unknown keys in conductor.toml are
-findings. Doctor also requires local `[[review.checks]]` to include at least one
-setup or gating check with a non-empty executable; advisory-only checks cannot
-make a gate block Done.
+Run `build sop doctor [--json]` to validate conductor.toml, review checks, and
+manifest-recorded or present emitted host stubs. Doctor validates those stubs
+byte-for-byte against the catalog and reports missing, modified, non-regular, or
+unsafe stub paths as drift. Review invariants are structured prose: doctor
+validates id uniqueness, non-empty statements, optional paths, and optional
+`blocks_done` shape only. It does not judge whether a statement is true. Unknown
+keys in conductor.toml are findings. Doctor also requires local
+`[[review.checks]]` to include at least one setup or gating check with a
+non-empty executable; advisory-only checks cannot make a gate block Done.
 
 Run `build sop brief <name>` to emit one JSON envelope containing SOP text,
 resolved conductor data, the SOP schema version, SOP version, binary version,

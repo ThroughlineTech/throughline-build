@@ -181,7 +181,7 @@ internal static class SopDoctorCommand
 
     private static void ValidateEmittedStubs(string repositoryRoot, List<SopDoctorFinding> findings)
     {
-        foreach (var result in SopInstaller.InspectEmittedStubs(repositoryRoot, SopBundleCatalog.All))
+        foreach (var result in SopInstaller.InspectInstalledOrPresentEmittedStubs(repositoryRoot, SopBundleCatalog.All))
         {
             if (string.Equals(result.Status, "clean", StringComparison.Ordinal))
                 continue;

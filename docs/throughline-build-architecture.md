@@ -199,8 +199,8 @@ tracks branch and worktree ownership separately. The standalone `worktree`,
 sections without requiring `[ticketing]`, `[workers]`, or `[events]`, resolving
 ticketing secrets, or constructing a Plane client. `build sop` runs in the same
 no-worker/no-ticketing band. `sop doctor` reads tracked `.build/conductor.toml`,
-validates emitted stubs byte-for-byte against the catalog, and only consults
-local `.build/config.toml` for `[[review.checks]]`;
+validates manifest-recorded or present emitted stubs byte-for-byte against the
+catalog, and only consults local `.build/config.toml` for `[[review.checks]]`;
 standard `sop brief` runs doctor first, then emits embedded SOP text and the
 resolved conductor data, owned catalog paths, and run mode. Admission-only
 inspection is a brief run mode with a validated absolute inspection root, a full

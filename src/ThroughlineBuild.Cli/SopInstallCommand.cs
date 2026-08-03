@@ -238,7 +238,7 @@ internal static class SopInstaller
         return View(operation, repositoryRoot, manifestResolution.AbsolutePath, buildVersion, scopeEntries, changed, results);
     }
 
-    internal static IReadOnlyList<SopPathResultView> InspectEmittedStubs(
+    internal static IReadOnlyList<SopPathResultView> InspectInstalledOrPresentEmittedStubs(
         string startDirectory,
         IReadOnlyList<SopCatalogEntry> scopeEntries,
         string? host = null)
@@ -250,8 +250,15 @@ internal static class SopInstaller
         var targets = BuildTargets(scopeEntries, host)
             .Where(target => target.IsEmitted)
             .ToList();
+        var manifestPath = Path.Combine(repositoryRoot, ".build", "sop-manifest.json");
+        var manifest = ReadManifestCacheSilently(manifestPath);
+        var scopedTargets = targets
+            .Where(target =>
+                ManifestRecordsTarget(manifest, target) ||
+                CatalogLeafExistsOrIsLink(repositoryRoot, target.Path))
+            .ToList();
         var results = new List<SopPathResultView>();
-        foreach (var target in targets)
+        foreach (var target in scopedTargets)
         {
             if (!TryResolvePath(repositoryRoot, target.Path, out var resolution, out var error))
             {
@@ -268,6 +275,80 @@ internal static class SopInstaller
         }
 
         return results;
+    }
+
+    private static SopManifest? ReadManifestCacheSilently(string manifestPath)
+    {
+        if (!File.Exists(manifestPath))
+            return null;
+
+        try
+        {
+            var manifest = JsonSerializer.Deserialize(
+                File.ReadAllText(manifestPath),
+                CliJsonContext.Default.SopManifest);
+            if (manifest is null)
+                return null;
+
+            return IsManifestCacheUsable(manifest, out _) ? manifest : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static bool ManifestRecordsTarget(SopManifest? manifest, SopInstallTarget target)
+    {
+        if (manifest?.Sops is null)
+            return false;
+
+        foreach (var sop in manifest.Sops)
+        {
+            if (sop is null || !target.Sops.Contains(sop.Name, StringComparer.Ordinal))
+                continue;
+
+            if (sop.Paths.Any(path =>
+                    path is not null &&
+                    string.Equals(path.Class, SopBundleCatalog.EmittedPathClass, StringComparison.Ordinal) &&
+                    PathsEqual(path.Path, target.Path)))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool CatalogLeafExistsOrIsLink(string repositoryRoot, string catalogPath)
+    {
+        if (!TryNormalizeCatalogPath(catalogPath, out var normalized, out _))
+            return false;
+
+        var absolutePath = Path.GetFullPath(Path.Combine(
+            repositoryRoot,
+            normalized.Replace('/', Path.DirectorySeparatorChar)));
+        if (!IsStrictlyBelow(absolutePath, repositoryRoot))
+            return false;
+
+        if (File.Exists(absolutePath) || Directory.Exists(absolutePath))
+            return true;
+
+        try
+        {
+            var fileInfo = new FileInfo(absolutePath);
+            if (fileInfo.LinkTarget is not null)
+                return true;
+
+            var directoryInfo = new DirectoryInfo(absolutePath);
+            if (directoryInfo.LinkTarget is not null)
+                return true;
+
+            var attributes = File.GetAttributes(absolutePath);
+            return (attributes & FileAttributes.ReparsePoint) != 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FileNotFoundException or DirectoryNotFoundException)
+        {
+            return false;
+        }
     }
 
     private static bool RunInstall(

@@ -297,12 +297,15 @@ prior writes, not permission to touch arbitrary paths. Emitted files are stubs
 and are validated byte-for-byte against the catalog. Scaffolded files are owned
 as paths, not content: install never overwrites an existing scaffolded file, and
 status validates `.build/conductor.toml` as structured conductor data instead of
-comparing it with a template. Before any write or delete, every target path and
-the manifest path must resolve strictly below the repository root and must not
-cross a symlink or reparse point.
+comparing it with a template. A locally modified emitted stub is intentionally
+preserved by install, upgrade, and uninstall; delete the local stub and rerun
+`build sop install` to restore catalog content. Before any write or delete,
+every target path and the manifest path must resolve strictly below the
+repository root and must not cross a symlink or reparse point.
 
-Run `build sop doctor [--json]` to validate that conductor data, emitted host
-stubs, and the local review-check contract are present. Run
+Run `build sop doctor [--json]` to validate that conductor data,
+manifest-recorded or present emitted host stubs, and the local review-check
+contract are present. Run
 `build sop brief <name>` to emit the
 embedded SOP text plus resolved conductor data, the SOP schema version, SOP
 version, binary version, doctor result, owned catalog paths, and run mode. The
@@ -328,9 +331,9 @@ commits, branches, pushes, and parent or epic expansion.
 The sop commands read `.build/conductor.toml` without loading ticketing, worker,
 or event configuration; if `.build/config.toml` is absent, doctor reports the
 missing `[[review.checks]]` as a validation finding instead of a bootstrap
-error. Doctor also validates emitted stubs byte-for-byte against the catalog and
-reports missing, modified, non-regular, or unsafe stub paths as drift. Review
-invariants in conductor.toml are structured prose: doctor checks
+error. Doctor also validates manifest-recorded or present emitted stubs
+byte-for-byte against the catalog and reports missing, modified, non-regular, or
+unsafe stub paths as drift. Review invariants in conductor.toml are structured prose: doctor checks
 ids, non-empty statements, optional paths, and optional `blocks_done` shape only.
 It does not judge whether the statements are true. Unknown conductor keys are
 findings, so misspelled fields cannot silently drop contract data. The local
