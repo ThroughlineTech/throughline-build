@@ -49,6 +49,7 @@ public static class HelpRegistryFactory
         r.Register(Get());
         r.Register(Comments());
         r.Register(Comment());
+        r.Register(Evidence());
         r.Register(Transition());
         r.Register(Relate());
         r.Register(Amend());
@@ -624,6 +625,40 @@ public static class HelpRegistryFactory
         [
             new("comment TLB-541 \"investigated; root cause is X\"", "Post a short note"),
             new("build review-notes.md | build comment TLB-541 -", "Post a long body from stdin"),
+        ]
+    );
+
+    private static CommandHelp Evidence() => new(
+        Name: "evidence",
+        Group: CommandGroup.WorkItems,
+        Summary: "Post one structured evidence comment and verify its read-back",
+        Usage: "evidence add --ticket <id> --kind <claim|review|commit|integrate|gate|final> [fields] [--json]",
+        Options:
+        [
+            new("add", "Add exactly one structured evidence comment; it never changes ticket state", false),
+            new("--ticket <id>", "Ticket receiving the evidence comment", false),
+            new("--kind <kind>", "claim, review, commit, integrate, gate, or final", false),
+            new("--claim <text>", "Claim text (required for claim evidence)", false),
+            new("--candidate-sha <sha>", "Candidate commit SHA (required by claim, commit, integrate, and final)", false),
+            new("--run-head-sha <sha>", "Run head SHA (required by review, integrate, gate, and final)", false),
+            new("--verdict <Pass|Rework|Fail>", "Review verdict (required by review evidence)", false),
+            new("--gate-result <pass|fail|inconclusive>", "Gate result (required by gate evidence)", false),
+            new("--fingerprint <value>", "Candidate fingerprint (required by every evidence kind)", false),
+            new("--summary <text>", "Optional one-line summary", false),
+            new("--note <text>", "Optional one-line note", false),
+            new("--json", "Emit a versioned envelope with the created comment and read-back proof", false),
+        ],
+        ExitCodes: [s_exit0, s_exit1, s_exit2],
+        Examples:
+        [
+            new("evidence add --ticket TLB-541 --kind claim --claim \"implemented the fix\" --candidate-sha SHA --fingerprint HASH", "Record a candidate claim"),
+            new("evidence add --ticket TLB-541 --kind review --run-head-sha SHA --verdict Pass --fingerprint HASH --json", "Record a verified review"),
+            new("evidence add --ticket TLB-541 --kind gate --run-head-sha SHA --gate-result pass --fingerprint HASH", "Record a gate result"),
+        ],
+        Details:
+        [
+            "The command posts exactly one comment, then reads that comment back by its returned id. If posting succeeds but read-back fails, the command reports the id and does not retry; inspect `build comments <ticket>` before trying again.",
+            "Evidence is an audit entry only. It never closes, defers, reopens, or transitions a ticket. Use the explicit lifecycle commands separately; do not use evidence as a cascading close or transition shortcut."
         ]
     );
 

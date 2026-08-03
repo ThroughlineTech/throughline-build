@@ -111,6 +111,27 @@ Ticket reads expose the same stable IDs that operators type. `build get --json` 
 ticket IDs such as `TLB-42` rather than Plane UUIDs. `build list --parent` accepts stable ticket IDs
 and legacy Plane UUIDs.
 
+## Structured evidence comments
+
+Use `build evidence add` to record one structured audit entry without changing
+ticket lifecycle state:
+
+```
+build evidence add --ticket TLB-541 --kind claim --claim "implemented the fix" --candidate-sha SHA --fingerprint HASH --json
+build evidence add --ticket TLB-541 --kind review --run-head-sha SHA --verdict Pass --fingerprint HASH --json
+```
+
+Supported kinds are `claim`, `review`, `commit`, `integrate`, `gate`, and
+`final`. Kind-specific fields are validated before any backend write. A
+successful invocation posts exactly one comment, reads it back by id, and
+reports the read-back evidence. If the post succeeds but read-back fails, the
+command reports the comment id and does not retry; inspect `build comments` before
+trying again.
+
+This command is an audit entry only. It never closes, defers, reopens, or
+transitions a ticket. Use explicit lifecycle commands separately, and never use
+evidence as a cascading close or transition shortcut.
+
 ## First Ticket Walkthrough
 
 This sequence takes a repository from zero configuration to a shipped ticket. Replace the uppercase

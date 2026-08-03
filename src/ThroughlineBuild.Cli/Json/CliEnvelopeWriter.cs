@@ -67,6 +67,13 @@ public static class CliEnvelopeWriter
         output.WriteLine(JsonSerializer.Serialize(envelope, CliJsonContext.Default.CommentCreatedEnvelope));
     }
 
+    /// <summary>Write the created structured evidence comment and its read-back proof.</summary>
+    public static void WriteEvidence(TextWriter output, EvidenceView evidence)
+    {
+        var envelope = new EvidenceEnvelope(SchemaVersion, Ok: true, evidence);
+        output.WriteLine(JsonSerializer.Serialize(envelope, CliJsonContext.Default.EvidenceEnvelope));
+    }
+
     /// <summary>Write a success envelope describing a state transition.</summary>
     public static void WriteTransition(TextWriter output, string ticketId, TicketState state)
     {

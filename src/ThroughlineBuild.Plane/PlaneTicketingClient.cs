@@ -20,6 +20,7 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
     private readonly HttpClient _http;
     private readonly PlaneClientOptions _options;
     private readonly ResiliencePipeline _pipeline;
+    private readonly ResiliencePipeline _commentPostRateLimitPipeline;
 
     // Hard rate gate: every HTTP send waits here so we never exceed Plane's 60/min limit.
     private readonly RequestThrottle _throttle;
@@ -85,18 +86,24 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
 
         _throttle = new RequestThrottle(options.RequestsPerMinute, TimeSpan.FromMinutes(1));
 
-        var maxRetryDelay = options.MaxRetryDelay;
-        _pipeline = new ResiliencePipelineBuilder()
+        _pipeline = CreateRetryPipeline(ex => ex.Status == 429 || ex.Status >= 500);
+        _commentPostRateLimitPipeline = CreateRetryPipeline(ex => ex.Status == 429);
+    }
+
+    private ResiliencePipeline CreateRetryPipeline(Func<PlaneApiException, bool> shouldHandle)
+    {
+        var maxRetryDelay = _options.MaxRetryDelay;
+        return new ResiliencePipelineBuilder()
             .AddRetry(new RetryStrategyOptions
             {
                 ShouldHandle = new PredicateBuilder()
-                    .Handle<PlaneApiException>(ex => ex.Status == 429 || ex.Status >= 500),
-                MaxRetryAttempts = options.MaxRetryAttempts,
+                    .Handle<PlaneApiException>(shouldHandle),
+                MaxRetryAttempts = _options.MaxRetryAttempts,
                 BackoffType = DelayBackoffType.Exponential,
                 // Jitter desynchronizes two concurrent build instances that would
                 // otherwise retry in lockstep and keep colliding on the same window.
                 UseJitter = true,
-                Delay = options.RetryBaseDelay,
+                Delay = _options.RetryBaseDelay,
                 // When Plane sends Retry-After (429s from its limiter do), wait exactly
                 // that long instead of our exponential guess - the window is shared with
                 // other processes, so our blind backoff is usually too short. Returning
@@ -984,21 +991,29 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
 
     public async Task<string> CreateCommentAsync(string id, string html, CancellationToken ct)
     {
-        return await _pipeline.ExecuteAsync(async token =>
+        var seq = ParseSequenceId(id);
+        // Resolve the issue through the normal read pipeline. The comment POST has its own
+        // rate-limit-only pipeline: a 429 means Plane rejected the request before storing it, so
+        // retrying is safe. A 5xx can arrive after Plane accepted the comment, so it is not retried
+        // and cannot create duplicate evidence. The transport funnel still retries pre-send faults
+        // and refuses to retry response-phase POST faults.
+        var issue = await _pipeline.ExecuteAsync(async token =>
         {
-            var seq = ParseSequenceId(id);
-            var issue = await FindIssueAsync(seq, token).ConfigureAwait(false);
+            return await FindIssueAsync(seq, token).ConfigureAwait(false);
+        }, ct).ConfigureAwait(false);
 
-            var responseBody = await PostJsonAsync(
+        var responseBody = await _commentPostRateLimitPipeline.ExecuteAsync(async token =>
+        {
+            return await PostJsonAsync(
                 $"{IssuesBase}{issue.Id}/comments/",
                 new CreateCommentRequest(html),
                 PlaneJsonContext.Default,
                 token).ConfigureAwait(false);
-
-            var comment = (PlaneComment?)JsonSerializer.Deserialize(
-                responseBody, typeof(PlaneComment), PlaneJsonContext.Default);
-            return comment?.Id ?? string.Empty;
         }, ct).ConfigureAwait(false);
+
+        var comment = (PlaneComment?)JsonSerializer.Deserialize(
+            responseBody, typeof(PlaneComment), PlaneJsonContext.Default);
+        return comment?.Id ?? string.Empty;
     }
 
     public async Task ApplyLabelsAsync(string id, IEnumerable<string> labels, CancellationToken ct)

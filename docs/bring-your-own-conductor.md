@@ -5,7 +5,7 @@ workflow and starts a fresh configured worker for each judgment phase.
 
 An operator can instead keep one long-lived agent session as the conductor. The
 conductor uses the ticket CRUD verbs (`list`, `get`, `comments`, `comment`,
-`transition`, and `amend`) and asks Build to own deterministic resources. The
+`evidence`, `transition`, and `amend`) and asks Build to own deterministic resources. The
 `worktree` verb is the isolated-workspace primitive for that topology. The
 `gate` verb runs the repository's configured review checks in that workspace.
 The `waves` verb plans which selected tickets can safely run concurrently.
@@ -351,6 +351,30 @@ symlink/reparse-point paths fail with a nonzero JSON error envelope. The command
 reads git and filesystem state only. It does not mutate ticket state, branches,
 commits, pushes, workers, or worktree lifecycle state.
 
+## Record structured evidence
+
+Use `build evidence add` for one audit entry after a conductor checkpoint:
+
+```sh
+build evidence add --ticket TLB-583 --kind claim \
+  --claim "implementation matches the ticket" \
+  --candidate-sha CANDIDATE_SHA --fingerprint FINGERPRINT --json
+build evidence add --ticket TLB-583 --kind review \
+  --run-head-sha RUN_HEAD_SHA --verdict Pass \
+  --fingerprint FINGERPRINT --json
+```
+
+The supported kinds are `claim`, `review`, `commit`, `integrate`, `gate`, and
+`final`. Each kind requires the provenance fields for its checkpoint. The
+command formats Markdown, posts exactly one comment, and reads that comment
+back by the returned id before reporting success. If the post succeeds but
+read-back fails, the command reports the created id and does not retry; inspect
+`build comments <id>` before trying again.
+
+Evidence is an audit entry only. It never closes, defers, reopens, or transitions
+a ticket. Keep lifecycle operations as separate explicit commands; do not use
+evidence as a cascading close or transition shortcut.
+
 ## Suggested conductor sequence
 
 For each selected ticket, a caller-owned conductor can:
@@ -361,8 +385,8 @@ For each selected ticket, a caller-owned conductor can:
 3. Run its own implementation agent in that directory.
 4. Run `build gate` and `build candidate status` in that directory, then run the
    conductor's own review agent with the gate and fingerprint evidence.
-5. Record evidence with `build comment` and move workflow state with
-   `build transition`.
+5. Record the checkpoint with `build evidence add`, then move workflow state
+   with the separate explicit `build transition` command.
 6. Tear down the lease only after the branch no longer needs to be preserved.
 
 The conductor still owns agent selection, review judgment, execution, and

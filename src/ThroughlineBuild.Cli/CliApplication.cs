@@ -941,6 +941,31 @@ public static class CliApplication
             }
         }
 
+        // 'build evidence add' posts one structured evidence comment and then reads that
+        // comment back. It never transitions a ticket; lifecycle remains an explicit command.
+        if (verbKind == CliVerbKind.Evidence)
+        {
+            var sharedTicketing = cliContext.Ticketing;
+            try
+            {
+                using var verbCts = new CancellationTokenSource();
+                Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+                return await EvidenceCommand.ExecuteAsync(
+                    args,
+                    jsonOutput,
+                    sharedTicketing,
+                    Console.Out,
+                    Console.Error,
+                    verbCts.Token,
+                    ex => PlaneCliError.MessageFor(ex, cliContext));
+            }
+            catch (OperationCanceledException)
+            {
+                Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
+        }
+
         // 'build transition <ticket-id> <state> [--json]' moves a ticket to a new state (write).
         // State is matched case/space/hyphen-insensitively to the TicketState names.
         if (verbKind == CliVerbKind.Transition)
