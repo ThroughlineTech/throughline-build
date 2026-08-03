@@ -755,6 +755,26 @@ public class CreateCommentAsyncTests
         Assert.Equal(2, handler.Requests.Count);
         Assert.Equal(HttpMethod.Post, handler.Requests[1].Method);
     }
+
+    [Fact]
+    public async Task CreateCommentAsync_RateLimitedPost_RetriesAndReturnsCommentId()
+    {
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(TestData.RateLimited());
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.CommentJson()));
+
+        var client = new PlaneTicketingClient(
+            new HttpClient(handler),
+            TestData.FastRetryOptions(maxRetryAttempts: 2));
+
+        var commentId = await client.CreateCommentAsync("TLB-24", "<p>hello</p>", CancellationToken.None);
+
+        Assert.Equal(TestData.CommentUuid, commentId);
+        Assert.Equal(3, handler.Requests.Count);
+        Assert.Equal(HttpMethod.Post, handler.Requests[1].Method);
+        Assert.Equal(HttpMethod.Post, handler.Requests[2].Method);
+    }
 }
 
 public class GetCommentsAsyncTests

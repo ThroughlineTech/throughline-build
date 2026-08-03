@@ -21,6 +21,7 @@ public sealed class EvidenceCommandTests
     [InlineData("final")]
     public async Task EverySupportedKind_PostsExactlyOneCommentAndReadsItBack(string kind)
     {
+        DisableReflectionSerialization();
         var fake = new FakeTicketing
         {
             ReadBackComments =
@@ -73,9 +74,33 @@ public sealed class EvidenceCommandTests
         Assert.Contains("run_head_sha", html);
         Assert.Contains("head-123", html);
         Assert.Contains("gate_result", html);
-        Assert.Contains("pass", html);
+        Assert.Contains("gate_result: <code>pass</code>", html);
+        Assert.DoesNotContain("gate_result: <code>passed</code>", html);
         Assert.Contains("finger-456", html);
         Assert.Contains("all checks green", html);
+    }
+
+    [Fact]
+    public async Task MarkdownFormatting_NormalizesVerdict()
+    {
+        var fake = new FakeTicketing
+        {
+            ReadBackComments = [new TicketComment("comment-1", "<p>ok</p>", CreatedAt)]
+        };
+
+        var (exit, _) = await RunAsync(
+            [
+                "evidence", "add", "--ticket", "TLB-604", "--kind", "review",
+                "--run-head-sha", "head-123", "--verdict", "pass",
+                "--fingerprint", "finger-456"
+            ],
+            fake);
+
+        Assert.Equal(0, exit);
+        var html = Assert.Single(fake.Created).Html;
+        Assert.Contains("verdict", html);
+        Assert.Contains("verdict: <code>Pass</code>", html);
+        Assert.DoesNotContain("verdict: <code>pass</code>", html);
     }
 
     [Fact]
@@ -259,6 +284,9 @@ public sealed class EvidenceCommandTests
         using var document = JsonDocument.Parse(json);
         return document.RootElement.GetProperty("error").GetProperty("code").GetString()!;
     }
+
+    private static void DisableReflectionSerialization() =>
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
 
     private sealed class FakeTicketing : ITicketing
     {
