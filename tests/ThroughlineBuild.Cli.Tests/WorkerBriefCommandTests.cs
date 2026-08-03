@@ -46,7 +46,11 @@ public sealed class WorkerBriefCommandTests
             Assert.Contains("Acceptance criteria", brief);
             Assert.Contains("Role boundaries", brief);
             Assert.Contains("Do not mutate the ticket, main branch, unrelated branches, other worktrees, or deployments.", brief);
-            Assert.Contains("build gate --ticket TLB-602 --role gating --json", brief);
+            Assert.Contains("build gate --ticket TLB-602 --role gating --require-checks --json", brief);
+            Assert.DoesNotContain(
+                brief.Split('\n'),
+                line => line.Contains("build gate", StringComparison.Ordinal) &&
+                    !line.Contains("--require-checks", StringComparison.Ordinal));
             Assert.Contains(worktree, brief, StringComparison.Ordinal);
             Assert.Contains("# Implement Phase Brief", brief);
             Assert.Contains("does not spawn a worker", brief);
