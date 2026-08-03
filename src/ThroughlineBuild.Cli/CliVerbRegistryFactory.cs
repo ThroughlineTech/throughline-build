@@ -21,6 +21,7 @@ public static class CliVerbRegistryFactory
         ("get", CliVerbKind.Get, false),
         ("comments", CliVerbKind.Comments, false),
         ("comment", CliVerbKind.Comment, false),
+        ("evidence", CliVerbKind.Evidence, false),
         ("transition", CliVerbKind.Transition, false),
         ("relate", CliVerbKind.Relate, false),
         ("setup", CliVerbKind.Setup, false),

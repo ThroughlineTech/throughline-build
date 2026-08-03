@@ -984,21 +984,25 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
 
     public async Task<string> CreateCommentAsync(string id, string html, CancellationToken ct)
     {
-        return await _pipeline.ExecuteAsync(async token =>
+        var seq = ParseSequenceId(id);
+        // Resolve the issue through the normal read pipeline, but keep the comment POST outside
+        // that pipeline. Retrying a 5xx around the whole delegate could repeat a POST after Plane
+        // accepted it but returned an error, creating duplicate evidence comments. The transport
+        // funnel still retries pre-send failures and refuses to retry response-phase POST faults.
+        var issue = await _pipeline.ExecuteAsync(async token =>
         {
-            var seq = ParseSequenceId(id);
-            var issue = await FindIssueAsync(seq, token).ConfigureAwait(false);
-
-            var responseBody = await PostJsonAsync(
-                $"{IssuesBase}{issue.Id}/comments/",
-                new CreateCommentRequest(html),
-                PlaneJsonContext.Default,
-                token).ConfigureAwait(false);
-
-            var comment = (PlaneComment?)JsonSerializer.Deserialize(
-                responseBody, typeof(PlaneComment), PlaneJsonContext.Default);
-            return comment?.Id ?? string.Empty;
+            return await FindIssueAsync(seq, token).ConfigureAwait(false);
         }, ct).ConfigureAwait(false);
+
+        var responseBody = await PostJsonAsync(
+            $"{IssuesBase}{issue.Id}/comments/",
+            new CreateCommentRequest(html),
+            PlaneJsonContext.Default,
+            ct).ConfigureAwait(false);
+
+        var comment = (PlaneComment?)JsonSerializer.Deserialize(
+            responseBody, typeof(PlaneComment), PlaneJsonContext.Default);
+        return comment?.Id ?? string.Empty;
     }
 
     public async Task ApplyLabelsAsync(string id, IEnumerable<string> labels, CancellationToken ct)

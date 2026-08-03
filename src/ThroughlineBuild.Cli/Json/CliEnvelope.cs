@@ -133,6 +133,18 @@ public sealed record CommentCreatedView(string Id);
 /// <summary>Success envelope for <c>build comment --json</c>.</summary>
 public sealed record CommentCreatedEnvelope(int SchemaVersion, bool Ok, CommentCreatedView Data);
 
+/// <summary>Read-back evidence for a structured comment mutation.</summary>
+public sealed record EvidenceView(
+    string Ticket,
+    string Kind,
+    string CommentId,
+    string Body,
+    DateTimeOffset CreatedAt,
+    bool ReadBackVerified);
+
+/// <summary>Success envelope for <c>build evidence add --json</c>.</summary>
+public sealed record EvidenceEnvelope(int SchemaVersion, bool Ok, EvidenceView Data);
+
 // ---- build transition --json -------------------------------------------------------
 
 /// <summary>Data payload after a state transition.</summary>
@@ -287,6 +299,7 @@ public sealed record WorkerBriefEnvelope(int SchemaVersion, bool Ok, WorkerBrief
 [JsonSerializable(typeof(ListEnvelope))]
 [JsonSerializable(typeof(CommentsEnvelope))]
 [JsonSerializable(typeof(CommentCreatedEnvelope))]
+[JsonSerializable(typeof(EvidenceEnvelope))]
 [JsonSerializable(typeof(TransitionEnvelope))]
 [JsonSerializable(typeof(RelationsEnvelope))]
 [JsonSerializable(typeof(RelateEnvelope))]
