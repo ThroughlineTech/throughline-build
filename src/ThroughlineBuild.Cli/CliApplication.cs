@@ -565,6 +565,46 @@ public static class CliApplication
             }
         }
 
+        // Standalone worker-brief artifact generation. This deterministic path reads one ticket,
+        // optional rework comments, and git evidence, then writes only the requested brief file.
+        // It never constructs a worker agent and never mutates tickets or git state.
+        if (verbKind == CliVerbKind.Worker)
+        {
+            using var workerBriefCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; workerBriefCts.Cancel(); };
+            try
+            {
+                var briefAgent = config.Workers.Phases.TryGetValue("implement", out var configuredAgent)
+                    ? configuredAgent
+                    : config.Workers.DefaultAgent;
+                return await WorkerBriefCommand.ExecuteAsync(
+                    args,
+                    jsonOutput,
+                    cliContext.Ticketing,
+                    new ProcessGitClient(rawCwd),
+                    config.Project,
+                    config.Review.Checks,
+                    config.ResolveTargetBranch(),
+                    briefAgent,
+                    Console.Out,
+                    Console.Error,
+                    workerBriefCts.Token,
+                    config.Workers.Phases);
+            }
+            catch (PlaneApiException ex)
+            {
+                return PlaneCliError.Report("worker brief", ex, jsonOutput, cliContext);
+            }
+            catch (OperationCanceledException)
+            {
+                if (jsonOutput)
+                    CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, "cancelled");
+                else
+                    Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
+        }
+
         // Standalone dependency-safe wave planner for caller-owned conductor loops.
         // It reads only JSON input and config, and never constructs a worker or ticket client.
         if (verbKind == CliVerbKind.Waves)

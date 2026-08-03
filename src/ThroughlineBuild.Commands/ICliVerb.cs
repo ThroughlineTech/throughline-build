@@ -21,6 +21,7 @@ public enum CliVerbKind
     Sop,
     Sweep,
     Candidate,
+    Worker,
     Worktree,
     Gate,
     Waves,

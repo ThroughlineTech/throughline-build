@@ -342,6 +342,24 @@ public sealed record SopManifestPath(
     string? ContentHash,
     string? ResourceName);
 
+// ---- build worker brief ----------------------------------------------------------
+
+public sealed record WorkerBriefView(
+    string SourceTicketId,
+    string Role,
+    string OutputPath,
+    string WorktreePath,
+    string Branch,
+    string BaseRef,
+    string BaseSha,
+    string HeadSha,
+    string GateCommand,
+    IReadOnlyList<string> ChangedPaths,
+    IReadOnlyList<string> TrackedStatus,
+    IReadOnlyList<string> UntrackedPaths);
+
+public sealed record WorkerBriefEnvelope(int SchemaVersion, bool Ok, WorkerBriefView Data);
+
 // Source-generated context keeps the --json path statically analyzable under PublishAot=true
 // (reflection-based serialization trips IL2026/IL3050). UseStringEnumConverter renders
 // State/Size/Risk as their names rather than integers. Mirrors PhaseSummaryJsonContext.
@@ -384,4 +402,7 @@ public sealed record SopManifestPath(
 [JsonSerializable(typeof(SopPathResultView))]
 [JsonSerializable(typeof(SopOperationEnvelope))]
 [JsonSerializable(typeof(SopManifest))]
+
+[JsonSerializable(typeof(WorkerBriefView))]
+[JsonSerializable(typeof(WorkerBriefEnvelope))]
 internal partial class CliJsonContext : JsonSerializerContext { }
