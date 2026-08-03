@@ -40,6 +40,7 @@ public static class HelpRegistryFactory
         r.Register(Gate());
         r.Register(Waves());
         r.Register(Candidate());
+        r.Register(Sop());
 
         // Work items
         r.Register(New());
@@ -360,6 +361,97 @@ public static class HelpRegistryFactory
             modes, and file-content hashes. Missing base refs, non-git directories, conflicted worktrees, invalid
             lease manifests, unreadable paths, untracked directories, and untracked symlink/reparse-point paths fail
             with a JSON error envelope.
+            """
+        ]
+    );
+
+    private static CommandHelp Sop() => new(
+        Name: "sop",
+        Group: CommandGroup.Conductor,
+        Summary: "Install, inspect, and emit binary-hosted SOPs",
+        Usage:
+            "sop list [--json]\n" +
+            "sop doctor [--json]\n" +
+            "sop brief <name> [--json]\n" +
+            "sop brief <name> admission <absolute-inspection-root> <inspection-sha> [--json]\n" +
+            "sop install [--sop <name>] [--host claude|codex] [--json]\n" +
+            "sop upgrade [--sop <name>] [--host claude|codex] [--json]\n" +
+            "sop uninstall [--sop <name>] [--host claude|codex] [--json]\n" +
+            "sop status [--sop <name>] [--host claude|codex] [--json]",
+        Options:
+        [
+            new("--json", "Emit a versioned JSON envelope", false),
+            new("--sop <name>", "Limit install, upgrade, uninstall, or status to one embedded SOP", false),
+            new("--host claude|codex", "Limit install, upgrade, uninstall, or status to one host's stubs plus shared scaffolded paths", false),
+        ],
+        ExitCodes:
+        [
+            new(0, "SOP operation passed; status found no drift"),
+            new(1, "Doctor failed, brief refused, status found drift, or a mutating operation reported a safety finding"),
+            new(2, "Bad arguments"),
+            new(SopCommand.UnknownSopExitCode, "Unknown SOP name"),
+        ],
+        Examples:
+        [
+            new("sop list --json", "List available embedded SOPs and their binary versions"),
+            new("sop doctor --json", "Validate .build/conductor.toml and [[review.checks]] without loading ticketing, workers, or events"),
+            new("sop brief run-backlog --json", "Emit the run-backlog procedure plus resolved conductor data"),
+            new("sop brief run-backlog admission /repo 0123456789abcdef0123456789abcdef01234567 --json", "Emit an admission-only brief envelope for a pinned inspection tree"),
+            new("sop install --sop run-backlog --host claude --json", "Install only the run-backlog Claude command and conductor scaffold"),
+            new("sop status --json", "Report catalog drift, including missing installed paths"),
+        ],
+        Details:
+        [
+            """
+            `sop list` reports every SOP embedded in the binary. The SOP version is the running
+            binary version; replacing the binary is the SOP upgrade path.
+
+            `sop doctor` reads tracked .build/conductor.toml independently of .build/config.toml
+            and validates manifest-recorded or present emitted host stubs byte-for-byte against the embedded catalog.
+            It only looks at .build/config.toml for [[review.checks]], so missing ticketing
+            credentials, worker configuration, and event configuration do not block it.
+            Unknown keys in conductor.toml are reported as findings so misspelled contract
+            fields cannot be silently discarded.
+
+            Review invariants are structured prose. Doctor validates ids, statements, optional
+            paths, and optional blocks_done shape only. It does not evaluate whether a statement is true.
+
+            Review checks must contain at least one setup or gating check with a non-empty executable.
+            Advisory-only checks are visible, but they do not make the gate capable of blocking Done.
+
+            `sop brief <name>` always emits a JSON envelope; --json is accepted for consistency
+            with other machine-readable verbs. Standard briefs run doctor first. Admission briefs
+            validate the inspection root and SHA before doctor reads conductor data, then run doctor.
+            If doctor fails, including when conductor.min_build_version is newer than the running
+            binary, the brief exits nonzero and does not include SOP text. There is no override flag.
+            A successful brief envelope includes the SOP text, conductor data, SOP schema version,
+            SOP version, binary version, doctor result, owned catalog paths, and runMode.
+
+            Admission-only inspection is a brief run mode, not a per-verb mutation flag:
+            `sop brief <name> admission <absolute-inspection-root> <inspection-sha>`. The root
+            must be the absolute git worktree root for the invoking repository; subdirectories and
+            unrelated repositories are refused. The SHA must be a full 40-character commit that
+            resolves in that worktree before doctor reads conductor data. The admission runMode carries the resolved
+            inspection root, normalized inspection SHA, inherited BUILD_SOP_* environment values,
+            and an explicit verb policy. While BUILD_SOP_RUN_MODE=admission is active, mutating
+            verbs refuse with JSON error code sop_admission_refused.
+
+            `sop install`, `sop upgrade`, `sop uninstall`, and `sop status` are catalog-driven.
+            The embedded catalog is the authority; .build/sop-manifest.json is a cache of prior
+            writes, not permission to touch arbitrary paths. Emitted files are host stubs and are
+            compared byte-for-byte with the catalog. Scaffolded files, currently .build/conductor.toml,
+            are never overwritten after creation and are validated as structured conductor data.
+            By default install emits every known host stub; --host narrows emitted stubs to Claude
+            or Codex while still including shared scaffolded paths.
+
+            Install is idempotent and restores missing catalog paths from the binary. Upgrade rewrites
+            only emitted files that still match trusted previous catalog hashes embedded in the current
+            binary; local edits are reported and preserved. Uninstall removes only catalog-owned
+            emitted regular files that still match the current catalog. To restore a locally modified
+            emitted stub, delete it and rerun `build sop install`. Status reports missing catalog
+            paths as drift. Every target and the SOP manifest path are resolved below the repository
+            root and refused when a symlink or reparse point is encountered before any write or delete.
+            No sop verb starts a worker agent.
             """
         ]
     );

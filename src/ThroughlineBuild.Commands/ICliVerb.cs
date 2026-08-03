@@ -18,6 +18,7 @@ public enum CliVerbKind
     UserGuide,
     OpDoc,
     Models,
+    Sop,
     Sweep,
     Candidate,
     Worktree,

@@ -92,6 +92,14 @@ public static class CliApplication
         var cliVerbRegistry = CliVerbRegistryFactory.Build();
         cliVerbRegistry.TryGet(verb, out var registeredVerb);
         var verbKind = registeredVerb?.Kind;
+
+        if (SopAdmission.TryGetRefusal(args, registeredVerb, out var admissionRefusal))
+            return SopAdmission.WriteRefusal(
+                admissionRefusal,
+                jsonOutput,
+                Console.Out,
+                Console.Error);
+
         IReadOnlyList<string>? batchImplementTicketIds = null;
         bool batchImplementAllChildren = false;
         if (verbKind == CliVerbKind.Chain)
@@ -416,6 +424,16 @@ public static class CliApplication
                 }
                 return ModelsRefreshCommand.Execute(rawCwd, SystemConsole.Instance,
                     () => new CodexModelProbe().ProbeAsync().GetAwaiter().GetResult());
+            }
+
+            if (verbKind == CliVerbKind.Sop)
+            {
+                return SopCommand.Execute(
+                    args,
+                    jsonOutput,
+                    rawCwd,
+                    Console.Out,
+                    Console.Error);
             }
 
             throw new InvalidOperationException($"Pre-config verb '{registeredVerb.Name}' has no handler.");

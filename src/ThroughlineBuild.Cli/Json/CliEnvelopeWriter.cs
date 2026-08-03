@@ -146,6 +146,34 @@ public static class CliEnvelopeWriter
             envelope, CliJsonContext.Default.WavesEnvelope));
     }
 
+    public static void WriteSopDoctor(TextWriter output, SopDoctorView result)
+    {
+        var envelope = new SopDoctorEnvelope(SchemaVersion, Ok: true, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.SopDoctorEnvelope));
+    }
+
+    public static void WriteSopList(TextWriter output, IReadOnlyList<SopListItemView> result)
+    {
+        var envelope = new SopListEnvelope(SchemaVersion, Ok: true, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.SopListEnvelope));
+    }
+
+    public static void WriteSopBrief(TextWriter output, SopBriefView result)
+    {
+        var envelope = new SopBriefEnvelope(SchemaVersion, Ok: result.Ready, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.SopBriefEnvelope));
+    }
+
+    public static void WriteSopOperation(TextWriter output, SopOperationView result)
+    {
+        var envelope = new SopOperationEnvelope(SchemaVersion, Ok: result.Passed, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.SopOperationEnvelope));
+    }
+
     /// <summary>Project a domain <see cref="Ticket"/> onto its wire shape.</summary>
     public static TicketView ToView(
         Ticket ticket,

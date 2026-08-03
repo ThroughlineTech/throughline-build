@@ -11,14 +11,102 @@ conductor uses the ticket CRUD verbs (`list`, `get`, `comments`, `comment`,
 The `waves` verb plans which selected tickets can safely run concurrently.
 The `candidate status` command fingerprints the current candidate worktree so a
 conductor can prove the reviewed tree is the tree it is about to commit.
+The `sop` command family lists binary-hosted SOPs, validates tracked conductor
+data, and emits the brief envelope that host stubs consume.
 None of these verbs starts a worker agent.
 They load only the repository configuration sections they consume and do not
 require `[ticketing]`, `[workers]`, or `[events]`, resolve ticketing secrets, or
 construct a Plane client. Missing ticketing credentials therefore do not block
-`worktree`, `gate`, `waves`, or `candidate status`. Other commands still require
-the full ticketing, worker, and event configuration.
+`worktree`, `gate`, `waves`, `candidate status`, or `sop`. Other commands
+still require the full ticketing, worker, and event configuration.
 
 ## Configuration
+
+Binary-hosted SOPs use tracked repository data:
+
+```toml
+[conductor]
+min_build_version = "0.1.0"
+branch_prefix = "ticket"
+ticket_prefix = "TLB"
+source_roots = ["src", "tests", "docs"]
+architecture_map = "docs/throughline-build-architecture.md"
+rework_cap = 3
+
+[[conductor.review.invariants]]
+id = "aot-json"
+statement = "CLI JSON output uses source-generated JsonSerializerContext."
+paths = ["src/ThroughlineBuild.Cli/**"]
+blocks_done = true
+
+[conductor.review.escalation]
+model_size = "large"
+paths = ["src/ThroughlineBuild.Cli/**"]
+
+[constellation]
+platform = "dotnet-cli"
+contract_authority = "src/ThroughlineBuild.Contracts"
+```
+
+`.build/conductor.toml` is tracked and contains no secrets. It carries the
+minimum Build version, branch and ticket prefixes, source roots, architecture
+map, review invariants, review escalation rule, rework cap, and constellation.
+Run `build sop list [--json]` to report available embedded SOPs and their binary
+versions. Run `build sop install [--sop <name>] [--host claude|codex] [--json]`
+to emit host stubs, scaffold a missing `.build/conductor.toml`, and write
+`.build/sop-manifest.json`. By default install emits every known host stub;
+`--host` narrows emitted stubs to Claude or Codex while still including shared
+scaffolded paths. Run `build sop status [--json]` to report catalog drift,
+including missing installed paths. Run
+`build sop upgrade [--sop <name>] [--host claude|codex] [--json]` after
+replacing the binary; it rewrites only emitted files that still match trusted
+previous catalog hashes embedded in the current binary. Run
+`build sop uninstall [--sop <name>] [--host claude|codex] [--json]` to remove
+only emitted regular files that still match the current catalog.
+
+The embedded catalog is the authority. `.build/sop-manifest.json` is a cache of
+prior writes, not permission to touch arbitrary paths. Emitted files are stubs
+and are validated byte-for-byte against the catalog. Scaffolded files are owned
+as paths, not content: install never overwrites an existing scaffolded file, and
+status validates `.build/conductor.toml` as structured conductor data instead of
+comparing it with a template. A locally modified emitted stub is intentionally
+preserved by install, upgrade, and uninstall; delete the local stub and rerun
+`build sop install` to restore catalog content. Before any write or delete,
+every target path and the manifest path must resolve strictly below the
+repository root and must not cross a symlink or reparse point.
+
+Run `build sop doctor [--json]` to validate conductor.toml, review checks, and
+manifest-recorded or present emitted host stubs. Doctor validates those stubs
+byte-for-byte against the catalog and reports missing, modified, non-regular, or
+unsafe stub paths as drift. Review invariants are structured prose: doctor
+validates id uniqueness, non-empty statements, optional paths, and optional
+`blocks_done` shape only. It does not judge whether a statement is true. Unknown
+keys in conductor.toml are findings. Doctor also requires local
+`[[review.checks]]` to include at least one setup or gating check with a
+non-empty executable; advisory-only checks cannot make a gate block Done.
+
+Run `build sop brief <name>` to emit one JSON envelope containing SOP text,
+resolved conductor data, the SOP schema version, SOP version, binary version,
+doctor result, the SOP's owned catalog paths, and run mode. `--json` is accepted
+for consistency. Standard briefs run doctor first and fail closed: if
+conductor.toml is invalid, review checks are missing, or `min_build_version` is
+newer than the running binary, the command exits 1 and omits SOP text. Admission
+briefs validate inspection inputs before doctor reads conductor data, then run
+doctor. There is no override flag. Unknown SOP names exit 9 with the JSON error
+code `unknown_sop`.
+
+Admission-only inspection enters through the brief mode syntax:
+`build sop brief <name> admission <absolute-inspection-root> <inspection-sha>`.
+The root must be the absolute git worktree root for the invoking repository;
+subdirectories and unrelated repositories are refused. The SHA must be a full
+40-character commit SHA that resolves in that worktree; relative roots, short
+SHAs, and unresolvable SHAs are refused before conductor data is read. The
+emitted `runMode` carries the resolved inspection root, normalized inspection
+SHA, inherited `BUILD_SOP_*` environment values, and an explicit verb policy.
+With `BUILD_SOP_RUN_MODE=admission` active, mutating verbs refuse with JSON error
+code `sop_admission_refused`; read-only inspection verbs remain available.
+Admission forbids worktree lease and teardown, ticket comments and transitions,
+commits, branches, pushes, and parent or epic expansion.
 
 Add an optional section to `.build/config.toml`:
 

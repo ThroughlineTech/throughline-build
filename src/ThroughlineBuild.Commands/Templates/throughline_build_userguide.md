@@ -278,6 +278,72 @@ sections they use without requiring `[ticketing]`, `[workers]`, or `[events]`,
 resolving ticketing secrets, or constructing a Plane client. Other commands
 still require the full ticketing, worker, and event configuration.
 
+Repositories that use binary-hosted SOPs also track `.build/conductor.toml`.
+Run `build sop list [--json]` to report embedded SOPs and their binary versions.
+Run `build sop install [--sop <name>] [--host claude|codex] [--json]` to emit
+host stubs, scaffold a missing `.build/conductor.toml`, and write
+`.build/sop-manifest.json`. By default install emits every known host stub;
+`--host` narrows emitted stubs to Claude or Codex while still including shared
+scaffolded paths. Run `build sop status [--json]` to report catalog drift,
+including missing installed paths. Run
+`build sop upgrade [--sop <name>] [--host claude|codex] [--json]` after
+replacing the binary; it rewrites only emitted files that still match trusted
+previous catalog hashes embedded in the current binary. Run
+`build sop uninstall [--sop <name>] [--host claude|codex] [--json]` to remove
+only emitted regular files that still match the current catalog.
+
+The embedded catalog is the authority. `.build/sop-manifest.json` is a cache of
+prior writes, not permission to touch arbitrary paths. Emitted files are stubs
+and are validated byte-for-byte against the catalog. Scaffolded files are owned
+as paths, not content: install never overwrites an existing scaffolded file, and
+status validates `.build/conductor.toml` as structured conductor data instead of
+comparing it with a template. A locally modified emitted stub is intentionally
+preserved by install, upgrade, and uninstall; delete the local stub and rerun
+`build sop install` to restore catalog content. Before any write or delete,
+every target path and the manifest path must resolve strictly below the
+repository root and must not cross a symlink or reparse point.
+
+Run `build sop doctor [--json]` to validate that conductor data,
+manifest-recorded or present emitted host stubs, and the local review-check
+contract are present. Run
+`build sop brief <name>` to emit the
+embedded SOP text plus resolved conductor data, the SOP schema version, SOP
+version, binary version, doctor result, owned catalog paths, and run mode. The
+brief always emits a JSON envelope; `--json` is accepted for consistency.
+Standard briefs run doctor first; if doctor fails, including when
+`min_build_version` is newer than the running binary, the command exits 1 and
+omits SOP text. Admission briefs validate inspection inputs before doctor reads
+conductor data, then run doctor. Unknown SOP names exit 9.
+
+Admission-only inspection enters through the brief mode syntax:
+`build sop brief <name> admission <absolute-inspection-root> <inspection-sha>`.
+The root must be the absolute git worktree root for the invoking repository;
+subdirectories and unrelated repositories are refused. The SHA must be a full
+40-character commit SHA that resolves in that worktree; relative roots, short
+SHAs, and unresolvable SHAs are refused before conductor data is read. The
+emitted `runMode` carries the resolved inspection root, normalized inspection
+SHA, inherited `BUILD_SOP_*` environment values, and an explicit verb policy.
+With `BUILD_SOP_RUN_MODE=admission` active, mutating verbs refuse with JSON error
+code `sop_admission_refused`; read-only inspection verbs remain available.
+Admission forbids worktree lease and teardown, ticket comments and transitions,
+commits, branches, pushes, and parent or epic expansion.
+
+The sop commands read `.build/conductor.toml` without loading ticketing, worker,
+or event configuration; if `.build/config.toml` is absent, doctor reports the
+missing `[[review.checks]]` as a validation finding instead of a bootstrap
+error. Doctor also validates manifest-recorded or present emitted stubs
+byte-for-byte against the catalog and reports missing, modified, non-regular, or
+unsafe stub paths as drift. Review invariants in conductor.toml are structured prose: doctor checks
+ids, non-empty statements, optional paths, and optional `blocks_done` shape only.
+It does not judge whether the statements are true. Unknown conductor keys are
+findings, so misspelled fields cannot silently drop contract data. The local
+`[[review.checks]]` list must include at least one setup or gating check with a
+non-empty executable; advisory-only checks do not make the gate capable of
+blocking Done. No `sop` verb starts a worker agent. Exit 0 means the requested
+SOP operation passed and status found no drift, exit 1 means validation findings,
+brief refusal, admission mutation refusal, drift, or a safety finding, exit 2
+means bad arguments, and exit 9 means an unknown SOP name.
+
 Lease prints the absolute worktree path for use as an agent working directory,
 runs `[project].install_command`, and writes a safety manifest. Configure the
 root and the only untracked local files Build may copy with `[worktree] root`

@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using ThroughlineBuild.Cli;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Helpers;
 
@@ -26,6 +27,8 @@ public static class CliErrorCodes
     public const string NotGitRepository = "not_git_repository";
     public const string InvalidWorktreeState = "invalid_worktree_state";
     public const string UnhashablePath = "unhashable_path";
+    public const string UnknownSop = "unknown_sop";
+    public const string SopAdmissionRefused = "sop_admission_refused";
 }
 
 /// <summary>A machine-readable error: a stable <paramref name="Code"/> plus a human message.</summary>
@@ -252,6 +255,93 @@ public sealed record WavesInput(
 
 public sealed record WavesEnvelope(int SchemaVersion, bool Ok, WavePlan Data);
 
+// ---- build sop doctor -------------------------------------------------------------
+
+public sealed record SopDoctorEnvelope(int SchemaVersion, bool Ok, SopDoctorView Data);
+
+// ---- build sop list / brief / install / status ------------------------------------
+
+public sealed record SopListItemView(
+    string Name,
+    string Version,
+    IReadOnlyList<SopOwnedPath> OwnedPaths);
+
+public sealed record SopListEnvelope(int SchemaVersion, bool Ok, IReadOnlyList<SopListItemView> Data);
+
+public sealed record SopBriefView(
+    string Name,
+    int SopSchemaVersion,
+    string SopVersion,
+    string BinaryVersion,
+    bool Ready,
+    string? SopText,
+    ConductorConfig? Conductor,
+    SopDoctorView Doctor,
+    IReadOnlyList<SopOwnedPath> OwnedPaths,
+    SopRunModeView RunMode);
+
+public sealed record SopEnvironmentVariableView(string Name, string Value);
+
+public sealed record SopVerbPolicyView(
+    bool ReadOnlyVerbsAllowed,
+    bool WorktreeLeaseAllowed,
+    bool WorktreeTeardownAllowed,
+    bool TicketTransitionAllowed,
+    bool TicketCommentAllowed,
+    bool CommitAllowed,
+    bool BranchAllowed,
+    bool PushAllowed,
+    bool ParentOrEpicExpansionAllowed,
+    IReadOnlyList<string> AllowedBuildVerbs,
+    IReadOnlyList<string> RefusedBuildVerbs);
+
+public sealed record SopRunModeView(
+    string Mode,
+    string? InspectionSha,
+    string? InspectionRoot,
+    IReadOnlyList<SopEnvironmentVariableView> Environment,
+    SopVerbPolicyView VerbPolicy);
+
+public sealed record SopBriefEnvelope(int SchemaVersion, bool Ok, SopBriefView Data);
+
+public sealed record SopPathResultView(
+    IReadOnlyList<string> Sops,
+    string Path,
+    string Class,
+    string Status,
+    string Message);
+
+public sealed record SopOperationView(
+    string Operation,
+    string RepositoryRoot,
+    string ManifestPath,
+    int SopSchemaVersion,
+    string BinaryVersion,
+    IReadOnlyList<string> ScopeSops,
+    bool Changed,
+    bool Passed,
+    IReadOnlyList<SopPathResultView> Results);
+
+public sealed record SopOperationEnvelope(int SchemaVersion, bool Ok, SopOperationView Data);
+
+public sealed record SopManifest(
+    int SchemaVersion,
+    string InstalledByBuildVersion,
+    DateTimeOffset UpdatedAtUtc,
+    IReadOnlyList<SopManifestSop> Sops);
+
+public sealed record SopManifestSop(
+    string Name,
+    string InstalledByBuildVersion,
+    DateTimeOffset InstalledAtUtc,
+    IReadOnlyList<SopManifestPath> Paths);
+
+public sealed record SopManifestPath(
+    string Path,
+    string Class,
+    string? ContentHash,
+    string? ResourceName);
+
 // Source-generated context keeps the --json path statically analyzable under PublishAot=true
 // (reflection-based serialization trips IL2026/IL3050). UseStringEnumConverter renders
 // State/Size/Risk as their names rather than integers. Mirrors PhaseSummaryJsonContext.
@@ -282,4 +372,16 @@ public sealed record WavesEnvelope(int SchemaVersion, bool Ok, WavePlan Data);
 [JsonSerializable(typeof(WavesInput))]
 [JsonSerializable(typeof(WaveTicketInput[]))]
 [JsonSerializable(typeof(WavesEnvelope))]
+[JsonSerializable(typeof(ConductorConfig))]
+[JsonSerializable(typeof(SopDoctorEnvelope))]
+[JsonSerializable(typeof(SopOwnedPath))]
+[JsonSerializable(typeof(SopListItemView))]
+[JsonSerializable(typeof(SopListEnvelope))]
+[JsonSerializable(typeof(SopBriefEnvelope))]
+[JsonSerializable(typeof(SopRunModeView))]
+[JsonSerializable(typeof(SopVerbPolicyView))]
+[JsonSerializable(typeof(SopEnvironmentVariableView))]
+[JsonSerializable(typeof(SopPathResultView))]
+[JsonSerializable(typeof(SopOperationEnvelope))]
+[JsonSerializable(typeof(SopManifest))]
 internal partial class CliJsonContext : JsonSerializerContext { }

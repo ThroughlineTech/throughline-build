@@ -39,6 +39,13 @@ Usage:
   build worktree lease|teardown|list [...]     Manage conductor-owned isolated workspaces
   build gate [--ticket <id>] [--role gating|advisory|all] [--require-checks] [--json]  Run configured checks without a worker
   build waves --input <path|-> [--json]        Plan dependency-safe, conflict-aware waves without running tickets
+  build sop list [--json]                      List embedded SOPs and their binary versions
+  build sop doctor [--json]                    Validate .build/conductor.toml and [[review.checks]] without loading ticketing, workers, or events
+  build sop brief <name> [admission <absolute-inspection-root> <inspection-sha>] [--json]  Emit one SOP brief envelope with procedure text, conductor data, versions, doctor result, owned catalog paths, and run mode
+  build sop install [--sop <name>] [--host claude|codex] [--json]    Emit host stubs, scaffold missing conductor.toml, and write the SOP manifest cache
+  build sop upgrade [--sop <name>] [--host claude|codex] [--json]    Rewrite only emitted files that still match prior catalog content
+  build sop uninstall [--sop <name>] [--host claude|codex] [--json]  Remove only emitted files that still match the current catalog
+  build sop status [--sop <name>] [--host claude|codex] [--json]     Report catalog drift, including missing installed paths
   build amend <ticket-id> [--title "..."] [--priority urgent|high|medium|low|none] [--type <name>]
                           [--label-add <name>]... [--label-remove <name>]... [--parent <ticket-id>]
                           [--size S|M|L] [--note "..."] [--description <path|->] [--ac <path|->]
@@ -127,5 +134,11 @@ Exit codes:
   0  Wave schedule produced
   2  Invalid config, arguments, input JSON, or dependency scope
   5  Dependency cycle in the selected ticket set
+
+  For 'build sop' verb only:
+  0  SOP operation passed; status found no drift
+  1  Invalid conductor data, missing/unrunnable review checks, brief refused, admission mutation refused, drift, or safety finding
+  2  Bad arguments
+  9  Unknown SOP name
 """;
 }
