@@ -170,6 +170,8 @@ public sealed class WorkerBriefCommandTests
             Assert.Contains("Rework round", brief);
             Assert.Contains("Touched files from prior implement commit", brief);
             Assert.Contains("Do not reinterpret the ticket execution contract", brief);
+            Assert.Contains("Do NOT stage or commit changes", brief);
+            Assert.DoesNotContain("Commit all changes locally", brief);
             Assert.Contains("Parent intent: Preserve the declared contract.", brief);
             Assert.Equal(1, ticketing.GetCommentsCalls);
             Assert.Empty(ticketing.Mutations);

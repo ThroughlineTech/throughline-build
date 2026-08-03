@@ -549,6 +549,7 @@ scope creep blew the ticket up. They only work as a set.
 | lease collision / install failure | unchanged | lease preserved if any | ABORTED-PRECLAIM, recovery triage |
 | `checksConfigured: false` | unchanged | lease preserved | abort the WHOLE run |
 | baseline red | unchanged | lease preserved | ABORTED-PRECLAIM; broken base is its own ticket |
+| semantic contract missing / authority or parent-intent conflict | In Progress | lease preserved, no commit | ESCALATED before code edits |
 | worker committed (`HEAD != baseSha`) | In Progress | nothing touched | ESCALATED |
 | three failed rework rounds | In Progress | lease preserved, no commit | ESCALATED |
 | surface expansion conflicts with a peer | In Progress | lease preserved | BLOCKED-REPLAN into a later wave |

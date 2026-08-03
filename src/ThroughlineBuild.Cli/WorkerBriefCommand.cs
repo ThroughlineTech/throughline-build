@@ -271,23 +271,33 @@ public static class WorkerBriefCommand
         };
     }
 
-    private static string NormalizeConductorInstruction(string instruction) => instruction
-        .Replace(
+    private static string NormalizeConductorInstruction(string instruction)
+    {
+        instruction = ReplaceRequired(
+            instruction,
             "to the working tree, committing logical units to the feature branch.",
-            "to the working tree, leaving all changes for the conductor to commit after review.",
-            StringComparison.Ordinal)
-        .Replace(
+            "to the working tree, leaving all changes for the conductor to commit after review.");
+        instruction = ReplaceRequired(
+            instruction,
             "- Commit all changes locally on branch ",
-            "- Do NOT stage or commit changes. The conductor commits from the primary worktree after independent review; current branch ",
-            StringComparison.Ordinal)
-        .Replace(
+            "- Do NOT stage or commit changes. The conductor commits from the primary worktree after independent review; current branch ");
+        instruction = ReplaceRequired(
+            instruction,
             "\"commit_sha\":\"<HEAD SHA of feature branch after all commits>\"",
-            "\"commit_sha\":null",
-            StringComparison.Ordinal)
-        .Replace(
+            "\"commit_sha\":null");
+        return ReplaceRequired(
+            instruction,
             "- metadata.commit_sha must be the HEAD SHA of the feature branch after all commits land",
-            "- metadata.commit_sha must be null because the conductor, not this worker, creates the commit",
-            StringComparison.Ordinal);
+            "- metadata.commit_sha must be null because the conductor, not this worker, creates the commit");
+    }
+
+    private static string ReplaceRequired(string instruction, string source, string replacement)
+    {
+        if (!instruction.Contains(source, StringComparison.Ordinal))
+            throw new InvalidOperationException($"implement brief normalization source text was not found: {source}");
+
+        return instruction.Replace(source, replacement, StringComparison.Ordinal);
+    }
 
     private static WorkerResult NeutralImplementerResult(BriefEvidence evidence) => new(
         Status.Ok,

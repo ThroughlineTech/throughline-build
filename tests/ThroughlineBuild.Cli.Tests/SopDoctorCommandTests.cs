@@ -194,6 +194,7 @@ public sealed class SopDoctorCommandTests
             Assert.Contains("A child inherits its parent's intent", text);
             Assert.Contains("A clear contract violation is an implementation defect", text);
             Assert.Contains("If one semantic miss repeats after rework", text);
+            Assert.Contains("semantic contract missing / authority or parent-intent conflict", text);
             Assert.Contains("structured prose: doctor validates their shape only", text);
             Assert.DoesNotContain("](ticket-transaction.md)", text);
             Assert.DoesNotContain("](fan-out-scheduling.md)", text);
