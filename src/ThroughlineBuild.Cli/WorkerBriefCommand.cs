@@ -130,7 +130,7 @@ public static class WorkerBriefCommand
             return Failure(json, output, error, CliErrorCodes.Failure, ex.Message, 1);
         }
 
-        var gateCommand = $"build gate --ticket {ticket.Id} --role gating --json";
+        var gateCommand = $"build gate --ticket {ticket.Id} --role gating --require-checks --json";
         var artifact = RenderArtifact(
             ticket,
             parsed.Role!,

@@ -381,9 +381,11 @@ build evidence add --ticket TLB-583 --kind review \
 The supported kinds are `claim`, `review`, `commit`, `integrate`, `gate`, and
 `final`. Each kind requires the provenance fields for its checkpoint. The
 command formats Markdown, posts exactly one comment, and reads that comment
-back by the returned id before reporting success. If the post succeeds but
-read-back fails, the command reports the created id and does not retry; inspect
-`build comments <id>` before trying again.
+back by the returned id before reporting success. `readBackVerified: true`
+means only that the returned id is present in the read-back list; it does not
+compare stored comment content with the submitted body. If the post succeeds
+but read-back fails, the command reports the created id and does not retry;
+inspect `build comments <id>` before trying again.
 
 Evidence is an audit entry only. It never closes, defers, reopens, or transitions
 a ticket. Keep lifecycle operations as separate explicit commands; do not use

@@ -657,7 +657,7 @@ public static class HelpRegistryFactory
         ],
         Details:
         [
-            "The command posts exactly one comment, then reads that comment back by its returned id. If posting succeeds but read-back fails, the command reports the id and does not retry; inspect `build comments <ticket>` before trying again.",
+            "The command posts exactly one comment, then reads that comment back by its returned id. `readBackVerified: true` means only that the returned id is present in the read-back list; it does not compare stored comment content with the submitted body. If posting succeeds but read-back fails, the command reports the id and does not retry; inspect `build comments <ticket>` before trying again.",
             "Evidence is an audit entry only. It never closes, defers, reopens, or transitions a ticket. Use the explicit lifecycle commands separately; do not use evidence as a cascading close or transition shortcut."
         ]
     );
