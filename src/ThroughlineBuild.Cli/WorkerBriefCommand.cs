@@ -433,10 +433,7 @@ public static class WorkerBriefCommand
                 Comment = comment,
                 Text = HtmlToText.Render(comment.Body)
             })
-            .Where(item =>
-                item.Text.Contains("reviewed: rework", StringComparison.OrdinalIgnoreCase) ||
-                item.Text.Contains("reviewed: fail", StringComparison.OrdinalIgnoreCase) ||
-                item.Text.Contains("[gate:", StringComparison.OrdinalIgnoreCase))
+            .Where(item => IsBlockingFindingMarker(item.Text))
             .OrderBy(item => item.Comment.CreatedAt)
             .ToList();
 
@@ -448,6 +445,14 @@ public static class WorkerBriefCommand
             latest.Text.Trim(),
             ParseFailedChecks(latest.Text),
             findings.Count + 1);
+    }
+
+    private static bool IsBlockingFindingMarker(string text)
+    {
+        var trimmed = text.TrimStart();
+        return trimmed.StartsWith("reviewed: rework", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("reviewed: fail", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("[gate:", StringComparison.OrdinalIgnoreCase);
     }
 
     private static IReadOnlyList<string> ParseFailedChecks(string text)

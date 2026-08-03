@@ -185,7 +185,7 @@ public sealed class WorkerBriefCommandTests
                 Ticket = TicketWithBody(),
                 Comments =
                 [
-                    new("review", "<p><strong>reviewed:</strong> fail - Security validation is missing<br/>checks_failed: test</p>", DateTimeOffset.UtcNow)
+                    new("review", "<p><strong>reviewed:</strong> fail - Security validation is missing<br/>checks_failed: security-gate-42</p>", DateTimeOffset.UtcNow)
                 ]
             };
 
@@ -201,7 +201,46 @@ public sealed class WorkerBriefCommandTests
             Assert.Equal(0, exit);
             var brief = await File.ReadAllTextAsync(outputPath);
             Assert.Contains("Security validation is missing", brief);
-            Assert.Contains("test", brief);
+            Assert.Contains("Blocking checks:", brief);
+            Assert.Contains("security-gate-42", brief);
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public async Task Rework_IgnoresQuotedMarkersAndCompletionProse()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var worktree = Path.Combine(root, "worktree");
+            var outputPath = Path.Combine(root, "rework.md");
+            Directory.CreateDirectory(worktree);
+            var ticketing = new FakeTicketing
+            {
+                Ticket = TicketWithBody(),
+                Comments =
+                [
+                    new("audit", "<p>The audit discusses reviewed: rework, reviewed: fail, and [gate: markers.</p>", DateTimeOffset.UtcNow.AddMinutes(-2)),
+                    new("implement", "<p>Rework complete - reviewer feedback mentions reviewed: rework and [gate: but reports no blocking finding.</p>", DateTimeOffset.UtcNow.AddMinutes(-1))
+                ]
+            };
+
+            var exit = await RunAsync(
+                ticketing,
+                new BriefGitClient { Diff = DiffWithPatch() },
+                worktree,
+                outputPath,
+                role: "rework",
+                json: false,
+                checks: []);
+
+            Assert.Equal(1, exit);
+            Assert.False(File.Exists(outputPath));
+            Assert.Equal(1, ticketing.GetCommentsCalls);
         }
         finally
         {
