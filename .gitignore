@@ -1,5 +1,4 @@
 .build/*
-!.build/conductor.toml
 .worktrees/
 secrets/
 bin/

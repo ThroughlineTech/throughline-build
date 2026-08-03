@@ -16,6 +16,7 @@ Contents:
 - `run-backlog-fanout-kit-7-31.zip`
 - `run-backlog-fanout-kit-8-1-old.zip`
 - `run-backlog-skill.zip`
+- `.codex/prompts/run-backlog.md`
 - installed Codex skill snapshot: `run-backlog/`
 
 The JavaScript validator and its tests are not included because they are absent
