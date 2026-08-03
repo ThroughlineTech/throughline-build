@@ -11,14 +11,17 @@ conductor uses the ticket CRUD verbs (`list`, `get`, `comments`, `comment`,
 The `waves` verb plans which selected tickets can safely run concurrently.
 The `candidate status` command fingerprints the current candidate worktree so a
 conductor can prove the reviewed tree is the tree it is about to commit.
-The `worker brief` command materializes a role-specific Markdown artifact from
-ticket and worktree evidence for an agent to inspect.
 None of these verbs starts a worker agent.
 They load only the repository configuration sections they consume and do not
 require `[ticketing]`, `[workers]`, or `[events]`, resolve ticketing secrets, or
 construct a Plane client. Missing ticketing credentials therefore do not block
 `worktree`, `gate`, `waves`, or `candidate status`. Other commands still require
 the full ticketing, worker, and event configuration.
+
+The `worker brief` command materializes a role-specific Markdown artifact from
+ticket and worktree evidence for an agent to inspect. It is the exception in
+this conductor group: it reads the source ticket, so it requires the full
+configuration and ticketing credentials.
 
 ## Configuration
 

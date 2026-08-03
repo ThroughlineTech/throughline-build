@@ -45,6 +45,7 @@ public sealed class WorkerBriefCommandTests
             Assert.Contains("Implement the feature", brief);
             Assert.Contains("Acceptance criteria", brief);
             Assert.Contains("Role boundaries", brief);
+            Assert.Contains("Do not mutate the ticket, main branch, unrelated branches, other worktrees, or deployments.", brief);
             Assert.Contains("build gate --ticket TLB-602 --role gating --json", brief);
             Assert.Contains(worktree, brief, StringComparison.Ordinal);
             Assert.Contains("# Implement Phase Brief", brief);
@@ -67,7 +68,14 @@ public sealed class WorkerBriefCommandTests
             var worktree = Path.Combine(root, "worktree");
             var outputPath = Path.Combine(root, "review.md");
             Directory.CreateDirectory(worktree);
-            var ticketing = new FakeTicketing { Ticket = TicketWithBody() };
+            var ticketing = new FakeTicketing
+            {
+                Ticket = TicketWithBody(),
+                Comments =
+                [
+                    new("implement", "<p>Implemented the feature and it is correct.</p>", DateTimeOffset.UtcNow)
+                ]
+            };
             var git = new BriefGitClient
             {
                 Branch = "ticket/TLB-602-worker-brief",
@@ -104,6 +112,9 @@ public sealed class WorkerBriefCommandTests
             Assert.Contains("review-notes.txt", brief);
             Assert.Contains("No implementer conclusion is supplied", brief);
             Assert.Contains("No implementer conclusion is a verdict", brief);
+            Assert.Contains("This artifact did not run automated checks", brief);
+            Assert.Contains("Checks were not run by build worker brief; run the exact gate command in the artifact.", brief);
+            Assert.DoesNotContain("automated check results above already capture build/test status", brief);
             Assert.DoesNotContain("Implemented the feature and it is correct", brief);
             Assert.Empty(ticketing.Mutations);
         }
@@ -153,6 +164,83 @@ public sealed class WorkerBriefCommandTests
             Assert.Contains("Touched files from prior implement commit", brief);
             Assert.Equal(1, ticketing.GetCommentsCalls);
             Assert.Empty(ticketing.Mutations);
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public async Task Rework_UsesReviewedFailAsBlockingFinding()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var worktree = Path.Combine(root, "worktree");
+            var outputPath = Path.Combine(root, "rework.md");
+            Directory.CreateDirectory(worktree);
+            var ticketing = new FakeTicketing
+            {
+                Ticket = TicketWithBody(),
+                Comments =
+                [
+                    new("review", "<p><strong>reviewed:</strong> fail - Security validation is missing<br/>checks_failed: test</p>", DateTimeOffset.UtcNow)
+                ]
+            };
+
+            var exit = await RunAsync(
+                ticketing,
+                new BriefGitClient { Diff = DiffWithPatch() },
+                worktree,
+                outputPath,
+                role: "rework",
+                json: false,
+                checks: []);
+
+            Assert.Equal(0, exit);
+            var brief = await File.ReadAllTextAsync(outputPath);
+            Assert.Contains("Security validation is missing", brief);
+            Assert.Contains("test", brief);
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public async Task Rework_UsesNewerReviewedFailOverOlderReworkFinding()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var worktree = Path.Combine(root, "worktree");
+            var outputPath = Path.Combine(root, "rework.md");
+            Directory.CreateDirectory(worktree);
+            var ticketing = new FakeTicketing
+            {
+                Ticket = TicketWithBody(),
+                Comments =
+                [
+                    new("review", "<p><strong>reviewed:</strong> rework - Older finding</p>", DateTimeOffset.UtcNow.AddMinutes(-2)),
+                    new("review", "<p><strong>reviewed:</strong> fail - Newer blocking finding</p>", DateTimeOffset.UtcNow.AddMinutes(-1))
+                ]
+            };
+
+            var exit = await RunAsync(
+                ticketing,
+                new BriefGitClient { Diff = DiffWithPatch() },
+                worktree,
+                outputPath,
+                role: "rework",
+                json: false,
+                checks: []);
+
+            Assert.Equal(0, exit);
+            var brief = await File.ReadAllTextAsync(outputPath);
+            Assert.Contains("Newer blocking finding", brief);
+            Assert.DoesNotContain("Older finding", brief);
         }
         finally
         {

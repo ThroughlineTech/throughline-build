@@ -281,6 +281,9 @@ public static class WorkerBriefCommand
     private static string NormalizeReviewInstruction(string instruction) => instruction.Replace(
         "(no automated checks configured)",
         "Checks were not run by build worker brief; run the exact gate command in the artifact.",
+        StringComparison.Ordinal).Replace(
+        "- You do not need a clean build to reach a verdict; the automated check results above already capture build/test status.",
+        "- This artifact did not run automated checks. Run the exact gate command in the artifact before reaching a verdict; do not infer build/test status from this brief.",
         StringComparison.Ordinal);
 
     private static string RenderArtifact(
@@ -432,6 +435,7 @@ public static class WorkerBriefCommand
             })
             .Where(item =>
                 item.Text.Contains("reviewed: rework", StringComparison.OrdinalIgnoreCase) ||
+                item.Text.Contains("reviewed: fail", StringComparison.OrdinalIgnoreCase) ||
                 item.Text.Contains("[gate:", StringComparison.OrdinalIgnoreCase))
             .OrderBy(item => item.Comment.CreatedAt)
             .ToList();
