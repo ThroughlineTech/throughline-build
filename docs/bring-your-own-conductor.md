@@ -44,6 +44,11 @@ statement = "CLI JSON output uses source-generated JsonSerializerContext."
 paths = ["src/ThroughlineBuild.Cli/**"]
 blocks_done = true
 
+[[conductor.review.invariants]]
+id = "semantic-ticket-contract"
+statement = "Semantic-risk tickets record a binding execution contract before code edits."
+blocks_done = true
+
 [conductor.review.escalation]
 model_size = "large"
 paths = ["src/ThroughlineBuild.Cli/**"]
@@ -320,6 +325,15 @@ summary as a verdict. Rework briefs read the prior blocking review or gate
 finding and keep the same worktree and branch semantics. The artifact includes
 the exact `build gate --ticket <id> --role gating --json` command and the
 configured check commands, but does not run them.
+
+Before dispatching a worker for a semantic-risk ticket, the conductor records a
+`Ticket execution contract` in the ticket body. It names parent intent,
+authority, forbidden shortcuts, required shared surfaces, focused negative tests,
+out-of-scope behavior, and the rework fence. The artifact carries that ticket
+body into every role and treats the recorded contract as binding. A missing or
+conflicting contract stops implementation before code edits; a reviewer reports
+that as a plan or contract defect for the conductor rather than inventing a
+replacement contract.
 
 `--json` emits the standard versioned envelope with the source ticket ID,
 absolute output path, role, workspace, branch, base and HEAD SHAs, changed

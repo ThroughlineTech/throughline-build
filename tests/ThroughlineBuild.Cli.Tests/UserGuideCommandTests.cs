@@ -53,6 +53,16 @@ public class UserGuideCommandTests
         Assert.NotEmpty(guide);
     }
 
+    [Fact]
+    public void UserGuideLoader_Load_DocumentsBindingSemanticContracts()
+    {
+        var guide = UserGuideLoader.Load();
+
+        Assert.Contains("For a semantic-risk ticket, record a `Ticket execution contract`", guide);
+        Assert.Contains("Every worker brief carries that", guide);
+        Assert.Contains("treats the recorded contract as binding.", guide);
+    }
+
     // ------------------------------------------------------------------
     // Execute: file creation
     // ------------------------------------------------------------------

@@ -189,6 +189,12 @@ public sealed class SopDoctorCommandTests
             Assert.Contains("# The ticket transaction (universal)", text);
             Assert.Contains("`build waves` accepts `verifiedExternalDeps` as an ASSERTION", text);
             Assert.Contains("Re-check this at the start of each wave", text);
+            Assert.Contains("### 2.1 Semantic checkpoint classification", text);
+            Assert.Contains("The execution contract records all of the following in the ticket body before code edits", text);
+            Assert.Contains("A child inherits its parent's intent", text);
+            Assert.Contains("A clear contract violation is an implementation defect", text);
+            Assert.Contains("If one semantic miss repeats after rework", text);
+            Assert.Contains("structured prose: doctor validates their shape only", text);
             Assert.DoesNotContain("](ticket-transaction.md)", text);
             Assert.DoesNotContain("](fan-out-scheduling.md)", text);
             Assert.Equal(2, CountOccurrences(text!, "](#sop-resource-ticket-transaction-md)"));

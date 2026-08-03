@@ -251,7 +251,7 @@ public static class HelpRegistryFactory
         Usage: "worker brief --ticket <id> --role implement|review|rework --worktree <path> --output <path> [--json]",
         Options:
         [
-            new("--ticket <id>", "Source ticket whose body and acceptance criteria are included", false),
+            new("--ticket <id>", "Source ticket whose body, acceptance criteria, and recorded semantic contract are included", false),
             new("--role <role>", "Worker role: implement, review, or rework", false),
             new("--worktree <path>", "Existing workspace whose branch, diff, and status are read", false),
             new("--output <path>", "Markdown artifact path; its parent directory must already exist", false),
@@ -271,7 +271,7 @@ public static class HelpRegistryFactory
         ],
         Details:
         [
-            "The command reads the ticket and supplied worktree, then writes one Markdown artifact. It does not spawn a worker or mutate tickets, git history, branches, worktrees, or deployments. Review artifacts include the current diff and status as evidence; rework artifacts preserve the supplied worktree and include prior blocking findings."
+            "The command reads the ticket and supplied worktree, then writes one Markdown artifact. It does not spawn a worker or mutate tickets, git history, branches, worktrees, or deployments. A recorded Ticket execution contract is carried in the ticket body and is binding in every role artifact. Review artifacts include the current diff and status as evidence; rework artifacts preserve the supplied worktree and include prior blocking findings."
         ]
     );
 

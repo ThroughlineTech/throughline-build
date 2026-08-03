@@ -225,6 +225,15 @@ public class HelpRegistryFactoryTests
     }
 
     [Fact]
+    public void Worker_HelpDocumentsBindingSemanticContracts()
+    {
+        var output = Tier1Renderer.Render(Registry.TryGet("worker")!);
+
+        Assert.Contains("recorded semantic contract", output);
+        Assert.Contains("Ticket execution contract is carried in the ticket body and is binding", output);
+    }
+
+    [Fact]
     public void Chain_HasPerPhaseAgentOptions()
     {
         var help = Registry.TryGet("chain")!;
