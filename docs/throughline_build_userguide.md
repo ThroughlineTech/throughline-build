@@ -397,6 +397,15 @@ command does not spawn a worker or mutate tickets, git history, branches,
 worktrees, deployments, or other files. Add `--json` for source ticket and
 output metadata.
 
+For a semantic-risk ticket, record a `Ticket execution contract` in the ticket
+body before dispatching a worker. It identifies parent intent, authority,
+forbidden shortcuts, required shared surfaces, focused negative tests,
+out-of-scope behavior, and the rework fence. Every worker brief carries that
+ticket body and treats the recorded contract as binding. Missing or conflicting
+contract information stops implementation before code edits; reviewers return it
+as a plan or contract defect for the conductor rather than inventing a
+replacement contract.
+
 Run `build candidate status --ticket <id> --base <ref> --json` from the
 candidate worktree after implementation and review checkpoints. The JSON
 envelope reports the resolved base SHA, HEAD SHA, tracked diff hash,

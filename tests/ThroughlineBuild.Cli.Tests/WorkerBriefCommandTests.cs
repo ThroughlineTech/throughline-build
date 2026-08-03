@@ -23,7 +23,7 @@ public sealed class WorkerBriefCommandTests
             var worktree = Path.Combine(root, "worktree");
             var outputPath = Path.Combine(root, "implement.md");
             Directory.CreateDirectory(worktree);
-            var ticketing = new FakeTicketing { Ticket = TicketWithBody() };
+            var ticketing = new FakeTicketing { Ticket = TicketWithExecutionContract() };
             var git = new BriefGitClient
             {
                 Branch = "ticket/TLB-602-worker-brief",
@@ -45,6 +45,11 @@ public sealed class WorkerBriefCommandTests
             Assert.Contains("Implement the feature", brief);
             Assert.Contains("Acceptance criteria", brief);
             Assert.Contains("Role boundaries", brief);
+            Assert.Contains("Semantic execution contract", brief);
+            Assert.Contains("Parent intent: Preserve the declared contract.", brief);
+            Assert.Contains("Treat a recorded contract as binding", brief);
+            Assert.Contains("Do NOT stage or commit changes", brief);
+            Assert.DoesNotContain("Commit all changes locally", brief);
             Assert.Contains("Do not mutate the ticket, main branch, unrelated branches, other worktrees, or deployments.", brief);
             Assert.Contains("build gate --ticket TLB-602 --role gating --json", brief);
             Assert.Contains(worktree, brief, StringComparison.Ordinal);
@@ -70,7 +75,7 @@ public sealed class WorkerBriefCommandTests
             Directory.CreateDirectory(worktree);
             var ticketing = new FakeTicketing
             {
-                Ticket = TicketWithBody(),
+                Ticket = TicketWithExecutionContract(),
                 Comments =
                 [
                     new("implement", "<p>Implemented the feature and it is correct.</p>", DateTimeOffset.UtcNow)
@@ -114,6 +119,8 @@ public sealed class WorkerBriefCommandTests
             Assert.Contains("No implementer conclusion is a verdict", brief);
             Assert.Contains("This artifact did not run automated checks", brief);
             Assert.Contains("Checks were not run by build worker brief; run the exact gate command in the artifact.", brief);
+            Assert.Contains("Verify declared authority, forbidden shortcuts, required negative tests, and declared shared surfaces", brief);
+            Assert.Contains("Parent intent: Preserve the declared contract.", brief);
             Assert.DoesNotContain("automated check results above already capture build/test status", brief);
             Assert.DoesNotContain("Implemented the feature and it is correct", brief);
             Assert.Empty(ticketing.Mutations);
@@ -135,7 +142,7 @@ public sealed class WorkerBriefCommandTests
             Directory.CreateDirectory(worktree);
             var ticketing = new FakeTicketing
             {
-                Ticket = TicketWithBody(),
+                Ticket = TicketWithExecutionContract(),
                 Comments =
                 [
                     new("implement", "<p>[implemented_at: abc]</p><p>Implemented the feature.</p>", DateTimeOffset.UtcNow.AddMinutes(-2)),
@@ -162,6 +169,10 @@ public sealed class WorkerBriefCommandTests
             Assert.Contains("same supplied worktree", brief);
             Assert.Contains("Rework round", brief);
             Assert.Contains("Touched files from prior implement commit", brief);
+            Assert.Contains("Do not reinterpret the ticket execution contract", brief);
+            Assert.Contains("Do NOT stage or commit changes", brief);
+            Assert.DoesNotContain("Commit all changes locally", brief);
+            Assert.Contains("Parent intent: Preserve the declared contract.", brief);
             Assert.Equal(1, ticketing.GetCommentsCalls);
             Assert.Empty(ticketing.Mutations);
         }
@@ -451,6 +462,19 @@ public sealed class WorkerBriefCommandTests
         Size.M,
         Risk.Medium,
         "<h2>Goal</h2><p>Implement the feature.</p><h3>Acceptance criteria</h3><ul><li>Writes a Markdown brief.</li><li>Uses source generated JSON.</li></ul>",
+        [],
+        [],
+        null);
+
+    private static Ticket TicketWithExecutionContract() => new(
+        "TLB-602",
+        "uuid-602",
+        "Add worker brief artifact",
+        "Task",
+        TicketState.Backlog,
+        Size.M,
+        Risk.Medium,
+        "<h2>Goal</h2><p>Implement the feature.</p><h2>Ticket execution contract</h2><p>Parent intent: Preserve the declared contract.</p><p>Authoritative source: ticket body.</p><p>Forbidden shortcuts: Do not infer missing authority.</p><p>Required negative tests: Cover the forbidden shortcut.</p><h2>Acceptance criteria</h2><ul><li>Writes a Markdown brief.</li></ul>",
         [],
         [],
         null);

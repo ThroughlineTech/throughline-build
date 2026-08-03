@@ -241,13 +241,13 @@ public static class WorkerBriefCommand
         var repo = new RepoState(evidence.BaseSha, evidence.TopLevelEntries);
         return role switch
         {
-            "implement" => ImplementBriefBuilder.Build(
+            "implement" => NormalizeConductorInstruction(ImplementBriefBuilder.Build(
                 agentName,
                 ticket,
                 repo,
                 evidence.Branch,
                 evidence.WorktreePath,
-                project).Instruction,
+                project).Instruction),
             "review" => NormalizeReviewInstruction(
                 ReviewBriefBuilder.Build(
                     agentName,
@@ -256,7 +256,7 @@ public static class WorkerBriefCommand
                     NeutralImplementerResult(evidence),
                     Array.Empty<CheckResult>(),
                     project).Instruction),
-            "rework" => ImplementBriefBuilder.Build(
+            "rework" => NormalizeConductorInstruction(ImplementBriefBuilder.Build(
                 agentName,
                 ticket,
                 repo,
@@ -266,9 +266,37 @@ public static class WorkerBriefCommand
                 reviewFeedback: reworkFeedback,
                 reworkContext: new ReworkBriefContext(
                     LatestImplementSummary(comments),
-                    evidence.Diff.Entries.Select(e => e.Path).ToList())).Instruction,
+                    evidence.Diff.Entries.Select(e => e.Path).ToList())).Instruction),
             _ => throw new InvalidOperationException($"unsupported worker brief role: {role}")
         };
+    }
+
+    private static string NormalizeConductorInstruction(string instruction)
+    {
+        instruction = ReplaceRequired(
+            instruction,
+            "to the working tree, committing logical units to the feature branch.",
+            "to the working tree, leaving all changes for the conductor to commit after review.");
+        instruction = ReplaceRequired(
+            instruction,
+            "- Commit all changes locally on branch ",
+            "- Do NOT stage or commit changes. The conductor commits from the primary worktree after independent review; current branch ");
+        instruction = ReplaceRequired(
+            instruction,
+            "\"commit_sha\":\"<HEAD SHA of feature branch after all commits>\"",
+            "\"commit_sha\":null");
+        return ReplaceRequired(
+            instruction,
+            "- metadata.commit_sha must be the HEAD SHA of the feature branch after all commits land",
+            "- metadata.commit_sha must be null because the conductor, not this worker, creates the commit");
+    }
+
+    private static string ReplaceRequired(string instruction, string source, string replacement)
+    {
+        if (!instruction.Contains(source, StringComparison.Ordinal))
+            throw new InvalidOperationException($"implement brief normalization source text was not found: {source}");
+
+        return instruction.Replace(source, replacement, StringComparison.Ordinal);
     }
 
     private static WorkerResult NeutralImplementerResult(BriefEvidence evidence) => new(
@@ -318,13 +346,15 @@ public static class WorkerBriefCommand
         sb.AppendLine(string.IsNullOrWhiteSpace(description) ? "(empty)" : description.TrimEnd());
         sb.AppendLine();
 
+        AppendSemanticContractGuidance(sb, role);
+
         sb.AppendLine("## Role boundaries");
         sb.AppendLine();
         switch (role)
         {
             case "implement":
                 sb.AppendLine($"- Implement the ticket in `{worktreePath}` on branch `{evidence.Branch}`.");
-                sb.AppendLine("- You may edit files and commit the implementation on the current feature branch.");
+                sb.AppendLine("- You may edit files, but do not stage or commit. The conductor creates the candidate commit after independent review.");
                 sb.AppendLine("- Do not mutate the ticket, main branch, unrelated branches, other worktrees, or deployments.");
                 break;
             case "review":
@@ -334,7 +364,7 @@ public static class WorkerBriefCommand
                 break;
             case "rework":
                 sb.AppendLine($"- Rework in the same supplied worktree `{worktreePath}` and keep branch `{evidence.Branch}`.");
-                sb.AppendLine("- Fix the blocking findings, commit the fix on the current branch, and rerun the exact gate command.");
+                sb.AppendLine("- Fix only the blocking findings, do not stage or commit, and rerun the exact gate command.");
                 sb.AppendLine("- Do not create or switch branches or worktrees, and do not mutate the ticket or deployment.");
                 break;
         }
@@ -386,6 +416,29 @@ public static class WorkerBriefCommand
         sb.AppendLine(instruction.TrimEnd());
         sb.AppendLine();
         return sb.ToString();
+    }
+
+    private static void AppendSemanticContractGuidance(StringBuilder sb, string role)
+    {
+        sb.AppendLine("## Semantic execution contract");
+        sb.AppendLine();
+        sb.AppendLine("The ticket body above carries a recorded `Ticket execution contract` when the conductor classifies the ticket as semantic-risk. Treat a recorded contract as binding; do not silently reinterpret it.");
+        switch (role)
+        {
+            case "implement":
+                sb.AppendLine("- If the ticket is marked semantic-risk and its execution contract is missing, ambiguous, or conflicts with inspected authority, stop before code edits and report the conflict to the conductor.");
+                sb.AppendLine("- Before broadening a shared surface, public contract, or user-facing behavior, add the focused negative tests the contract requires when applicable.");
+                break;
+            case "review":
+                sb.AppendLine("- Verify declared authority, forbidden shortcuts, required negative tests, and declared shared surfaces against the diff.");
+                sb.AppendLine("- Report a clear-contract violation as an implementation defect. Report a missing, ambiguous, or conflicting contract as a plan or contract defect for the conductor, not as speculative implementation rework.");
+                break;
+            case "rework":
+                sb.AppendLine("- Address only the numbered reviewer findings. Do not reinterpret the ticket execution contract; a changed contract requires a conductor amendment before more implementation.");
+                sb.AppendLine("- If a semantic finding repeats after rework, stop for direct conductor inspection or escalation instead of starting another generic rework round.");
+                break;
+        }
+        sb.AppendLine();
     }
 
     private static void AppendEvidence(StringBuilder sb, BriefEvidence evidence)

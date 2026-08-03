@@ -27,10 +27,10 @@ pipeline, a fresh worker CLI per phase, a cold context load every time. Do not a
 ```
   [run preflight] -> [recovery triage] -> plan
                                            |
-        per ticket:  lease -> baseline -> claim -> implement -> scope-check
-                                                       ^            |
-                                                       |            v
-                                        (rework, max 3) +---- independent-review
+        per ticket:  lease -> baseline -> claim -> semantic-checkpoint -> implement -> scope-check
+                                                                            ^            |
+                                                                            |            v
+                                                             (rework, max 3) +---- independent-review
                                                                     |
                                             commit -> integrate -> merged-gate
                                                                     |
@@ -121,8 +121,8 @@ Define the transaction key immediately after a successful lease, before the firs
 `tx=<TICKET-ID>|<leaseBranch>|<baseSha>|<runBranch>`
 
 Every conductor comment starts with a stable, greppable prefix and carries that exact key:
-`run-backlog <STAGE> <TICKET-ID> [<tx>]: <one line>`, where `<STAGE>` is one of `claim`, `scope`,
-`review`, `commit`, `integrate`, `gate`, `final`, `blocked`, `escalated`. Commit and later stages
+`run-backlog <STAGE> <TICKET-ID> [<tx>]: <one line>`, where `<STAGE>` is one of `claim`, `semantic`,
+`scope`, `review`, `commit`, `integrate`, `gate`, `final`, `blocked`, `escalated`. Commit and later stages
 carry `candidateSha` or `ticketSha` as appropriate; integrate, gate, and final also carry the exact
 `runHeadSha` they observed.
 
@@ -137,6 +137,40 @@ Conductor. Wave planning, dependency verification, and surface prediction are in
 [fan-out-scheduling.md](fan-out-scheduling.md). In a serial run "plan" still happens: the declared
 surface is not optional, it is the scope fence. Unverifiable dependency, cycle, or unpredictable
 surface -> the ticket is not started (ABORTED-PRECLAIM).
+
+### 2.1 Semantic checkpoint classification
+
+Before implementation, classify every ticket as semantic-risk or not semantic-risk. Treat a ticket as
+semantic-risk when it touches or could change derived state, publication, freshness or status, scoring,
+authorization, persistence, cache behavior, contracts, shared public or administrative behavior,
+lifecycle transitions, or an area with known prior drift. Uncertainty is semantic-risk; do not use a
+narrow label to avoid the checkpoint.
+
+For a semantic-risk ticket, derive a ticket execution contract from the ticket body, parent body and
+comments, repository instructions, and inspected code. A child inherits its parent's intent; it may
+refine the assigned surface but must not silently reinterpret that intent. If the parent and child,
+comments, instructions, or inspected authority conflict, stop before implementation and escalate the
+conflict to the conductor or human who can amend the contract.
+
+The execution contract records all of the following in the ticket body before code edits:
+
+- Parent intent and the ticket's semantic-risk classification.
+- Authoritative source of truth.
+- Forbidden shortcuts.
+- Required shared helper, query, or surface.
+- Required focused negative tests.
+- Explicit out-of-scope behavior.
+- Rework fence.
+
+For a durable, checkable repository rule in that contract, add a
+`[[conductor.review.invariants]]` entry with `id`, `statement`, relevant `paths`, and
+`blocks_done = true` where the conductor must treat the rule as a finalization obligation. These are
+structured prose: doctor validates their shape only and does not evaluate whether a statement is true.
+The conductor, not doctor, judges whether the contract was satisfied.
+
+If the contract cannot be written from a declared authority, do not create one by inference. Stop before
+code edits and escalate. A non-semantic classification does not waive the declared surface, independent
+review, gate, fingerprint, or finalization rules.
 
 ---
 
@@ -198,11 +232,26 @@ build comment <ID> "run-backlog claim <ID> [<tx>]: baseline gate green"
 build transition <ID> InProgress
 ```
 
-- **Success ->** `implement`.
+- **Success ->** `semantic-checkpoint`.
 - **Comment fails ->** no ticket mutation occurred; ABORTED-PRECLAIM with the lease preserved.
 - **Transition fails ->** retry once, then ESCALATED. Recovery finds the existing lease and
   matching claim ledger as "claim recorded but transition pending"; it does not create a new
   lease.
+
+## 5.1 semantic-checkpoint
+
+- **Entry:** ticket In Progress; claim ledger line present. **Owner:** conductor, before dispatching
+  an implementer. **Mutations:** the conductor may amend the ticket body to record the semantic
+  classification and, for a semantic-risk ticket, its execution contract.
+
+Use conductor-owned `build amend` operations to preserve the source ticket while recording the contract.
+Read the ticket and its comments back after the amendment. The worker brief must contain the resulting
+ticket body, so the implementer, reviewer, and any rework handoff receive the same contract.
+
+- A non-semantic ticket with its classification recorded -> `implement`.
+- A semantic-risk ticket with every contract field recorded and no authority conflict -> `implement`.
+- Missing field, unresolved authority conflict, or a child-parent intent conflict -> ESCALATED before
+  code edits. Do not substitute a local interpretation or send a partial implementation to review.
 
 ## 6. implement
 
@@ -212,6 +261,12 @@ build transition <ID> InProgress
 
 Give it the ticket body, the declared surface, the absolute lease path, and the exact gate command:
 `build gate --ticket <ID> --require-checks --json`. Never restate the underlying toolchain commands.
+
+For a semantic-risk ticket, the ticket execution contract is binding. An implementer stops before code
+edits when it is missing, ambiguous, or conflicts with inspected authority. Before expanding a shared
+surface, public contract, or user-facing behavior, add and run the focused negative tests the contract
+requires when applicable. A need for a new source of truth, shortcut, shared surface, or test not in the
+contract is a conductor decision, not an implementer interpretation.
 
 The implementer does NOT commit, stage, branch, push, stash, reset, tear down a worktree, or touch
 a ticket. `HEAD` in the lease must still equal `baseSha` when it returns - `scope-check` verifies
@@ -249,6 +304,12 @@ manifest file and the manifest's `seededFiles` as expected residue.
 Independence is the invariant: the reviewer did not write the code and must see the implementer's
 actual tree. Do NOT use any per-call "fresh workspace" isolation feature and do not spawn the
 reviewer into a different worktree - rework round 2 must also resume round 1's tree.
+
+For a semantic-risk ticket, review the execution contract before reaching a verdict. Verify the declared
+authority, forbidden shortcuts, required focused negative tests, and required shared surfaces against the
+actual diff. A clear contract violation is an implementation defect. A missing, ambiguous, or conflicting
+contract is a plan or contract defect: do not invent a replacement contract or send speculative
+implementation rework; return it to the conductor for amendment or escalation.
 
 The conductor fingerprints the exact candidate change BEFORE review. The fingerprint consists of:
 
@@ -471,7 +532,12 @@ scope creep blew the ticket up. They only work as a set.
 4. **The first-round list is closed.** In round N the reviewer may only re-check round N-1's
    numbered findings and flag genuine NEW defects introduced by the rework diff. Reviewer drift
    loops as hard as implementer drift.
-5. **Three rework rounds maximum.** Round N addresses ONLY round N-1's blocking findings; scope is
+5. **Semantic rework preserves the contract.** Rework addresses only the numbered reviewer findings;
+   it does not reinterpret the execution contract. If a plan or contract defect needs a different
+   authority, shortcut, surface, or test, the conductor amends the contract before more implementation.
+   If one semantic miss repeats after rework, the conductor inspects the evidence directly or escalates;
+   do not start another generic rework round on the same unresolved semantic decision.
+6. **Three rework rounds maximum.** Round N addresses ONLY round N-1's blocking findings; scope is
    re-checked after every round. After three failed rounds STOP - hand over the diff, the full
    finding history, and the gate output, and leave the worktree standing. Escalation is a
    successful outcome of this contract.
@@ -483,6 +549,7 @@ scope creep blew the ticket up. They only work as a set.
 | lease collision / install failure | unchanged | lease preserved if any | ABORTED-PRECLAIM, recovery triage |
 | `checksConfigured: false` | unchanged | lease preserved | abort the WHOLE run |
 | baseline red | unchanged | lease preserved | ABORTED-PRECLAIM; broken base is its own ticket |
+| semantic contract missing / authority or parent-intent conflict | In Progress | lease preserved, no commit | ESCALATED before code edits |
 | worker committed (`HEAD != baseSha`) | In Progress | nothing touched | ESCALATED |
 | three failed rework rounds | In Progress | lease preserved, no commit | ESCALATED |
 | surface expansion conflicts with a peer | In Progress | lease preserved | BLOCKED-REPLAN into a later wave |
