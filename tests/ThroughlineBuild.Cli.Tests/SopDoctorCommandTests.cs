@@ -624,6 +624,75 @@ public sealed class SopDoctorCommandTests
     }
 
     [Fact]
+    public async Task CliSopDoctorAndBrief_FailForDeletedStubWithoutManifest()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var install = await RunCliInDirectoryAsync(repo, ["sop", "install", "--json"]);
+            Assert.Equal(0, install.Exit);
+            File.Delete(PathFor(repo, ".build/sop-manifest.json"));
+            File.Delete(PathFor(repo, ".claude/commands/run-backlog.md"));
+
+            var doctor = await RunCliInDirectoryAsync(repo, ["sop", "doctor", "--json"]);
+            var status = await RunCliInDirectoryAsync(repo, ["sop", "status", "--json"]);
+            var brief = await RunCliInDirectoryAsync(repo, ["sop", "brief", "run-backlog", "--json"]);
+
+            Assert.Equal(1, doctor.Exit);
+            Assert.Equal(1, status.Exit);
+            Assert.Equal(1, brief.Exit);
+            using var doctorDoc = JsonDocument.Parse(doctor.Stdout);
+            var doctorData = doctorDoc.RootElement.GetProperty("data");
+            Assert.False(doctorData.GetProperty("passed").GetBoolean());
+            Assert.Contains(doctorData.GetProperty("findings").EnumerateArray(), finding =>
+                finding.GetProperty("code").GetString() == "sop.stub.missing" &&
+                finding.GetProperty("path").GetString() == ".claude/commands/run-backlog.md");
+            Assert.DoesNotContain(doctorData.GetProperty("findings").EnumerateArray(), finding =>
+                finding.GetProperty("path").GetString() == ".agents/skills/run-backlog/SKILL.md");
+            using var statusDoc = JsonDocument.Parse(status.Stdout);
+            Assert.Contains(statusDoc.RootElement.GetProperty("data").GetProperty("results").EnumerateArray(), result =>
+                result.GetProperty("status").GetString() == "missing" &&
+                result.GetProperty("path").GetString() == ".claude/commands/run-backlog.md");
+            using var briefDoc = JsonDocument.Parse(brief.Stdout);
+            var briefData = briefDoc.RootElement.GetProperty("data");
+            Assert.False(briefData.GetProperty("ready").GetBoolean());
+            Assert.False(briefData.TryGetProperty("sopText", out _));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task CliSopDoctor_WithoutManifestDoesNotReportUninstalledCodexHost()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var install = await RunCliInDirectoryAsync(
+                repo,
+                ["sop", "install", "--sop", "run-backlog", "--host", "claude", "--json"]);
+            Assert.Equal(0, install.Exit);
+            File.Delete(PathFor(repo, ".build/sop-manifest.json"));
+
+            var doctor = await RunCliInDirectoryAsync(repo, ["sop", "doctor", "--json"]);
+
+            Assert.Equal(1, doctor.Exit);
+            using var doctorDoc = JsonDocument.Parse(doctor.Stdout);
+            var findings = doctorDoc.RootElement.GetProperty("data").GetProperty("findings").EnumerateArray();
+            Assert.DoesNotContain(findings, finding =>
+                finding.GetProperty("path").GetString()?.StartsWith(".agents/skills/", StringComparison.Ordinal) == true);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public void Doctor_FailsWhenCatalogStubIsModified()
     {
         var repo = CreateRepo();

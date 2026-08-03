@@ -252,13 +252,9 @@ internal static class SopInstaller
             .ToList();
         var manifestPath = Path.Combine(repositoryRoot, ".build", "sop-manifest.json");
         var manifest = ReadManifestCacheSilently(manifestPath);
-        var scopedTargets = targets
-            .Where(target =>
-                ManifestRecordsTarget(manifest, target) ||
-                CatalogLeafExistsOrIsLink(repositoryRoot, target.Path))
-            .ToList();
         var results = new List<SopPathResultView>();
-        foreach (var target in scopedTargets)
+        var resolutions = new Dictionary<string, ResolvedCatalogPath>(PathComparer);
+        foreach (var target in targets)
         {
             if (!TryResolvePath(repositoryRoot, target.Path, out var resolution, out var error))
             {
@@ -270,6 +266,29 @@ internal static class SopInstaller
                     error));
                 continue;
             }
+
+            resolutions.Add(target.Path, resolution);
+        }
+
+        var installedHosts = targets
+            .Where(target => resolutions.ContainsKey(target.Path))
+            .Where(target => CatalogLeafExistsOrIsLink(repositoryRoot, target.Path))
+            .Select(target => HostForCatalogPath(target.Path))
+            .Where(host => host is not null)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var target in targets)
+        {
+            if (!resolutions.TryGetValue(target.Path, out var resolution))
+                continue;
+
+            var targetHost = HostForCatalogPath(target.Path);
+            var isScopedByPresentHost = manifest is null &&
+                targetHost is not null &&
+                installedHosts.Contains(targetHost);
+            if (!ManifestRecordsTarget(manifest, target) &&
+                !CatalogLeafExistsOrIsLink(repositoryRoot, target.Path) &&
+                !isScopedByPresentHost)
+                continue;
 
             StatusEmitted(target, resolution, results);
         }
