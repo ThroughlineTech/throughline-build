@@ -131,7 +131,9 @@ public enum BuildConfigLoadMode
     CandidateStandalone,
     WorktreeStandalone,
     GateStandalone,
-    WavesStandalone
+    WavesStandalone,
+    ProfileApply,
+    ProfileDerivation
 }
 
 public static class BuildConfigLoader
@@ -183,8 +185,10 @@ public static class BuildConfigLoader
             : EmptyTicketingConfig();
         if (mode == BuildConfigLoadMode.Full)
             ValidateTicketingFilled(ticketing, path);
-        var llm = ReadLlmSection(root);
-        var workers = mode == BuildConfigLoadMode.Full
+        var llm = mode == BuildConfigLoadMode.Full
+            ? ReadLlmSection(root)
+            : new LlmConfig(string.Empty, string.Empty);
+        var workers = mode is BuildConfigLoadMode.Full or BuildConfigLoadMode.ProfileDerivation
             ? ReadWorkersSection(root)
             : EmptyWorkersConfig();
         var events = mode == BuildConfigLoadMode.Full

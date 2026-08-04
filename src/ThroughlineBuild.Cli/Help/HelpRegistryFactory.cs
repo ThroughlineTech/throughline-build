@@ -64,6 +64,7 @@ public static class HelpRegistryFactory
         r.Register(UserGuide());
         r.Register(OpDoc());
         r.Register(Scaffold());
+        r.Register(Profile());
 
         return r;
     }
@@ -338,6 +339,39 @@ public static class HelpRegistryFactory
         [
             new("gate", "Run the complete configured gate in the current tree"),
             new("gate --ticket TLB-583 --role gating --json", "Run setup and gating checks with structured output"),
+        ]
+    );
+
+    private static CommandHelp Profile() => new(
+        Name: "profile",
+        Group: CommandGroup.Configure,
+        Summary: "Derive or apply repository-specific review and ship checks",
+        Usage:
+            "profile derive [--force] [--json]\n" +
+            "profile apply <file|-> [--force] [--json]\n" +
+            "profile prompt [--json]",
+        Options:
+        [
+            new("--force", "Overwrite review checks that look hand-customized", false),
+            new("<file|->", "Read PROJECT_PROFILE JSON from a file or standard input", false),
+            new("--json", "Emit a versioned JSON envelope", false),
+        ],
+        ExitCodes:
+        [
+            new(0, "Profile was written or already configured checks were safely preserved"),
+            new(1, "Worker, canary verification, input, or write failure"),
+            new(2, "Usage or configuration error"),
+            new(3, "Missing secret when required by the selected worker"),
+        ],
+        Examples:
+        [
+            new("profile derive --json", "Inspect the repository with the configured default worker and prove its gate can fail"),
+            new("profile prompt | agent > profile.json && build profile apply profile.json", "Let an interactive agent derive JSON without spawning a nested worker"),
+            new("agent > profile.json && build profile apply profile.json --force", "Replace previously customized checks deliberately"),
+        ],
+        Details:
+        [
+            "`profile prompt` needs no configuration or ticketing credentials. `profile apply` reads only config.toml and spawns no worker. `profile derive` reads only [workers], uses the configured default worker, and verifies every gating canary in a temporary worktree before changing config.toml."
         ]
     );
 

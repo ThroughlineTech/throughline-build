@@ -13,12 +13,17 @@ The `candidate status` command fingerprints the current candidate worktree so a
 conductor can prove the reviewed tree is the tree it is about to commit.
 The `sop` command family lists binary-hosted SOPs, validates tracked conductor
 data, and emits the brief envelope that host stubs consume.
-None of these verbs starts a worker agent.
+`profile prompt` emits the canonical repository-interrogation rules and
+`profile apply` persists a supplied PROJECT_PROFILE without starting a worker.
+`profile derive` is deliberately different: it starts the configured default
+worker and is therefore for a plain terminal, not an active agent session.
 They load only the repository configuration sections they consume and do not
 require `[ticketing]`, `[workers]`, or `[events]`, resolve ticketing secrets, or
 construct a Plane client. Missing ticketing credentials therefore do not block
-`worktree`, `gate`, `waves`, `candidate status`, or `sop`. Other commands
-still require the full ticketing, worker, and event configuration.
+`worktree`, `gate`, `waves`, `candidate status`, `sop`, `profile prompt`, or
+`profile apply`. `profile derive` reads `[workers]` but still does not require
+ticketing or event configuration. Other commands still require the full
+ticketing, worker, and event configuration.
 
 The `worker brief` command materializes a role-specific Markdown artifact from
 ticket and worktree evidence for an agent to inspect. It is the exception in

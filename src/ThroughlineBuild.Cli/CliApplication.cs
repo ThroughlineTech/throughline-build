@@ -436,6 +436,57 @@ public static class CliApplication
                     Console.Error);
             }
 
+            if (verbKind == CliVerbKind.Profile)
+            {
+                if (!ProfileCommand.TryParse(args, out var profileInvocation, out var profileParseError))
+                    return ProfileCommand.WriteUsage(jsonOutput, Console.Out, Console.Error, profileParseError!);
+
+                if (profileInvocation!.Action == ProfileAction.Prompt)
+                    return ProfileCommand.ExecutePrompt(jsonOutput, Console.Out);
+
+                var profileConfigMode = profileInvocation.Action == ProfileAction.Derive
+                    ? BuildConfigLoadMode.ProfileDerivation
+                    : BuildConfigLoadMode.ProfileApply;
+                var profileBootstrap = await CliBootstrap.CreateAsync(
+                    rawCwd,
+                    CancellationToken.None,
+                    requireTicketing: false,
+                    configLoadMode: profileConfigMode);
+                if (profileBootstrap.Failure is { } profileFailure)
+                {
+                    if (jsonOutput)
+                        CliEnvelopeWriter.WriteError(Console.Out, profileFailure.JsonErrorCode, profileFailure.Message);
+                    else
+                        Console.Error.WriteLine($"{profileFailure.HumanPrefix}: {profileFailure.Message}");
+                    return profileFailure.ExitCode;
+                }
+
+                using var profileContext = profileBootstrap.Context!;
+                if (profileInvocation.Action == ProfileAction.Apply)
+                {
+                    return await ProfileCommand.ExecuteApplyAsync(
+                        profileInvocation,
+                        jsonOutput,
+                        profileContext.ConfigPath,
+                        rawCwd,
+                        Console.Out,
+                        Console.Error,
+                        CancellationToken.None);
+                }
+
+                return await ProfileCommand.ExecuteDeriveAsync(
+                    profileInvocation,
+                    jsonOutput,
+                    profileContext.ConfigPath,
+                    profileContext.WorkingDirectory,
+                    profileContext.Config.Workers,
+                    workerAgentBuilder,
+                    new ProfileGateVerifier(),
+                    Console.Out,
+                    Console.Error,
+                    CancellationToken.None);
+            }
+
             throw new InvalidOperationException($"Pre-config verb '{registeredVerb.Name}' has no handler.");
         }
 

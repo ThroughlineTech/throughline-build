@@ -41,6 +41,31 @@ public sealed class ScaffoldProfileDeriver
         CancellationToken ct)
     {
         var brief = BuildBrief(opDocMarkdown);
+        return await DeriveBriefAsync(brief, workingDirectory, timeout, debugCaptureDirectory, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Asks a worker to inspect the current repository rather than an operation document. The
+    /// deterministic output parsing is identical to scaffold derivation; only the prompt source
+    /// differs.
+    /// </summary>
+    public async Task<ProfileDerivationResult> DeriveRepositoryAsync(
+        string workingDirectory,
+        TimeSpan timeout,
+        string? debugCaptureDirectory,
+        CancellationToken ct)
+    {
+        var brief = BuildRepositoryBrief();
+        return await DeriveBriefAsync(brief, workingDirectory, timeout, debugCaptureDirectory, ct).ConfigureAwait(false);
+    }
+
+    private async Task<ProfileDerivationResult> DeriveBriefAsync(
+        WorkerBrief brief,
+        string workingDirectory,
+        TimeSpan timeout,
+        string? debugCaptureDirectory,
+        CancellationToken ct)
+    {
         var options = new WorkerOptions(timeout, AllowedTools: ReadOnlyTools,
             DebugCaptureDirectory: debugCaptureDirectory, Size: WorkerSize.Small);
 
@@ -83,6 +108,31 @@ public sealed class ScaffoldProfileDeriver
             TicketId: "scaffold-profile",
             Phase: Phase.Scaffold,
             Instruction: instruction,
+            RelevantFiles: Array.Empty<string>(),
+            AllowedWrites: Array.Empty<string>(),
+            Context: new Dictionary<string, string>());
+    }
+
+    private static WorkerBrief BuildRepositoryBrief()
+    {
+        const string workerOutputContract = """
+
+## Worker response protocol
+
+Wrap the JSON object in exactly one named block, then emit the standard result envelope:
+
+<<<PROJECT_PROFILE_START
+{ ... profile JSON ... }
+<<<PROJECT_PROFILE_END
+
+WORKER_RESULT
+{"status":"Ok","summary":"Derived project toolchain profile","files_changed":[],"failure_reason":null,"metadata":{}}
+""";
+
+        return new WorkerBrief(
+            TicketId: "profile-derive",
+            Phase: Phase.Scaffold,
+            Instruction: ProfilePromptLoader.LoadRepository() + workerOutputContract,
             RelevantFiles: Array.Empty<string>(),
             AllowedWrites: Array.Empty<string>(),
             Context: new Dictionary<string, string>());

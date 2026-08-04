@@ -41,6 +41,7 @@ public class HelpRegistryFactoryTests
     [InlineData("user-guide")]
     [InlineData("op-doc")]
     [InlineData("scaffold")]
+    [InlineData("profile")]
     public void TryGet_ReturnsEntryForAllKnownCommands(string verb)
     {
         var help = Registry.TryGet(verb);
@@ -102,6 +103,7 @@ public class HelpRegistryFactoryTests
     [InlineData("user-guide")]
     [InlineData("op-doc")]
     [InlineData("scaffold")]
+    [InlineData("profile")]
     public void ConfigureCommands_HaveCorrectGroup(string verb)
     {
         Assert.Equal(CommandGroup.Configure, Registry.TryGet(verb)!.Group);
@@ -137,6 +139,7 @@ public class HelpRegistryFactoryTests
     [InlineData("user-guide")]
     [InlineData("op-doc")]
     [InlineData("scaffold")]
+    [InlineData("profile")]
     public void AllCommands_HaveNonEmptySummaryAndUsage(string verb)
     {
         var help = Registry.TryGet(verb)!;

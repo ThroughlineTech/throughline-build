@@ -138,58 +138,48 @@ credentials.
 ## 4. Fill in the gate
 
 This is the step that actually decides whether a run works, and it is the step
-worth spending an agent on rather than hand-authoring TOML.
+worth spending an agent on rather than hand-authoring TOML. Derive it from the
+repository's real build and test entry points:
 
-The generated config has every `[[review.checks]]` block commented out. You need
-at least one real gating check, and it must be capable of FAILING.
+```sh
+build profile derive --json
+```
 
-### Let an agent derive it
+`profile derive` uses the configured default worker to inspect the package
+manifest, project or solution file, CI workflow, and contributor guides. It
+writes only the profile-managed values in `.build/config.toml`: `[project]`,
+`[[review.checks]]`, and `[[ship.regression_checks]]`. It preserves every other
+section and comment.
 
-The binary already contains the canonical derivation rules, embedded at
-[src/ThroughlineBuild.Scaffold/Templates/derive-profile-prompt.md](../src/ThroughlineBuild.Scaffold/Templates/derive-profile-prompt.md).
-`build scaffold <op-doc>` applies them automatically, but that path requires an
-op-doc and creates a ticket tree. When you are configuring an existing repository
-by hand, paste the rules into your Claude session and point them at the repo:
+Before reporting success, the command creates a temporary worktree, runs the
+derived setup and gating checks there, and writes each gating check's deliberately
+broken canary. A check that remains green with its canary is rejected as vacuous;
+the configuration is left unchanged. Re-running is idempotent: existing
+customized checks are preserved and reported. Use `--force` only when you intend
+to replace them.
 
-> Read this repository and derive its toolchain gate. Follow the rules in
-> `src/.../derive-profile-prompt.md` (read the file). Emit the `PROJECT_PROFILE`
-> JSON block, then write the resulting `[[review.checks]]` and
-> `[[ship.regression_checks]]` into `.build/config.toml`, leaving every other
-> section and comment untouched.
+### Agent-session and CI path
 
-Do not shorten those rules to "figure out my build and test commands". The
-derivation rules exist because the obvious answer produces a gate that cannot
-fail. They require, at minimum:
+`profile derive` starts a worker, so it cannot run inside an already-active agent
+session. For that case, and for CI, read the same embedded rules and apply the
+JSON deterministically without spawning a worker:
 
-- **role on every check.** `gating` hard-fails the run; `advisory` is recorded
-  but never blocks. Build, test, typecheck, and compile are gating. Lint, format,
-  and style are advisory, because a false-gating burns a cold rework loop on
-  something auto-fixable.
-- **non-vacuity.** A command that inspects nothing always passes. A `tsc --noEmit`
-  against a project-references root with `files: []` follows no references and
-  checks zero files.
-- **a canary per gating check.** The smallest deliberately-broken file the check
-  MUST reject, carried as `canary = [{ path, content }]`. This is the mechanism
-  that proves the gate can fail. For a test check, the canary is a deliberately
-  failing test, which guards against a runner that collects zero tests and
-  reports green.
-- **required_paths on every gating and setup check**, so a check is not run
-  against a tree that cannot support it.
-- **a hermetic test command.** The runner must not collect `.worktrees/` or
-  `.build/`, or a root test run goes red from the engine's own scratch copies.
-- **no user-global tool caches.** Every check runs in a freshly created throwaway
-  worktree, and the same check runs against different code in different
-  worktrees. A tool with a global path-keyed cache can replay a stale verdict
-  into a ship baseline. Pass the cache-disabling flag when one exists.
+```sh
+build profile prompt > profile-rules.md
+# Have the active agent inspect the repository and write only PROJECT_PROFILE JSON to profile.json.
+build profile apply profile.json --json
+```
 
-### Watch the freshly-created-worktree trap
+`profile apply -` reads the JSON from standard input. It needs neither ticketing
+credentials nor worker configuration. The prompt's rules require role-tagged
+checks, required paths, hermetic test discovery, no user-global cache poisoning,
+and one canary per gating check.
 
-Checks run in throwaway worktrees, not in your working tree. Any check that
-assumes a prior step has run in that directory will fail on first use. In
-particular, `--no-restore` and `--no-build` style flags are only safe when an
-earlier `setup` or gating check in the same list has produced their inputs.
+### Offline fallback
 
-### Verify it
+If no worker or agent is available, hand-author the profile-managed TOML values.
+This is the fallback, not the normal installation path. Preserve the same
+non-vacuity and canary requirements, then verify the resulting gate:
 
 ```sh
 build gate --require-checks --json

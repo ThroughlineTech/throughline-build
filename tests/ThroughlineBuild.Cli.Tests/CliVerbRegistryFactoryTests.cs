@@ -10,7 +10,7 @@ public sealed class CliVerbRegistryFactoryTests
         string[] expected =
         [
             "init", "settarget", "user-guide", "op-doc", "models",
-            "sop", "sweep", "candidate", "worker", "worktree", "gate", "waves", "list", "get", "comments", "comment", "evidence", "transition",
+            "sop", "profile", "sweep", "candidate", "worker", "worktree", "gate", "waves", "list", "get", "comments", "comment", "evidence", "transition",
             "relate", "setup", "amend", "close", "defer", "reopen", "new",
             "scaffold", "rework", "decompose", "plan", "implement", "review",
             "ship", "chain",
@@ -28,6 +28,7 @@ public sealed class CliVerbRegistryFactoryTests
     [InlineData("op-doc")]
     [InlineData("models")]
     [InlineData("sop")]
+    [InlineData("profile")]
     public void BuildMarksConfigRepairVerbsForPreConfigDispatch(string name)
     {
         var registry = CliVerbRegistryFactory.Build();

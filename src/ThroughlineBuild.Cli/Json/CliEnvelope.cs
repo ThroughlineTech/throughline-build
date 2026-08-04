@@ -250,6 +250,18 @@ public sealed record GateView(
 
 public sealed record GateEnvelope(int SchemaVersion, bool Ok, GateView Data);
 
+public sealed record ProfilePromptView(string Prompt);
+public sealed record ProfilePromptEnvelope(int SchemaVersion, bool Ok, ProfilePromptView Data);
+
+public sealed record ProfileOperationView(
+    string Operation,
+    string ConfigPath,
+    bool Changed,
+    string Message,
+    bool? CanaryVerified);
+
+public sealed record ProfileOperationEnvelope(int SchemaVersion, bool Ok, ProfileOperationView Data);
+
 // ---- build waves ------------------------------------------------------------------
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -400,6 +412,8 @@ public sealed record WorkerBriefEnvelope(int SchemaVersion, bool Ok, WorkerBrief
 [JsonSerializable(typeof(WorktreeTeardownEnvelope))]
 [JsonSerializable(typeof(CandidateStatusEnvelope))]
 [JsonSerializable(typeof(GateEnvelope))]
+[JsonSerializable(typeof(ProfilePromptEnvelope))]
+[JsonSerializable(typeof(ProfileOperationEnvelope))]
 [JsonSerializable(typeof(WavesInput))]
 [JsonSerializable(typeof(WaveTicketInput[]))]
 [JsonSerializable(typeof(WavesEnvelope))]

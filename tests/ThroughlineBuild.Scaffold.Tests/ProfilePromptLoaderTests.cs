@@ -45,4 +45,15 @@ public class ProfilePromptLoaderTests
         Assert.Contains("conftest.py", prompt);  // pytest
         Assert.Contains("xUnit", prompt);        // .NET
     }
+
+    [Fact]
+    public void RepositoryPrompt_UsesTheSharedRulesButRequestsPlainJson()
+    {
+        var prompt = ProfilePromptLoader.LoadRepository();
+
+        Assert.Contains("Interrogate the repository itself", prompt);
+        Assert.Contains("setupFiles", prompt);
+        Assert.Contains("Return ONLY the JSON object", prompt);
+        Assert.DoesNotContain("{{op_doc_markdown}}", prompt);
+    }
 }

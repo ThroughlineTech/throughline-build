@@ -146,6 +146,20 @@ public static class CliEnvelopeWriter
             envelope, CliJsonContext.Default.GateEnvelope));
     }
 
+    public static void WriteProfilePrompt(TextWriter output, ProfilePromptView result)
+    {
+        var envelope = new ProfilePromptEnvelope(SchemaVersion, Ok: true, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.ProfilePromptEnvelope));
+    }
+
+    public static void WriteProfileOperation(TextWriter output, ProfileOperationView result)
+    {
+        var envelope = new ProfileOperationEnvelope(SchemaVersion, Ok: true, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.ProfileOperationEnvelope));
+    }
+
     public static void WriteWaves(TextWriter output, WavePlan result)
     {
         var envelope = new WavesEnvelope(SchemaVersion, Ok: true, result);

@@ -12,6 +12,8 @@
   <ItemGroup>
     <EmbeddedResource Include="..\..\docs\op-docs\op-doc-spec.md" LogicalName="ThroughlineBuild.Scaffold.Docs.op-doc-spec.md" />
     <EmbeddedResource Include="Templates\derive-profile-prompt.md" LogicalName="ThroughlineBuild.Scaffold.Templates.derive-profile-prompt.md" />
+    <EmbeddedResource Include="Templates\derive-profile-repository-prompt.md" LogicalName="ThroughlineBuild.Scaffold.Templates.derive-profile-repository-prompt.md" />
+    <EmbeddedResource Include="Templates\derive-profile-rules.md" LogicalName="ThroughlineBuild.Scaffold.Templates.derive-profile-rules.md" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Templates\op-doc-skeleton.md"
