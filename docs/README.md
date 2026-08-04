@@ -12,6 +12,7 @@ Start with these documents when evaluating or using the current source tree:
 | [Architecture](throughline-build-architecture.md) | As-built design, trust boundaries, components, and invariants |
 | [Operator user guide](throughline_build_userguide.md) | Installation, configuration, and day-to-day workflows |
 | [Building from source](build-command-setup.md) | Contributor prerequisites, build, test, and Native AOT publish commands |
+| [New repository setup](new-repository-plane-run-backlog-setup.md) | Connect Plane, configure real gates, and install run-backlog for Claude and Codex |
 | [Agent adapters](build-agent-tool-name-mapping.md) | Shared worker contract and provider-specific behavior |
 | [Event log](build-event-log-format.md) | Durable JSONL event format |
 | [Debug transcript](build-debug-transcript-format.md) | Worker transcript format and redaction behavior |
