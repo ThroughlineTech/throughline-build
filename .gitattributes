@@ -24,3 +24,13 @@ src/ThroughlineBuild.Commands/Templates/*.md text eol=lf
 src/ThroughlineBuild.Commands/Templates/*.template text eol=lf
 tests/ThroughlineBuild.Briefs.Tests/Templates/*.md text eol=lf
 tests/ThroughlineBuild.Briefs.Tests/Snapshots/*.txt text eol=lf
+
+# NuGet writes packages.lock.json with platform-native newlines (CRLF on Windows,
+# LF elsewhere) and there is no knob to change that. Under the `*.json text
+# eol=lf` rule above, git checks the file out as LF on Windows, so the first
+# restore that regenerates it rewrites every line ending and `git status` reports
+# the file modified while `git diff` shows no content change. `!eol` leaves the
+# checkout style to `core.eol` (default: native), which is exactly what NuGet
+# emits, so the working tree stays clean on all three CI platforms. `text` is
+# kept, so check-in still normalizes to LF and the committed blobs are unchanged.
+packages.lock.json text !eol
