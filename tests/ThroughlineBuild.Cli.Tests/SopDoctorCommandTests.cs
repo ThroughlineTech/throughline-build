@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ThroughlineBuild.Cli.Json;
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Git;
 using Xunit;
 
 namespace ThroughlineBuild.Cli.Tests;
@@ -725,6 +726,89 @@ public sealed class SopDoctorCommandTests
             var briefData = briefDoc.RootElement.GetProperty("data");
             Assert.False(briefData.GetProperty("ready").GetBoolean());
             Assert.False(briefData.TryGetProperty("sopText", out _));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void Inspect_ReportsScopeUnavailableWhenIndexCannotBeConsulted()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var install = SopInstaller.Run(
+                "install",
+                repo,
+                SopBundleCatalog.All,
+                "0.1.0+test",
+                DateTimeOffset.UtcNow);
+            Assert.True(install.Passed);
+            File.Delete(PathFor(repo, ".build/sop-manifest.json"));
+            Directory.Delete(PathFor(repo, ".claude"), recursive: true);
+
+            var results = SopInstaller.InspectInstalledOrPresentEmittedStubs(
+                repo,
+                SopBundleCatalog.All,
+                host: null,
+                trackedPathProbe: (_, _) => GitTrackedPathProbe.Unavailable("git could not be started: not found"));
+
+            Assert.Contains(results, result =>
+                result.Status == "scope_unavailable" &&
+                result.Path == ".claude/commands/run-backlog.md" &&
+                result.Message.Contains("not found", StringComparison.Ordinal));
+            Assert.Contains(results, result =>
+                result.Status == "scope_unavailable" &&
+                result.Path == ".claude/commands/cross-impact.md");
+
+            // Stubs still on disk are answerable without the index, so they are graded normally.
+            Assert.Contains(results, result =>
+                result.Status == "clean" &&
+                result.Path == ".agents/skills/run-backlog/SKILL.md");
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void Doctor_FailsWhenIndexCannotBeConsultedForAbsentStub()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var install = SopInstaller.Run(
+                "install",
+                repo,
+                SopBundleCatalog.All,
+                "0.1.0+test",
+                DateTimeOffset.UtcNow);
+            Assert.True(install.Passed);
+            File.Delete(PathFor(repo, ".build/sop-manifest.json"));
+            Directory.Delete(PathFor(repo, ".claude"), recursive: true);
+
+            var unavailable = SopInstaller.InspectInstalledOrPresentEmittedStubs(
+                repo,
+                SopBundleCatalog.All,
+                host: null,
+                trackedPathProbe: (_, _) => GitTrackedPathProbe.Unavailable("git could not be started"));
+            var notARepository = SopInstaller.InspectInstalledOrPresentEmittedStubs(
+                repo,
+                SopBundleCatalog.All,
+                host: null,
+                trackedPathProbe: (_, _) => GitTrackedPathProbe.NotARepository());
+
+            // An unanswerable question blocks; a definite "there is no index here" does not,
+            // because a tree without one cannot record install intent in the first place.
+            Assert.Contains(unavailable, result => result.Status == "scope_unavailable");
+            Assert.DoesNotContain(notARepository, result => result.Status == "scope_unavailable");
+            Assert.DoesNotContain(notARepository, result =>
+                result.Path.StartsWith(".claude/", StringComparison.Ordinal));
         }
         finally
         {

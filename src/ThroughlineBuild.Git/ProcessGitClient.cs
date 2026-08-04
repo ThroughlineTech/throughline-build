@@ -1124,9 +1124,27 @@ public sealed class ProcessGitClient : IGitClient
 
     public async Task<IReadOnlyList<string>> FilterTrackedPathsAsync(IReadOnlyList<string> paths, string workingDirectory, CancellationToken ct)
     {
-        if (paths.Count == 0)
-            return Array.Empty<string>();
+        var probe = await ProbeTrackedPathsAsync(paths, workingDirectory, ct).ConfigureAwait(false);
+        return probe.Paths;
+    }
 
+    /// <summary>
+    /// Asks the index which of <paramref name="paths"/> are tracked, and reports whether the
+    /// question could be answered at all. <see cref="FilterTrackedPathsAsync"/> collapses every
+    /// failure to an empty list, which is safe for callers that only widen a warning but unsafe
+    /// for callers that treat "not tracked" as evidence: for those, a missing git binary is
+    /// indistinguishable from a genuinely empty index. Callers that need that distinction take
+    /// the probe and decide for themselves what an unanswerable question means.
+    /// </summary>
+    public async Task<GitTrackedPathProbe> ProbeTrackedPathsAsync(
+        IReadOnlyList<string> paths,
+        string workingDirectory,
+        CancellationToken ct)
+    {
+        if (paths.Count == 0)
+            return GitTrackedPathProbe.Tracked(Array.Empty<string>());
+
+        GitRun run;
         try
         {
             var psi = new ProcessStartInfo("git") { WorkingDirectory = workingDirectory };
@@ -1135,23 +1153,50 @@ public sealed class ProcessGitClient : IGitClient
             foreach (var path in paths)
                 psi.ArgumentList.Add(path);
 
-            var run = await RunGitCaptureAsync(psi, ct).ConfigureAwait(false);
-            if (run.ExitCode != 0)
-                return Array.Empty<string>();
-
-            var lines = new List<string>();
-            foreach (var rawLine in run.Stdout.Split('\n'))
-            {
-                var line = rawLine.TrimEnd('\r');
-                if (line.Length > 0)
-                    lines.Add(line);
-            }
-            return lines;
+            run = await RunGitCaptureAsync(psi, ct).ConfigureAwait(false);
         }
-        catch
+        catch (OperationCanceledException)
         {
-            return Array.Empty<string>();
+            throw;
         }
+        catch (Exception ex)
+        {
+            return GitTrackedPathProbe.Unavailable($"git could not be started: {ex.Message}");
+        }
+
+        if (run.TimedOut)
+            return GitTrackedPathProbe.Unavailable("git ls-files timed out");
+
+        if (run.ExitCode != 0)
+        {
+            // Only this one diagnostic means "there is no index here", which is a definite
+            // answer. Any other failure leaves the question open, so it must not be reported
+            // as an empty index; unrecognized wording therefore falls through to Unavailable.
+            return run.Stderr.Contains("not a git repository", StringComparison.OrdinalIgnoreCase)
+                ? GitTrackedPathProbe.NotARepository()
+                : GitTrackedPathProbe.Unavailable(DescribeFailure(run));
+        }
+
+        var lines = new List<string>();
+        foreach (var rawLine in run.Stdout.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r');
+            if (line.Length > 0)
+                lines.Add(line);
+        }
+
+        return GitTrackedPathProbe.Tracked(lines);
+    }
+
+    private static string DescribeFailure(GitRun run)
+    {
+        var firstLine = run.Stderr
+            .Split('\n')
+            .Select(line => line.Trim())
+            .FirstOrDefault(line => line.Length > 0);
+        return string.IsNullOrEmpty(firstLine)
+            ? $"git ls-files exited {run.ExitCode}"
+            : $"git ls-files exited {run.ExitCode}: {firstLine}";
     }
 
     private static async Task<string> RunGitAsync(

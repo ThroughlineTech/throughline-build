@@ -242,7 +242,8 @@ internal static class SopInstaller
     internal static IReadOnlyList<SopPathResultView> InspectInstalledOrPresentEmittedStubs(
         string startDirectory,
         IReadOnlyList<SopCatalogEntry> scopeEntries,
-        string? host = null)
+        string? host = null,
+        Func<string, IReadOnlyList<string>, GitTrackedPathProbe>? trackedPathProbe = null)
     {
         if (host is not null && !IsKnownHost(host))
             throw new ArgumentException($"unknown SOP host: {host}", nameof(host));
@@ -271,43 +272,63 @@ internal static class SopInstaller
             resolutions.Add(target.Path, resolution);
         }
 
-        var trackedTargets = manifest is null
-            ? GetTrackedCatalogTargets(repositoryRoot, targets)
-            : new HashSet<string>(PathComparer);
+        // The manifest, when usable, already records what was installed, so the index is only
+        // consulted when it is the last remaining witness.
+        var probe = manifest is null
+            ? ProbeTrackedCatalogPaths(
+                repositoryRoot,
+                targets.Where(target => resolutions.ContainsKey(target.Path)).Select(target => target.Path).ToList(),
+                trackedPathProbe)
+            : GitTrackedPathProbe.Tracked(Array.Empty<string>());
+        var trackedTargets = probe.Paths.ToHashSet(PathComparer);
         foreach (var target in targets)
         {
             if (!resolutions.TryGetValue(target.Path, out var resolution))
                 continue;
 
-            if (!ManifestRecordsTarget(manifest, target) &&
-                !CatalogLeafExistsOrIsLink(repositoryRoot, target.Path) &&
-                !trackedTargets.Contains(target.Path))
+            if (ManifestRecordsTarget(manifest, target) ||
+                CatalogLeafExistsOrIsLink(repositoryRoot, target.Path) ||
+                trackedTargets.Contains(target.Path))
+            {
+                StatusEmitted(target, resolution, results);
                 continue;
+            }
 
-            StatusEmitted(target, resolution, results);
+            // Absent from disk and unrecorded by the manifest. Only the index can still say
+            // whether this path was ever installed, so a probe that could not run leaves the
+            // question open. Skipping here would narrow scope to nothing and report clean,
+            // which is the fail-open this scoping exists to prevent.
+            if (probe.Scope == GitTrackedPathScope.Unavailable)
+            {
+                results.Add(Result(
+                    target,
+                    "scope_unavailable",
+                    "catalog path is absent and the index could not be consulted to decide " +
+                    $"whether it was ever installed: {probe.Failure}"));
+            }
         }
 
         return results;
     }
 
-    private static HashSet<string> GetTrackedCatalogTargets(
+    private static GitTrackedPathProbe ProbeTrackedCatalogPaths(
         string repositoryRoot,
-        IReadOnlyList<SopInstallTarget> targets)
+        IReadOnlyList<string> catalogPaths,
+        Func<string, IReadOnlyList<string>, GitTrackedPathProbe>? trackedPathProbe)
     {
+        if (trackedPathProbe is not null)
+            return trackedPathProbe(repositoryRoot, catalogPaths);
+
         try
         {
-            var tracked = new ProcessGitClient(repositoryRoot)
-                .FilterTrackedPathsAsync(
-                    targets.Select(target => target.Path).ToList(),
-                    repositoryRoot,
-                    CancellationToken.None)
+            return new ProcessGitClient(repositoryRoot)
+                .ProbeTrackedPathsAsync(catalogPaths, repositoryRoot, CancellationToken.None)
                 .GetAwaiter()
                 .GetResult();
-            return tracked.ToHashSet(PathComparer);
         }
-        catch
+        catch (Exception ex)
         {
-            return new HashSet<string>(PathComparer);
+            return GitTrackedPathProbe.Unavailable($"git probe failed: {ex.Message}");
         }
     }
 
@@ -1240,7 +1261,8 @@ internal static class SopInstaller
             "modified" or
             "not_regular" or
             "missing_manifest_history" or
-            "invalid_scaffolded");
+            "invalid_scaffolded" or
+            "scope_unavailable");
 
     private static SopPathResultView Result(SopInstallTarget target, string status, string message) =>
         Result(target.Sops, target.Path, target.Class, status, message);

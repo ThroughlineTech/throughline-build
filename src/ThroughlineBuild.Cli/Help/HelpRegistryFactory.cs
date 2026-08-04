@@ -446,6 +446,11 @@ public static class HelpRegistryFactory
             Unknown keys in conductor.toml are reported as findings so misspelled contract
             fields cannot be silently discarded.
 
+            When no manifest is present, doctor asks git which catalog paths are tracked so a
+            deleted stub is still reported as missing. If git cannot answer, doctor fails rather
+            than assuming nothing was installed. A tree that is not a git repository has no index
+            to consult, so there doctor can only see stubs still present on disk.
+
             Review invariants are structured prose. Doctor validates ids, statements, optional
             paths, and optional blocks_done shape only. It does not evaluate whether a statement is true.
 

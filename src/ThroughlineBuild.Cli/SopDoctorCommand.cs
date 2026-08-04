@@ -186,10 +186,15 @@ internal static class SopDoctorCommand
             if (string.Equals(result.Status, "clean", StringComparison.Ordinal))
                 continue;
 
+            // Drift is a claim about content; an unanswerable scope question is not, so it is
+            // reported in its own words rather than as drift.
+            var message = string.Equals(result.Status, "scope_unavailable", StringComparison.Ordinal)
+                ? $"emitted stub scope unavailable: {result.Message}"
+                : $"emitted stub drift: {result.Message}";
             findings.Add(new SopDoctorFinding(
                 StubFindingCode(result.Status),
                 result.Path,
-                $"emitted stub drift: {result.Message}"));
+                message));
         }
     }
 
@@ -200,6 +205,7 @@ internal static class SopDoctorCommand
         "not_regular" => "sop.stub.not_regular",
         "unsafe_path" => "sop.stub.unsafe_path",
         "invalid_catalog" => "sop.stub.invalid_catalog",
+        "scope_unavailable" => "sop.stub.scope_unavailable",
         _ => "sop.stub.drift",
     };
 
