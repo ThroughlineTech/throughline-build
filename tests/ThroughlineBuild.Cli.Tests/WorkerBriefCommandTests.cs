@@ -13,8 +13,25 @@ public sealed class WorkerBriefCommandTests
     private static readonly string BaseSha = new('a', 40);
     private static readonly string HeadSha = new('b', 40);
 
-    [Fact]
-    public async Task Implement_WritesTicketRoleGateAndWorkspaceContent()
+    // Every agent that ships a brief template set. Only two distinct texts exist today
+    // (claude-code differs; codex, copilot, and gemini are byte-identical), so the role
+    // tests below run against all of them rather than exercising one repeatedly.
+    public static TheoryData<string> BriefAgents()
+    {
+        var data = new TheoryData<string>();
+        foreach (var agent in TemplateLoader.AvailableAgents())
+            data.Add(agent);
+        return data;
+    }
+
+    // Text present only in the claude-code implement and review templates. Used to tell which
+    // template set actually rendered a brief; asserting on the agent name would not, since the
+    // name is never echoed into the artifact.
+    private const string ClaudeCodeOnlyMarker = "do not split them across separate messages";
+
+    [Theory]
+    [MemberData(nameof(BriefAgents))]
+    public async Task Implement_WritesTicketRoleGateAndWorkspaceContent(string agent)
     {
         DisableReflectionSerialization();
         var root = CreateTempDirectory();
@@ -37,7 +54,8 @@ public sealed class WorkerBriefCommandTests
                 outputPath,
                 role: "implement",
                 json: false,
-                checks: [Check("test", ["test"])]);
+                checks: [Check("test", ["test"])],
+                agentOverrides: new WorkerBriefAgentOverrides(All: agent));
 
             Assert.Equal(0, exit);
             var brief = await File.ReadAllTextAsync(outputPath);
@@ -67,8 +85,9 @@ public sealed class WorkerBriefCommandTests
         }
     }
 
-    [Fact]
-    public async Task Review_EmitsAotJsonMetadataAndActualDiffStatusEvidence()
+    [Theory]
+    [MemberData(nameof(BriefAgents))]
+    public async Task Review_EmitsAotJsonMetadataAndActualDiffStatusEvidence(string agent)
     {
         DisableReflectionSerialization();
         var root = CreateTempDirectory();
@@ -102,7 +121,8 @@ public sealed class WorkerBriefCommandTests
                 role: "review",
                 json: true,
                 checks: [Check("test", ["test"] )],
-                output: stdout);
+                output: stdout,
+                agentOverrides: new WorkerBriefAgentOverrides(All: agent));
 
             Assert.Equal(0, exit);
             using var document = JsonDocument.Parse(stdout.ToString());
@@ -135,8 +155,9 @@ public sealed class WorkerBriefCommandTests
         }
     }
 
-    [Fact]
-    public async Task Rework_IncludesPriorBlockingFindingAndKeepsSameWorktreeSemantics()
+    [Theory]
+    [MemberData(nameof(BriefAgents))]
+    public async Task Rework_IncludesPriorBlockingFindingAndKeepsSameWorktreeSemantics(string agent)
     {
         var root = CreateTempDirectory();
         try
@@ -162,7 +183,8 @@ public sealed class WorkerBriefCommandTests
                 outputPath,
                 role: "rework",
                 json: false,
-                checks: []);
+                checks: [],
+                agentOverrides: new WorkerBriefAgentOverrides(All: agent));
 
             Assert.Equal(0, exit);
             var brief = await File.ReadAllTextAsync(outputPath);
@@ -433,6 +455,164 @@ public sealed class WorkerBriefCommandTests
         }
     }
 
+    [Fact]
+    public async Task AgentFlag_IsHonored_SoDistinctTemplateSetsProduceDifferentBriefs()
+    {
+        DisableReflectionSerialization();
+        var root = CreateTempDirectory();
+        try
+        {
+            var claudeCode = await RenderBriefAsync(root, "implement", new WorkerBriefAgentOverrides(All: "claude-code"));
+            var codex = await RenderBriefAsync(root, "implement", new WorkerBriefAgentOverrides(All: "codex"));
+
+            Assert.NotEqual(claudeCode, codex);
+            Assert.Contains(ClaudeCodeOnlyMarker, claudeCode);
+            Assert.DoesNotContain(ClaudeCodeOnlyMarker, codex);
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
+    }
+
+    [Theory]
+    // Per-phase flag beats --agent, which beats [workers.phases], which beats default_agent.
+    [InlineData("implement", "claude-code", "codex", null, "codex", true)]
+    [InlineData("implement", null, "claude-code", "codex", "codex", true)]
+    [InlineData("implement", null, null, "claude-code", "codex", true)]
+    [InlineData("implement", null, null, null, "claude-code", true)]
+    [InlineData("implement", "codex", "claude-code", "claude-code", "claude-code", false)]
+    // Rework maps onto the implement phase; review takes the review-phase flag instead.
+    [InlineData("rework", "claude-code", "codex", "codex", "codex", true)]
+    [InlineData("review", "claude-code", "codex", null, "codex", false)]
+    public async Task AgentResolution_FollowsFlagThenPhaseThenDefaultPrecedence(
+        string role,
+        string? implementFlag,
+        string? agentAll,
+        string? configuredPhaseAgent,
+        string configuredDefaultAgent,
+        bool expectsClaudeCodeTemplates)
+    {
+        DisableReflectionSerialization();
+        var root = CreateTempDirectory();
+        try
+        {
+            var phase = role == "review" ? "review" : "implement";
+            var brief = await RenderBriefAsync(
+                root,
+                role,
+                new WorkerBriefAgentOverrides(All: agentAll, Implement: implementFlag),
+                configuredPhaseAgent is null
+                    ? null
+                    : new Dictionary<string, string>(StringComparer.Ordinal) { [phase] = configuredPhaseAgent },
+                configuredDefaultAgent);
+
+            if (expectsClaudeCodeTemplates)
+                Assert.Contains(ClaudeCodeOnlyMarker, brief);
+            else
+                Assert.DoesNotContain(ClaudeCodeOnlyMarker, brief);
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public async Task ReviewRole_UsesReviewPhaseFlagOverAgentAll()
+    {
+        DisableReflectionSerialization();
+        var root = CreateTempDirectory();
+        try
+        {
+            var brief = await RenderBriefAsync(
+                root,
+                "review",
+                new WorkerBriefAgentOverrides(All: "codex", Review: "claude-code"));
+
+            Assert.Contains(ClaudeCodeOnlyMarker, brief);
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
+    }
+
+    [Theory]
+    [InlineData("no-such-agent", null)]
+    [InlineData(null, "claude-code")]
+    public async Task UnusableAgentFlag_IsUsageErrorBeforeAnyTicketOrOutputWrite(
+        string? unknownAgentAll,
+        string? planFlag)
+    {
+        DisableReflectionSerialization();
+        var root = CreateTempDirectory();
+        try
+        {
+            var worktree = Path.Combine(root, "worktree");
+            var outputPath = Path.Combine(root, "brief.md");
+            Directory.CreateDirectory(worktree);
+            var ticketing = new FakeTicketing { Ticket = TicketWithBody() };
+            var output = new StringWriter();
+
+            var exit = await RunAsync(
+                ticketing,
+                new BriefGitClient { Diff = DiffWithPatch() },
+                worktree,
+                outputPath,
+                role: "implement",
+                json: true,
+                checks: [],
+                output: output,
+                agentOverrides: new WorkerBriefAgentOverrides(All: unknownAgentAll, Plan: planFlag));
+
+            Assert.Equal(2, exit);
+            Assert.Equal("usage", JsonDocument.Parse(output.ToString()).RootElement.GetProperty("error").GetProperty("code").GetString());
+            Assert.Equal(0, ticketing.GetCalls);
+            Assert.False(File.Exists(outputPath));
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
+    }
+
+    // Renders one brief into a fresh output file under <paramref name="root"/> and returns its text.
+    private static async Task<string> RenderBriefAsync(
+        string root,
+        string role,
+        WorkerBriefAgentOverrides overrides,
+        IReadOnlyDictionary<string, string>? phaseAgents = null,
+        string configuredAgent = "codex")
+    {
+        var worktree = Path.Combine(root, "worktree");
+        Directory.CreateDirectory(worktree);
+        var outputPath = Path.Combine(root, $"{role}-{Guid.NewGuid():N}.md");
+        var ticketing = new FakeTicketing
+        {
+            Ticket = TicketWithBody(),
+            Comments =
+            [
+                new("review", "<p><strong>reviewed:</strong> rework - API validation is missing</p>", DateTimeOffset.UtcNow)
+            ]
+        };
+
+        var exit = await RunAsync(
+            ticketing,
+            new BriefGitClient { Diff = DiffWithPatch() },
+            worktree,
+            outputPath,
+            role,
+            json: false,
+            checks: [],
+            agentOverrides: overrides,
+            phaseAgents: phaseAgents,
+            configuredAgent: configuredAgent);
+
+        Assert.Equal(0, exit);
+        return await File.ReadAllTextAsync(outputPath);
+    }
+
     private static async Task<int> RunAsync(
         FakeTicketing ticketing,
         BriefGitClient git,
@@ -441,7 +621,10 @@ public sealed class WorkerBriefCommandTests
         string role,
         bool json,
         IReadOnlyList<CheckSpec> checks,
-        TextWriter? output = null)
+        TextWriter? output = null,
+        WorkerBriefAgentOverrides? agentOverrides = null,
+        IReadOnlyDictionary<string, string>? phaseAgents = null,
+        string configuredAgent = "codex")
     {
         return await WorkerBriefCommand.ExecuteAsync(
             ["worker", "brief", "--ticket", "TLB-602", "--role", role, "--worktree", worktree, "--output", outputPath],
@@ -451,10 +634,12 @@ public sealed class WorkerBriefCommandTests
             ProjectContext.Empty,
             checks,
             "main",
-            "codex",
+            configuredAgent,
             output ?? TextWriter.Null,
             TextWriter.Null,
-            CancellationToken.None);
+            CancellationToken.None,
+            phaseAgents,
+            agentOverrides);
     }
 
     private static Ticket TicketWithBody() => new(

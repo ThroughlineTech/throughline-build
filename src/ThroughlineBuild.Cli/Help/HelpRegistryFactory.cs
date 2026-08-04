@@ -248,13 +248,16 @@ public static class HelpRegistryFactory
         Name: "worker",
         Group: CommandGroup.Conductor,
         Summary: "Create an inspectable role-specific worker brief artifact",
-        Usage: "worker brief --ticket <id> --role implement|review|rework --worktree <path> --output <path> [--json]",
+        Usage: "worker brief --ticket <id> --role implement|review|rework --worktree <path> --output <path> [--agent <name>] [--json]",
         Options:
         [
             new("--ticket <id>", "Source ticket whose body, acceptance criteria, and recorded semantic contract are included", false),
             new("--role <role>", "Worker role: implement, review, or rework", false),
             new("--worktree <path>", "Existing workspace whose branch, diff, and status are read", false),
             new("--output <path>", "Markdown artifact path; its parent directory must already exist", false),
+            new("--agent <name>", "Render the brief from this agent's templates instead of the configured agent", false),
+            new("--agent-implement <name>", "Same, but only for the implement and rework roles; wins over --agent", false),
+            new("--agent-review <name>", "Same, but only for the review role; wins over --agent", false),
             new("--json", "Emit a versioned envelope with source ticket and output metadata", false),
         ],
         ExitCodes:
@@ -268,10 +271,12 @@ public static class HelpRegistryFactory
         [
             new("worker brief --ticket TLB-602 --role implement --worktree . --output .build/worker-brief.md", "Write an implementation brief without starting a worker"),
             new("worker brief --ticket TLB-602 --role review --worktree .worktrees/tlb-602 --output review.md --json", "Write a review artifact and emit machine-readable metadata"),
+            new("worker brief --ticket TLB-602 --role implement --worktree . --output codex.md --agent codex", "Render the same brief from another agent's templates"),
         ],
         Details:
         [
-            "The command reads the ticket and supplied worktree, then writes one Markdown artifact. It does not spawn a worker or mutate tickets, git history, branches, worktrees, or deployments. A recorded Ticket execution contract is carried in the ticket body and is binding in every role artifact. Review artifacts include the current diff and status as evidence; rework artifacts preserve the supplied worktree and include prior blocking findings."
+            "The command reads the ticket and supplied worktree, then writes one Markdown artifact. It does not spawn a worker or mutate tickets, git history, branches, worktrees, or deployments. A recorded Ticket execution contract is carried in the ticket body and is binding in every role artifact. Review artifacts include the current diff and status as evidence; rework artifacts preserve the supplied worktree and include prior blocking findings.",
+            "Agent precedence, highest first: --agent-implement or --agent-review for the matching role, then --agent, then the [workers.phases] entry for that phase, then default_agent. The rework role uses the implement phase. Because this verb only renders templates and never starts a worker, a flag value must name a shipped brief template set rather than a configured [workers.<name>] sub-table; an unknown name is a usage error with exit 2, as is --agent-plan, which no brief role uses.",
         ]
     );
 

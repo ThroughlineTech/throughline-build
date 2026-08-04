@@ -397,7 +397,11 @@ diff/status inputs and an independent-verdict instruction; rework includes
 prior blocking findings and keeps the supplied worktree and branch. The
 command does not spawn a worker or mutate tickets, git history, branches,
 worktrees, deployments, or other files. Add `--json` for source ticket and
-output metadata.
+output metadata. Add `--agent <name>`, or the per-phase `--agent-implement` /
+`--agent-review`, to render the brief from another agent's templates; the
+per-phase flag wins over `--agent`, which wins over `[workers.phases]`, which
+wins over `default_agent`. The value must name a shipped template set, since
+this command renders templates without starting a worker.
 
 For a semantic-risk ticket, record a `Ticket execution contract` in the ticket
 body before dispatching a worker. It identifies parent intent, authority,

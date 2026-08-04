@@ -9,6 +9,20 @@ using ThroughlineBuild.Verification;
 namespace ThroughlineBuild.Cli;
 
 /// <summary>
+/// Agent-override flag values extracted by <see cref="CliArgParser.ExtractAgentFlags"/>, carried
+/// into the brief so the flags are honored here as they are for the worker-spawning phase verbs.
+/// </summary>
+/// <param name="All">Value of <c>--agent</c>, applying to whichever phase the role maps to.</param>
+/// <param name="Plan">Value of <c>--agent-plan</c>; rejected because no brief role maps to plan.</param>
+/// <param name="Implement">Value of <c>--agent-implement</c>, used by the implement and rework roles.</param>
+/// <param name="Review">Value of <c>--agent-review</c>, used by the review role.</param>
+public sealed record WorkerBriefAgentOverrides(
+    string? All = null,
+    string? Plan = null,
+    string? Implement = null,
+    string? Review = null);
+
+/// <summary>
 /// Builds an inspectable, role-specific worker brief without starting a worker.
 /// Ticket reads, git reads, and one requested output write are the only effects.
 /// </summary>
@@ -28,11 +42,19 @@ public static class WorkerBriefCommand
         TextWriter output,
         TextWriter error,
         CancellationToken ct,
-        IReadOnlyDictionary<string, string>? phaseAgents = null)
+        IReadOnlyDictionary<string, string>? phaseAgents = null,
+        WorkerBriefAgentOverrides? agentOverrides = null)
     {
         var parsed = Parse(args);
         if (parsed.Error is not null)
             return Usage(json, output, error, parsed.Error);
+
+        // Resolve the brief agent before any ticket, git, or filesystem read so a bad
+        // --agent value is a usage error rather than a partially executed command.
+        var phaseName = PhaseForRole(parsed.Role!);
+        var (effectiveAgentName, agentError) = ResolveAgent(phaseName, agentOverrides, phaseAgents, agentName);
+        if (agentError is not null)
+            return Failure(json, output, error, CliErrorCodes.Usage, agentError, 2);
 
         string worktreePath;
         string outputPath;
@@ -112,10 +134,6 @@ public static class WorkerBriefCommand
         string instruction;
         try
         {
-            var phaseName = parsed.Role == "rework" ? "implement" : parsed.Role!;
-            var effectiveAgentName = phaseAgents is not null && phaseAgents.TryGetValue(phaseName, out var phaseAgent)
-                ? phaseAgent
-                : agentName;
             instruction = BuildRoleInstruction(
                 parsed.Role!,
                 effectiveAgentName,
@@ -175,6 +193,48 @@ public static class WorkerBriefCommand
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// Maps a brief role onto the worker phase whose agent and templates it uses.
+    /// Rework reuses the implement phase; there is no plan role.
+    /// </summary>
+    private static string PhaseForRole(string role) => role == "rework" ? "implement" : role;
+
+    /// <summary>
+    /// Resolves the agent whose templates render the brief, in precedence order:
+    /// <c>--agent-&lt;phase&gt;</c>, then <c>--agent</c>, then <c>[workers.phases]</c> for the
+    /// phase, then <c>default_agent</c>. Flag values are validated against the shipped brief
+    /// templates, because this verb renders templates and never constructs a worker agent.
+    /// </summary>
+    private static (string Agent, string? Error) ResolveAgent(
+        string phaseName,
+        WorkerBriefAgentOverrides? overrides,
+        IReadOnlyDictionary<string, string>? phaseAgents,
+        string fallbackAgent)
+    {
+        if (!string.IsNullOrWhiteSpace(overrides?.Plan))
+            return (fallbackAgent,
+                "--agent-plan does not apply to worker brief: no brief role maps to the plan phase");
+
+        var phaseOverride = phaseName == "review" ? overrides?.Review : overrides?.Implement;
+        var flagAgent = phaseOverride ?? overrides?.All;
+        if (!string.IsNullOrWhiteSpace(flagAgent))
+        {
+            if (!TemplateLoader.HasTemplates(flagAgent))
+            {
+                var available = string.Join(", ", TemplateLoader.AvailableAgents());
+                return (fallbackAgent,
+                    $"unknown agent '{flagAgent}': no brief templates ship for it. Available agents: {available}");
+            }
+
+            return (flagAgent, null);
+        }
+
+        if (phaseAgents is not null && phaseAgents.TryGetValue(phaseName, out var configuredAgent))
+            return (configuredAgent, null);
+
+        return (fallbackAgent, null);
     }
 
     private static async Task<BriefEvidence> ReadEvidenceAsync(

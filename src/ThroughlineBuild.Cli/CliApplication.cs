@@ -574,9 +574,10 @@ public static class CliApplication
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; workerBriefCts.Cancel(); };
             try
             {
-                var briefAgent = config.Workers.Phases.TryGetValue("implement", out var configuredAgent)
-                    ? configuredAgent
-                    : config.Workers.DefaultAgent;
+                // The command resolves the brief agent itself: --agent-<phase>, then --agent, then
+                // the [workers.phases] entry for the role's phase, then this default_agent floor.
+                // Passing the implement-phase agent here would leak it into review-role briefs.
+                var briefAgent = config.Workers.DefaultAgent;
                 return await WorkerBriefCommand.ExecuteAsync(
                     args,
                     jsonOutput,
@@ -589,7 +590,12 @@ public static class CliApplication
                     Console.Out,
                     Console.Error,
                     workerBriefCts.Token,
-                    config.Workers.Phases);
+                    config.Workers.Phases,
+                    new WorkerBriefAgentOverrides(
+                        agentAll,
+                        agentPlanFlag,
+                        agentImplementFlag,
+                        agentReviewFlag));
             }
             catch (PlaneApiException ex)
             {

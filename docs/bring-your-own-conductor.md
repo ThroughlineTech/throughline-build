@@ -326,6 +326,20 @@ finding and keep the same worktree and branch semantics. The artifact includes
 the exact `build gate --ticket <id> --role gating --json` command and the
 configured check commands, but does not run them.
 
+The brief is rendered from one agent's prompt templates. Pass `--agent <name>`
+to override the configured agent, or `--agent-implement` / `--agent-review` to
+override only the role's phase; the per-phase flag wins over `--agent`, which
+wins over the `[workers.phases]` entry for that phase, which wins over
+`default_agent`. The rework role uses the implement phase. Because this command
+renders templates and never starts a worker, the value must name a shipped
+template set (`claude-code`, `codex`, `copilot`, `gemini`) rather than a
+configured `[workers.<name>]` sub-table; an unknown name, or `--agent-plan`,
+exits 2 without reading the ticket or writing the artifact.
+
+```sh
+build worker brief --ticket TLB-583 --role implement --worktree .worktrees/conductor/tlb-583-safe-worktrees --output .build/tlb-583-codex.md --agent codex
+```
+
 Before dispatching a worker for a semantic-risk ticket, the conductor records a
 `Ticket execution contract` in the ticket body. It names parent intent,
 authority, forbidden shortcuts, required shared surfaces, focused negative tests,
