@@ -214,6 +214,19 @@ Omitting `--host` installs both known host adapters. Expected result:
 Install is idempotent, and it creates `.build/conductor.toml` only when that file
 is missing. It never overwrites an existing conductor file.
 
+**Use `install`, not `upgrade`, when a path is absent.** The two verbs are not
+interchangeable and the distinction bites on fresh clones:
+
+| Verb | What it does | When |
+| --- | --- | --- |
+| `sop install` | Writes emitted paths that are missing; scaffolds `conductor.toml` when absent; never overwrites a locally modified stub | First install, and any clone that has no stubs |
+| `sop upgrade` | Rewrites emitted files that ALREADY EXIST and still match a trusted previous catalog hash. It does NOT create missing files | After replacing the binary with a newer one |
+
+Running `sop upgrade` on a repository whose stubs were never installed reports
+every path as `missing` with `ok: false`. That is correct behavior, not a
+failure: nothing existed to reconcile. The message says so directly, and the fix
+is `sop install`.
+
 The Claude stub is deliberately five lines long. It does not contain the SOP; it
 tells the session to run `build sop brief run-backlog --json` and follow the text
 that command returns. The SOP prose therefore always comes from the installed
@@ -322,6 +335,49 @@ a candidate commit exists but is not yet proven integrated.
 Escalation is a successful outcome. Three failed rework rounds, a baseline red,
 or a rebase conflict at integration all stop with the worktree, branch, diff, and
 finding history preserved for you to inspect.
+
+## 10. Set up a second machine
+
+What a clone gives you depends entirely on whether someone completed this runbook
+and committed the result. Check before assuming:
+
+```sh
+git log --oneline -- .claude/commands .agents/skills   # empty means never committed
+ls .build/conductor.toml
+```
+
+**If the stubs and `conductor.toml` are absent**, this machine is doing a first
+install, not a migration. Do the whole runbook from step 2. `build sop upgrade`
+is the wrong verb here and will report every path missing.
+
+**If they are present in the clone**, you need much less:
+
+```sh
+build --version                        # must be >= conductor.min_build_version
+export PLANE_API_TOKEN=...
+build init --no-interactive --plane-url ... --workspace ... --project-id ... --token-env PLANE_API_TOKEN
+build setup
+# re-create [[review.checks]] -- see below
+build sop upgrade --json               # only if this binary is newer than the one that wrote the stubs
+build sop doctor --json
+build sop brief run-backlog --json     # returns sopText => ready
+```
+
+The gate does not travel. `.build/config.toml` is gitignored, and it holds
+`[[review.checks]]`, `[[ship.regression_checks]]`, `[waves]`, and `[worktree]`
+alongside the Plane connection. Those are repository facts, not machine facts,
+but they live in the one file a clone never brings. Every new machine therefore
+re-creates the gate, and nothing structurally guarantees it matches the first
+machine's.
+
+Until that is fixed, copy `[[review.checks]]` across by hand rather than
+re-deriving it, and diff the two files. Re-deriving invites two machines to
+enforce different gates while both report green.
+
+The SOP prose itself has no such problem: it lives in the binary, so the only
+thing governing fidelity is the binary version. `min_build_version` in the tracked
+`conductor.toml` is a floor, not a pin. An older binary is caught; a newer one
+silently supplies different SOP prose to the same repository.
 
 ## Troubleshooting
 
