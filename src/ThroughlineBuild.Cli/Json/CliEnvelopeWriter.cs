@@ -195,6 +195,20 @@ public static class CliEnvelopeWriter
             envelope, CliJsonContext.Default.SopOperationEnvelope));
     }
 
+    public static void WriteConductorPrompt(TextWriter output, ConductorPromptView result)
+    {
+        var envelope = new ConductorPromptEnvelope(SchemaVersion, Ok: true, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.ConductorPromptEnvelope));
+    }
+
+    public static void WriteConductorApply(TextWriter output, ConductorApplyView result)
+    {
+        var envelope = new ConductorApplyEnvelope(SchemaVersion, Ok: true, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.ConductorApplyEnvelope));
+    }
+
     public static void WriteWorkerBrief(TextWriter output, WorkerBriefView result)
     {
         var envelope = new WorkerBriefEnvelope(SchemaVersion, Ok: true, result);

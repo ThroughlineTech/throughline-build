@@ -350,6 +350,19 @@ public sealed record SopOperationView(
 
 public sealed record SopOperationEnvelope(int SchemaVersion, bool Ok, SopOperationView Data);
 
+// ---- build conductor prompt / apply ----------------------------------------------
+
+public sealed record ConductorPromptView(string Prompt);
+
+public sealed record ConductorPromptEnvelope(int SchemaVersion, bool Ok, ConductorPromptView Data);
+
+public sealed record ConductorApplyView(
+    string ConductorPath,
+    int InvariantCount,
+    bool Changed);
+
+public sealed record ConductorApplyEnvelope(int SchemaVersion, bool Ok, ConductorApplyView Data);
+
 public sealed record SopManifest(
     int SchemaVersion,
     string InstalledByBuildVersion,
@@ -431,6 +444,8 @@ public sealed record WorkerBriefEnvelope(int SchemaVersion, bool Ok, WorkerBrief
 [JsonSerializable(typeof(SopPathResultView))]
 [JsonSerializable(typeof(SopOperationEnvelope))]
 [JsonSerializable(typeof(SopManifest))]
+[JsonSerializable(typeof(ConductorPromptEnvelope))]
+[JsonSerializable(typeof(ConductorApplyEnvelope))]
 
 [JsonSerializable(typeof(WorkerBriefView))]
 [JsonSerializable(typeof(WorkerBriefEnvelope))]

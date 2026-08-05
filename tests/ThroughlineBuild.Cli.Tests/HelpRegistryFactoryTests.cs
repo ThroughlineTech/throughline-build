@@ -29,6 +29,7 @@ public class HelpRegistryFactoryTests
     [InlineData("gate")]
     [InlineData("waves")]
     [InlineData("sop")]
+    [InlineData("conductor")]
     [InlineData("new")]
     [InlineData("list")]
     [InlineData("amend")]
@@ -104,6 +105,7 @@ public class HelpRegistryFactoryTests
     [InlineData("op-doc")]
     [InlineData("scaffold")]
     [InlineData("profile")]
+    [InlineData("conductor")]
     public void ConfigureCommands_HaveCorrectGroup(string verb)
     {
         Assert.Equal(CommandGroup.Configure, Registry.TryGet(verb)!.Group);
@@ -140,6 +142,7 @@ public class HelpRegistryFactoryTests
     [InlineData("op-doc")]
     [InlineData("scaffold")]
     [InlineData("profile")]
+    [InlineData("conductor")]
     public void AllCommands_HaveNonEmptySummaryAndUsage(string verb)
     {
         var help = Registry.TryGet(verb)!;
@@ -225,6 +228,18 @@ public class HelpRegistryFactoryTests
         Assert.Contains("paths as drift", output);
         Assert.Contains("Review invariants are structured prose", output);
         Assert.Contains("does not evaluate whether a statement is true", output);
+    }
+
+    [Fact]
+    public void Conductor_HelpDocumentsWorkerFreePromptAndAtomicApply()
+    {
+        var output = Tier1Renderer.Render(Registry.TryGet("conductor")!);
+
+        Assert.Contains("conductor prompt", output);
+        Assert.Contains("conductor apply <path|->", output);
+        Assert.Contains("never access ticketing, secrets, workers, or the network", output);
+        Assert.Contains("preserves all bytes outside", output);
+        Assert.Contains("Input validation or atomic write failure", output);
     }
 
     [Fact]

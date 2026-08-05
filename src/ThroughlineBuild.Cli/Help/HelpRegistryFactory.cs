@@ -42,6 +42,7 @@ public static class HelpRegistryFactory
         r.Register(Waves());
         r.Register(Candidate());
         r.Register(Sop());
+        r.Register(Conductor());
 
         // Work items
         r.Register(New());
@@ -372,6 +373,37 @@ public static class HelpRegistryFactory
         Details:
         [
             "`profile prompt` needs no configuration or ticketing credentials. `profile apply` reads only config.toml and spawns no worker. `profile derive` reads only [workers], uses the configured default worker, and verifies every gating canary in a temporary worktree before changing config.toml."
+        ]
+    );
+
+    private static CommandHelp Conductor() => new(
+        Name: "conductor",
+        Group: CommandGroup.Configure,
+        Summary: "Prompt for and atomically apply repository review invariants",
+        Usage:
+            "conductor prompt [--json]\n" +
+            "conductor apply <path|-> [--json]",
+        Options:
+        [
+            new("<path|->", "Read TOML invariant blocks from a file or standard input", false),
+            new("--json", "Emit a versioned JSON envelope", false),
+        ],
+        ExitCodes:
+        [
+            new(0, "Prompt emitted or validated invariant blocks applied"),
+            new(1, "Input validation or atomic write failure"),
+            new(2, "Usage error or missing conductor configuration"),
+        ],
+        Examples:
+        [
+            new("conductor prompt", "Print the cached worker-free invariant-authoring prompt"),
+            new("conductor prompt | agent > invariants.toml", "Use an interactive agent without spawning a worker"),
+            new("conductor apply invariants.toml --json", "Validate and atomically replace only the invariant block run"),
+            new("agent | build conductor apply -", "Validate invariant TOML from standard input"),
+        ],
+        Details:
+        [
+            "Both subcommands run before config bootstrap and never access ticketing, secrets, workers, or the network. Apply preserves all bytes outside the contiguous [[conductor.review.invariants]] run."
         ]
     );
 

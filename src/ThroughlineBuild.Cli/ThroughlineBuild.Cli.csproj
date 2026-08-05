@@ -44,6 +44,8 @@
     <PackageReference Include="Tomlyn" />
   </ItemGroup>
   <ItemGroup>
+    <EmbeddedResource Include="Templates\conductor-invariants-prompt.md"
+      LogicalName="ThroughlineBuild.Cli.Templates.ConductorInvariantsPrompt.md" />
     <EmbeddedResource Include="Sops\run-backlog\ticket-transaction.md"
       LogicalName="ThroughlineBuild.Cli.Sops.RunBacklog.TicketTransaction.md" />
     <EmbeddedResource Include="Sops\run-backlog\fan-out-scheduling.md"

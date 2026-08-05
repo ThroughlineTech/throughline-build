@@ -226,6 +226,17 @@ public static class CliApplication
 
         if (registeredVerb?.RunsBeforeConfig == true)
         {
+            if (verbKind == CliVerbKind.Conductor)
+            {
+                return ConductorCommand.Execute(
+                    args,
+                    jsonOutput,
+                    rawCwd,
+                    Console.In,
+                    Console.Out,
+                    Console.Error);
+            }
+
             // 'build init' must run before config load - it bootstraps the config file.
             if (verbKind == CliVerbKind.Init)
             {

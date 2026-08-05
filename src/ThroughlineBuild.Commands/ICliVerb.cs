@@ -19,6 +19,7 @@ public enum CliVerbKind
     OpDoc,
     Models,
     Sop,
+    Conductor,
     Profile,
     Sweep,
     Candidate,
