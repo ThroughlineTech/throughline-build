@@ -344,6 +344,50 @@ public sealed class SopDoctorCommandTests
         }
     }
 
+    [Theory]
+    [InlineData(
+        "ticket_prefix = \"TLB\"",
+        "ticket_prefix = \"TICKET\"",
+        "conductor.ticket_prefix.placeholder",
+        "conductor.ticket_prefix",
+        "replace it with the prefix used by this repository's ticket IDs")]
+    [InlineData(
+        "statement = \"CLI JSON output uses source-generated JsonSerializerContext.\"",
+        "statement = \"Replace this sentence with a true review invariant for this repository.\"",
+        "conductor.review.invariants.statement.placeholder",
+        "conductor.review.invariants[1].statement",
+        "replace it with a true review invariant for this repository")]
+    [InlineData(
+        "platform = \"dotnet-cli\"",
+        "platform = \"unknown\"",
+        "constellation.platform.placeholder",
+        "constellation.platform",
+        "replace it with the repository's actual platform identifier")]
+    public void Doctor_FailsOnExactConductorScaffoldPlaceholders(
+        string original,
+        string placeholder,
+        string expectedCode,
+        string expectedPath,
+        string expectedAction)
+    {
+        var repo = CreateRepo(ValidConductorToml.Replace(original, placeholder));
+        var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+
+        try
+        {
+            Assert.False(report.Passed);
+            var finding = Assert.Single(report.Findings, finding => finding.Code == expectedCode);
+            Assert.Equal(expectedPath, finding.Path);
+            Assert.Contains(".build/conductor.toml", finding.Message, StringComparison.Ordinal);
+            Assert.Contains($"key '{expectedPath}'", finding.Message, StringComparison.Ordinal);
+            Assert.Contains(expectedAction, finding.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
     [Fact]
     public void Doctor_FailsOnUnknownConductorKeysIncludingMisspelledBlocksDone()
     {
@@ -371,6 +415,7 @@ public sealed class SopDoctorCommandTests
 
     [Theory]
     [InlineData("# no review checks", "review.checks.empty")]
+    [InlineData("[review]\nchecks = []", "review.checks.empty")]
     [InlineData("[review]\n\n[[review.checks]]\nname = \"unit\"\nexecutable = \"   \"", "review.checks.command.missing")]
     [InlineData("[review]\n\n[[review.checks]]\nname = \"unit\"", "review.checks.command.missing")]
     public void Doctor_FailsWhenReviewChecksAreEmptyOrHaveNoRunnableCommand(

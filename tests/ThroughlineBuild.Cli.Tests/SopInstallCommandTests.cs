@@ -79,6 +79,44 @@ public sealed class SopInstallCommandTests
     }
 
     [Fact]
+    public async Task InitThenSopInstall_LeavesDoctorFailingOnUnresolvedScaffoldValues()
+    {
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+        var repo = CreateRepo();
+
+        try
+        {
+            var init = await RunCliInDirectoryAsync(repo, ["init", "--no-interactive"]);
+            Assert.Equal(0, init.Exit);
+
+            var install = await RunCliInDirectoryAsync(
+                repo,
+                ["sop", "install", "--sop", "run-backlog", "--json"]);
+            Assert.Equal(0, install.Exit);
+
+            var doctor = await RunCliInDirectoryAsync(repo, ["sop", "doctor", "--json"]);
+
+            Assert.Equal(1, doctor.Exit);
+            Assert.Equal(string.Empty, doctor.Stderr);
+            using var doc = JsonDocument.Parse(doctor.Stdout);
+            var data = doc.RootElement.GetProperty("data");
+            Assert.False(data.GetProperty("passed").GetBoolean());
+            var codes = data.GetProperty("findings")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("code").GetString())
+                .ToList();
+            Assert.Contains("conductor.ticket_prefix.placeholder", codes);
+            Assert.Contains("conductor.review.invariants.statement.placeholder", codes);
+            Assert.Contains("constellation.platform.placeholder", codes);
+            Assert.Contains("review.checks.empty", codes);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public void StubResources_AreThinFailClosedAndHostBodiesMatch()
     {
         var runBacklogClaude = SopResourceLoader.LoadResource(SopBundleCatalog.RunBacklogClaudeCommandResource);

@@ -57,6 +57,10 @@ public sealed record SopDoctorView(
 internal static class SopDoctorCommand
 {
     private const int BinaryDefaultReworkCap = 3;
+    private const string ScaffoldTicketPrefix = "TICKET";
+    private const string ScaffoldInvariantStatement =
+        "Replace this sentence with a true review invariant for this repository.";
+    private const string ScaffoldPlatform = "unknown";
     private static readonly HashSet<string> ValidEscalationModelSizes = new(StringComparer.Ordinal)
     {
         "small",
@@ -284,6 +288,14 @@ internal static class SopDoctorCommand
 
         var branchPrefix = RequiredString(conductor, "branch_prefix", "conductor.branch_prefix", findings);
         var ticketPrefix = RequiredString(conductor, "ticket_prefix", "conductor.ticket_prefix", findings);
+        if (string.Equals(ticketPrefix, ScaffoldTicketPrefix, StringComparison.Ordinal))
+        {
+            findings.Add(new SopDoctorFinding(
+                "conductor.ticket_prefix.placeholder",
+                "conductor.ticket_prefix",
+                ".build/conductor.toml key 'conductor.ticket_prefix' still holds the scaffold " +
+                "placeholder 'TICKET'; replace it with the prefix used by this repository's ticket IDs"));
+        }
         var sourceRoots = RequiredStringList(conductor, "source_roots", "conductor.source_roots", findings);
         var architectureMap = RequiredString(conductor, "architecture_map", "conductor.architecture_map", findings);
         var reworkCap = RequiredInt(conductor, "rework_cap", "conductor.rework_cap", findings);
@@ -352,6 +364,14 @@ internal static class SopDoctorCommand
             AddUnknownKeyFindings(entry, path, KnownInvariantKeys, findings);
             var id = RequiredString(entry, "id", $"{path}.id", findings);
             var statement = RequiredString(entry, "statement", $"{path}.statement", findings);
+            if (string.Equals(statement, ScaffoldInvariantStatement, StringComparison.Ordinal))
+            {
+                findings.Add(new SopDoctorFinding(
+                    "conductor.review.invariants.statement.placeholder",
+                    $"{path}.statement",
+                    $".build/conductor.toml key '{path}.statement' still holds the scaffold placeholder; " +
+                    "replace it with a true review invariant for this repository"));
+            }
             if (id is not null && !seen.Add(id))
             {
                 findings.Add(new SopDoctorFinding(
@@ -416,6 +436,14 @@ internal static class SopDoctorCommand
         AddUnknownKeyFindings(constellation, "constellation", KnownConstellationKeys, findings);
 
         var platform = RequiredString(constellation, "platform", "constellation.platform", findings);
+        if (string.Equals(platform, ScaffoldPlatform, StringComparison.Ordinal))
+        {
+            findings.Add(new SopDoctorFinding(
+                "constellation.platform.placeholder",
+                "constellation.platform",
+                ".build/conductor.toml key 'constellation.platform' still holds the scaffold " +
+                "placeholder 'unknown'; replace it with the repository's actual platform identifier"));
+        }
         var contractAuthority = RequiredString(
             constellation,
             "contract_authority",
