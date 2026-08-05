@@ -10,6 +10,27 @@ running your first ticket end-to-end.
 
 ## Prerequisites
 
+### Install run-backlog into a repository
+
+After putting `build` and Git on PATH and making the Plane token available,
+run the same three-stage sequence in every repository:
+
+```sh
+build install
+build install --profile .build/profile.json
+build install --invariants .build/invariants.toml
+```
+
+Each of the first two commands emits a canonical prompt and stops. Give that
+prompt to an agent that can read the repository, save only the requested JSON
+or TOML, and pass the file to the next invocation. The command never starts a
+worker itself. The final invocation prepares a non-protected run branch,
+commits only exact installer-owned readiness paths (a deterministic Setup-owned
+`.gitignore` when created or changed, plus catalog-emitted host stubs), and
+prints READY only after the run-backlog structural preflight passes. It
+intentionally does not install target-stack dependencies or require a green
+target build during installation.
+
 ### Install
 
 **git** - Any recent version. Confirm it is on your PATH with `git --version`. The `build ship`
@@ -302,7 +323,9 @@ sections they use without requiring `[ticketing]`, `[workers]`, or `[events]`,
 resolving ticketing secrets, or constructing a Plane client. Other commands
 still require the full ticketing, worker, and event configuration.
 
-Repositories that use binary-hosted SOPs also track `.build/conductor.toml`.
+Repositories that use binary-hosted SOPs keep `.build/conductor.toml` ignored
+and machine-local. Recreate it in each clone through `build install` or
+`build sop install`.
 Run `build sop list [--json]` to report embedded SOPs and their binary versions.
 Run `build sop install [--sop <name>] [--host claude|codex] [--json]` to emit
 host stubs, scaffold a missing `.build/conductor.toml`, and write

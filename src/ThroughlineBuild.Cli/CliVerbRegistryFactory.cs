@@ -7,6 +7,7 @@ public static class CliVerbRegistryFactory
     private static readonly (string Name, CliVerbKind Kind, bool RunsBeforeConfig)[] Verbs =
     [
         ("init", CliVerbKind.Init, true),
+        ("install", CliVerbKind.Install, true),
         ("settarget", CliVerbKind.SetTarget, true),
         ("user-guide", CliVerbKind.UserGuide, true),
         ("op-doc", CliVerbKind.OpDoc, true),

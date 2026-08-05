@@ -14,6 +14,7 @@ public interface ICliVerb
 public enum CliVerbKind
 {
     Init,
+    Install,
     SetTarget,
     UserGuide,
     OpDoc,

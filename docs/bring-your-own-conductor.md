@@ -11,8 +11,8 @@ conductor uses the ticket CRUD verbs (`list`, `get`, `comments`, `comment`,
 The `waves` verb plans which selected tickets can safely run concurrently.
 The `candidate status` command fingerprints the current candidate worktree so a
 conductor can prove the reviewed tree is the tree it is about to commit.
-The `sop` command family lists binary-hosted SOPs, validates tracked conductor
-data, and emits the brief envelope that host stubs consume.
+The `sop` command family lists binary-hosted SOPs, validates machine-local
+conductor data, and emits the brief envelope that host stubs consume.
 `profile prompt` emits the canonical repository-interrogation rules and
 `profile apply` persists a supplied PROJECT_PROFILE without starting a worker.
 `profile verify-canaries` is a separate explicit opt-in operation that proves
@@ -32,7 +32,7 @@ configuration and ticketing credentials.
 
 ## Configuration
 
-Binary-hosted SOPs use tracked repository data:
+Binary-hosted SOPs read machine-local conductor data:
 
 ```toml
 [conductor]
@@ -63,9 +63,11 @@ platform = "dotnet-cli"
 contract_authority = "src/ThroughlineBuild.Contracts"
 ```
 
-`.build/conductor.toml` is tracked and contains no secrets. It carries the
-minimum Build version, branch and ticket prefixes, source roots, architecture
-map, review invariants, review escalation rule, rework cap, and constellation.
+`.build/conductor.toml` is ignored, machine-local, and contains no secrets;
+recreate it in each clone through `build install` or `build sop install`. It
+carries the minimum Build version, branch and ticket prefixes, source roots,
+architecture map, review invariants, review escalation rule, rework cap, and
+constellation.
 Run `build sop list [--json]` to report available embedded SOPs and their binary
 versions. Run `build sop install [--sop <name>] [--host claude|codex] [--json]`
 to emit host stubs, scaffold a missing `.build/conductor.toml`, and write

@@ -60,6 +60,7 @@ public static class HelpRegistryFactory
 
         // Configure
         r.Register(Init());
+        r.Register(Install());
         r.Register(SetTarget());
         r.Register(Setup());
         r.Register(UserGuide());
@@ -509,7 +510,7 @@ public static class HelpRegistryFactory
             `sop list` reports every SOP embedded in the binary. The SOP version is the running
             binary version; replacing the binary is the SOP upgrade path.
 
-            `sop doctor` reads tracked .build/conductor.toml independently of .build/config.toml
+            `sop doctor` reads .build/conductor.toml independently of .build/config.toml
             and validates manifest-recorded or present emitted host stubs byte-for-byte against the embedded catalog.
             It only looks at .build/config.toml for [[review.checks]], so missing ticketing
             credentials, worker configuration, and event configuration do not block it.
@@ -851,6 +852,30 @@ public static class HelpRegistryFactory
     // ------------------------------------------------------------------
     // Configure commands
     // ------------------------------------------------------------------
+
+    private static CommandHelp Install() => new(
+        Name: "install",
+        Group: CommandGroup.Configure,
+        Summary: "Install and prove run-backlog readiness through two explicit agent handoffs",
+        Usage: "install [--profile <path|-> | --invariants <path|->] [--json]",
+        Options:
+        [
+            new("--profile <path|->", "Apply PROJECT_PROFILE JSON, install SOPs, and stop at the invariant prompt", false),
+            new("--invariants <path|->", "Apply invariant TOML and finish deterministic readiness preparation", false),
+            new("--json", "Emit one versioned handoff or readiness envelope; progress remains on stderr", false),
+        ],
+        ExitCodes: [s_exit0, s_exit1, s_exit2, s_exit3, s_exit5],
+        Examples:
+        [
+            new("install", "Initialize/setup, then stop with the canonical profile prompt"),
+            new("install --profile .build/profile.json", "Apply the profile, install SOPs, then stop with the conductor prompt"),
+            new("install --invariants .build/invariants.toml --json", "Apply invariants and report READY only after SOP preflight passes"),
+        ],
+        Details:
+        [
+            "The verb never starts a worker or runs target-stack build/test commands. Final readiness requires doctor success, configured checks, resolved conductor data, a clean non-protected branch, no merge/rebase operation, and a queryable worktree lease surface."
+        ]
+    );
 
     private static CommandHelp Init() => new(
         Name: "init",

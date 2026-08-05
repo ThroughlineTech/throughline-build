@@ -42,8 +42,9 @@ lives under `.build/`.
 - There is no daemon or server. Each invocation loads state, performs work, and
   exits.
 - `.build/config.toml` is local configuration and may contain credentials; it
-  must remain ignored. `.build/conductor.toml` is tracked repository data for
-  binary-hosted SOPs and must contain no secrets.
+  must remain ignored. `.build/conductor.toml` is machine-local conductor data
+  for binary-hosted SOPs; it is also ignored, is recreated per clone by
+  `build install` or `build sop install`, and must contain no secrets.
 
 ### Non-Goals
 
@@ -198,7 +199,7 @@ tracks branch and worktree ownership separately. The standalone `worktree`,
 `gate`, `waves`, and `candidate status` paths load only their consumed config
 sections without requiring `[ticketing]`, `[workers]`, or `[events]`, resolving
 ticketing secrets, or constructing a Plane client. `build sop` runs in the same
-no-worker/no-ticketing band. `sop doctor` reads tracked `.build/conductor.toml`,
+no-worker/no-ticketing band. `sop doctor` reads `.build/conductor.toml`,
 validates manifest-recorded or present emitted stubs byte-for-byte against the
 catalog, and only consults local `.build/config.toml` for `[[review.checks]]`;
 standard `sop brief` runs doctor first, then emits embedded SOP text and the

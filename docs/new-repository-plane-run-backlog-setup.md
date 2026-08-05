@@ -6,6 +6,33 @@ type `/run-backlog`, and have it drive a real ticket to Done.
 Run every command from the repository root. The current binary is the authority;
 use `build <command> --help` if its command contract differs from this document.
 
+## Fixed installation sequence
+
+`build install` is the stack-agnostic, resumable path. It runs no worker and
+does not execute the target repository's build or test commands:
+
+```sh
+build install
+# Give the emitted prompt to an agent; save its JSON as .build/profile.json.
+build install --profile .build/profile.json
+# Give the emitted prompt to an agent; save its TOML as .build/invariants.toml.
+build install --invariants .build/invariants.toml
+```
+
+The first two invocations stop at explicit handoffs. The third reports READY
+only after doctor passes, at least one blocking review check exists, generated
+placeholders are gone, and the exact installer-owned readiness paths are
+committed on a non-protected run branch: a deterministic `.gitignore` when
+Setup created or changed it, plus catalog-emitted Claude/Codex stubs. The
+porcelain status must be empty, no merge or rebase may be active, and the
+worktree lease list must be queryable. Rerunning a stage is safe: matching
+profile/invariant data, the run branch, and the readiness commit are not
+duplicated. Use `<command> --json` for one machine-readable result envelope;
+progress remains on stderr.
+
+The detailed steps below remain useful for diagnosis and for operating the
+individual commands directly.
+
 ## Who runs the work
 
 `run-backlog` does NOT use `build chain`, `plan`, `implement`, or `review`. The
@@ -37,7 +64,7 @@ Two TOML files have different owners and must not be combined:
 | File | Contents | Git policy |
 | --- | --- | --- |
 | `.build/config.toml` | Plane connection, token environment-variable name, workers, events, and executable review checks | Machine-local and ignored |
-| `.build/conductor.toml` | SOP version floor, ticket and branch prefixes, source roots, architecture map, review invariants, and escalation paths | Tracked |
+| `.build/conductor.toml` | SOP version floor, ticket and branch prefixes, source roots, architecture map, review invariants, and escalation paths | Machine-local and ignored; `build install` recreates it per clone |
 
 The SOP installer also emits two tracked host stubs and one installer cache:
 
@@ -206,7 +233,7 @@ interchangeable and the distinction bites on fresh clones:
 
 | Verb | What it does | When |
 | --- | --- | --- |
-| `sop install` | Writes emitted paths that are missing; scaffolds `conductor.toml` when absent; never overwrites a locally modified stub | First install, and any clone that has no stubs |
+| `sop install` | Writes emitted paths that are missing; scaffolds `conductor.toml` when absent; never overwrites a locally modified stub | First install, every clone missing its local conductor, or any clone missing stubs |
 | `sop upgrade` | Rewrites emitted files that ALREADY EXIST and still match a trusted previous catalog hash. It does NOT create missing files | After replacing the binary with a newer one |
 
 Running `sop upgrade` on a repository whose stubs were never installed reports
@@ -238,7 +265,8 @@ Open `.build/conductor.toml` and replace every generic value. At minimum verify:
 Doctor validates the SHAPE of `[[conductor.review.invariants]]`, not the truth of
 each statement, so it will accept a well-formed lie. Delete the scaffold sentence
 that tells you to replace it with a true invariant. `conductor.toml` must contain
-no secrets and should be committed alongside the host stubs.
+no secrets. It is machine-local and ignored; recreate and verify it in every
+clone rather than committing it with the host stubs.
 
 Also review `[waves]` in `config.toml`. `cap` defaults to 2, which means two
 tickets can run concurrently. Set `cap = 1` for a first dogfood run so there is
@@ -277,22 +305,21 @@ Common doctor findings and what each means:
 
 ```sh
 git status --short
-git check-ignore -v .build/config.toml
+git check-ignore -v .build/config.toml .build/conductor.toml .build/sop-manifest.json
 ```
 
-`.build/config.toml` must be ignored. Review and commit the tracked contract and
-stubs:
+Both `.build/config.toml` and `.build/conductor.toml` must be ignored. The
+installer commits only its exact readiness paths:
 
 ```text
-.build/conductor.toml
+.gitignore                         # only when Setup created or changed it deterministically
 .claude/commands/run-backlog.md
 .agents/skills/run-backlog/SKILL.md
 ```
 
 Treat `.build/sop-manifest.json` as installer history, not as authority for
 modified stubs. Before committing, confirm no temporary configuration file holds
-a literal Plane token and no broad `.build/` ignore rule hides the tracked
-`conductor.toml`.
+a literal Plane token outside the ignored `.build/` directory.
 
 ## 9. Run a ticket
 
@@ -325,19 +352,21 @@ finding history preserved for you to inspect.
 
 ## 10. Set up a second machine
 
-What a clone gives you depends entirely on whether someone completed this runbook
-and committed the result. Check before assuming:
+What a clone gives you depends on whether someone completed this runbook and
+committed the host stubs. The machine-local conductor file never travels. Check
+before assuming:
 
 ```sh
 git log --oneline -- .claude/commands .agents/skills   # empty means never committed
 ls .build/conductor.toml
 ```
 
-**If the stubs and `conductor.toml` are absent**, this machine is doing a first
-install, not a migration. Do the whole runbook from step 2. `build sop upgrade`
-is the wrong verb here and will report every path missing.
+**If the stubs are absent**, this machine is doing a first install, not a
+migration. Do the whole runbook from step 2. `build sop upgrade` is the wrong
+verb here and will report every path missing.
 
-**If they are present in the clone**, you need much less:
+**If the stubs are present in the clone**, recreate the ignored configuration
+and conductor data for this machine:
 
 ```sh
 build --version                        # must be >= conductor.min_build_version
@@ -345,7 +374,8 @@ export PLANE_API_TOKEN=...
 build init --no-interactive --plane-url ... --workspace ... --project-id ... --token-env PLANE_API_TOKEN
 build setup
 # re-create [[review.checks]] -- see below
-build sop upgrade --json               # only if this binary is newer than the one that wrote the stubs
+build sop install --json               # creates the missing local conductor without replacing stubs
+# replace the conductor scaffold with this repository's verified facts
 build sop doctor --json
 build sop brief run-backlog --json     # returns sopText => ready
 ```
@@ -362,7 +392,7 @@ re-deriving it, and diff the two files. Re-deriving invites two machines to
 enforce different gates while both report green.
 
 The SOP prose itself has no such problem: it lives in the binary, so the only
-thing governing fidelity is the binary version. `min_build_version` in the tracked
+thing governing fidelity is the binary version. `min_build_version` in the local
 `conductor.toml` is a floor, not a pin. An older binary is caught; a newer one
 silently supplies different SOP prose to the same repository.
 

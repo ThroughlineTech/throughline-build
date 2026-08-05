@@ -37,6 +37,7 @@ public class HelpRegistryFactoryTests
     [InlineData("defer")]
     [InlineData("reopen")]
     [InlineData("init")]
+    [InlineData("install")]
     [InlineData("settarget")]
     [InlineData("setup")]
     [InlineData("user-guide")]
@@ -99,6 +100,7 @@ public class HelpRegistryFactoryTests
 
     [Theory]
     [InlineData("init")]
+    [InlineData("install")]
     [InlineData("settarget")]
     [InlineData("setup")]
     [InlineData("user-guide")]
@@ -136,6 +138,7 @@ public class HelpRegistryFactoryTests
     [InlineData("defer")]
     [InlineData("reopen")]
     [InlineData("init")]
+    [InlineData("install")]
     [InlineData("settarget")]
     [InlineData("setup")]
     [InlineData("user-guide")]

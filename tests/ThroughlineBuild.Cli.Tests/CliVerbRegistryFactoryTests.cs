@@ -9,7 +9,7 @@ public sealed class CliVerbRegistryFactoryTests
     {
         string[] expected =
         [
-            "init", "settarget", "user-guide", "op-doc", "models",
+            "init", "install", "settarget", "user-guide", "op-doc", "models",
             "sop", "conductor", "profile", "sweep", "candidate", "worker", "worktree", "gate", "waves", "list", "get", "comments", "comment", "evidence", "transition",
             "relate", "setup", "amend", "close", "defer", "reopen", "new",
             "scaffold", "rework", "decompose", "plan", "implement", "review",
@@ -23,6 +23,7 @@ public sealed class CliVerbRegistryFactoryTests
 
     [Theory]
     [InlineData("init")]
+    [InlineData("install")]
     [InlineData("settarget")]
     [InlineData("user-guide")]
     [InlineData("op-doc")]

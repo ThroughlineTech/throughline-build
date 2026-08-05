@@ -226,6 +226,24 @@ public static class CliApplication
 
         if (registeredVerb?.RunsBeforeConfig == true)
         {
+            if (verbKind == CliVerbKind.Install)
+            {
+                if (!InstallCommand.TryParse(args, out var installInvocation, out var installError))
+                {
+                    if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, installError);
+                    else
+                    {
+                        Console.Error.WriteLine($"Error: {installError}");
+                        Console.Error.WriteLine("Usage: build install [--profile <path|-> | --invariants <path|->] [--json]");
+                    }
+                    return 2;
+                }
+                using var installCts = new CancellationTokenSource();
+                Console.CancelKeyPress += (_, e) => { e.Cancel = true; installCts.Cancel(); };
+                return await InstallCommand.ExecuteAsync(
+                    installInvocation!, jsonOutput, rawCwd, Console.In, Console.Out, Console.Error, installCts.Token);
+            }
+
             if (verbKind == CliVerbKind.Conductor)
             {
                 return ConductorCommand.Execute(

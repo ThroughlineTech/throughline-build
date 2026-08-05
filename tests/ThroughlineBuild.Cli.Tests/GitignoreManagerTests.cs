@@ -60,6 +60,15 @@ public class GitignoreManagerTests
     }
 
     [Fact]
+    public void RequiredEntries_IgnoreInstallHandoffsAndMachineLocalSopState()
+    {
+        Assert.Contains(".build/profile.json", GitignoreManager.RequiredEntries);
+        Assert.Contains(".build/invariants.toml", GitignoreManager.RequiredEntries);
+        Assert.Contains(".build/conductor.toml", GitignoreManager.RequiredEntries);
+        Assert.Contains(".build/sop-manifest.json", GitignoreManager.RequiredEntries);
+    }
+
+    [Fact]
     public void Merge_IsIdempotent_SecondPassReturnsNull()
     {
         var first = GitignoreManager.Merge("node_modules/\n")!;

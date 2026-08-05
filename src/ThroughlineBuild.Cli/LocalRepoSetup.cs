@@ -18,6 +18,10 @@ public static class GitignoreManager
     {
         // build tool artifacts
         ".build/config.toml",
+        ".build/conductor.toml",
+        ".build/sop-manifest.json",
+        ".build/profile.json",
+        ".build/invariants.toml",
         ".build/*.md",
         ".build/events/",
         ".build/sessions/",

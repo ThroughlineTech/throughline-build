@@ -446,6 +446,7 @@ public sealed record WorkerBriefEnvelope(int SchemaVersion, bool Ok, WorkerBrief
 [JsonSerializable(typeof(SopManifest))]
 [JsonSerializable(typeof(ConductorPromptEnvelope))]
 [JsonSerializable(typeof(ConductorApplyEnvelope))]
+[JsonSerializable(typeof(InstallEnvelope))]
 
 [JsonSerializable(typeof(WorkerBriefView))]
 [JsonSerializable(typeof(WorkerBriefEnvelope))]

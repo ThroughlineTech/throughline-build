@@ -160,6 +160,13 @@ public static class CliEnvelopeWriter
             envelope, CliJsonContext.Default.ProfileOperationEnvelope));
     }
 
+    public static void WriteInstall(TextWriter output, InstallView result)
+    {
+        var envelope = new InstallEnvelope(SchemaVersion, Ok: true, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.InstallEnvelope));
+    }
+
     public static void WriteWaves(TextWriter output, WavePlan result)
     {
         var envelope = new WavesEnvelope(SchemaVersion, Ok: true, result);
