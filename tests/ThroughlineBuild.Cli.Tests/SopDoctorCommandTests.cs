@@ -1012,9 +1012,29 @@ public sealed class SopDoctorCommandTests
             Directory.SetCurrentDirectory(directory);
             Console.SetOut(stdout);
             Console.SetError(stderr);
-            var exit = await CliApplication.RunAsync(
-                args,
-                (_, _) => throw new InvalidOperationException("worker must not be constructed"));
+            int exit;
+            if (args.Length >= 2 && args[0] == "sop" && args[1] == "install")
+            {
+                var json = args.Contains("--json", StringComparer.Ordinal);
+                var commandArgs = args.Where(arg => arg != "--json").ToArray();
+                exit = await SopInstallCommand.ExecuteInstallAsync(
+                    commandArgs,
+                    json,
+                    directory,
+                    stdout,
+                    stderr,
+                    configuredProjectIdentifier: "TLB",
+                    configuredProjectId: "project-uuid",
+                    projectDiscovery: null,
+                    trackedFilesProvider: (_, _) =>
+                        Task.FromResult<IReadOnlyList<string>>(["src/placeholder.cs"]));
+            }
+            else
+            {
+                exit = await CliApplication.RunAsync(
+                    args,
+                    (_, _) => throw new InvalidOperationException("worker must not be constructed"));
+            }
             return (exit, stdout.ToString(), stderr.ToString());
         }
         finally

@@ -428,6 +428,16 @@ public static class CliApplication
 
             if (verbKind == CliVerbKind.Sop)
             {
+                if (args.Length >= 2 && string.Equals(args[1], "install", StringComparison.Ordinal))
+                {
+                    return await SopCommand.ExecuteInstallAsync(
+                        args,
+                        jsonOutput,
+                        rawCwd,
+                        Console.Out,
+                        Console.Error);
+                }
+
                 return SopCommand.Execute(
                     args,
                     jsonOutput,

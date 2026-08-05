@@ -1,7 +1,9 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using ThroughlineBuild.Cli.Json;
+using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Git;
 
@@ -9,6 +11,10 @@ namespace ThroughlineBuild.Cli;
 
 internal static class SopInstallCommand
 {
+    internal delegate Task<IReadOnlyList<string>> TrackedFilesProvider(
+        string repositoryRoot,
+        CancellationToken cancellationToken);
+
     public static int Execute(
         IReadOnlyList<string> args,
         bool json,
@@ -34,6 +40,168 @@ internal static class SopInstallCommand
             WriteHuman(output, result);
 
         return result.Passed ? 0 : 1;
+    }
+
+    public static async Task<int> ExecuteInstallAsync(
+        IReadOnlyList<string> args,
+        bool json,
+        string startDirectory,
+        TextWriter output,
+        TextWriter error,
+        string configuredProjectIdentifier,
+        string configuredProjectId,
+        IProjectDiscovery? projectDiscovery,
+        TrackedFilesProvider? trackedFilesProvider = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryParseScope(args, json, output, error, out var entries, out var host, out var exitCode))
+            return exitCode;
+
+        SopConductorIdentity? identity = null;
+        if (entries.SelectMany(entry => entry.OwnedPaths)
+            .Any(path => string.Equals(path.Class, SopBundleCatalog.ScaffoldedPathClass, StringComparison.Ordinal)))
+        {
+            try
+            {
+                identity = await DeriveIdentityAsync(
+                    SopInstaller.ResolveRepositoryRoot(startDirectory),
+                    configuredProjectIdentifier,
+                    configuredProjectId,
+                    projectDiscovery,
+                    trackedFilesProvider ?? ListTrackedFilesAsync,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (SopIdentityDerivationException ex)
+            {
+                if (json)
+                    CliEnvelopeWriter.WriteError(output, CliErrorCodes.Failure, ex.Message);
+                else
+                    error.WriteLine($"Error: {ex.Message}");
+                return 1;
+            }
+        }
+
+        var result = SopInstaller.Run(
+            "install",
+            startDirectory,
+            entries,
+            BuildVersion.Current,
+            DateTimeOffset.UtcNow,
+            host,
+            identity);
+
+        if (json)
+            CliEnvelopeWriter.WriteSopOperation(output, result);
+        else
+            WriteHuman(output, result);
+
+        return result.Passed ? 0 : 1;
+    }
+
+    internal static bool ValidateInvocation(
+        IReadOnlyList<string> args,
+        bool json,
+        TextWriter output,
+        TextWriter error,
+        out int exitCode) =>
+        TryParseScope(args, json, output, error, out _, out _, out exitCode);
+
+    private static async Task<SopConductorIdentity> DeriveIdentityAsync(
+        string repositoryRoot,
+        string configuredProjectIdentifier,
+        string configuredProjectId,
+        IProjectDiscovery? projectDiscovery,
+        TrackedFilesProvider trackedFilesProvider,
+        CancellationToken cancellationToken)
+    {
+        var ticketPrefix = configuredProjectIdentifier.Trim();
+        if (ticketPrefix.Length == 0)
+        {
+            if (projectDiscovery is null)
+            {
+                throw new SopIdentityDerivationException(
+                    "plane_project_identifier is not configured and Plane project discovery is unavailable");
+            }
+
+            IReadOnlyList<ProjectInfo> projects;
+            try
+            {
+                projects = await projectDiscovery.ListProjectsAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new SopIdentityDerivationException(
+                    $"could not resolve plane_project_identifier from configured plane_project_id " +
+                    $"'{configuredProjectId}': {ex.Message}");
+            }
+
+            var matches = projects
+                .Where(project => string.Equals(project.Id, configuredProjectId, StringComparison.Ordinal))
+                .ToList();
+            if (matches.Count != 1 || string.IsNullOrWhiteSpace(matches[0].Identifier))
+            {
+                throw new SopIdentityDerivationException(
+                    $"configured plane_project_id '{configuredProjectId}' did not resolve to exactly one " +
+                    "Plane project with an identifier; set plane_project_identifier in .build/config.toml " +
+                    "or fix the configured project UUID");
+            }
+
+            ticketPrefix = matches[0].Identifier.Trim();
+        }
+
+        IReadOnlyList<string> trackedFiles;
+        try
+        {
+            trackedFiles = await trackedFilesProvider(repositoryRoot, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new SopIdentityDerivationException(
+                $"could not derive conductor source_roots from git ls-files: {ex.Message}");
+        }
+
+        var roots = trackedFiles
+            .Select(path => path.Replace('\\', '/'))
+            .Where(path => path.IndexOf('/') is > 0)
+            .Select(path => path[..path.IndexOf('/')])
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+        if (roots.Count == 0)
+            roots.Add(".");
+
+        return new SopConductorIdentity(ticketPrefix, roots.AsReadOnly());
+    }
+
+    private static async Task<IReadOnlyList<string>> ListTrackedFilesAsync(
+        string repositoryRoot,
+        CancellationToken cancellationToken)
+    {
+        var startInfo = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = repositoryRoot,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add("ls-files");
+        startInfo.ArgumentList.Add("-z");
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("git could not be started");
+        var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
+        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        var output = await stdout.ConfigureAwait(false);
+        var diagnostic = await stderr.ConfigureAwait(false);
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"git ls-files exited {process.ExitCode}: {diagnostic.Trim()}");
+        }
+
+        return output.Split('\0', StringSplitOptions.RemoveEmptyEntries);
     }
 
     private static bool TryParseScope(
@@ -138,10 +306,20 @@ internal static class SopInstallCommand
             : $"sop {result.Operation} reported drift");
         output.WriteLine($"changed: {result.Changed.ToString().ToLowerInvariant()}");
         output.WriteLine($"manifest: {result.ManifestPath}");
+        if (result.TicketPrefix is not null)
+            output.WriteLine($"ticket prefix: {result.TicketPrefix}");
+        if (result.SourceRoots is not null)
+            output.WriteLine($"source roots: {string.Join(", ", result.SourceRoots)}");
         foreach (var item in result.Results)
             output.WriteLine($"{item.Status}\t{item.Path}\t{item.Message}");
     }
+
+    private sealed class SopIdentityDerivationException(string message) : Exception(message);
 }
+
+internal sealed record SopConductorIdentity(
+    string TicketPrefix,
+    IReadOnlyList<string> SourceRoots);
 
 internal static class SopInstaller
 {
@@ -161,7 +339,8 @@ internal static class SopInstaller
         IReadOnlyList<SopCatalogEntry> scopeEntries,
         string buildVersion,
         DateTimeOffset now,
-        string? host = null)
+        string? host = null,
+        SopConductorIdentity? conductorIdentity = null)
     {
         if (host is not null && !IsKnownHost(host))
             throw new ArgumentException($"unknown SOP host: {host}", nameof(host));
@@ -179,7 +358,15 @@ internal static class SopInstaller
                 "manifest",
                 "unsafe_path",
                 manifestError));
-            return View(operation, repositoryRoot, manifestPath, buildVersion, scopeEntries, changed: false, results);
+            return View(
+                operation,
+                repositoryRoot,
+                manifestPath,
+                buildVersion,
+                scopeEntries,
+                changed: false,
+                results,
+                conductorIdentity);
         }
 
         var resolutions = new Dictionary<string, ResolvedCatalogPath>(PathComparer);
@@ -200,7 +387,40 @@ internal static class SopInstaller
         }
 
         if (results.Count > 0)
-            return View(operation, repositoryRoot, manifestResolution.AbsolutePath, buildVersion, scopeEntries, changed: false, results);
+            return View(
+                operation,
+                repositoryRoot,
+                manifestResolution.AbsolutePath,
+                buildVersion,
+                scopeEntries,
+                changed: false,
+                results,
+                conductorIdentity);
+
+        if (string.Equals(operation, "install", StringComparison.Ordinal) &&
+            conductorIdentity is null)
+        {
+            var unresolvedScaffold = targets.FirstOrDefault(target =>
+                target.IsScaffolded &&
+                !File.Exists(resolutions[target.Path].AbsolutePath) &&
+                !Directory.Exists(resolutions[target.Path].AbsolutePath));
+            if (unresolvedScaffold is not null)
+            {
+                results.Add(Result(
+                    unresolvedScaffold,
+                    "identity_unavailable",
+                    "conductor identity must be derived before scaffolding; no files were written"));
+                return View(
+                    operation,
+                    repositoryRoot,
+                    manifestResolution.AbsolutePath,
+                    buildVersion,
+                    scopeEntries,
+                    changed: false,
+                    results,
+                    conductorIdentity);
+            }
+        }
 
         var manifest = ReadManifestOrNull(manifestResolution.AbsolutePath, results);
         var changed = operation switch
@@ -213,7 +433,8 @@ internal static class SopInstaller
                 scopeEntries,
                 buildVersion,
                 now,
-                results),
+                results,
+                conductorIdentity),
             "upgrade" => RunUpgrade(
                 targets,
                 resolutions,
@@ -236,7 +457,15 @@ internal static class SopInstaller
             _ => throw new InvalidOperationException($"unknown sop operation: {operation}"),
         };
 
-        return View(operation, repositoryRoot, manifestResolution.AbsolutePath, buildVersion, scopeEntries, changed, results);
+        return View(
+            operation,
+            repositoryRoot,
+            manifestResolution.AbsolutePath,
+            buildVersion,
+            scopeEntries,
+            changed,
+            results,
+            conductorIdentity);
     }
 
     internal static IReadOnlyList<SopPathResultView> InspectInstalledOrPresentEmittedStubs(
@@ -414,7 +643,8 @@ internal static class SopInstaller
         IReadOnlyList<SopCatalogEntry> scopeEntries,
         string buildVersion,
         DateTimeOffset now,
-        List<SopPathResultView> results)
+        List<SopPathResultView> results,
+        SopConductorIdentity? conductorIdentity)
     {
         var changed = false;
         foreach (var target in targets)
@@ -428,7 +658,7 @@ internal static class SopInstaller
 
             if (target.IsScaffolded)
             {
-                changed |= InstallScaffolded(target, resolved, buildVersion, results);
+                changed |= InstallScaffolded(target, resolved, buildVersion, conductorIdentity, results);
                 continue;
             }
 
@@ -602,12 +832,19 @@ internal static class SopInstaller
         SopInstallTarget target,
         ResolvedCatalogPath resolved,
         string buildVersion,
+        SopConductorIdentity? conductorIdentity,
         List<SopPathResultView> results)
     {
         if (!File.Exists(resolved.AbsolutePath) && !Directory.Exists(resolved.AbsolutePath))
         {
             Directory.CreateDirectory(Path.GetDirectoryName(resolved.AbsolutePath)!);
-            File.WriteAllText(resolved.AbsolutePath, BuildConductorScaffold(buildVersion), Utf8NoBom);
+            File.WriteAllText(
+                resolved.AbsolutePath,
+                BuildConductorScaffold(
+                    buildVersion,
+                    conductorIdentity ?? throw new InvalidOperationException(
+                        "conductor identity was not derived before scaffolding")),
+                Utf8NoBom);
             results.Add(Result(target, "scaffolded", "scaffolded file was written"));
             return true;
         }
@@ -1158,7 +1395,7 @@ internal static class SopInstaller
                !relative.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal);
     }
 
-    private static string ResolveRepositoryRoot(string startDirectory)
+    internal static string ResolveRepositoryRoot(string startDirectory)
     {
         var current = new DirectoryInfo(Path.GetFullPath(startDirectory));
         while (current is not null)
@@ -1237,7 +1474,8 @@ internal static class SopInstaller
         string buildVersion,
         IReadOnlyList<SopCatalogEntry> scopeEntries,
         bool changed,
-        IReadOnlyList<SopPathResultView> results)
+        IReadOnlyList<SopPathResultView> results,
+        SopConductorIdentity? conductorIdentity)
     {
         var passed = !HasBlockingFindings(results);
         return new SopOperationView(
@@ -1249,7 +1487,9 @@ internal static class SopInstaller
             ScopeSops: scopeEntries.Select(entry => entry.Name).ToList(),
             Changed: changed,
             Passed: passed,
-            Results: results);
+            Results: results,
+            TicketPrefix: conductorIdentity?.TicketPrefix,
+            SourceRoots: conductorIdentity?.SourceRoots);
     }
 
     private static bool HasBlockingFindings(IReadOnlyList<SopPathResultView> results) =>
@@ -1262,6 +1502,7 @@ internal static class SopInstaller
             "not_regular" or
             "missing_manifest_history" or
             "invalid_scaffolded" or
+            "identity_unavailable" or
             "scope_unavailable");
 
     private static SopPathResultView Result(SopInstallTarget target, string status, string message) =>
@@ -1274,15 +1515,19 @@ internal static class SopInstaller
         string status,
         string message) => new(sops, path, @class, status, message);
 
-    private static string BuildConductorScaffold(string buildVersion)
+    private static string BuildConductorScaffold(
+        string buildVersion,
+        SopConductorIdentity conductorIdentity)
     {
         var minVersion = TrimVersionCore(buildVersion);
+        var ticketPrefix = QuoteTomlBasicString(conductorIdentity.TicketPrefix);
+        var sourceRoots = string.Join(", ", conductorIdentity.SourceRoots.Select(QuoteTomlBasicString));
         return $$"""
             [conductor]
             min_build_version = "{{minVersion}}"
             branch_prefix = "ticket"
-            ticket_prefix = "TICKET"
-            source_roots = ["src"]
+            ticket_prefix = {{ticketPrefix}}
+            source_roots = [{{sourceRoots}}]
             architecture_map = "docs/throughline-build-architecture.md"
             rework_cap = 3
 
@@ -1300,6 +1545,33 @@ internal static class SopInstaller
             platform = "unknown"
             contract_authority = "src"
             """;
+    }
+
+    private static string QuoteTomlBasicString(string value)
+    {
+        var result = new StringBuilder(value.Length + 2);
+        result.Append('"');
+        foreach (var character in value)
+        {
+            switch (character)
+            {
+                case '\b': result.Append("\\b"); break;
+                case '\t': result.Append("\\t"); break;
+                case '\n': result.Append("\\n"); break;
+                case '\f': result.Append("\\f"); break;
+                case '\r': result.Append("\\r"); break;
+                case '"': result.Append("\\\""); break;
+                case '\\': result.Append("\\\\"); break;
+                default:
+                    if (character < ' ')
+                        result.Append($"\\u{(int)character:X4}");
+                    else
+                        result.Append(character);
+                    break;
+            }
+        }
+        result.Append('"');
+        return result.ToString();
     }
 
     private static string TrimVersionCore(string buildVersion)

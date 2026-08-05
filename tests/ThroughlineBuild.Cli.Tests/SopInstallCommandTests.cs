@@ -1,6 +1,8 @@
 using System.Text.Json;
 using ThroughlineBuild.Cli;
 using ThroughlineBuild.Cli.Json;
+using ThroughlineBuild.Commands;
+using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
 using Xunit;
 
@@ -79,6 +81,262 @@ public sealed class SopInstallCommandTests
     }
 
     [Fact]
+    public async Task Install_ConfiguredIdentifier_DerivesSortedDistinctTrackedRootsAndJsonValues()
+    {
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: "SQZ",
+                configuredProjectId: "project-uuid",
+                new ThrowingProjectDiscovery(),
+                ["zeta/file.txt", "docs/guide.md", "app/main.ts", "docs/reference.md", "README.md"]);
+
+            Assert.Equal(0, result.Exit);
+            Assert.Equal(string.Empty, result.Stderr);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            var data = doc.RootElement.GetProperty("data");
+            Assert.Equal("SQZ", data.GetProperty("ticketPrefix").GetString());
+            Assert.Equal(
+                ["app", "docs", "zeta"],
+                data.GetProperty("sourceRoots").EnumerateArray().Select(item => item.GetString()!).ToArray());
+
+            var conductor = File.ReadAllText(PathFor(repo, ".build/conductor.toml"));
+            Assert.Contains("ticket_prefix = \"SQZ\"", conductor, StringComparison.Ordinal);
+            Assert.Contains("source_roots = [\"app\", \"docs\", \"zeta\"]", conductor, StringComparison.Ordinal);
+
+            var human = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: "SQZ",
+                configuredProjectId: "project-uuid",
+                new ThrowingProjectDiscovery(),
+                ["zeta/file.txt", "docs/guide.md", "app/main.ts"],
+                json: false);
+            Assert.Equal(0, human.Exit);
+            Assert.Contains("ticket prefix: SQZ", human.Stdout, StringComparison.Ordinal);
+            Assert.Contains("source roots: app, docs, zeta", human.Stdout, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task CliInstall_UsesConfiguredIdentifierAndGitTrackedRoots()
+    {
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+        var repo = CreateRepo();
+
+        try
+        {
+            Directory.Delete(PathFor(repo, ".git"));
+            await RunGitAsync(repo, "init");
+            Directory.CreateDirectory(PathFor(repo, "ios"));
+            Directory.CreateDirectory(PathFor(repo, "docs"));
+            File.WriteAllText(PathFor(repo, "ios/App.swift"), "struct App {}\n");
+            File.WriteAllText(PathFor(repo, "docs/guide.md"), "guide\n");
+            await RunGitAsync(repo, "add", "ios/App.swift", "docs/guide.md");
+
+            var config = ConfigTemplateLoader.Load()
+                .Replace("REQUIRED_PLANE_BASE_URL", "https://api.plane.so", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_WORKSPACE_SLUG", "workspace", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_PROJECT_ID", "configured-uuid", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_API_TOKEN", "token", StringComparison.Ordinal)
+                .Replace(
+                    "plane_project_id = \"configured-uuid\"",
+                    "plane_project_id = \"configured-uuid\"\nplane_project_identifier = \"CLI\"",
+                    StringComparison.Ordinal);
+            Directory.CreateDirectory(PathFor(repo, ".build"));
+            File.WriteAllText(PathFor(repo, ".build/config.toml"), config);
+
+            var result = await RunCliApplicationInDirectoryAsync(repo, ["sop", "install", "--json"]);
+
+            Assert.Equal(0, result.Exit);
+            Assert.Equal(string.Empty, result.Stderr);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            var data = doc.RootElement.GetProperty("data");
+            Assert.Equal("CLI", data.GetProperty("ticketPrefix").GetString());
+            Assert.Equal(
+                ["docs", "ios"],
+                data.GetProperty("sourceRoots").EnumerateArray().Select(item => item.GetString()!).ToArray());
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_LegacyProjectId_ResolvesUniquePlaneIdentifier()
+    {
+        var repo = CreateRepo();
+        var discovery = new FakeProjectDiscovery(
+        [
+            new ProjectInfo("other-uuid", "Other", "OTH"),
+            new ProjectInfo("configured-uuid", "Configured", "LEG"),
+        ]);
+
+        try
+        {
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: string.Empty,
+                configuredProjectId: "configured-uuid",
+                discovery,
+                ["client/app.swift"]);
+
+            Assert.Equal(0, result.Exit);
+            Assert.Equal(1, discovery.ListCalls);
+            Assert.Contains(
+                "ticket_prefix = \"LEG\"",
+                File.ReadAllText(PathFor(repo, ".build/conductor.toml")),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_MissingConfiguredProject_FailsBeforeWriting()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: string.Empty,
+                configuredProjectId: "missing-uuid",
+                new FakeProjectDiscovery([new ProjectInfo("other-uuid", "Other", "OTH")]),
+                ["src/main.cs"]);
+
+            Assert.Equal(1, result.Exit);
+            Assert.Contains("did not resolve to exactly one", result.Stdout, StringComparison.Ordinal);
+            Assert.False(File.Exists(PathFor(repo, ".build/conductor.toml")));
+            Assert.False(File.Exists(PathFor(repo, ".agents/skills/run-backlog/SKILL.md")));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_AmbiguousConfiguredProject_FailsBeforeWriting()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: string.Empty,
+                configuredProjectId: "duplicate-uuid",
+                new FakeProjectDiscovery(
+                [
+                    new ProjectInfo("duplicate-uuid", "First", "ONE"),
+                    new ProjectInfo("duplicate-uuid", "Second", "TWO"),
+                ]),
+                ["src/main.cs"]);
+
+            Assert.Equal(1, result.Exit);
+            Assert.Contains("did not resolve to exactly one", result.Stdout, StringComparison.Ordinal);
+            Assert.False(File.Exists(PathFor(repo, ".build/conductor.toml")));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_UnavailableProjectDiscovery_FailsBeforeWriting()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: string.Empty,
+                configuredProjectId: "configured-uuid",
+                new ThrowingProjectDiscovery(),
+                ["src/main.cs"]);
+
+            Assert.Equal(1, result.Exit);
+            Assert.Contains("project discovery unavailable", result.Stdout, StringComparison.Ordinal);
+            Assert.False(File.Exists(PathFor(repo, ".build/conductor.toml")));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void Installer_WithoutDerivedIdentity_FailsBeforeAnyWrite()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = SopInstaller.Run(
+                "install",
+                repo,
+                SopBundleCatalog.All,
+                "0.1.0+test",
+                DateTimeOffset.UtcNow);
+
+            Assert.False(result.Passed);
+            Assert.False(result.Changed);
+            Assert.Contains(result.Results, item => item.Status == "identity_unavailable");
+            Assert.False(File.Exists(PathFor(repo, ".build/conductor.toml")));
+            Assert.False(File.Exists(PathFor(repo, ".claude/commands/run-backlog.md")));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_TrackedRootFilesOnly_FallsBackToDotSourceRoot()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: "ROOT",
+                configuredProjectId: "project-uuid",
+                new ThrowingProjectDiscovery(),
+                ["README.md", "solution.sln"]);
+
+            Assert.Equal(0, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            Assert.Equal(
+                ["."],
+                doc.RootElement.GetProperty("data").GetProperty("sourceRoots")
+                    .EnumerateArray().Select(item => item.GetString()!).ToArray());
+            Assert.Contains(
+                "source_roots = [\".\"]",
+                File.ReadAllText(PathFor(repo, ".build/conductor.toml")),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public async Task InitThenSopInstall_LeavesDoctorFailingOnUnresolvedScaffoldValues()
     {
         AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
@@ -105,7 +363,7 @@ public sealed class SopInstallCommandTests
                 .EnumerateArray()
                 .Select(item => item.GetProperty("code").GetString())
                 .ToList();
-            Assert.Contains("conductor.ticket_prefix.placeholder", codes);
+            Assert.DoesNotContain("conductor.ticket_prefix.placeholder", codes);
             Assert.Contains("conductor.review.invariants.statement.placeholder", codes);
             Assert.Contains("constellation.platform.placeholder", codes);
             Assert.Contains("review.checks.empty", codes);
@@ -751,6 +1009,77 @@ public sealed class SopInstallCommandTests
             Directory.SetCurrentDirectory(directory);
             Console.SetOut(stdout);
             Console.SetError(stderr);
+            int exit;
+            if (args.Length >= 2 && args[0] == "sop" && args[1] == "install")
+            {
+                var json = args.Contains("--json", StringComparer.Ordinal);
+                var commandArgs = args.Where(arg => arg != "--json").ToArray();
+                exit = await SopInstallCommand.ExecuteInstallAsync(
+                    commandArgs,
+                    json,
+                    directory,
+                    stdout,
+                    stderr,
+                    configuredProjectIdentifier: "TLB",
+                    configuredProjectId: "project-uuid",
+                    projectDiscovery: null,
+                    trackedFilesProvider: (_, _) =>
+                        Task.FromResult<IReadOnlyList<string>>(["src/placeholder.cs"]));
+            }
+            else
+            {
+                exit = await CliApplication.RunAsync(
+                    args,
+                    (_, _) => throw new InvalidOperationException("worker must not be constructed"));
+            }
+            return (exit, stdout.ToString(), stderr.ToString());
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+            Console.SetError(originalErr);
+            Directory.SetCurrentDirectory(originalDirectory);
+        }
+    }
+
+    private static async Task<(int Exit, string Stdout, string Stderr)> RunDerivedInstallAsync(
+        string repository,
+        string configuredProjectIdentifier,
+        string configuredProjectId,
+        IProjectDiscovery? projectDiscovery,
+        IReadOnlyList<string> trackedFiles,
+        bool json = true)
+    {
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+        var exit = await SopInstallCommand.ExecuteInstallAsync(
+            ["sop", "install"],
+            json,
+            repository,
+            stdout,
+            stderr,
+            configuredProjectIdentifier,
+            configuredProjectId,
+            projectDiscovery,
+            (_, _) => Task.FromResult(trackedFiles));
+        return (exit, stdout.ToString(), stderr.ToString());
+    }
+
+    private static async Task<(int Exit, string Stdout, string Stderr)> RunCliApplicationInDirectoryAsync(
+        string directory,
+        string[] args)
+    {
+        var originalDirectory = Directory.GetCurrentDirectory();
+        var originalOut = Console.Out;
+        var originalErr = Console.Error;
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        try
+        {
+            Directory.SetCurrentDirectory(directory);
+            Console.SetOut(stdout);
+            Console.SetError(stderr);
             var exit = await CliApplication.RunAsync(
                 args,
                 (_, _) => throw new InvalidOperationException("worker must not be constructed"));
@@ -762,6 +1091,28 @@ public sealed class SopInstallCommandTests
             Console.SetError(originalErr);
             Directory.SetCurrentDirectory(originalDirectory);
         }
+    }
+
+    private static async Task RunGitAsync(string workingDirectory, params string[] args)
+    {
+        var startInfo = new System.Diagnostics.ProcessStartInfo("git")
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in args)
+            startInfo.ArgumentList.Add(arg);
+
+        using var process = System.Diagnostics.Process.Start(startInfo)!;
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        Assert.True(
+            process.ExitCode == 0,
+            $"git {string.Join(" ", args)} failed: {await stderr}; stdout: {await stdout}");
     }
 
     private static IReadOnlyList<string> ResultStatuses(JsonElement data) =>
@@ -785,5 +1136,34 @@ public sealed class SopInstallCommandTests
         catch
         {
         }
+    }
+
+    private sealed class FakeProjectDiscovery(IReadOnlyList<ProjectInfo> projects) : IProjectDiscovery
+    {
+        public int ListCalls { get; private set; }
+
+        public Task<IReadOnlyList<ProjectInfo>> ListProjectsAsync(CancellationToken ct)
+        {
+            ListCalls++;
+            return Task.FromResult(projects);
+        }
+
+        public Task<string?> FindProjectByNameAsync(string name, CancellationToken ct) =>
+            throw new InvalidOperationException("not used");
+
+        public Task<string> CreateProjectAsync(string name, string identifier, CancellationToken ct) =>
+            throw new InvalidOperationException("not used");
+    }
+
+    private sealed class ThrowingProjectDiscovery : IProjectDiscovery
+    {
+        public Task<IReadOnlyList<ProjectInfo>> ListProjectsAsync(CancellationToken ct) =>
+            throw new InvalidOperationException("project discovery unavailable");
+
+        public Task<string?> FindProjectByNameAsync(string name, CancellationToken ct) =>
+            throw new InvalidOperationException("not used");
+
+        public Task<string> CreateProjectAsync(string name, string identifier, CancellationToken ct) =>
+            throw new InvalidOperationException("not used");
     }
 }

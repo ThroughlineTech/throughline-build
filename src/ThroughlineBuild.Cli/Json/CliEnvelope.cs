@@ -344,7 +344,9 @@ public sealed record SopOperationView(
     IReadOnlyList<string> ScopeSops,
     bool Changed,
     bool Passed,
-    IReadOnlyList<SopPathResultView> Results);
+    IReadOnlyList<SopPathResultView> Results,
+    string? TicketPrefix = null,
+    IReadOnlyList<string>? SourceRoots = null);
 
 public sealed record SopOperationEnvelope(int SchemaVersion, bool Ok, SopOperationView Data);
 

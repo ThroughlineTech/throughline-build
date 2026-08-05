@@ -28,6 +28,73 @@ internal static class SopCommand
         };
     }
 
+    public static async Task<int> ExecuteInstallAsync(
+        IReadOnlyList<string> args,
+        bool json,
+        string startDirectory,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken = default)
+    {
+        if (!SopInstallCommand.ValidateInvocation(args, json, output, error, out var usageExit))
+            return usageExit;
+
+        var configBootstrap = await CliBootstrap.CreateAsync(
+            startDirectory,
+            cancellationToken,
+            requireTicketing: false).ConfigureAwait(false);
+        if (configBootstrap.Failure is { } configFailure)
+            return WriteBootstrapFailure(configFailure, json, output, error);
+
+        using var configContext = configBootstrap.Context!;
+        var ticketing = configContext.Config.Ticketing;
+        if (!string.IsNullOrWhiteSpace(ticketing.PlaneProjectIdentifier))
+        {
+            return await SopInstallCommand.ExecuteInstallAsync(
+                args,
+                json,
+                startDirectory,
+                output,
+                error,
+                ticketing.PlaneProjectIdentifier,
+                ticketing.PlaneProjectId,
+                projectDiscovery: null,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+
+        var ticketingBootstrap = await CliBootstrap.CreateAsync(
+            startDirectory,
+            cancellationToken,
+            requireTicketing: true).ConfigureAwait(false);
+        if (ticketingBootstrap.Failure is { } ticketingFailure)
+            return WriteBootstrapFailure(ticketingFailure, json, output, error);
+
+        using var ticketingContext = ticketingBootstrap.Context!;
+        return await SopInstallCommand.ExecuteInstallAsync(
+            args,
+            json,
+            startDirectory,
+            output,
+            error,
+            configuredProjectIdentifier: string.Empty,
+            ticketingContext.Config.Ticketing.PlaneProjectId,
+            ticketingContext.Ticketing,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
+
+    private static int WriteBootstrapFailure(
+        CliBootstrapFailure failure,
+        bool json,
+        TextWriter output,
+        TextWriter error)
+    {
+        if (json)
+            CliEnvelopeWriter.WriteError(output, failure.JsonErrorCode, failure.Message);
+        else
+            error.WriteLine($"{failure.HumanPrefix}: {failure.Message}");
+        return failure.ExitCode;
+    }
+
     private static int Usage(bool json, TextWriter output, TextWriter error, string message)
     {
         if (json)
