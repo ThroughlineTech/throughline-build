@@ -1,6 +1,5 @@
 using System.Text;
 using ThroughlineBuild.Cli.Json;
-using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Git;
 using ThroughlineBuild.Scaffold;
 using ThroughlineBuild.Verification;
@@ -9,9 +8,9 @@ namespace ThroughlineBuild.Cli;
 
 public enum ProfileAction
 {
-    Derive,
     Apply,
-    Prompt
+    Prompt,
+    VerifyCanaries
 }
 
 public sealed record ProfileInvocation(ProfileAction Action, bool Force, string? InputPath);
@@ -38,14 +37,16 @@ public static class ProfileCommand
 
         var action = args[1] switch
         {
-            "derive" => ProfileAction.Derive,
             "apply" => ProfileAction.Apply,
             "prompt" => ProfileAction.Prompt,
+            "verify-canaries" => ProfileAction.VerifyCanaries,
             _ => (ProfileAction?)null,
         };
         if (action is null)
         {
-            error = $"unknown profile subcommand: {args[1]}";
+            error = args[1] == "derive"
+                ? "profile derive was removed; use 'build profile prompt' to obtain the rules and 'build profile apply <file|->' to persist the resulting JSON"
+                : $"unknown profile subcommand: {args[1]}";
             return false;
         }
 
@@ -86,15 +87,21 @@ public static class ProfileCommand
             positional.Add(args[i]);
         }
 
-        if (action == ProfileAction.Derive)
+        if (action == ProfileAction.VerifyCanaries)
         {
-            if (positional.Count != 0)
+            if (force)
             {
-                error = "profile derive accepts no positional arguments";
+                error = "profile verify-canaries does not accept --force";
                 return false;
             }
 
-            invocation = new ProfileInvocation(ProfileAction.Derive, force, null);
+            if (positional.Count != 1)
+            {
+                error = "profile verify-canaries requires exactly one JSON input path or '-'";
+                return false;
+            }
+
+            invocation = new ProfileInvocation(ProfileAction.VerifyCanaries, false, positional[0]);
             return true;
         }
 
@@ -115,9 +122,9 @@ public static class ProfileCommand
         else
         {
             error.WriteLine($"Error: {message}");
-            error.WriteLine("Usage: build profile derive [--force] [--json]");
-            error.WriteLine("       build profile apply <file|-> [--force] [--json]");
+            error.WriteLine("Usage: build profile apply <file|-> [--force] [--json]");
             error.WriteLine("       build profile prompt [--json]");
+            error.WriteLine("       build profile verify-canaries <file|-> [--json]");
         }
         return 2;
     }
@@ -161,97 +168,47 @@ public static class ProfileCommand
         }
 
         var outcome = ConfigProfileWriter.Apply(configText, profile, invocation.Force);
-        if (outcome.Changed && outcome.NewText is not null)
+        if (!outcome.Changed || outcome.NewText is null)
         {
-            try
-            {
-                await File.WriteAllTextAsync(configPath, outcome.NewText, new UTF8Encoding(false), ct)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                return Failure(json, output, error, CliErrorCodes.Failure,
-                    $"could not write configuration '{configPath}': {ex.Message}", 1);
-            }
+            return Failure(json, output, error, CliErrorCodes.Failure,
+                outcome.SkipReason ?? "config already matched the supplied profile; no changes were written", 1);
         }
 
-        var message = outcome.Changed
-            ? outcome.Summary ?? "wrote profile"
-            : outcome.SkipReason ?? "config already matched the supplied profile";
-        WriteOperation(json, output, "apply", configPath, outcome.Changed, message, canaryVerified: null);
+        try
+        {
+            await File.WriteAllTextAsync(configPath, outcome.NewText, new UTF8Encoding(false), ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            return Failure(json, output, error, CliErrorCodes.Failure,
+                $"could not write configuration '{configPath}': {ex.Message}", 1);
+        }
+
+        WriteOperation(json, output, "apply", configPath, true,
+            outcome.Summary ?? "wrote profile", canaryVerified: null);
         return 0;
     }
 
-    public static async Task<int> ExecuteDeriveAsync(
+    public static async Task<int> ExecuteVerifyCanariesAsync(
         ProfileInvocation invocation,
         bool json,
-        string configPath,
         string workingDirectory,
-        WorkersConfig workers,
-        Func<string, AgentConfig, IWorkerAgent> workerAgentBuilder,
         ProfileGateVerifier verifier,
         TextWriter output,
         TextWriter error,
         CancellationToken ct)
     {
-        string configText;
-        try
-        {
-            configText = await File.ReadAllTextAsync(configPath, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            return Failure(json, output, error, CliErrorCodes.ConfigError,
-                $"could not read configuration '{configPath}': {ex.Message}", 2);
-        }
+        var profileJson = await ReadInputAsync(invocation.InputPath!, workingDirectory, error, json, output, ct)
+            .ConfigureAwait(false);
+        if (profileJson is null)
+            return 1;
 
-        var skipReason = ConfigProfileWriter.AlreadyConfiguredSkipReason(configText, invocation.Force);
-        if (skipReason is not null)
-        {
-            WriteOperation(json, output, "derive", configPath, false, skipReason, canaryVerified: null);
-            return 0;
-        }
-
-        if (!workers.Agents.TryGetValue(workers.DefaultAgent, out var agentConfig))
-        {
-            return Failure(json, output, error, CliErrorCodes.ConfigError,
-                $"missing [workers.{workers.DefaultAgent}] sub-table in config", 2);
-        }
-
-        var preflight = await ClaudeTransportPreflight.GateAsync(
-            workers, [workers.DefaultAgent], error, ct).ConfigureAwait(false);
-        if (preflight != 0)
-        {
-            return Failure(json, output, error, CliErrorCodes.ConfigError,
-                "configured worker transport is unsupported on this host", preflight);
-        }
-
-        ProfileDerivationResult derivation;
-        try
-        {
-            var worker = workerAgentBuilder(workers.DefaultAgent, agentConfig);
-            var deriver = new ScaffoldProfileDeriver(worker);
-            var timeout = TimeSpan.FromMinutes(Math.Clamp(workers.TimeoutMinutes, 1, 30));
-            derivation = await deriver.DeriveRepositoryAsync(workingDirectory, timeout, null, ct).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return Failure(json, output, error, CliErrorCodes.Failure,
-                $"profile derivation threw: {ex.Message}", 1);
-        }
-
-        if (!derivation.Success || derivation.Profile is null)
-        {
-            return Failure(json, output, error, CliErrorCodes.Failure,
-                $"profile derivation failed: {derivation.FailureReason}", 1);
-        }
+        if (!ProjectProfileParser.TryParse(profileJson, out var profile, out var parseError) || profile is null)
+            return Failure(json, output, error, CliErrorCodes.Usage, $"PROJECT_PROFILE JSON was invalid: {parseError}", 2);
 
         var verification = await verifier.VerifyAsync(
-            derivation.Profile,
+            profile,
             workingDirectory,
             new ProcessGitClient(workingDirectory),
             new AutomatedChecksRunner(),
@@ -259,28 +216,11 @@ public static class ProfileCommand
         if (!verification.Success)
         {
             return Failure(json, output, error, CliErrorCodes.Failure,
-                $"profile derivation failed gate verification: {verification.FailureReason}", 1);
+                $"profile canary verification failed: {verification.FailureReason}", 1);
         }
 
-        var outcome = ConfigProfileWriter.Apply(configText, derivation.Profile, invocation.Force);
-        if (outcome.Changed && outcome.NewText is not null)
-        {
-            try
-            {
-                await File.WriteAllTextAsync(configPath, outcome.NewText, new UTF8Encoding(false), ct)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                return Failure(json, output, error, CliErrorCodes.Failure,
-                    $"derived a profile but could not write configuration '{configPath}': {ex.Message}", 1);
-            }
-        }
-
-        var message = outcome.Changed
-            ? outcome.Summary ?? "wrote derived profile"
-            : outcome.SkipReason ?? "config already matched the derived profile";
-        WriteOperation(json, output, "derive", configPath, outcome.Changed, message, canaryVerified: true);
+        WriteOperation(json, output, "verify-canaries", workingDirectory, false,
+            "every gating check rejected its canary", canaryVerified: true);
         return 0;
     }
 

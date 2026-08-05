@@ -346,11 +346,11 @@ public static class HelpRegistryFactory
     private static CommandHelp Profile() => new(
         Name: "profile",
         Group: CommandGroup.Configure,
-        Summary: "Derive or apply repository-specific review and ship checks",
+        Summary: "Prompt for, apply, or verify repository-specific review and ship checks",
         Usage:
-            "profile derive [--force] [--json]\n" +
             "profile apply <file|-> [--force] [--json]\n" +
-            "profile prompt [--json]",
+            "profile prompt [--json]\n" +
+            "profile verify-canaries <file|-> [--json]",
         Options:
         [
             new("--force", "Overwrite review checks that look hand-customized", false),
@@ -359,20 +359,19 @@ public static class HelpRegistryFactory
         ],
         ExitCodes:
         [
-            new(0, "Profile was written or already configured checks were safely preserved"),
-            new(1, "Worker, canary verification, input, or write failure"),
+            new(0, "Profile was written, a prompt was emitted, or every gating canary was rejected"),
+            new(1, "Apply refusal, canary verification, input, or write failure"),
             new(2, "Usage or configuration error"),
-            new(3, "Missing secret when required by the selected worker"),
         ],
         Examples:
         [
-            new("profile derive --json", "Inspect the repository with the configured default worker and prove its gate can fail"),
             new("profile prompt | agent > profile.json && build profile apply profile.json", "Let an interactive agent derive JSON without spawning a nested worker"),
             new("agent > profile.json && build profile apply profile.json --force", "Replace previously customized checks deliberately"),
+            new("profile verify-canaries profile.json --json", "Explicitly prove every proposed gating check rejects its canary"),
         ],
         Details:
         [
-            "`profile prompt` needs no configuration or ticketing credentials. `profile apply` reads only config.toml and spawns no worker. `profile derive` reads only [workers], uses the configured default worker, and verifies every gating canary in a temporary worktree before changing config.toml."
+            "`profile prompt` needs no configuration or ticketing credentials. `profile apply` reads only config.toml and spawns no worker. It exits nonzero rather than silently preserving customized or already-matching checks. `profile verify-canaries` is an explicit opt-in operation that uses a temporary worktree and never changes config.toml."
         ]
     );
 
@@ -955,14 +954,12 @@ public static class HelpRegistryFactory
         Name: "scaffold",
         Group: CommandGroup.Configure,
         Summary: "Scaffold an op-doc into Plane",
-        Usage: "scaffold <op-doc-path> [--validate-only] [--dry-run] [--accept-warnings] [--no-profile] [--force-profile] [--debug]",
+        Usage: "scaffold <op-doc-path> [--validate-only] [--dry-run] [--accept-warnings] [--debug]",
         Options:
         [
             new("--validate-only",    "Parse and validate the op-doc without creating any tickets",          false),
             new("--dry-run",          "Show what would be created without making Plane API calls",           false),
             new("--accept-warnings",  "Proceed even when the op-doc has non-fatal warnings",                 false),
-            new("--no-profile",       "Skip deriving review/ship checks from the op-doc into config.toml",   false),
-            new("--force-profile",    "Overwrite review/ship checks even if they look hand-customized",      false),
             new("--debug",            "Stream diagnostic output",                                            false),
         ],
         ExitCodes:

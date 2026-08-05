@@ -137,32 +137,9 @@ credentials.
 
 ## 4. Fill in the gate
 
-This is the step that actually decides whether a run works, and it is the step
-worth spending an agent on rather than hand-authoring TOML. Derive it from the
-repository's real build and test entry points:
-
-```sh
-build profile derive --json
-```
-
-`profile derive` uses the configured default worker to inspect the package
-manifest, project or solution file, CI workflow, and contributor guides. It
-writes only the profile-managed values in `.build/config.toml`: `[project]`,
-`[[review.checks]]`, and `[[ship.regression_checks]]`. It preserves every other
-section and comment.
-
-Before reporting success, the command creates a temporary worktree, runs the
-derived setup and gating checks there, and writes each gating check's deliberately
-broken canary. A check that remains green with its canary is rejected as vacuous;
-the configuration is left unchanged. Re-running is idempotent: existing
-customized checks are preserved and reported. Use `--force` only when you intend
-to replace them.
-
-### Agent-session and CI path
-
-`profile derive` starts a worker, so it cannot run inside an already-active agent
-session. For that case, and for CI, read the same embedded rules and apply the
-JSON deterministically without spawning a worker:
+This is the step that actually decides whether a run works. Have the active
+agent inspect the repository's real build and test entry points using the
+binary-hosted rules, then apply the resulting JSON deterministically:
 
 ```sh
 build profile prompt > profile-rules.md
@@ -170,10 +147,30 @@ build profile prompt > profile-rules.md
 build profile apply profile.json --json
 ```
 
-`profile apply -` reads the JSON from standard input. It needs neither ticketing
-credentials nor worker configuration. The prompt's rules require role-tagged
-checks, required paths, hermetic test discovery, no user-global cache poisoning,
-and one canary per gating check.
+`profile prompt` starts no worker. `profile apply` writes only the
+profile-managed values in `.build/config.toml`: `[project]`,
+`[[review.checks]]`, and `[[ship.regression_checks]]`. It preserves every other
+section and comment. `profile apply -` reads the JSON from standard input. These
+commands need neither ticketing credentials nor worker configuration.
+
+Apply refuses to overwrite customized checks and exits nonzero without changing
+the file. Use `--force` only when you intend to replace them. Applying a profile
+that already matches also exits nonzero instead of reporting a successful no-op.
+
+### Optional canary proof
+
+Canary proving is an explicit opt-in step. It creates a temporary worktree, runs
+the proposed setup and gating checks there, and writes each gating check's
+deliberately broken canary. A check that remains green is rejected as vacuous:
+
+```sh
+build profile verify-canaries profile.json --json
+```
+
+This verb never changes `.build/config.toml` and is not run by profile prompt,
+profile apply, scaffold, or SOP installation. The prompt's rules require
+role-tagged checks, required paths, hermetic test discovery, no user-global cache
+poisoning, and one canary per gating check.
 
 ### Offline fallback
 
@@ -398,9 +395,10 @@ of `[[review.checks]]`; it never loads or tests Plane configuration. Use
 
 ### The gate passes but nothing was really checked
 
-Run the canary probe. A gating check with no canary has never been proven able to
-fail, and a check that inspects an empty aggregate root passes forever. Re-derive
-the profile with the full rules from step 4.
+Run `build profile verify-canaries profile.json --json`. A gating check with no
+canary has never been proven able to fail, and a check that inspects an empty
+aggregate root passes forever. Regenerate the JSON with the full rules from
+step 4, verify it, then apply it.
 
 ### Only one host stub exists
 

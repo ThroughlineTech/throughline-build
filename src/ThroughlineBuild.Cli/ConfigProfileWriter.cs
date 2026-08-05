@@ -7,7 +7,7 @@ using Tomlyn.Model;
 namespace ThroughlineBuild.Cli;
 
 /// <summary>
-/// Writes an op-doc-derived <see cref="ProjectProfile"/> into the three toolchain-bearing sections of
+/// Writes a validated <see cref="ProjectProfile"/> into the three toolchain-bearing sections of
 /// .build/config.toml - <c>[project]</c>, <c>[[review.checks]]</c>, and <c>[[ship.regression_checks]]</c> -
 /// while preserving every other section and its comments verbatim. This is what stops a Node repo from
 /// inheriting the .NET template's <c>dotnet build</c>/<c>dotnet test</c> checks.
@@ -49,7 +49,7 @@ public static class ConfigProfileWriter
 
         bool changed = projectChanged || reviewChanged || shipChanged;
         if (!changed)
-            return new WriteOutcome(false, null, "config already matched the derived profile", null);
+            return new WriteOutcome(false, null, "config already matched the supplied profile", null);
 
         var summary =
             $"[project] {(profile.Framework.Length > 0 ? profile.Framework : profile.Language)}; " +
@@ -97,7 +97,7 @@ public static class ConfigProfileWriter
         var nonDefault = execs.Where(e => !string.Equals(e, "dotnet", StringComparison.OrdinalIgnoreCase)).ToList();
         if (nonDefault.Count > 0)
         {
-            return (true, $"existing [[review.checks]] look customized (executable(s): {string.Join(", ", nonDefault.Distinct())}); re-run with --force-profile to overwrite");
+            return (true, $"existing [[review.checks]] look customized (executable(s): {string.Join(", ", nonDefault.Distinct())}); re-run with --force to overwrite");
         }
         return (false, null);
     }

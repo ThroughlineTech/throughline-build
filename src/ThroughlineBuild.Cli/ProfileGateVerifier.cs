@@ -11,8 +11,8 @@ public sealed record ProfileGateVerificationResult(bool Success, string? Failure
 }
 
 /// <summary>
-/// Validates an LLM-derived review gate before it can be written to configuration. The profile is
-/// exercised in an isolated worktree so a declared canary can never modify the operator's tree.
+/// Explicitly proves a proposed profile's gating canaries. The profile is exercised in an isolated
+/// worktree so a declared canary can never modify the operator's tree.
 /// </summary>
 public class ProfileGateVerifier
 {
@@ -27,7 +27,7 @@ public class ProfileGateVerifier
         var gatingChecks = allReviewChecks.Where(check => check.Role == CheckRole.Gating).ToList();
         if (gatingChecks.Count == 0)
             return ProfileGateVerificationResult.Fail(
-                "derived profile has no gating review check; it cannot produce a blocking gate");
+                "profile has no gating review check; it cannot produce a blocking gate");
 
         string baseSha;
         try
@@ -41,8 +41,8 @@ public class ProfileGateVerifier
         }
 
         var suffix = Guid.NewGuid().ToString("N")[..12];
-        var worktreePath = Path.Combine(Path.GetTempPath(), $"profile-derive-{suffix}");
-        var branchName = $"profile-derive/{suffix}";
+        var worktreePath = Path.Combine(Path.GetTempPath(), $"profile-canary-{suffix}");
+        var branchName = $"profile-canary/{suffix}";
         bool created = false;
 
         try
@@ -87,7 +87,7 @@ public class ProfileGateVerifier
                     ? failedBaseline.StderrTail
                     : $"exit {failedBaseline.ExitCode}: {failedBaseline.StderrTail}";
                 return ProfileGateVerificationResult.Fail(
-                    $"derived {failedBaseline.Role.ToString().ToLowerInvariant()} check " +
+                    $"proposed {failedBaseline.Role.ToString().ToLowerInvariant()} check " +
                     $"'{failedBaseline.Name}' does not pass in a fresh worktree ({detail})");
             }
 

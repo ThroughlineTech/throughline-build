@@ -1,10 +1,6 @@
 using System.Text.Json;
 using ThroughlineBuild.Cli;
-using ThroughlineBuild.Contracts;
-using ThroughlineBuild.Contracts.Models;
-using ThroughlineBuild.Scaffold;
 using Xunit;
-using WorkerBrief = ThroughlineBuild.Contracts.Models.Brief;
 
 namespace ThroughlineBuild.Cli.Tests;
 
@@ -31,36 +27,6 @@ public sealed class ProfileCommandTests
       ]
     }
     """;
-
-    private sealed class FakeWorker : IWorkerAgent
-    {
-        public string Name => "fake";
-        public IWorkerProgressDigester? Digester => null;
-
-        public Task<WorkerResult> ExecuteAsync(
-            WorkerBrief brief,
-            string workingDirectory,
-            WorkerOptions options,
-            CancellationToken ct) =>
-            Task.FromResult(new WorkerResult(
-                Status.Ok,
-                "derived",
-                Array.Empty<string>(),
-                null,
-                new Dictionary<string, object>(),
-                new Dictionary<string, string> { ["PROJECT_PROFILE"] = ProfileJson }));
-    }
-
-    private sealed class PassingVerifier : ProfileGateVerifier
-    {
-        public override Task<ProfileGateVerificationResult> VerifyAsync(
-            ProjectProfile profile,
-            string mainWorktreePath,
-            IGitClient git,
-            ThroughlineBuild.Verification.AutomatedChecksRunner runner,
-            CancellationToken ct) =>
-            Task.FromResult(ProfileGateVerificationResult.Ok());
-    }
 
     [Fact]
     public async Task ApplyFromStdin_WritesProfileWithoutTicketingOrWorkerConfiguration()
@@ -131,7 +97,7 @@ public sealed class ProfileCommandTests
     }
 
     [Fact]
-    public async Task ApplyIsIdempotentAndForceCanReplaceCustomizedChecks()
+    public async Task ApplyToAlreadyMatchingOrHalfConfiguredRepoExitsNonzeroUntilForced()
     {
         var initial = "# minimal config\n";
         var first = await RunInRepositoryAsync(initial, ["profile", "apply", "-"], stdin: ProfileJson,
@@ -140,7 +106,7 @@ public sealed class ProfileCommandTests
         {
             Assert.Equal(0, first.Exit);
             var second = await RunAtRepositoryAsync(first.Repository!, ["profile", "apply", "-"], ProfileJson);
-            Assert.Equal(0, second.Exit);
+            Assert.Equal(1, second.Exit);
             Assert.Equal(first.ConfigText, second.ConfigText);
 
             var customized = """
@@ -155,8 +121,10 @@ public sealed class ProfileCommandTests
             File.WriteAllText(Path.Combine(first.Repository!, ".build", "config.toml"), customized);
 
             var skipped = await RunAtRepositoryAsync(first.Repository!, ["profile", "apply", "-"], ProfileJson);
-            Assert.Equal(0, skipped.Exit);
+            Assert.Equal(1, skipped.Exit);
             Assert.Equal(customized, skipped.ConfigText);
+            Assert.Contains("--force", skipped.Stderr);
+            Assert.DoesNotContain("--force-profile", skipped.Stderr);
 
             var forced = await RunAtRepositoryAsync(first.Repository!, ["profile", "apply", "-", "--force"], ProfileJson);
             Assert.Equal(0, forced.Exit);
@@ -169,92 +137,29 @@ public sealed class ProfileCommandTests
     }
 
     [Fact]
-    public async Task DeriveWritesEmptyConfigAndPreservesCustomizedChecksUnlessForced()
+    public async Task RemovedDeriveExitsUsageAndPointsToPromptAndApply()
     {
-        var directory = Path.Combine(Path.GetTempPath(), "profile-derive-tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(Path.Combine(directory, ".build"));
-        var configPath = Path.Combine(directory, ".build", "config.toml");
-        File.WriteAllText(configPath, "# empty config\n");
+        var result = await RunInRepositoryAsync("# unchanged\n", ["profile", "derive"]);
 
-        try
-        {
-            var workers = Workers();
-            var output = new StringWriter();
-            var error = new StringWriter();
-
-            var wrote = await ProfileCommand.ExecuteDeriveAsync(
-                new ProfileInvocation(ProfileAction.Derive, false, null),
-                json: false,
-                configPath,
-                directory,
-                workers,
-                (_, _) => new FakeWorker(),
-                new PassingVerifier(),
-                output,
-                error,
-                CancellationToken.None);
-
-            Assert.Equal(0, wrote);
-            Assert.Equal(string.Empty, error.ToString());
-            Assert.Contains("executable = \"tool\"", File.ReadAllText(configPath));
-
-            const string customized = """
-            [review]
-
-            [[review.checks]]
-            name = "custom"
-            executable = "npm"
-            arguments = ["test"]
-            timeout_minutes = 5
-            """;
-            File.WriteAllText(configPath, customized);
-            bool workerCreated = false;
-
-            var skipped = await ProfileCommand.ExecuteDeriveAsync(
-                new ProfileInvocation(ProfileAction.Derive, false, null),
-                json: false,
-                configPath,
-                directory,
-                workers,
-                (_, _) => { workerCreated = true; return new FakeWorker(); },
-                new PassingVerifier(),
-                output,
-                error,
-                CancellationToken.None);
-
-            Assert.Equal(0, skipped);
-            Assert.False(workerCreated);
-            Assert.Equal(customized, File.ReadAllText(configPath));
-
-            var forced = await ProfileCommand.ExecuteDeriveAsync(
-                new ProfileInvocation(ProfileAction.Derive, true, null),
-                json: false,
-                configPath,
-                directory,
-                workers,
-                (_, _) => new FakeWorker(),
-                new PassingVerifier(),
-                output,
-                error,
-                CancellationToken.None);
-
-            Assert.Equal(0, forced);
-            Assert.Contains("executable = \"tool\"", File.ReadAllText(configPath));
-        }
-        finally
-        {
-            TryDeleteDirectory(directory);
-        }
+        Assert.Equal(2, result.Exit);
+        Assert.Contains("profile derive was removed", result.Stderr);
+        Assert.Contains("profile prompt", result.Stderr);
+        Assert.Contains("profile apply", result.Stderr);
+        Assert.Equal("# unchanged\n", result.ConfigText);
     }
 
-    private static WorkersConfig Workers() => new(
-        "codex",
-        5,
-        new Dictionary<string, AgentConfig>(StringComparer.Ordinal)
-        {
-            ["codex"] = new AgentConfig("ignored", null, new Dictionary<WorkerSize, ModelTier>())
-        },
-        new Dictionary<string, string>(StringComparer.Ordinal));
+    [Fact]
+    public void VerifyCanariesIsExplicitAndDoesNotAcceptApplyForceFlag()
+    {
+        Assert.True(ProfileCommand.TryParse(
+            ["profile", "verify-canaries", "profile.json"], out var invocation, out var error), error);
+        Assert.Equal(ProfileAction.VerifyCanaries, invocation!.Action);
+        Assert.Equal("profile.json", invocation.InputPath);
+
+        Assert.False(ProfileCommand.TryParse(
+            ["profile", "verify-canaries", "profile.json", "--force"], out _, out var forceError));
+        Assert.Contains("does not accept --force", forceError);
+    }
 
     private static async Task<(int Exit, string Stdout, string Stderr, string ConfigText, string? Repository)> RunInRepositoryAsync(
         string config,

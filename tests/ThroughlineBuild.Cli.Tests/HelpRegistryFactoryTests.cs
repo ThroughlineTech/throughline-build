@@ -189,6 +189,19 @@ public class HelpRegistryFactoryTests
     }
 
     [Fact]
+    public void ProfileHelp_AdvertisesDeterministicFlowAndExplicitCanaryProofOnly()
+    {
+        var help = Registry.TryGet("profile")!;
+
+        Assert.DoesNotContain("derive", help.Usage, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(help.Examples, example =>
+            example.Command.Contains("profile derive", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("profile prompt", help.Usage);
+        Assert.Contains("profile apply", help.Usage);
+        Assert.Contains("profile verify-canaries", help.Usage);
+    }
+
+    [Fact]
     public void Gate_HasRequireChecksOption()
     {
         var help = Registry.TryGet("gate")!;

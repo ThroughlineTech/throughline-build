@@ -15,15 +15,15 @@ The `sop` command family lists binary-hosted SOPs, validates tracked conductor
 data, and emits the brief envelope that host stubs consume.
 `profile prompt` emits the canonical repository-interrogation rules and
 `profile apply` persists a supplied PROJECT_PROFILE without starting a worker.
-`profile derive` is deliberately different: it starts the configured default
-worker and is therefore for a plain terminal, not an active agent session.
+`profile verify-canaries` is a separate explicit opt-in operation that proves
+the proposed gating checks in a temporary worktree without changing config.
 They load only the repository configuration sections they consume and do not
 require `[ticketing]`, `[workers]`, or `[events]`, resolve ticketing secrets, or
 construct a Plane client. Missing ticketing credentials therefore do not block
 `worktree`, `gate`, `waves`, `candidate status`, `sop`, `profile prompt`, or
-`profile apply`. `profile derive` reads `[workers]` but still does not require
-ticketing or event configuration. Other commands still require the full
-ticketing, worker, and event configuration.
+`profile apply`. Profile prompt and apply never start a worker or execute a
+canary. Other commands still require the full ticketing, worker, and event
+configuration.
 
 The `worker brief` command materializes a role-specific Markdown artifact from
 ticket and worktree evidence for an agent to inspect. It is the exception in

@@ -199,7 +199,7 @@ public static class CliApplication
             if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]) || args[1].StartsWith("--"))
             {
                 Console.Error.WriteLine("Error: op-doc-path is required");
-                Console.Error.WriteLine("Usage: build scaffold <op-doc-path> [--validate-only] [--dry-run] [--accept-warnings] [--no-profile] [--force-profile] [--debug]");
+                Console.Error.WriteLine("Usage: build scaffold <op-doc-path> [--validate-only] [--dry-run] [--accept-warnings] [--debug]");
                 return 2;
             }
         }
@@ -465,14 +465,23 @@ public static class CliApplication
                 if (profileInvocation!.Action == ProfileAction.Prompt)
                     return ProfileCommand.ExecutePrompt(jsonOutput, Console.Out);
 
-                var profileConfigMode = profileInvocation.Action == ProfileAction.Derive
-                    ? BuildConfigLoadMode.ProfileDerivation
-                    : BuildConfigLoadMode.ProfileApply;
+                if (profileInvocation.Action == ProfileAction.VerifyCanaries)
+                {
+                    return await ProfileCommand.ExecuteVerifyCanariesAsync(
+                        profileInvocation,
+                        jsonOutput,
+                        rawCwd,
+                        new ProfileGateVerifier(),
+                        Console.Out,
+                        Console.Error,
+                        CancellationToken.None);
+                }
+
                 var profileBootstrap = await CliBootstrap.CreateAsync(
                     rawCwd,
                     CancellationToken.None,
                     requireTicketing: false,
-                    configLoadMode: profileConfigMode);
+                    configLoadMode: BuildConfigLoadMode.ProfileApply);
                 if (profileBootstrap.Failure is { } profileFailure)
                 {
                     if (jsonOutput)
@@ -483,26 +492,11 @@ public static class CliApplication
                 }
 
                 using var profileContext = profileBootstrap.Context!;
-                if (profileInvocation.Action == ProfileAction.Apply)
-                {
-                    return await ProfileCommand.ExecuteApplyAsync(
-                        profileInvocation,
-                        jsonOutput,
-                        profileContext.ConfigPath,
-                        rawCwd,
-                        Console.Out,
-                        Console.Error,
-                        CancellationToken.None);
-                }
-
-                return await ProfileCommand.ExecuteDeriveAsync(
+                return await ProfileCommand.ExecuteApplyAsync(
                     profileInvocation,
                     jsonOutput,
                     profileContext.ConfigPath,
-                    profileContext.WorkingDirectory,
-                    profileContext.Config.Workers,
-                    workerAgentBuilder,
-                    new ProfileGateVerifier(),
+                    rawCwd,
                     Console.Out,
                     Console.Error,
                     CancellationToken.None);
@@ -1726,18 +1720,12 @@ public static class CliApplication
             // Parse scaffold-local flags.
             var scaffoldArgs = new Dictionary<string, string>(StringComparer.Ordinal);
             scaffoldArgs["op_doc_path"] = args[1];
-            bool noProfile = false;
-            bool forceProfile = false;
-            bool validateOnlyFlag = false;
-            bool dryRunFlag = false;
             for (int i = 2; i < args.Length; i++)
             {
                 var a = args[i];
-                if (a == "--validate-only") { scaffoldArgs["validate_only"] = "true"; validateOnlyFlag = true; }
-                else if (a == "--dry-run") { scaffoldArgs["dry_run"] = "true"; dryRunFlag = true; }
+                if (a == "--validate-only") scaffoldArgs["validate_only"] = "true";
+                else if (a == "--dry-run") scaffoldArgs["dry_run"] = "true";
                 else if (a == "--accept-warnings") scaffoldArgs["accept_warnings"] = "true";
-                else if (a == "--no-profile") noProfile = true;
-                else if (a == "--force-profile") forceProfile = true;
                 // --debug and --error-location already stripped by pre-pass; other unknown flags are silently ignored
             }
             if (errorLocation) scaffoldArgs["show_location"] = "true";
@@ -1772,41 +1760,6 @@ public static class CliApplication
                     ScaffoldExitCategory.BackendUnavailable => 4,
                     _ => scaffoldResult.Success ? 0 : 1
                 };
-
-                // Derive the project's review/ship checks from the op-doc and write them into
-                // .build/config.toml. Runs only on a real creation run; derivation never changes the
-                // scaffold exit code (the ticket tree is this command's contract, not the config).
-                bool ticketsCreated = tag == ScaffoldExitCategory.Clean || tag == ScaffoldExitCategory.PartialCreation;
-                if (ticketsCreated && !validateOnlyFlag && !dryRunFlag && !noProfile)
-                {
-                    // Under --debug, capture the derivation worker's raw stdin/stdout/stderr and
-                    // structured transcript like any phase worker. Without it, a derivation failure
-                    // (e.g. a missing PROJECT_PROFILE block) leaves no diagnosable artifact.
-                    string? scaffoldDebugDir = debugMode
-                        ? Path.GetFullPath(Path.Combine(resolvedCwd, ".build", "sessions",
-                            $"scaffold-profile-{DateTimeOffset.Now:yyyy-MM-dd-HHmmss}"))
-                        : null;
-                    // Gate the profile-derivation worker (the default agent) before it launches. Derivation
-                    // is best-effort and never changes the scaffold exit code, so on an unsupported host we
-                    // skip it with a clear note rather than fail the scaffold whose ticket tree already exists.
-                    var scaffoldGateExit = await ClaudeTransportPreflight.GateAsync(
-                        config.Workers, [config.Workers.DefaultAgent], Console.Error, scaffoldCts.Token);
-                    if (scaffoldGateExit != 0)
-                    {
-                        Console.Error.WriteLine(
-                            "[build] Skipping profile derivation: the configured Claude transport is unsupported on this " +
-                            "host (see above). The ticket tree was created; derive checks later or set transport = \"print\".");
-                    }
-                    else
-                    {
-                        await ScaffoldProfileRunner.RunAsync(
-                            args[1], resolvedCwd, config.Workers, forceProfile, scaffoldDebugDir, scaffoldCts.Token);
-                    }
-                }
-                else if (noProfile)
-                {
-                    Console.WriteLine("[scaffold] --no-profile: skipped review-check derivation");
-                }
 
                 return scaffoldExit;
             }
