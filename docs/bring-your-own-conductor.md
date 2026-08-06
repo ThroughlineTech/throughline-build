@@ -68,6 +68,16 @@ recreate it in each clone through `build install` or `build sop install`. It
 carries the minimum Build version, branch and ticket prefixes, source roots,
 architecture map, review invariants, review escalation rule, rework cap, and
 constellation.
+
+`.build/` belongs to the clone, not to a worktree. A linked worktree, including
+every worktree the conductor cuts under `.worktrees/`, holds no copy of it, so
+`sop doctor`, `sop brief`, and config loading resolve conductor and config data
+from the clone's main worktree and report the same result there as in the
+worktree. Install the SOP once per clone; nothing seeds `.build/` per worktree.
+Emitted host stubs are the exception: they are tracked repository content, so
+they are validated in the tree the verb runs in. Resolution is bounded by the
+repository, so a tree whose repository holds no `.build/config.toml` reports it
+missing rather than adopting an unrelated ancestor's config.
 Run `build sop list [--json]` to report available embedded SOPs and their binary
 versions. Run `build sop install [--sop <name>] [--host claude|codex] [--json]`
 to emit host stubs, scaffold a missing `.build/conductor.toml`, and write

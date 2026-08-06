@@ -1,6 +1,4 @@
 using ThroughlineBuild.Cli.Json;
-using ThroughlineBuild.Git;
-using ThroughlineBuild.Helpers;
 using ThroughlineBuild.Plane;
 
 namespace ThroughlineBuild.Cli;
@@ -26,24 +24,30 @@ public sealed record CliBootstrapResult(CliContext? Context, CliBootstrapFailure
 
 public static class CliBootstrap
 {
-    public static async Task<CliBootstrapResult> CreateAsync(
+    public static Task<CliBootstrapResult> CreateAsync(
         string rawWorkingDirectory,
         CancellationToken cancellationToken = default,
         bool requireTicketing = true,
-        BuildConfigLoadMode configLoadMode = BuildConfigLoadMode.Full)
+        BuildConfigLoadMode configLoadMode = BuildConfigLoadMode.Full) =>
+        Task.FromResult(Create(rawWorkingDirectory, requireTicketing, configLoadMode));
+
+    private static CliBootstrapResult Create(
+        string rawWorkingDirectory,
+        bool requireTicketing,
+        BuildConfigLoadMode configLoadMode)
     {
-        var resolverGit = new ProcessGitClient(rawWorkingDirectory);
-        var workingDirectory = await MainWorktreeResolver.ResolveAsync(
-            resolverGit,
-            rawWorkingDirectory,
-            cancellationToken).ConfigureAwait(false);
+        // The clone's machine-local .build lives in the main worktree, so every verb bootstraps
+        // against that root whether it was invoked there or inside a linked worktree.
+        var layout = RepositoryLayout.Resolve(rawWorkingDirectory);
+        var workingDirectory = layout.MainWorktreeRoot;
 
         string configPath;
         try
         {
-            configPath = BuildConfigLoader.FindConfigFile(workingDirectory)
+            configPath = layout.FindBuildDataFile("config.toml")
                 ?? throw new ConfigException(
-                    $"config file not found: searched from {workingDirectory} upwards for .build/config.toml");
+                    $"config file not found: searched {rawWorkingDirectory} and the repository " +
+                    $"rooted at {workingDirectory} for .build/config.toml");
         }
         catch (ConfigException ex)
         {

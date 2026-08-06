@@ -137,18 +137,11 @@ public enum BuildConfigLoadMode
 
 public static class BuildConfigLoader
 {
-    public static string? FindConfigFile(string startDir)
-    {
-        var current = new DirectoryInfo(startDir);
-        while (current != null)
-        {
-            var candidate = Path.Combine(current.FullName, ".build", "config.toml");
-            if (File.Exists(candidate))
-                return candidate;
-            current = current.Parent;
-        }
-        return null;
-    }
+    // Bounded by the repository: the shared resolver stops at the worktree (reaching the main
+    // worktree when the caller sits in a linked one), so a tree whose repository holds no
+    // .build/config.toml fails closed instead of adopting an unrelated ancestor's config.
+    public static string? FindConfigFile(string startDir) =>
+        RepositoryLayout.Resolve(startDir).FindBuildDataFile("config.toml");
 
     public static BuildConfig Load(
         string path,

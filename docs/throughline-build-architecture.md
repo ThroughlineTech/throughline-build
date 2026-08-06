@@ -45,6 +45,9 @@ lives under `.build/`.
   must remain ignored. `.build/conductor.toml` is machine-local conductor data
   for binary-hosted SOPs; it is also ignored, is recreated per clone by
   `build install` or `build sop install`, and must contain no secrets.
+- `.build/` is per clone, not per worktree. A linked worktree holds no copy of
+  it, so a verb run inside one resolves config and conductor data from the
+  clone's main worktree, and Build does not seed `.build/` into leased trees.
 
 ### Non-Goals
 
@@ -95,9 +98,15 @@ build (ThroughlineBuild.Cli)
 
 1. Pre-configuration verbs such as `--help`, `init`, `user-guide`, and
    `sop` are dispatched before config loading.
-2. Most configured verbs find `.build/config.toml` by walking upward from the
-   working directory, load it, and compose the configured Plane, git, worker,
-   event, and verification services.
+2. Most configured verbs find `.build/config.toml` through the shared repository
+   resolver, load it, and compose the configured Plane, git, worker, event, and
+   verification services. One resolver answers for config, conductor, and SOP
+   catalog paths: git names the tree the verb runs in and the clone's main
+   worktree, `.build` data resolves from the main worktree when the verb runs in
+   a linked worktree, and the search never climbs past the repository, so a tree
+   whose repository has no `.build/config.toml` fails closed instead of adopting
+   an ancestor's. Without git, resolution falls back to a walk bounded by the
+   first `.git` or `.build` it finds.
 3. A ticket phase fetches the current ticket and runs its state and repository
    preconditions.
 4. LLM-bearing phases build a provider-specific brief and execute the selected
@@ -202,6 +211,10 @@ ticketing secrets, or constructing a Plane client. `build sop` runs in the same
 no-worker/no-ticketing band. `sop doctor` reads `.build/conductor.toml`,
 validates manifest-recorded or present emitted stubs byte-for-byte against the
 catalog, and only consults local `.build/config.toml` for `[[review.checks]]`;
+both files come from the same resolved `.build` directory, so a report that
+names a repository root and a config path never pairs them with a conductor from
+another tree, and emitted stubs are graded in the tree the verb runs in because
+they are tracked content rather than machine-local data;
 standard `sop brief` runs doctor first, then emits embedded SOP text and the
 resolved conductor data, owned catalog paths, and run mode. Admission-only
 inspection is a brief run mode with a validated absolute inspection root, a full

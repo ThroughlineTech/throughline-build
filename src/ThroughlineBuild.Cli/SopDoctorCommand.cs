@@ -148,10 +148,14 @@ internal static class SopDoctorCommand
         bool validateStubs)
     {
         var findings = new List<SopDoctorFinding>();
-        var conductorPath = FindConductorFile(startDirectory);
-        var repositoryRoot = conductorPath is null
-            ? ResolveRepositoryRootFallback(startDirectory)
-            : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(conductorPath)!, ".."));
+
+        // One resolution answers every question below, so the report can never name a repository
+        // root and a config path from one tree while reporting no conductor from another.
+        var layout = RepositoryLayout.Resolve(startDirectory);
+        var buildDirectory = layout.FindBuildDirectory();
+        var repositoryRoot = layout.DataRoot;
+        var conductorPath = ExistingBuildDataFile(buildDirectory, "conductor.toml");
+        var configPath = ExistingBuildDataFile(buildDirectory, "config.toml");
 
         ConductorConfig? conductor = null;
         if (conductorPath is null)
@@ -166,16 +170,17 @@ internal static class SopDoctorCommand
             conductor = ReadConductor(conductorPath, runningBuildVersion, findings);
         }
 
-        var configPath = Path.Combine(repositoryRoot, ".build", "config.toml");
         if (validateReviewChecks)
             ValidateReviewChecks(configPath, findings);
+        // Emitted stubs are tracked repository content, so they are inspected in the tree the
+        // verb actually runs in rather than in the tree that owns the machine-local .build data.
         if (validateStubs)
-            ValidateEmittedStubs(repositoryRoot, findings);
+            ValidateEmittedStubs(layout.WorktreeRoot, findings);
 
         return new SopDoctorView(
             RepositoryRoot: repositoryRoot,
             ConductorPath: conductorPath,
-            ConfigPath: File.Exists(configPath) ? configPath : null,
+            ConfigPath: configPath,
             BuildVersion: runningBuildVersion,
             Passed: findings.Count == 0,
             ReviewInvariantMode: "shape_only",
@@ -213,36 +218,16 @@ internal static class SopDoctorCommand
         _ => "sop.stub.drift",
     };
 
-    internal static string? FindConductorFile(string startDirectory)
+    internal static string? FindConductorFile(string startDirectory) =>
+        RepositoryLayout.Resolve(startDirectory).FindBuildDataFile("conductor.toml");
+
+    private static string? ExistingBuildDataFile(string? buildDirectory, string fileName)
     {
-        var current = new DirectoryInfo(Path.GetFullPath(startDirectory));
-        while (current is not null)
-        {
-            var buildDirectory = Path.Combine(current.FullName, ".build");
-            var candidate = Path.Combine(buildDirectory, "conductor.toml");
-            if (File.Exists(candidate))
-                return candidate;
-            var gitPath = Path.Combine(current.FullName, ".git");
-            if (Directory.Exists(buildDirectory) || Directory.Exists(gitPath) || File.Exists(gitPath))
-                return null;
-            current = current.Parent;
-        }
+        if (buildDirectory is null)
+            return null;
 
-        return null;
-    }
-
-    private static string ResolveRepositoryRootFallback(string startDirectory)
-    {
-        var current = new DirectoryInfo(Path.GetFullPath(startDirectory));
-        while (current is not null)
-        {
-            if (Directory.Exists(Path.Combine(current.FullName, ".git")) ||
-                Directory.Exists(Path.Combine(current.FullName, ".build")))
-                return current.FullName;
-            current = current.Parent;
-        }
-
-        return Path.GetFullPath(startDirectory);
+        var candidate = Path.Combine(buildDirectory, fileName);
+        return File.Exists(candidate) ? candidate : null;
     }
 
     private static ConductorConfig? ReadConductor(
@@ -544,9 +529,9 @@ internal static class SopDoctorCommand
         }
     }
 
-    private static void ValidateReviewChecks(string configPath, List<SopDoctorFinding> findings)
+    private static void ValidateReviewChecks(string? configPath, List<SopDoctorFinding> findings)
     {
-        if (!File.Exists(configPath))
+        if (configPath is null || !File.Exists(configPath))
         {
             findings.Add(new SopDoctorFinding(
                 "review.checks.empty",

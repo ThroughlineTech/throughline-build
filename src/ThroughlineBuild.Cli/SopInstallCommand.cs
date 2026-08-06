@@ -324,6 +324,7 @@ internal sealed record SopConductorIdentity(
 internal static class SopInstaller
 {
     private const int ManifestSchemaVersion = 1;
+    private const string BuildDataDirectory = ".build";
     private const string ManifestRelativePath = ".build/sop-manifest.json";
     private const string ClaudeHost = "claude";
     private const string CodexHost = "codex";
@@ -345,12 +346,16 @@ internal static class SopInstaller
         if (host is not null && !IsKnownHost(host))
             throw new ArgumentException($"unknown SOP host: {host}", nameof(host));
 
-        var repositoryRoot = ResolveRepositoryRoot(startDirectory);
-        var manifestPath = Path.Combine(repositoryRoot, ".build", "sop-manifest.json");
+        var layout = RepositoryLayout.Resolve(startDirectory);
+        var repositoryRoot = layout.WorktreeRoot;
+        var dataRoot = layout.DataRoot;
+        string RootFor(string catalogPath) => IsBuildDataPath(catalogPath) ? dataRoot : repositoryRoot;
+
+        var manifestPath = Path.Combine(dataRoot, BuildDataDirectory, "sop-manifest.json");
         var targets = BuildTargets(scopeEntries, host);
         var results = new List<SopPathResultView>();
 
-        if (!TryResolvePath(repositoryRoot, ManifestRelativePath, out var manifestResolution, out var manifestError))
+        if (!TryResolvePath(dataRoot, ManifestRelativePath, out var manifestResolution, out var manifestError))
         {
             results.Add(Result(
                 Array.Empty<string>(),
@@ -372,7 +377,7 @@ internal static class SopInstaller
         var resolutions = new Dictionary<string, ResolvedCatalogPath>(PathComparer);
         foreach (var target in targets)
         {
-            if (TryResolvePath(repositoryRoot, target.Path, out var resolution, out var error))
+            if (TryResolvePath(RootFor(target.Path), target.Path, out var resolution, out var error))
             {
                 resolutions[target.Path] = resolution;
                 continue;
@@ -477,11 +482,12 @@ internal static class SopInstaller
         if (host is not null && !IsKnownHost(host))
             throw new ArgumentException($"unknown SOP host: {host}", nameof(host));
 
-        var repositoryRoot = ResolveRepositoryRoot(startDirectory);
+        var layout = RepositoryLayout.Resolve(startDirectory);
+        var repositoryRoot = layout.WorktreeRoot;
         var targets = BuildTargets(scopeEntries, host)
             .Where(target => target.IsEmitted)
             .ToList();
-        var manifestPath = Path.Combine(repositoryRoot, ".build", "sop-manifest.json");
+        var manifestPath = Path.Combine(layout.DataRoot, BuildDataDirectory, "sop-manifest.json");
         var manifest = ReadManifestCacheSilently(manifestPath);
         var results = new List<SopPathResultView>();
         var resolutions = new Dictionary<string, ResolvedCatalogPath>(PathComparer);
@@ -1395,21 +1401,13 @@ internal static class SopInstaller
                !relative.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal);
     }
 
-    internal static string ResolveRepositoryRoot(string startDirectory)
-    {
-        var current = new DirectoryInfo(Path.GetFullPath(startDirectory));
-        while (current is not null)
-        {
-            var gitPath = Path.Combine(current.FullName, ".git");
-            if (Directory.Exists(gitPath) ||
-                File.Exists(gitPath) ||
-                Directory.Exists(Path.Combine(current.FullName, ".build")))
-                return current.FullName;
-            current = current.Parent;
-        }
+    // Tracked catalog paths live in the tree the verb runs in; machine-local .build data lives
+    // in the main worktree of the clone. Both answers come from the shared resolver.
+    internal static string ResolveRepositoryRoot(string startDirectory) =>
+        RepositoryLayout.Resolve(startDirectory).WorktreeRoot;
 
-        return Path.GetFullPath(startDirectory);
-    }
+    private static bool IsBuildDataPath(string catalogPath) =>
+        catalogPath.Replace('\\', '/').StartsWith($"{BuildDataDirectory}/", StringComparison.Ordinal);
 
     private static IReadOnlyList<SopInstallTarget> BuildTargets(
         IReadOnlyList<SopCatalogEntry> entries,
