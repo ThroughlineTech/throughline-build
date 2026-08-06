@@ -9,7 +9,7 @@ using ThroughlineBuild.Scaffold;
 
 namespace ThroughlineBuild.Cli;
 
-internal sealed record InstallInvocation(string? ProfilePath, string? InvariantsPath);
+internal sealed record InstallInvocation(string? ProfilePath, string? InvariantsPath, bool Force = false);
 internal sealed record InstallProfileApplyResult(
     bool Success, int ExitCode, string Message, string? Language, string? Framework);
 
@@ -41,9 +41,16 @@ internal static class InstallCommand
         error = string.Empty;
         string? profile = null;
         string? invariants = null;
+        var force = false;
         for (var i = 1; i < args.Count; i++)
         {
             var option = args[i];
+            if (option == "--force")
+            {
+                if (force) { error = "--force may be specified only once"; return false; }
+                force = true;
+                continue;
+            }
             if (option is not ("--profile" or "--invariants"))
             {
                 error = $"unknown install option: {option}";
@@ -70,7 +77,14 @@ internal static class InstallCommand
             error = "install accepts either --profile or --invariants, not both";
             return false;
         }
-        invocation = new InstallInvocation(profile, invariants);
+        // --force is the override the profile-apply refusal names, so it has to be reachable from the
+        // command that prints it - but it only means anything to the profile stage. See TLB-639.
+        if (force && profile is null)
+        {
+            error = "install --force applies only to --profile";
+            return false;
+        }
+        invocation = new InstallInvocation(profile, invariants, force);
         return true;
     }
 
@@ -102,7 +116,7 @@ internal static class InstallCommand
             if (invocation.ProfilePath is not null)
             {
                 Progress(diagnostics, "stage 2/3: applying repository profile");
-                var apply = ApplyProfile(cwd, invocation.ProfilePath, input);
+                var apply = ApplyProfile(cwd, invocation.ProfilePath, invocation.Force, input);
                 if (!apply.Success)
                     return Failure(json, output, diagnostics, apply.Message, apply.ExitCode);
 
@@ -213,7 +227,7 @@ internal static class InstallCommand
     }
 
     private static InstallProfileApplyResult ApplyProfile(
-        string cwd, string inputPath, TextReader input)
+        string cwd, string inputPath, bool force, TextReader input)
     {
         var configPath = BuildConfigLoader.FindConfigFile(cwd);
         if (configPath is null)
@@ -237,14 +251,17 @@ internal static class InstallCommand
             return new(false, 2, platform.Message, null, null);
 
         var original = File.ReadAllText(configPath);
-        var outcome = ConfigProfileWriter.Apply(original, profile, force: false);
+        var outcome = ConfigProfileWriter.Apply(original, profile, force);
         if (outcome.Changed && outcome.NewText is not null)
         {
             File.WriteAllText(configPath, outcome.NewText, new UTF8Encoding(false));
             return new(true, 0, outcome.Summary ?? "profile applied", profile.Language, profile.Framework);
         }
-        if (string.Equals(outcome.SkipReason, "config already matched the supplied profile", StringComparison.Ordinal))
-            return new(true, 0, outcome.SkipReason!, profile.Language, profile.Framework);
+        // Re-running the installer against an already-installed repository must reach the same handoff
+        // without rewriting config; that is stage 2's half of install idempotence. See TLB-639.
+        if (outcome.AlreadyMatched)
+            return new(true, 0, outcome.Summary ?? ConfigProfileWriter.AlreadyMatchedSummary,
+                profile.Language, profile.Framework);
         return new(false, 1, outcome.SkipReason ?? "profile apply made no change", null, null);
     }
 

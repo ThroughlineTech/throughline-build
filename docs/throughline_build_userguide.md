@@ -31,6 +31,14 @@ prints READY only after the run-backlog structural preflight passes. It
 intentionally does not install target-stack dependencies or require a green
 target build during installation.
 
+The sequence is re-runnable on an already-installed repository whatever its
+toolchain: a profile that already matches config is a no-op success, and a
+second pass adds no commit or branch change. Stage 2 refuses only when the
+profile would overwrite `[[review.checks]]` or `[[ship.regression_checks]]`
+that are already in config and say something else - checks a human wrote. Pass
+`build install --profile .build/profile.json --force` to replace them
+deliberately.
+
 ### Install
 
 **git** - Any recent version. Confirm it is on your PATH with `git --version`. The `build ship`

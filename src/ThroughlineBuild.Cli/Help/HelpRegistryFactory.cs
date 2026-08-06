@@ -354,13 +354,13 @@ public static class HelpRegistryFactory
             "profile verify-canaries <file|-> [--json]",
         Options:
         [
-            new("--force", "Overwrite review checks that look hand-customized", false),
+            new("--force", "Overwrite existing checks that differ from the supplied profile", false),
             new("<file|->", "Read PROJECT_PROFILE JSON from a file or standard input", false),
             new("--json", "Emit a versioned JSON envelope", false),
         ],
         ExitCodes:
         [
-            new(0, "Profile was written, a prompt was emitted, or every gating canary was rejected"),
+            new(0, "Profile was written or already matched, a prompt was emitted, or every gating canary was rejected"),
             new(1, "Apply refusal, canary verification, input, or write failure"),
             new(2, "Usage or configuration error"),
         ],
@@ -372,7 +372,7 @@ public static class HelpRegistryFactory
         ],
         Details:
         [
-            "`profile prompt` needs no configuration or ticketing credentials. `profile apply` reads only config.toml and spawns no worker. It exits nonzero rather than silently preserving customized or already-matching checks. `profile verify-canaries` is an explicit opt-in operation that uses a temporary worktree and never changes config.toml."
+            "`profile prompt` needs no configuration or ticketing credentials. `profile apply` reads only config.toml and spawns no worker. Applying a profile the config already matches is a no-op success, so the command is safe to repeat; applying one that would overwrite existing, differing checks exits nonzero until `--force` is passed. `profile verify-canaries` is an explicit opt-in operation that uses a temporary worktree and never changes config.toml."
         ]
     );
 
@@ -857,10 +857,11 @@ public static class HelpRegistryFactory
         Name: "install",
         Group: CommandGroup.Configure,
         Summary: "Install and prove run-backlog readiness through two explicit agent handoffs",
-        Usage: "install [--profile <path|-> | --invariants <path|->] [--json]",
+        Usage: "install [--profile <path|-> [--force] | --invariants <path|->] [--json]",
         Options:
         [
             new("--profile <path|->", "Apply PROJECT_PROFILE JSON, install SOPs, and stop at the invariant prompt", false),
+            new("--force", "With --profile, overwrite existing checks that differ from the profile", false),
             new("--invariants <path|->", "Apply invariant TOML and finish deterministic readiness preparation", false),
             new("--json", "Emit one versioned handoff or readiness envelope; progress remains on stderr", false),
         ],
@@ -869,11 +870,13 @@ public static class HelpRegistryFactory
         [
             new("install", "Initialize/setup, then stop with the canonical profile prompt"),
             new("install --profile .build/profile.json", "Apply the profile, install SOPs, then stop with the conductor prompt"),
+            new("install --profile .build/profile.json --force", "Replace checks a human wrote with the ones the profile derives"),
             new("install --invariants .build/invariants.toml --json", "Apply invariants and report READY only after SOP preflight passes"),
         ],
         Details:
         [
-            "The verb never starts a worker or runs target-stack build/test commands. Final readiness requires doctor success, configured checks, resolved conductor data, a clean non-protected branch, no merge/rebase operation, and a queryable worktree lease surface."
+            "The verb never starts a worker or runs target-stack build/test commands. Final readiness requires doctor success, configured checks, resolved conductor data, a clean non-protected branch, no merge/rebase operation, and a queryable worktree lease surface.",
+            "Every stage is re-runnable on an installed repository regardless of its toolchain: a profile that already matches config is a no-op success, and the second run produces no additional commit or branch change."
         ]
     );
 

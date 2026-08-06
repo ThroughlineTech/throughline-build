@@ -168,10 +168,19 @@ public static class ProfileCommand
         }
 
         var outcome = ConfigProfileWriter.Apply(configText, profile, invocation.Force);
+        if (outcome.AlreadyMatched)
+        {
+            // Re-applying the same profile is a no-op success, not a failure: the installer and any
+            // repeated automation must be able to run this twice. See TLB-639.
+            WriteOperation(json, output, "apply", configPath, false,
+                outcome.Summary ?? ConfigProfileWriter.AlreadyMatchedSummary, canaryVerified: null);
+            return 0;
+        }
+
         if (!outcome.Changed || outcome.NewText is null)
         {
             return Failure(json, output, error, CliErrorCodes.Failure,
-                outcome.SkipReason ?? "config already matched the supplied profile; no changes were written", 1);
+                outcome.SkipReason ?? "profile apply made no change", 1);
         }
 
         try

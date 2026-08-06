@@ -234,7 +234,7 @@ public static class CliApplication
                     else
                     {
                         Console.Error.WriteLine($"Error: {installError}");
-                        Console.Error.WriteLine("Usage: build install [--profile <path|-> | --invariants <path|->] [--json]");
+                        Console.Error.WriteLine("Usage: build install [--profile <path|-> [--force] | --invariants <path|->] [--json]");
                     }
                     return 2;
                 }

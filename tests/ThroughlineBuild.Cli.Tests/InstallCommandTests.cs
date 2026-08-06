@@ -66,6 +66,27 @@ public sealed class InstallCommandTests
         Assert.Contains("not both", error);
     }
 
+    // The profile-apply refusal tells the operator to re-run with --force, so the command that
+    // prints it has to accept --force. See TLB-639.
+    [Fact]
+    public void Parse_AcceptsForceOnTheProfileStageOnly()
+    {
+        Assert.True(InstallCommand.TryParse(
+            ["install", "--profile", "p.json", "--force"], out var forced, out var parseError), parseError);
+        Assert.Equal("p.json", forced!.ProfilePath);
+        Assert.True(forced.Force);
+
+        Assert.True(InstallCommand.TryParse(["install", "--profile", "p.json"], out var plain, out _));
+        Assert.False(plain!.Force);
+
+        Assert.False(InstallCommand.TryParse(["install", "--force"], out _, out var bareError));
+        Assert.Contains("applies only to --profile", bareError);
+
+        Assert.False(InstallCommand.TryParse(
+            ["install", "--invariants", "i.toml", "--force"], out _, out var invariantsError));
+        Assert.Contains("applies only to --profile", invariantsError);
+    }
+
     [Fact]
     public void JsonHandoffEnvelope_IsSourceGeneratedAndMachineReadable()
     {
@@ -129,6 +150,94 @@ public sealed class InstallCommandTests
             Assert.Equal(2, readinessCalls);
             Assert.Equal(head, await GitAsync(repo, "rev-parse", "HEAD"));
             Assert.Equal(string.Empty, await GitAsync(repo, "status", "--porcelain"));
+        }
+        finally
+        {
+            TryDelete(repo);
+        }
+    }
+
+    // TLB-639: stage 2 used to refuse its own output on every stack whose executables were not
+    // "dotnet", so the sequence could not be re-run. Both a non-dotnet and a dotnet toolchain must
+    // now reach the same handoff twice, leaving config.toml and conductor.toml byte-identical and
+    // adding no commit.
+    [Theory]
+    [InlineData("pnpm")]
+    [InlineData("dotnet")]
+    public async Task ExecuteAsync_StageTwoRerun_IsIdempotentOnAnyToolchain(string executable)
+    {
+        var repo = await CreateRepositoryAsync();
+        try
+        {
+            var dependencies = EndToEndDependencies(() => { });
+            Assert.Equal(0, (await ExecuteStageAsync(repo, new InstallInvocation(null, null), dependencies)).Exit);
+
+            var profile = ProfileJson
+                .Replace("\"pnpm\"", $"\"{executable}\"", StringComparison.Ordinal);
+            Write(repo, ".build/profile.json", profile);
+            var invocation = new InstallInvocation(".build/profile.json", null);
+
+            var first = await ExecuteStageAsync(repo, invocation, dependencies);
+            Assert.Equal(0, first.Exit);
+            Assert.Equal("invariants_handoff", Stage(first.Stdout));
+            var configAfterFirst = ReadBytesIfPresent(repo, ".build/config.toml");
+            var conductorAfterFirst = ReadBytesIfPresent(repo, ".build/conductor.toml");
+            var head = await GitAsync(repo, "rev-parse", "HEAD");
+            var branch = await GitAsync(repo, "rev-parse", "--abbrev-ref", "HEAD");
+
+            var second = await ExecuteStageAsync(repo, invocation, dependencies);
+
+            Assert.Equal(0, second.Exit);
+            Assert.Equal("invariants_handoff", Stage(second.Stdout));
+            Assert.Equal(configAfterFirst, ReadBytesIfPresent(repo, ".build/config.toml"));
+            Assert.Equal(conductorAfterFirst, ReadBytesIfPresent(repo, ".build/conductor.toml"));
+            Assert.Equal(head, await GitAsync(repo, "rev-parse", "HEAD"));
+            Assert.Equal(branch, await GitAsync(repo, "rev-parse", "--abbrev-ref", "HEAD"));
+        }
+        finally
+        {
+            TryDelete(repo);
+        }
+    }
+
+    // Checks a human wrote are still protected, and the --force the refusal names is reachable from
+    // the installer that printed it.
+    [Fact]
+    public async Task ExecuteAsync_StageTwo_PreservesHandWrittenChecksUntilForced()
+    {
+        var repo = await CreateRepositoryAsync();
+        try
+        {
+            var dependencies = EndToEndDependencies(() => { });
+            Assert.Equal(0, (await ExecuteStageAsync(repo, new InstallInvocation(null, null), dependencies)).Exit);
+
+            var configPath = Path.Combine(repo, ".build", "config.toml");
+            File.WriteAllText(configPath, File.ReadAllText(configPath) + """
+
+            [[review.checks]]
+            name = "hand-written"
+            executable = "make"
+            arguments = ["check"]
+            timeout_minutes = 5
+
+            """);
+            var handWritten = File.ReadAllBytes(configPath);
+
+            Write(repo, ".build/profile.json", ProfileJson);
+            var refused = await ExecuteStageAsync(
+                repo, new InstallInvocation(".build/profile.json", null), dependencies);
+
+            Assert.Equal(1, refused.Exit);
+            Assert.Contains("--force", refused.Stdout);
+            Assert.Equal(handWritten, File.ReadAllBytes(configPath));
+
+            var forced = await ExecuteStageAsync(
+                repo, new InstallInvocation(".build/profile.json", null, Force: true), dependencies);
+
+            Assert.Equal(0, forced.Exit);
+            Assert.Equal("invariants_handoff", Stage(forced.Stdout));
+            Assert.Contains("executable = \"pnpm\"", File.ReadAllText(configPath));
+            Assert.DoesNotContain("hand-written", File.ReadAllText(configPath));
         }
         finally
         {

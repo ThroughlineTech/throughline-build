@@ -97,7 +97,7 @@ public sealed class ProfileCommandTests
     }
 
     [Fact]
-    public async Task ApplyToAlreadyMatchingOrHalfConfiguredRepoExitsNonzeroUntilForced()
+    public async Task ApplyIsIdempotentAndExitsNonzeroOnDifferingChecksUntilForced()
     {
         var initial = "# minimal config\n";
         var first = await RunInRepositoryAsync(initial, ["profile", "apply", "-"], stdin: ProfileJson,
@@ -105,9 +105,12 @@ public sealed class ProfileCommandTests
         try
         {
             Assert.Equal(0, first.Exit);
+
+            // Re-applying the same profile is a no-op success, not a failure (TLB-639).
             var second = await RunAtRepositoryAsync(first.Repository!, ["profile", "apply", "-"], ProfileJson);
-            Assert.Equal(1, second.Exit);
+            Assert.Equal(0, second.Exit);
             Assert.Equal(first.ConfigText, second.ConfigText);
+            Assert.Equal(string.Empty, second.Stderr);
 
             var customized = """
             [review]
