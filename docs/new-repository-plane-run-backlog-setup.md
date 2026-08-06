@@ -21,14 +21,15 @@ build install --invariants .build/invariants.toml
 
 The first two invocations stop at explicit handoffs. The third reports READY
 only after doctor passes, at least one blocking review check exists, generated
-placeholders are gone, and the exact installer-owned readiness paths are
-committed on a non-protected run branch: a deterministic `.gitignore` when
-Setup created or changed it, plus catalog-emitted Claude/Codex stubs. The
-porcelain status must be empty, no merge or rebase may be active, and the
-worktree lease list must be queryable. Rerunning a stage is safe: matching
-profile/invariant data, the run branch, and the readiness commit are not
-duplicated. Use `<command> --json` for one machine-readable result envelope;
-progress remains on stderr.
+placeholders are gone, the Plane token actually resolves (not just that config
+parses - see step 3 below on why an interactive shell's resolution is not
+enough), and the exact installer-owned readiness paths are committed on a
+non-protected run branch: a deterministic `.gitignore` when Setup created or
+changed it, plus catalog-emitted Claude/Codex stubs. The porcelain status must
+be empty, no merge or rebase may be active, and the worktree lease list must be
+queryable. Rerunning a stage is safe: matching profile/invariant data, the run
+branch, and the readiness commit are not duplicated. Use `<command> --json` for
+one machine-readable result envelope; progress remains on stderr.
 
 The detailed steps below remain useful for diagnosis and for operating the
 individual commands directly.
@@ -63,8 +64,9 @@ Two TOML files have different owners and must not be combined:
 
 | File | Contents | Git policy |
 | --- | --- | --- |
-| `.build/config.toml` | Plane connection, token environment-variable name, workers, events, and executable review checks | Machine-local and ignored |
+| `.build/config.toml` | Plane connection, the token environment-variable name and/or token-file path, workers, events, and executable review checks | Machine-local and ignored |
 | `.build/conductor.toml` | SOP version floor, ticket and branch prefixes, source roots, architecture map, review invariants, and escalation paths | Machine-local and ignored; `build install` recreates it per clone |
+| `secrets/plane-api-token` (or wherever `plane_api_token_file` points) | The Plane API token, trimmed, and nothing else | Machine-local and ignored (`secrets/` is a reserved gitignore entry) |
 
 The SOP installer also emits two tracked host stubs and one installer cache:
 
@@ -119,7 +121,18 @@ the token in a terminal that VS Code did not spawn from, the Claude session will
 not see it. Export it, then launch VS Code from that same shell, or set the
 variable persistently for your user account.
 
-## 3. Create `.build/config.toml` and connect Plane
+**This is only a starting point, not the final state.** An environment variable
+set this way is only visible to processes descended from THIS shell. Bash
+sources `~/.bashrc` only for interactive shells; `zsh -c` does not read
+`~/.zshrc`; `bash -c` does not read `~/.bash_profile`; and an agent harness or
+an editor launched without a login shell inherits none of them. `/run-backlog`
+itself calls only deterministic `build` verbs, and every one of those is a
+non-interactive invocation from whatever process spawned the session - so once
+you finish step 3 below, persist the token to a file (step 3 shows how) rather
+than relying on this export surviving into every future shell that runs
+`build`.
+
+## 3. Create `.build/config.toml`, connect Plane, and persist the token to a file
 
 For an existing Plane project:
 
@@ -130,11 +143,28 @@ build init --no-interactive \
   --project-id "PROJECT_UUID" \
   --token-env PLANE_API_TOKEN
 build setup
+build setup --write-token-file secrets/plane-api-token
 ```
 
 An explicit `--project-id` uses the offline initialization path: it writes the
 complete configuration but does not contact or provision Plane, so `build setup`
 must follow it.
+
+`build setup --write-token-file` writes the token this run already resolved (the
+environment variable from step 2, here) into `secrets/plane-api-token` - a path
+already reserved in the generated `.gitignore` - and sets
+`plane_api_token_file = "secrets/plane-api-token"` in `.build/config.toml`. It
+never prints the token to stdout, stderr, or any log; the config mutation only
+ever carries the path. From then on, resolution order is `plane_api_token`, then
+the `plane_api_token_env` variable (unchanged, so CI that already exports the
+token keeps working exactly as before), then `plane_api_token_file`. Unlike the
+environment variable, the file's contents do not depend on which shell (or
+whether it was interactive) launched `build`, so `/run-backlog`'s own
+non-interactive `build` calls resolve the token the same way your terminal did
+in step 2 - and so does any other agent harness, cron job, or CI runner that
+inherits this clone. On macOS or Linux, keep the file readable only by you
+(`chmod 600 secrets/plane-api-token`); `build` warns, but does not fail, if it
+finds looser permissions.
 
 To find or create a project by name and provision in one connected command, omit
 `--project-id` and pass `--project-name` instead. Connected initialization
@@ -373,12 +403,17 @@ build --version                        # must be >= conductor.min_build_version
 export PLANE_API_TOKEN=...
 build init --no-interactive --plane-url ... --workspace ... --project-id ... --token-env PLANE_API_TOKEN
 build setup
+build setup --write-token-file secrets/plane-api-token
 # re-create [[review.checks]] -- see below
 build sop install --json               # creates the missing local conductor without replacing stubs
 # replace the conductor scaffold with this repository's verified facts
 build sop doctor --json
 build sop brief run-backlog --json     # returns sopText => ready
 ```
+
+`secrets/` is gitignored like `.build/`, so this machine's token file does not
+travel with the clone either; run `build setup --write-token-file` again here,
+same as the first machine.
 
 The gate does not travel. `.build/config.toml` is gitignored, and it holds
 `[[review.checks]]`, `[[ship.regression_checks]]`, `[waves]`, and `[worktree]`
@@ -416,6 +451,26 @@ checks.
 `plane_api_token_env` holds the secret value instead of the variable name. Set it
 to `plane_api_token_env = "PLANE_API_TOKEN"` and export the token under that name
 in the shell that launched VS Code.
+
+### `plane_api_token not set in config, environment variable '...' is not set, and ...`
+
+The token resolves in your own terminal but not in the shell that actually ran
+`build` - the classic case is an agent harness or a non-interactive shell that
+never sourced `~/.bashrc`/`~/.zshrc`/`~/.bash_profile`, so an export placed only
+there is invisible to it. This is the exact failure step 3 above exists to
+prevent. The fix is the same regardless of which non-interactive process hit it:
+
+```sh
+build setup --write-token-file secrets/plane-api-token
+```
+
+Run it from a shell where the token DOES currently resolve (your own terminal,
+right after step 2). It persists that same token to a file and points
+`plane_api_token_file` at it, and that file resolves identically no matter which
+shell or agent harness invokes `build` afterward. The error message itself names
+every source it tried - the config key, the environment variable name, and the
+token file path - so if it did not mention `plane_api_token_file` at all, config
+does not have one set yet.
 
 ### `sop doctor` passes but `build list` fails
 

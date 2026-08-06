@@ -157,6 +157,22 @@ internal static class InstallCommand
             if (configPath is null)
                 return Failure(json, output, diagnostics, "config file not found", 2);
             var config = BuildConfigLoader.Load(configPath);
+
+            // Readiness must prove the Plane token actually resolves, not just that config parsed.
+            // Before this, only the very first `build install` invocation (stage 1, via
+            // CliBootstrap) ever called ResolveSecrets; the final invocation that reports READY did
+            // not, so a token that stopped resolving between stage 1 and this run (or that only ever
+            // resolved because this particular invocation happened to inherit an interactive shell's
+            // env) could still reach READY. See TLB-638.
+            try
+            {
+                BuildConfigLoader.ResolveSecrets(config, configPath, w => diagnostics.WriteLine(w));
+            }
+            catch (ConfigException ex)
+            {
+                return Failure(json, output, diagnostics, ex.Message, 3, CliErrorCodes.MissingSecret);
+            }
+
             var protectedBranch = config.Ship.BaseBranch;
             var stubPaths = SopBundleCatalog.All
                 .SelectMany(entry => entry.OwnedPaths)
@@ -344,9 +360,11 @@ internal static class InstallCommand
         output.WriteLine(view.Ready ? "READY" : "STOP");
     }
 
-    private static int Failure(bool json, TextWriter output, TextWriter diagnostics, string message, int exitCode)
+    private static int Failure(
+        bool json, TextWriter output, TextWriter diagnostics, string message, int exitCode,
+        string errorCode = CliErrorCodes.Failure)
     {
-        if (json) CliEnvelopeWriter.WriteError(output, CliErrorCodes.Failure, message);
+        if (json) CliEnvelopeWriter.WriteError(output, errorCode, message);
         else diagnostics.WriteLine($"Error: {message}");
         return exitCode;
     }

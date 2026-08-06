@@ -13,7 +13,7 @@ public static class HelpRegistryFactory
     private static readonly ExitCodeEntry s_exit0 = new(0, "Success");
     private static readonly ExitCodeEntry s_exit1 = new(1, "Phase or command failure");
     private static readonly ExitCodeEntry s_exit2 = new(2, "Config error or bad arguments");
-    private static readonly ExitCodeEntry s_exit3 = new(3, "Missing secret (env var not set)");
+    private static readonly ExitCodeEntry s_exit3 = new(3, "Missing secret (token not resolvable from config, env var, or token file)");
     private static readonly ExitCodeEntry s_exit4 = new(4, "Phase infrastructure failure");
     private static readonly ExitCodeEntry s_exit5 = new(5, "Operator aborted (typed 'q' at a prompt)");
 
@@ -153,7 +153,7 @@ public static class HelpRegistryFactory
             new(0, "Shipped successfully, or only decruft cleanup failed after merge"),
             new(1, "Ship gate blocked at rebase, conflict scan, or regression checks"),
             new(2, "Config error or bad arguments"),
-            new(3, "Missing secret (env var not set)"),
+            new(3, "Missing secret (token not resolvable from config, env var, or token file)"),
             new(4, "Ship infrastructure failure, including state check, fetch, or fast-forward merge"),
         ],
         Examples:
@@ -930,16 +930,18 @@ public static class HelpRegistryFactory
         Name: "setup",
         Group: CommandGroup.Configure,
         Summary: "Make a project workflow-ready: git init + .gitignore, and provision the Plane project (states + labels)",
-        Usage: "setup [--check]",
+        Usage: "setup [--check] [--write-token-file <path>]",
         Options:
         [
             new("--check", "Verify only: report any missing git repo, .gitignore entries, or Plane states/labels and exit 1; mutate nothing", false),
+            new("--write-token-file <path>", "Write the Plane API token this run already resolved to <path> and set plane_api_token_file in config.toml, so a non-interactive process (an agent, CI, an editor with no login shell) can find it too; never combine with --check", false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2, s_exit3],
         Examples:
         [
             new("setup", "Initialize git, top up .gitignore, and create missing Plane states/labels"),
             new("setup --check", "Report readiness gaps without changing anything (CI gate)"),
+            new("setup --write-token-file secrets/plane-api-token", "Persist the currently-resolved token to a file non-interactive shells can also read"),
         ]
     );
 

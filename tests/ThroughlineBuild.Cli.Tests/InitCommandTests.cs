@@ -269,8 +269,10 @@ public class InitCommandTests
             var console = new FakeConsole();
             await InitCommand.ExecuteAsync(dir, force: false, printTemplate: true, console);
 
-            // --print-template is pure template output: none of the offline hints leak in.
-            Assert.DoesNotContain("build setup", console.Stdout);
+            // --print-template is pure template output: none of the offline hints leak in. The
+            // template itself legitimately mentions 'build setup' in a plane_api_token_file
+            // comment (TLB-638), so check for the specific hint sentence, not the bare phrase.
+            Assert.DoesNotContain("Next: run 'build setup'", console.Stdout);
             Assert.DoesNotContain("Still REQUIRED", console.Stdout);
             Assert.DoesNotContain("Next:", console.Stdout);
             Assert.DoesNotContain("user-guide", console.Stdout);

@@ -102,6 +102,56 @@ public sealed class InstallCommandTests
         Assert.Equal("prompt", json.RootElement.GetProperty("data").GetProperty("prompt").GetString());
     }
 
+    // TLB-638: before this, only stage 1 (via CliBootstrap) ever called ResolveSecrets. Stage 3 -
+    // the invocation that actually reports READY - never re-checked that the token still resolved,
+    // so a token reachable only because THIS run happened to inherit an interactive shell's env
+    // (rather than from config, a token file, or an env var an agent's non-interactive shell would
+    // also see) could still reach READY. Remove the ResolveSecrets call added to stage 3 in
+    // InstallCommand.ExecuteAsync and this test starts asserting "ready" instead of failing.
+    [Fact]
+    public async Task ExecuteAsync_StageThree_FailsClosedWhenPlaneTokenIsUnresolvable()
+    {
+        var repo = await CreateRepositoryAsync();
+        try
+        {
+            var readinessCalls = 0;
+            var dependencies = EndToEndDependencies(() => readinessCalls++);
+
+            Assert.Equal(0, (await ExecuteStageAsync(repo, new InstallInvocation(null, null), dependencies)).Exit);
+
+            Write(repo, ".build/profile.json", ProfileJson);
+            Assert.Equal(0, (await ExecuteStageAsync(
+                repo, new InstallInvocation(".build/profile.json", null), dependencies)).Exit);
+
+            // Drop the inline token that let stages 1-2 resolve secrets, leaving only
+            // plane_api_token_env pointing at a variable this process never sets - the same shape
+            // the bug report's non-interactive agent harness sees when the token lives only in an
+            // interactive shell's rc file.
+            var configPath = Path.Combine(repo, ".build", "config.toml");
+            var withoutInlineToken = File.ReadAllText(configPath)
+                .Replace("plane_api_token = \"test-plane-token\"\n", string.Empty, StringComparison.Ordinal);
+            Assert.DoesNotContain("plane_api_token = ", withoutInlineToken, StringComparison.Ordinal);
+            File.WriteAllText(configPath, withoutInlineToken);
+
+            Write(repo, ".build/invariants.toml", InvariantsToml);
+            var third = await ExecuteStageAsync(
+                repo, new InstallInvocation(null, ".build/invariants.toml"), dependencies);
+
+            Assert.NotEqual(0, third.Exit);
+            Assert.Equal(0, readinessCalls);
+            using var envelope = System.Text.Json.JsonDocument.Parse(third.Stdout);
+            Assert.False(envelope.RootElement.GetProperty("ok").GetBoolean());
+            Assert.Equal("missing_secret", envelope.RootElement.GetProperty("error").GetProperty("code").GetString());
+            var message = envelope.RootElement.GetProperty("error").GetProperty("message").GetString();
+            Assert.Contains("UNUSED_TOKEN", message);
+            Assert.Contains("plane_api_token_file", message);
+        }
+        finally
+        {
+            TryDelete(repo);
+        }
+    }
+
     [Fact]
     public async Task ExecuteAsync_AllThreeStages_ReachesReadyInNonDotnetRepoAndRerunsIdempotently()
     {
@@ -588,6 +638,7 @@ public sealed class InstallCommandTests
     plane_workspace_slug = "workspace"
     plane_project_id = "project-id"
     plane_project_identifier = "WEB"
+    plane_api_token = "test-plane-token"
     plane_api_token_env = "UNUSED_TOKEN"
 
     [llm]

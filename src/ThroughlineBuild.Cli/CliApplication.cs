@@ -1145,6 +1145,21 @@ public static class CliApplication
         if (verbKind == CliVerbKind.Setup)
         {
             var checkOnly = filteredArgs.Contains("--check");
+            // --write-token-file persists the token this process already resolved (inline config,
+            // an env var, or an existing file) into a dedicated file, so a future non-interactive
+            // process can find it without depending on that process's shell. It never handles a new
+            // token value, so it needs no separate interactive/non-interactive prompt path. See TLB-638.
+            var writeTokenFilePath = CliArgParser.GetFlagValue(filteredArgs, "--write-token-file");
+            if (filteredArgs.Contains("--write-token-file") && string.IsNullOrWhiteSpace(writeTokenFilePath))
+            {
+                Console.Error.WriteLine("Error: --write-token-file requires a path");
+                return 2;
+            }
+            if (writeTokenFilePath is not null && checkOnly)
+            {
+                Console.Error.WriteLine("Error: --write-token-file cannot be combined with --check");
+                return 2;
+            }
             var sharedTicketing = cliContext.Ticketing;
             var setupCmd = new SetupCommand(sharedTicketing, new FileSystemLocalRepoOps(configuredCwd));
             try
@@ -1152,6 +1167,17 @@ public static class CliApplication
                 using var verbCts = new CancellationTokenSource();
                 Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
                 var setupExit = await setupCmd.ExecuteAsync(checkOnly, SystemConsole.Instance, verbCts.Token);
+                if (setupExit == 0 && writeTokenFilePath is not null)
+                {
+                    var writeResult = TokenFileInstaller.Write(
+                        configuredCwd, cliContext.ConfigPath, writeTokenFilePath, cliContext.Secrets.PlaneApiToken);
+                    if (!writeResult.Success)
+                    {
+                        Console.Error.WriteLine($"Error: {writeResult.Message}");
+                        return 1;
+                    }
+                    Console.WriteLine(writeResult.Message);
+                }
                 // Diagnose the configured Claude transport (executable, version, platform) so an operator
                 // learns about an unsupported interactive-hook setup here, before running a phase.
                 var transportExit = await ClaudeTransportPreflight.ReportAsync(

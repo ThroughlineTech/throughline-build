@@ -11,6 +11,13 @@ plane_workspace_slug = "REQUIRED_PLANE_WORKSPACE_SLUG"  # REQUIRED: your workspa
 plane_project_id = "REQUIRED_PLANE_PROJECT_ID"  # REQUIRED: UUID of your Plane project
 plane_api_token = "REQUIRED_PLANE_API_TOKEN"  # REQUIRED: your Plane API token
 # plane_api_token_env = "PLANE_API_TOKEN"  # alternative for CI: read token from this env var
+# plane_api_token_file = "secrets/plane-api-token"  # default for a human developer: a file
+#   whose entire trimmed contents are the token, resolved relative to the project root. Unlike
+#   plane_api_token_env, resolution never depends on which shell (interactive or not) launched
+#   build, so a non-interactive agent harness or an editor with no login-shell environment finds
+#   it the same way an interactive terminal does. Write it with 'build setup --write-token-file
+#   <path>' once any of the above already resolves - that command never prints the token.
+#   Resolution order: plane_api_token, then plane_api_token_env, then plane_api_token_file.
 # plane_requests_per_minute = 40  # per-process cap on Plane API calls/min. The default 40
 #   is sized for Plane Cloud's 60/min limit, leaving headroom for a second concurrent
 #   'build'. Raise it for a self-hosted Plane that imposes a higher limit (or none).

@@ -9,7 +9,7 @@ Global exit codes:
   0  Success.
   1  Phase or command failure.
   2  Config error, bad arguments, unknown verb, or unknown help topic.
-  3  Missing secret. A required environment variable such as the Plane API token is not set.
+  3  Missing secret. The Plane API token did not resolve from config, its env var, or its token file.
   4  Phase infrastructure failure. Examples include verifier crash, ship worktree missing, or git unavailable.
 
 Command-specific overrides:

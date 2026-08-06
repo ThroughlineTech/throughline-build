@@ -79,7 +79,7 @@ public static class CliBootstrap
         BuildSecrets secrets;
         try
         {
-            secrets = BuildConfigLoader.ResolveSecrets(config);
+            secrets = BuildConfigLoader.ResolveSecrets(config, configPath);
         }
         catch (ConfigException ex)
         {

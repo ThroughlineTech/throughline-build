@@ -103,7 +103,7 @@ Exit codes:
   0  Success
   1  Phase or command failure
   2  Config error or unknown verb
-  3  Missing secret (env var not set)
+  3  Missing secret (not resolvable from config, env var, or token file)
   4  Phase infrastructure failure (review verifier crash, ship worktree missing, git unavailable)
 
   For 'build chain' verb only (see separate exit code mapping):

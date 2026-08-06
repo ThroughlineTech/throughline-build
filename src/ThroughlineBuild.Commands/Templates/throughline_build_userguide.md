@@ -68,9 +68,23 @@ for a self-hosted instance use your server root. Written to `plane_base_url` in 
 Plane under Project Settings > General. Written to `plane_project_id` in config.
 
 **Plane API token** - A personal API token from your Plane profile (Settings > API Tokens).
-Prefer keeping the value in an environment variable and writing only its name to config with
-`build init --token-env PLANE_API_TOKEN`. A literal `plane_api_token` is supported but must never
-be committed.
+
+For a human developer, the default path is a file: point `plane_api_token_file` at it (the
+conventional path is `secrets/plane-api-token`, already reserved in the generated `.gitignore`).
+Unlike an environment variable, a file's contents do not depend on which shell launched `build` -
+bash only sources `~/.bashrc` for interactive shells, `zsh -c` does not read `~/.zshrc`, and an
+editor or agent harness launched without a login shell inherits neither - so a token exported only
+from an rc file is invisible to a non-interactive process even though it works in your own
+terminal. Once any other source already resolves the token, write it out with
+`build setup --write-token-file secrets/plane-api-token`; that command never prints the token to
+stdout, stderr, or any log.
+
+For CI, prefer an environment variable and write only its name to config with
+`build init --token-env PLANE_API_TOKEN`; CI sets it directly as part of the pipeline, not via an
+interactive shell, so this path is unaffected by the above. A literal `plane_api_token` is
+supported but must never be committed. Resolution order: `plane_api_token`, then
+`plane_api_token_env`, then `plane_api_token_file`, then failure - and the failure message names
+every source it tried.
 
 **Default agent name** - The agent key used for plan, implement, review, and rework phases
 (e.g. `claude-code`). Must match a `[workers.<name>]` block in config. Written to `default_agent`
@@ -215,6 +229,20 @@ If Plane returns 401 or 403, `build` reports the repository-local config path, r
 workspace, and project that were used for the request. The message also reminds you that sibling
 repositories may select different `.build/config.toml` files and recommends rerunning connected
 `build init` for this repository. Token values and Plane response bodies are not echoed.
+
+If tickets will also run from a non-interactive shell later - an agent harness, a scheduled job, an
+editor launched without a login shell - persist the token now, in this same terminal where it
+already resolves:
+
+```
+build setup --write-token-file secrets/plane-api-token
+```
+
+This writes the token this run already resolved (from step 1's environment variable, here) to that
+file and sets `plane_api_token_file` in config, without ever printing the token itself. A
+non-interactive process reads the file the same way regardless of its own shell, so it no longer
+matters whether that later process's shell ever sourced the rc file where you originally exported
+`PLANE_API_TOKEN`.
 
 ### 4. Create a ticket
 

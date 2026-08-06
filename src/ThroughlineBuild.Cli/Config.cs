@@ -18,7 +18,12 @@ public record TicketingConfig(
     string PlaneProjectIdentifier = "",
     string PlaneProjectName = "",
     string? PlaneApiToken = null,
-    int PlaneRequestsPerMinute = PlaneClientOptions.DefaultRequestsPerMinute);
+    int PlaneRequestsPerMinute = PlaneClientOptions.DefaultRequestsPerMinute,
+    // Path to a file whose entire trimmed contents are the Plane API token. Checked after
+    // plane_api_token and plane_api_token_env; unlike either, it does not depend on which shell
+    // (interactive or not) launched the process, so it is the resolution path that works the same
+    // way for a human's terminal and for a non-interactive agent harness. See TLB-638.
+    string PlaneApiTokenFile = "");
 
 public record LlmConfig(
     string DefaultModel,
@@ -276,14 +281,46 @@ public static class BuildConfigLoader
         return Path.Combine(projectRoot, rawLogDir);
     }
 
-    public static BuildSecrets ResolveSecrets(BuildConfig config)
+    // Resolution order for the Plane API token: inline plane_api_token, then the environment
+    // variable named by plane_api_token_env (so CI - which sets that variable directly, never via
+    // an interactive shell rc file - is unchanged), then the file named by plane_api_token_file,
+    // then failure. The file exists because env-var resolution silently depends on which shell
+    // launched the process: bash only sources ~/.bashrc for interactive shells, zsh -c does not
+    // read ~/.zshrc, bash -c does not read ~/.bash_profile, and an editor or agent harness launched
+    // without a login shell inherits none of them. A file Build reads directly has no such
+    // dependency on any shell. See TLB-638.
+    //
+    // configPath, when supplied, anchors a relative plane_api_token_file at the project root (the
+    // parent of the directory holding config.toml), matching ResolveLogDirectory's convention.
+    // warnSink receives the POSIX loose-permissions warning; it defaults to stderr like Load's.
+    public static BuildSecrets ResolveSecrets(
+        BuildConfig config, string? configPath = null, Action<string>? warnSink = null)
     {
+        var emit = warnSink ?? (w => Console.Error.WriteLine(w));
+
         var planeToken = config.Ticketing.PlaneApiToken;
+        var triedTokenFile = false;
+        string? resolvedTokenFilePath = null;
+
         if (string.IsNullOrEmpty(planeToken))
             planeToken = Environment.GetEnvironmentVariable(config.Ticketing.PlaneApiTokenEnv);
+
+        if (string.IsNullOrEmpty(planeToken) && !string.IsNullOrWhiteSpace(config.Ticketing.PlaneApiTokenFile))
+        {
+            triedTokenFile = true;
+            resolvedTokenFilePath = ResolveTokenFilePath(config.Ticketing.PlaneApiTokenFile, configPath);
+            if (File.Exists(resolvedTokenFilePath))
+            {
+                WarnIfTokenFileTooOpen(resolvedTokenFilePath, emit);
+                var fileToken = File.ReadAllText(resolvedTokenFilePath).Trim();
+                if (fileToken.Length > 0)
+                    planeToken = fileToken;
+            }
+        }
+
         if (string.IsNullOrEmpty(planeToken))
-            throw new ConfigException(
-                $"plane_api_token not set in config and required environment variable '{config.Ticketing.PlaneApiTokenEnv}' is not set");
+            throw new ConfigException(BuildMissingPlaneTokenMessage(
+                config.Ticketing, triedTokenFile, resolvedTokenFilePath));
         if (planeToken.StartsWith("REQUIRED_", StringComparison.Ordinal))
             throw new ConfigException(
                 $"plane_api_token still holds the scaffold placeholder \"{planeToken}\"; replace it with your " +
@@ -296,6 +333,62 @@ public static class BuildConfigLoader
         return new BuildSecrets(planeToken, string.IsNullOrEmpty(anthropicKey) ? null : anthropicKey);
     }
 
+    // Names every source ResolveSecrets tried, so the diagnosis points at "no shell loaded this
+    // token" rather than reading as a plain missing-config error. See TLB-638.
+    private static string BuildMissingPlaneTokenMessage(
+        TicketingConfig ticketing, bool triedTokenFile, string? resolvedTokenFilePath)
+    {
+        var fileClause = triedTokenFile
+            ? $"token file '{resolvedTokenFilePath}' (from plane_api_token_file = \"{ticketing.PlaneApiTokenFile}\") was not found or was empty"
+            : "plane_api_token_file is not set in config";
+        return
+            $"plane_api_token not set in config, environment variable '{ticketing.PlaneApiTokenEnv}' " +
+            $"(from plane_api_token_env) is not set, and {fileClause}. Non-interactive shells - the " +
+            "kind an agent harness, CI runner, or editor launched without a login shell uses - do not " +
+            "source ~/.bashrc, ~/.zshrc, or ~/.bash_profile, so a token exported only there is invisible " +
+            "here even though it works in your own terminal. Fix: set plane_api_token_file to a file " +
+            "containing just the token, or export the token under plane_api_token_env's name in the " +
+            "environment that actually launches build (not just an interactive shell's rc file).";
+    }
+
+    private static string ResolveTokenFilePath(string configuredPath, string? configPath)
+    {
+        if (Path.IsPathRooted(configuredPath))
+            return configuredPath;
+        var root = configPath is not null
+            ? Path.GetDirectoryName(Path.GetDirectoryName(configPath)) ?? Directory.GetCurrentDirectory()
+            : Directory.GetCurrentDirectory();
+        return Path.GetFullPath(configuredPath, root);
+    }
+
+    // POSIX-only advisory: a token file readable by group or other is a needless exposure of a live
+    // secret. Warns and continues rather than failing the command - out of scope to enforce this,
+    // and Windows ACLs have no group/other bits to compare against, so this never runs there. This
+    // is the one deliberate, path-handling-only platform difference the readiness contract allows.
+    private static void WarnIfTokenFileTooOpen(string path, Action<string> emit)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var mode = File.GetUnixFileMode(path);
+        const UnixFileMode openToOthers =
+            UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
+            UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute;
+        if ((mode & openToOthers) == 0)
+            return;
+        emit($"warning: token file '{path}' is readable by group or other (mode {FormatUnixMode(mode)}); " +
+             $"restrict it, e.g. chmod 600 \"{path}\"");
+    }
+
+    private static string FormatUnixMode(UnixFileMode mode)
+    {
+        int Digit(UnixFileMode read, UnixFileMode write, UnixFileMode execute) =>
+            (mode.HasFlag(read) ? 4 : 0) + (mode.HasFlag(write) ? 2 : 0) + (mode.HasFlag(execute) ? 1 : 0);
+        var owner = Digit(UnixFileMode.UserRead, UnixFileMode.UserWrite, UnixFileMode.UserExecute);
+        var group = Digit(UnixFileMode.GroupRead, UnixFileMode.GroupWrite, UnixFileMode.GroupExecute);
+        var other = Digit(UnixFileMode.OtherRead, UnixFileMode.OtherWrite, UnixFileMode.OtherExecute);
+        return $"{owner}{group}{other}";
+    }
+
     private static readonly HashSet<string> KnownTopLevelSections = new(StringComparer.Ordinal)
     {
         "ticketing", "llm", "workers", "events", "review", "ship", "work", "worktree", "waves", "plan", "project", "batch"
@@ -305,7 +398,7 @@ public static class BuildConfigLoader
     {
         "backend", "plane_base_url", "plane_workspace_slug", "plane_project_id",
         "plane_api_token_env", "plane_project_identifier", "plane_project_name", "plane_api_token",
-        "plane_requests_per_minute"
+        "plane_api_token_file", "plane_requests_per_minute"
     };
 
     private static readonly HashSet<string> KnownLlmKeys = new(StringComparer.Ordinal)
@@ -748,7 +841,8 @@ public static class BuildConfigLoader
             PlaneProjectIdentifier: OptionalString(t, "plane_project_identifier", string.Empty),
             PlaneProjectName: OptionalString(t, "plane_project_name", string.Empty),
             PlaneApiToken: OptionalString(t, "plane_api_token", string.Empty) is var tok && tok.Length > 0 ? tok : null,
-            PlaneRequestsPerMinute: rpm);
+            PlaneRequestsPerMinute: rpm,
+            PlaneApiTokenFile: OptionalString(t, "plane_api_token_file", string.Empty));
     }
 
     private static LlmConfig ReadLlmSection(TomlTable root)
