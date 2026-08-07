@@ -126,6 +126,233 @@ public sealed class SopInstallCommandTests
     }
 
     [Fact]
+    public async Task Install_ArchitectureMapCandidatePresent_UsesTrackedFileRealCasing()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: "ARC",
+                configuredProjectId: "project-uuid",
+                new ThrowingProjectDiscovery(),
+                ["src/main.ts", "docs/ARCHITECTURE.md", "README.md"]);
+
+            Assert.Equal(0, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            Assert.Equal(
+                "docs/ARCHITECTURE.md",
+                doc.RootElement.GetProperty("data").GetProperty("architectureMap").GetString());
+            Assert.Contains(
+                "architecture_map = \"docs/ARCHITECTURE.md\"",
+                File.ReadAllText(PathFor(repo, ".build/conductor.toml")),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_NoArchitectureMapCandidate_WritesSentinelDoctorRejects()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: "NOA",
+                configuredProjectId: "project-uuid",
+                new ThrowingProjectDiscovery(),
+                ["src/main.ts", "src/util.ts"]);
+
+            Assert.Equal(0, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            Assert.Equal(
+                "UNRESOLVED_ARCHITECTURE_MAP",
+                doc.RootElement.GetProperty("data").GetProperty("architectureMap").GetString());
+
+            var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+            Assert.Contains(report.Findings, finding => finding.Code == "conductor.architecture_map.not_found");
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_NoContractAuthorityDerivedAtScaffoldTime_DoctorRejectsSentinel()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: "CTA",
+                configuredProjectId: "project-uuid",
+                new ThrowingProjectDiscovery(),
+                ["src/main.ts"]);
+
+            Assert.Equal(0, result.Exit);
+            Assert.Contains(
+                "contract_authority = \"UNRESOLVED_CONTRACT_AUTHORITY\"",
+                File.ReadAllText(PathFor(repo, ".build/conductor.toml")),
+                StringComparison.Ordinal);
+
+            var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+            Assert.Contains(
+                report.Findings, finding => finding.Code == "constellation.contract_authority.placeholder");
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task CliInstall_BranchWithCommonPrefix_DerivesMostFrequentSegment()
+    {
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+        var repo = CreateRepo();
+
+        try
+        {
+            Directory.Delete(PathFor(repo, ".git"));
+            await RunGitAsync(repo, "init");
+            await RunGitAsync(repo, "config", "user.email", "test@example.invalid");
+            await RunGitAsync(repo, "config", "user.name", "Test User");
+            File.WriteAllText(PathFor(repo, "README.md"), "readme\n");
+            await RunGitAsync(repo, "add", "README.md");
+            await RunGitAsync(repo, "commit", "-m", "initial");
+            await RunGitAsync(repo, "branch", "feature/one");
+            await RunGitAsync(repo, "branch", "feature/two");
+            await RunGitAsync(repo, "branch", "chore/three");
+
+            var config = ConfigTemplateLoader.Load()
+                .Replace("REQUIRED_PLANE_BASE_URL", "https://api.plane.so", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_WORKSPACE_SLUG", "workspace", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_PROJECT_ID", "configured-uuid", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_API_TOKEN", "token", StringComparison.Ordinal)
+                .Replace(
+                    "plane_project_id = \"configured-uuid\"",
+                    "plane_project_id = \"configured-uuid\"\nplane_project_identifier = \"BRN\"",
+                    StringComparison.Ordinal);
+            Directory.CreateDirectory(PathFor(repo, ".build"));
+            File.WriteAllText(PathFor(repo, ".build/config.toml"), config);
+
+            var result = await RunCliApplicationInDirectoryAsync(repo, ["sop", "install", "--json"]);
+
+            Assert.Equal(0, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            Assert.Equal(
+                "feature",
+                doc.RootElement.GetProperty("data").GetProperty("branchPrefix").GetString());
+            Assert.Contains(
+                "branch_prefix = \"feature\"",
+                File.ReadAllText(PathFor(repo, ".build/conductor.toml")),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_NoSlashBranches_FallsBackToTicketBranchPrefix()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: "SLA",
+                configuredProjectId: "project-uuid",
+                new ThrowingProjectDiscovery(),
+                ["src/main.ts"],
+                branchNames: ["main", "develop"]);
+
+            Assert.Equal(0, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            Assert.Equal(
+                "ticket",
+                doc.RootElement.GetProperty("data").GetProperty("branchPrefix").GetString());
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_NonDotnetScratchRepository_ProducesRepositoryOwnFactsWithNoThroughlinePaths()
+    {
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+        var repo = Path.Combine(Path.GetTempPath(), "sop-install-cross-stack-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(repo);
+
+        try
+        {
+            // A real Node/TypeScript-shaped repository - nothing about it resembles this engine's
+            // own .NET layout. Proves TLB-628's "verify against a scratch repository of a different
+            // stack, not by inspection" requirement end to end, through real git.
+            await RunGitAsync(repo, "init", "-b", "main");
+            await RunGitAsync(repo, "config", "user.email", "scratch@example.invalid");
+            await RunGitAsync(repo, "config", "user.name", "Scratch User");
+            Directory.CreateDirectory(PathFor(repo, "src"));
+            Directory.CreateDirectory(PathFor(repo, "docs"));
+            File.WriteAllText(PathFor(repo, "package.json"), "{ \"name\": \"scratch-app\" }\n");
+            File.WriteAllText(PathFor(repo, "src/index.js"), "console.log('scratch');\n");
+            File.WriteAllText(PathFor(repo, "docs/architecture.md"), "# Scratch app architecture\n");
+            await RunGitAsync(repo, "add", "package.json", "src", "docs");
+            await RunGitAsync(repo, "commit", "-m", "initial");
+            await RunGitAsync(repo, "checkout", "-b", "ticket/scratch-1");
+            await RunGitAsync(repo, "checkout", "main");
+
+            var config = ConfigTemplateLoader.Load()
+                .Replace("REQUIRED_PLANE_BASE_URL", "https://api.plane.so", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_WORKSPACE_SLUG", "workspace", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_PROJECT_ID", "configured-uuid", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_API_TOKEN", "token", StringComparison.Ordinal)
+                .Replace(
+                    "plane_project_id = \"configured-uuid\"",
+                    "plane_project_id = \"configured-uuid\"\nplane_project_identifier = \"SCR\"",
+                    StringComparison.Ordinal);
+            Directory.CreateDirectory(PathFor(repo, ".build"));
+            File.WriteAllText(PathFor(repo, ".build/config.toml"), config);
+
+            var result = await RunCliApplicationInDirectoryAsync(repo, ["sop", "install", "--json"]);
+            Assert.Equal(0, result.Exit);
+
+            var conductor = File.ReadAllText(PathFor(repo, ".build/conductor.toml"));
+            Assert.Contains("ticket_prefix = \"SCR\"", conductor, StringComparison.Ordinal);
+            Assert.Contains("source_roots = [\"docs\", \"src\"]", conductor, StringComparison.Ordinal);
+            Assert.Contains("branch_prefix = \"ticket\"", conductor, StringComparison.Ordinal);
+            Assert.Contains("architecture_map = \"docs/architecture.md\"", conductor, StringComparison.Ordinal);
+
+            Assert.DoesNotContain("ThroughlineBuild", conductor, StringComparison.Ordinal);
+            Assert.DoesNotContain("throughline-build-architecture", conductor, StringComparison.Ordinal);
+            Assert.DoesNotContain("dotnet", conductor, StringComparison.OrdinalIgnoreCase);
+
+            var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+            Assert.DoesNotContain(
+                report.Findings, finding => finding.Code == "conductor.architecture_map.not_found");
+            Assert.DoesNotContain(
+                report.Findings, finding => finding.Code == "conductor.source_roots.not_found");
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public async Task CliInstall_UsesConfiguredIdentifierAndGitTrackedRoots()
     {
         AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
@@ -365,7 +592,11 @@ public sealed class SopInstallCommandTests
                 .ToList();
             Assert.DoesNotContain("conductor.ticket_prefix.placeholder", codes);
             Assert.Contains("conductor.review.invariants.statement.placeholder", codes);
+            Assert.Contains("conductor.review.invariants.id.placeholder", codes);
             Assert.Contains("constellation.platform.placeholder", codes);
+            Assert.Contains("constellation.contract_authority.placeholder", codes);
+            Assert.Contains("conductor.architecture_map.not_found", codes);
+            Assert.Contains("conductor.source_roots.not_found", codes);
             Assert.Contains("review.checks.empty", codes);
         }
         finally
@@ -1024,7 +1255,9 @@ public sealed class SopInstallCommandTests
                     configuredProjectId: "project-uuid",
                     projectDiscovery: null,
                     trackedFilesProvider: (_, _) =>
-                        Task.FromResult<IReadOnlyList<string>>(["src/placeholder.cs"]));
+                        Task.FromResult<IReadOnlyList<string>>(["src/placeholder.cs"]),
+                    branchNamesProvider: (_, _) =>
+                        Task.FromResult<IReadOnlyList<string>>([]));
             }
             else
             {
@@ -1048,7 +1281,8 @@ public sealed class SopInstallCommandTests
         string configuredProjectId,
         IProjectDiscovery? projectDiscovery,
         IReadOnlyList<string> trackedFiles,
-        bool json = true)
+        bool json = true,
+        IReadOnlyList<string>? branchNames = null)
     {
         var stdout = new StringWriter();
         var stderr = new StringWriter();
@@ -1061,7 +1295,8 @@ public sealed class SopInstallCommandTests
             configuredProjectIdentifier,
             configuredProjectId,
             projectDiscovery,
-            (_, _) => Task.FromResult(trackedFiles));
+            (_, _) => Task.FromResult(trackedFiles),
+            (_, _) => Task.FromResult(branchNames ?? Array.Empty<string>()));
         return (exit, stdout.ToString(), stderr.ToString());
     }
 

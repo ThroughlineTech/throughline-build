@@ -413,6 +413,133 @@ public sealed class SopDoctorCommandTests
         }
     }
 
+    [Fact]
+    public void Doctor_FailsWhenArchitectureMapNamesAPathThatDoesNotExist()
+    {
+        var conductor = ValidConductorToml.Replace(
+            "architecture_map = \"docs/throughline-build-architecture.md\"",
+            "architecture_map = \"docs/does-not-exist.md\"");
+        var repo = CreateRepo(conductor);
+        var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+
+        try
+        {
+            Assert.False(report.Passed);
+            var finding = Assert.Single(
+                report.Findings, finding => finding.Code == "conductor.architecture_map.not_found");
+            Assert.Equal("conductor.architecture_map", finding.Path);
+            Assert.Contains("docs/does-not-exist.md", finding.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void Doctor_FailsWhenASourceRootIsNotADirectoryInTheRepository()
+    {
+        var conductor = ValidConductorToml.Replace(
+            "source_roots = [\"src\", \"tests\", \"docs\"]",
+            "source_roots = [\"src\", \"vendor\", \"docs\"]");
+        var repo = CreateRepo(conductor);
+        var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+
+        try
+        {
+            Assert.False(report.Passed);
+            var finding = Assert.Single(
+                report.Findings, finding => finding.Code == "conductor.source_roots.not_found");
+            Assert.Equal("conductor.source_roots[1]", finding.Path);
+            Assert.Contains("vendor", finding.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void Doctor_PassesWhenSourceRootsContainOnlyDot()
+    {
+        var conductor = ValidConductorToml
+            .Replace("source_roots = [\"src\", \"tests\", \"docs\"]", "source_roots = [\".\"]");
+        var repo = CreateRepo(conductor);
+        var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+
+        try
+        {
+            Assert.DoesNotContain(report.Findings, finding => finding.Code == "conductor.source_roots.not_found");
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void Doctor_FailsOnContractAuthorityScaffoldPlaceholder()
+    {
+        var conductor = ValidConductorToml.Replace(
+            "contract_authority = \"src/ThroughlineBuild.Contracts\"",
+            "contract_authority = \"UNRESOLVED_CONTRACT_AUTHORITY\"");
+        var repo = CreateRepo(conductor);
+        var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+
+        try
+        {
+            Assert.False(report.Passed);
+            Assert.Contains(
+                report.Findings, finding => finding.Code == "constellation.contract_authority.placeholder");
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void Doctor_FailsWhenEveryInvariantKeepsTheScaffoldDefaultIdEvenWithEditedStatements()
+    {
+        var conductor = ValidConductorToml
+            .Replace("id = \"contracts-io-free\"", "id = \"repository-contract\"")
+            .Replace("id = \"aot-json\"", "id = \"repository-contract\"")
+            .Replace(
+                "statement = \"CLI JSON output uses source-generated JsonSerializerContext.\"",
+                "statement = \"A second, genuinely different, non-placeholder statement.\"");
+        var repo = CreateRepo(conductor);
+        var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+
+        try
+        {
+            Assert.False(report.Passed);
+            Assert.Contains(
+                report.Findings, finding => finding.Code == "conductor.review.invariants.id.placeholder");
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void Doctor_DoesNotFlagInvariantIdsWhenAtLeastOneDiffersFromScaffoldDefault()
+    {
+        // ValidConductorToml's two invariants already use distinct, non-default ids.
+        var repo = CreateRepo();
+        var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+
+        try
+        {
+            Assert.DoesNotContain(
+                report.Findings, finding => finding.Code == "conductor.review.invariants.id.placeholder");
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
     [Theory]
     [InlineData("# no review checks", "review.checks.empty")]
     [InlineData("[review]\nchecks = []", "review.checks.empty")]
@@ -978,6 +1105,16 @@ public sealed class SopDoctorCommandTests
         File.WriteAllText(Path.Combine(buildDir, "conductor.toml"), conductorToml);
         if (configToml is not null)
             File.WriteAllText(Path.Combine(buildDir, "config.toml"), configToml);
+
+        // Doctor now resolves architecture_map and source_roots against the filesystem (TLB-628),
+        // so the default ValidConductorToml's referenced paths must actually exist for the "clean,
+        // fully-edited conductor.toml" tests to still see zero findings. Harmless for tests that
+        // pass a conductorToml referencing different paths - these directories simply go unused.
+        Directory.CreateDirectory(Path.Combine(repository, "src"));
+        Directory.CreateDirectory(Path.Combine(repository, "tests"));
+        Directory.CreateDirectory(Path.Combine(repository, "docs"));
+        File.WriteAllText(
+            Path.Combine(repository, "docs", "throughline-build-architecture.md"), "architecture\n");
         return repository;
     }
 
@@ -1027,7 +1164,9 @@ public sealed class SopDoctorCommandTests
                     configuredProjectId: "project-uuid",
                     projectDiscovery: null,
                     trackedFilesProvider: (_, _) =>
-                        Task.FromResult<IReadOnlyList<string>>(["src/placeholder.cs"]));
+                        Task.FromResult<IReadOnlyList<string>>(["src/placeholder.cs"]),
+                    branchNamesProvider: (_, _) =>
+                        Task.FromResult<IReadOnlyList<string>>([]));
             }
             else
             {

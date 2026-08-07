@@ -228,7 +228,17 @@ public sealed class RepositoryLayoutTests
         // byte for byte, whatever the machine's global core.autocrlf says.
         await RunGitAsync(repository, "config", "core.autocrlf", "false");
         File.WriteAllText(Path.Combine(repository, "README.md"), "# test\n");
-        await RunGitAsync(repository, "add", "README.md");
+        // Tracked, so a linked worktree cut from this commit sees them too - doctor now
+        // resolves ValidConductorToml's architecture_map and source_roots against the
+        // filesystem (TLB-628), and must report the same result from both trees.
+        Directory.CreateDirectory(Path.Combine(repository, "src"));
+        Directory.CreateDirectory(Path.Combine(repository, "tests"));
+        Directory.CreateDirectory(Path.Combine(repository, "docs"));
+        File.WriteAllText(Path.Combine(repository, "src", ".gitkeep"), string.Empty);
+        File.WriteAllText(Path.Combine(repository, "tests", ".gitkeep"), string.Empty);
+        File.WriteAllText(
+            Path.Combine(repository, "docs", "throughline-build-architecture.md"), "architecture\n");
+        await RunGitAsync(repository, "add", "README.md", "src", "tests", "docs");
         await RunGitAsync(repository, "commit", "-m", "initial commit");
     }
 

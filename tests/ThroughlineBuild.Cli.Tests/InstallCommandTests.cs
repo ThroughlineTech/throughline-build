@@ -24,7 +24,8 @@ public sealed class InstallCommandTests
           "role": "gating",
           "canary": [{ "path": "app/canary.txt", "content": "broken" }]
         }
-      ]
+      ],
+      "contract_authority": "app"
     }
     """;
 
@@ -173,7 +174,9 @@ public sealed class InstallCommandTests
             Assert.Equal(0, second.Exit);
             Assert.Equal("invariants_handoff", Stage(second.Stdout));
             Assert.Contains(".build/invariants.toml", second.Stdout);
-            Assert.Contains("platform = \"Vite\"", File.ReadAllText(Path.Combine(repo, ".build/conductor.toml")));
+            var conductorAfterProfile = File.ReadAllText(Path.Combine(repo, ".build/conductor.toml"));
+            Assert.Contains("platform = \"Vite\"", conductorAfterProfile);
+            Assert.Contains("contract_authority = \"app\"", conductorAfterProfile);
 
             Write(repo, ".build/invariants.toml", InvariantsToml);
             var third = await ExecuteStageAsync(
@@ -401,6 +404,59 @@ public sealed class InstallCommandTests
         finally { TryDelete(repo); }
     }
 
+    // TLB-628: ResolveContractAuthority mirrors ResolveGeneratedPlatform's shape exactly, but a
+    // blank profile value is a legitimate "this repository has none" answer, not a failure.
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task ResolveContractAuthority_BlankValueSkipsWithNoFileChange(string contractAuthority)
+    {
+        var repo = await CreateRepositoryAsync();
+        try
+        {
+            const string existing = "[constellation]\r\nplatform = \"unknown\"\r\ncontract_authority = \"UNRESOLVED_CONTRACT_AUTHORITY\"\r\n";
+            Write(repo, ".build/conductor.toml", existing);
+            var before = File.ReadAllBytes(Path.Combine(repo, ".build/conductor.toml"));
+            var result = InstallCommand.ResolveContractAuthority(repo, contractAuthority);
+            Assert.True(result.Success, result.Message);
+            Assert.Equal(before, File.ReadAllBytes(Path.Combine(repo, ".build/conductor.toml")));
+        }
+        finally { TryDelete(repo); }
+    }
+
+    [Fact]
+    public async Task ResolveContractAuthority_ReplacesScaffoldPlaceholder()
+    {
+        var repo = await CreateRepositoryAsync();
+        try
+        {
+            Write(repo, ".build/conductor.toml",
+                "[constellation]\nplatform = \"unknown\"\ncontract_authority = \"UNRESOLVED_CONTRACT_AUTHORITY\"\n");
+            var result = InstallCommand.ResolveContractAuthority(repo, "packages/shared-types");
+            Assert.True(result.Success, result.Message);
+            Assert.Contains(
+                "contract_authority = \"packages/shared-types\"",
+                File.ReadAllText(Path.Combine(repo, ".build/conductor.toml")));
+        }
+        finally { TryDelete(repo); }
+    }
+
+    [Fact]
+    public async Task ResolveContractAuthority_PreservesExistingNonPlaceholderValue()
+    {
+        var repo = await CreateRepositoryAsync();
+        try
+        {
+            const string existing = "[constellation]\r\nplatform = \"unknown\"\r\ncontract_authority = \"already-set\"\r\n";
+            Write(repo, ".build/conductor.toml", existing);
+            var before = File.ReadAllBytes(Path.Combine(repo, ".build/conductor.toml"));
+            var result = InstallCommand.ResolveContractAuthority(repo, "packages/shared-types");
+            Assert.True(result.Success, result.Message);
+            Assert.Equal(before, File.ReadAllBytes(Path.Combine(repo, ".build/conductor.toml")));
+        }
+        finally { TryDelete(repo); }
+    }
+
     [Fact]
     public async Task Readiness_FromProtectedBranch_CommitsExactlyStubsAndIsIdempotent()
     {
@@ -601,7 +657,7 @@ public sealed class InstallCommandTests
         {
             var result = SopInstaller.Run(
                 "install", repo, SopBundleCatalog.All, BuildVersion.Current, DateTimeOffset.UtcNow,
-                conductorIdentity: new SopConductorIdentity("WEB", ["app", "public"]));
+                conductorIdentity: new SopConductorIdentity("WEB", ["app", "public"], "ticket", "README.md"));
             return Task.FromResult(result.Passed ? 0 : 1);
         },
         repo => SopDoctorCommand.RunDoctor(repo, BuildVersion.Current),
@@ -698,7 +754,12 @@ public sealed class InstallCommandTests
         await GitAsync(repo, "config", "user.name", "Install Test");
         await GitAsync(repo, "config", "user.email", "install@example.invalid");
         Write(repo, "README.md", "non-dotnet fixture\n");
-        await GitAsync(repo, "add", "README.md");
+        // The fake identity EndToEndDependencies scaffolds with ("app"/"public" source_roots,
+        // README.md architecture_map) must resolve against real paths now that doctor checks them
+        // against the filesystem (TLB-628).
+        Write(repo, "app/.gitkeep", string.Empty);
+        Write(repo, "public/.gitkeep", string.Empty);
+        await GitAsync(repo, "add", "README.md", "app", "public");
         await GitAsync(repo, "commit", "-m", "initial");
         return repo;
     }

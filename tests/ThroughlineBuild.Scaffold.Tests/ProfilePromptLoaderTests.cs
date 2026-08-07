@@ -15,6 +15,7 @@ public class ProfilePromptLoaderTests
 
         Assert.Contains("Interrogate the repository itself", prompt);
         Assert.Contains("setupFiles", prompt);
+        Assert.Contains("contract_authority", prompt);
         Assert.Contains("Return ONLY the JSON object", prompt);
         Assert.DoesNotContain("{{op_doc_markdown}}", prompt);
     }

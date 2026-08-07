@@ -15,6 +15,26 @@ internal static class SopInstallCommand
         string repositoryRoot,
         CancellationToken cancellationToken);
 
+    internal delegate Task<IReadOnlyList<string>> BranchNamesProvider(
+        string repositoryRoot,
+        CancellationToken cancellationToken);
+
+    /// <summary>Build's own branch-naming convention, used when no local branch reveals one. Not a
+    /// guess about the repository - the same role "." plays as the source_roots fallback.</summary>
+    internal const string DefaultBranchPrefix = "ticket";
+
+    /// <summary>Candidate tracked-file paths for architecture_map, in priority order, matched
+    /// case-insensitively. First match wins; the written value keeps the tracked file's real casing.</summary>
+    private static readonly string[] ArchitectureMapCandidates =
+    {
+        "docs/architecture.md",
+        "architecture.md",
+        "docs/contributing.md",
+        "contributing.md",
+        "agents.md",
+        "readme.md",
+    };
+
     public static int Execute(
         IReadOnlyList<string> args,
         bool json,
@@ -52,6 +72,7 @@ internal static class SopInstallCommand
         string configuredProjectId,
         IProjectDiscovery? projectDiscovery,
         TrackedFilesProvider? trackedFilesProvider = null,
+        BranchNamesProvider? branchNamesProvider = null,
         CancellationToken cancellationToken = default)
     {
         if (!TryParseScope(args, json, output, error, out var entries, out var host, out var exitCode))
@@ -69,6 +90,7 @@ internal static class SopInstallCommand
                     configuredProjectId,
                     projectDiscovery,
                     trackedFilesProvider ?? ListTrackedFilesAsync,
+                    branchNamesProvider ?? ListBranchNamesAsync,
                     cancellationToken).ConfigureAwait(false);
             }
             catch (SopIdentityDerivationException ex)
@@ -112,6 +134,7 @@ internal static class SopInstallCommand
         string configuredProjectId,
         IProjectDiscovery? projectDiscovery,
         TrackedFilesProvider trackedFilesProvider,
+        BranchNamesProvider branchNamesProvider,
         CancellationToken cancellationToken)
     {
         var ticketPrefix = configuredProjectIdentifier.Trim();
@@ -170,7 +193,62 @@ internal static class SopInstallCommand
         if (roots.Count == 0)
             roots.Add(".");
 
-        return new SopConductorIdentity(ticketPrefix, roots.AsReadOnly());
+        var architectureMap = DeriveArchitectureMap(trackedFiles);
+
+        IReadOnlyList<string> branchNames;
+        try
+        {
+            branchNames = await branchNamesProvider(repositoryRoot, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new SopIdentityDerivationException(
+                $"could not derive conductor branch_prefix from git for-each-ref: {ex.Message}");
+        }
+
+        var branchPrefix = DeriveBranchPrefix(branchNames);
+
+        return new SopConductorIdentity(ticketPrefix, roots.AsReadOnly(), branchPrefix, architectureMap);
+    }
+
+    /// <summary>
+    /// First tracked file matching <see cref="ArchitectureMapCandidates"/>, case-insensitively, in
+    /// priority order, keeping the tracked file's real casing. When nothing matches, returns a
+    /// sentinel the doctor's architecture_map existence check will always flag - the "genuinely
+    /// can't derive it, so don't write anything that looks like an answer" case. See TLB-628.
+    /// </summary>
+    private static string DeriveArchitectureMap(IReadOnlyList<string> trackedFiles)
+    {
+        var normalized = trackedFiles.Select(path => path.Replace('\\', '/')).ToList();
+        foreach (var candidate in ArchitectureMapCandidates)
+        {
+            var match = normalized.FirstOrDefault(
+                path => string.Equals(path, candidate, StringComparison.OrdinalIgnoreCase));
+            if (match is not null)
+                return match;
+        }
+
+        return SopInstaller.ScaffoldArchitectureMapPlaceholder;
+    }
+
+    /// <summary>
+    /// Most frequent segment before the first "/" among local branch names that contain one
+    /// (ties broken by ordinal order for determinism). Falls back to <see cref="DefaultBranchPrefix"/>
+    /// when no local branch reveals a convention - Build's own default, not a guess about the
+    /// repository, mirroring the "." fallback source_roots uses when nothing is tracked.
+    /// </summary>
+    private static string DeriveBranchPrefix(IReadOnlyList<string> branchNames)
+    {
+        var best = branchNames
+            .Where(name => name.IndexOf('/') > 0)
+            .Select(name => name[..name.IndexOf('/')])
+            .GroupBy(prefix => prefix, StringComparer.Ordinal)
+            .OrderByDescending(group => group.Count())
+            .ThenBy(group => group.Key, StringComparer.Ordinal)
+            .Select(group => group.Key)
+            .FirstOrDefault();
+
+        return best ?? DefaultBranchPrefix;
     }
 
     private static async Task<IReadOnlyList<string>> ListTrackedFilesAsync(
@@ -202,6 +280,38 @@ internal static class SopInstallCommand
         }
 
         return output.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+    }
+
+    private static async Task<IReadOnlyList<string>> ListBranchNamesAsync(
+        string repositoryRoot,
+        CancellationToken cancellationToken)
+    {
+        var startInfo = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = repositoryRoot,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add("for-each-ref");
+        startInfo.ArgumentList.Add("--format=%(refname:short)");
+        startInfo.ArgumentList.Add("refs/heads");
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("git could not be started");
+        var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
+        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        var output = await stdout.ConfigureAwait(false);
+        var diagnostic = await stderr.ConfigureAwait(false);
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"git for-each-ref exited {process.ExitCode}: {diagnostic.Trim()}");
+        }
+
+        return output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 
     private static bool TryParseScope(
@@ -310,6 +420,10 @@ internal static class SopInstallCommand
             output.WriteLine($"ticket prefix: {result.TicketPrefix}");
         if (result.SourceRoots is not null)
             output.WriteLine($"source roots: {string.Join(", ", result.SourceRoots)}");
+        if (result.BranchPrefix is not null)
+            output.WriteLine($"branch prefix: {result.BranchPrefix}");
+        if (result.ArchitectureMap is not null)
+            output.WriteLine($"architecture map: {result.ArchitectureMap}");
         foreach (var item in result.Results)
             output.WriteLine($"{item.Status}\t{item.Path}\t{item.Message}");
     }
@@ -319,7 +433,9 @@ internal static class SopInstallCommand
 
 internal sealed record SopConductorIdentity(
     string TicketPrefix,
-    IReadOnlyList<string> SourceRoots);
+    IReadOnlyList<string> SourceRoots,
+    string BranchPrefix,
+    string ArchitectureMap);
 
 internal static class SopInstaller
 {
@@ -328,6 +444,26 @@ internal static class SopInstaller
     private const string ManifestRelativePath = ".build/sop-manifest.json";
     private const string ClaudeHost = "claude";
     private const string CodexHost = "codex";
+
+    /// <summary>
+    /// Written when no candidate architecture/contributor doc is tracked. Doctor's architecture_map
+    /// existence check (SopDoctorCommand) always flags this - it is not a plausible-looking guess,
+    /// it is a value doctor rejects until an operator supplies a real one. See TLB-628.
+    /// </summary>
+    internal const string ScaffoldArchitectureMapPlaceholder = "UNRESOLVED_ARCHITECTURE_MAP";
+
+    /// <summary>
+    /// Written in place of the old generic "src" guess. contract_authority needs real judgment
+    /// (which directory, if any, is the repository's shared-contract authority) that nothing can
+    /// derive at scaffold time; doctor flags this sentinel until an operator or the profile pass
+    /// (InstallCommand.ResolveContractAuthority) replaces it. See TLB-628.
+    /// </summary>
+    internal const string ScaffoldContractAuthorityPlaceholder = "UNRESOLVED_CONTRACT_AUTHORITY";
+
+    /// <summary>Default id the scaffold gives its single starter invariant. Doctor flags an
+    /// invariants list whose every entry still carries this id, even if the statement text was
+    /// edited - editing only the sentence is not enough to prove the invariant is repository-specific.</summary>
+    internal const string ScaffoldInvariantId = "repository-contract";
     private static readonly UTF8Encoding Utf8NoBom = new(false);
 
     public static bool IsKnownHost(string host) =>
@@ -1487,7 +1623,9 @@ internal static class SopInstaller
             Passed: passed,
             Results: results,
             TicketPrefix: conductorIdentity?.TicketPrefix,
-            SourceRoots: conductorIdentity?.SourceRoots);
+            SourceRoots: conductorIdentity?.SourceRoots,
+            BranchPrefix: conductorIdentity?.BranchPrefix,
+            ArchitectureMap: conductorIdentity?.ArchitectureMap);
     }
 
     private static bool HasBlockingFindings(IReadOnlyList<SopPathResultView> results) =>
@@ -1519,18 +1657,20 @@ internal static class SopInstaller
     {
         var minVersion = TrimVersionCore(buildVersion);
         var ticketPrefix = QuoteTomlBasicString(conductorIdentity.TicketPrefix);
+        var branchPrefix = QuoteTomlBasicString(conductorIdentity.BranchPrefix);
         var sourceRoots = string.Join(", ", conductorIdentity.SourceRoots.Select(QuoteTomlBasicString));
+        var architectureMap = QuoteTomlBasicString(conductorIdentity.ArchitectureMap);
         return $$"""
             [conductor]
             min_build_version = "{{minVersion}}"
-            branch_prefix = "ticket"
+            branch_prefix = {{branchPrefix}}
             ticket_prefix = {{ticketPrefix}}
             source_roots = [{{sourceRoots}}]
-            architecture_map = "docs/throughline-build-architecture.md"
+            architecture_map = {{architectureMap}}
             rework_cap = 3
 
             [[conductor.review.invariants]]
-            id = "repository-contract"
+            id = "{{ScaffoldInvariantId}}"
             statement = "Replace this sentence with a true review invariant for this repository."
             paths = ["src/**"]
             blocks_done = true
@@ -1541,7 +1681,7 @@ internal static class SopInstaller
 
             [constellation]
             platform = "unknown"
-            contract_authority = "src"
+            contract_authority = "{{ScaffoldContractAuthorityPlaceholder}}"
             """;
     }
 

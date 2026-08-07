@@ -280,23 +280,52 @@ binary and can never go stale in a checked-in file.
 
 `build sop brief` runs doctor first and withholds `data.sopText` entirely when
 doctor fails, so an unedited scaffold means `/run-backlog` dead-ends immediately.
-Open `.build/conductor.toml` and replace every generic value. At minimum verify:
+Step 5's `sop install` already derived most of `.build/conductor.toml` from the
+repository itself - `ticket_prefix`, `source_roots`, `branch_prefix`, and
+`architecture_map` are real values, not placeholders, unless the repository has
+no tracked architecture or contributor doc (then `architecture_map` is left as
+an `UNRESOLVED_ARCHITECTURE_MAP` sentinel doctor rejects until you set it by
+hand). Open the file and verify, rather than retype:
 
 - `min_build_version` is no newer than the installed binary;
 - `branch_prefix` matches the repository's branch convention;
 - `ticket_prefix` matches the Plane project identifier;
-- `source_roots` covers the code and current architecture documentation;
-- `architecture_map` names a tracked, current file;
-- every review invariant is true and repository-specific;
-- escalation paths identify the repository's high-risk surfaces;
-- `platform` describes the target platform; and
-- `contract_authority` names the real shared-contract authority.
+- `source_roots` covers the code and current architecture documentation; and
+- `architecture_map` names a tracked, current file.
 
-Doctor validates the SHAPE of `[[conductor.review.invariants]]`, not the truth of
-each statement, so it will accept a well-formed lie. Delete the scaffold sentence
-that tells you to replace it with a true invariant. `conductor.toml` must contain
-no secrets. It is machine-local and ignored; recreate and verify it in every
-clone rather than committing it with the host stubs.
+`platform` and `contract_authority` still need real values, but not necessarily
+by hand: the `build install --profile PATH` orchestrator (the "fixed
+installation sequence" at the top of this document) resolves them
+automatically from the same `framework`/`language`/`contract_authority` fields
+the agent supplied to `profile apply`, right after `sop install` runs - but
+only because that sequence runs `sop install` AFTER the profile pass. The
+step-by-step sequence in this document runs them in the opposite order (step 4
+profile, step 5 install), so `conductor.toml` does not exist yet when the
+profile is applied and these two facts are not auto-filled here; set them by
+hand from the same `framework`/`language` you gave `profile apply`, and set
+`contract_authority` to the repository's real shared-contract directory, or an
+explicit `"none"` if it has none. Either way, doctor keeps flagging the
+scaffold's `"unknown"`/`"UNRESOLVED_CONTRACT_AUTHORITY"` placeholders until a
+real value replaces them.
+
+What remains is real human judgment: review invariants. Get the rules and
+persist your answer the same worker-free way `profile prompt`/`profile apply`
+works:
+
+```sh
+build conductor prompt > conductor-invariants-rules.md
+# Have the active agent inspect the repository and write only TOML to invariants.toml.
+build conductor apply invariants.toml --json
+```
+
+`conductor apply` splices `[[conductor.review.invariants]]` in place and leaves
+every other section of `conductor.toml` byte-for-byte untouched. It rejects the
+scaffold's placeholder sentence, prose, Markdown fences, and any section other
+than the invariants it owns - a lie that is well-formed TOML still passes,
+because doctor validates SHAPE, not truth. Also verify escalation paths
+identify the repository's high-risk surfaces. `conductor.toml` must contain no
+secrets. It is machine-local and ignored; recreate and verify it in every clone
+rather than committing it with the host stubs.
 
 Also review `[waves]` in `config.toml`. `cap` defaults to 2, which means two
 tickets can run concurrently. Set `cap = 1` for a first dogfood run so there is
@@ -326,7 +355,14 @@ Common doctor findings and what each means:
 | `review.checks.command.missing` | A check names an executable that cannot be resolved |
 | `review.checks.role.invalid` | `role` is not `gating`, `advisory`, or `setup` |
 | `conductor.file.missing` | `build sop install` has not run |
-| `conductor.review.invariants.empty` | Step 6 was skipped |
+| `conductor.review.invariants.empty` | Step 6's `conductor apply` was skipped |
+| `conductor.review.invariants.statement.placeholder` | A statement still matches the scaffold sentence |
+| `conductor.review.invariants.id.placeholder` | Every invariant still carries the scaffold's default id, even if the statement text changed |
+| `conductor.ticket_prefix.placeholder` | `sop install` could not resolve a Plane project identifier (unusual - it normally fails install outright instead) |
+| `conductor.architecture_map.not_found` | `architecture_map` names a path that is not a tracked file in this repository |
+| `conductor.source_roots.not_found` | A `source_roots` entry is not a directory in this repository |
+| `constellation.platform.placeholder` | Step 4's profile pass has not run yet, or supplied an empty framework and language |
+| `constellation.contract_authority.placeholder` | Step 4's profile pass left `contract_authority` blank; set it by hand if the repository genuinely has none |
 | `sop.stub.modified` / `sop.stub.drift` | A stub was hand-edited, or was written by an older binary |
 | `sop.stub.missing` | A stub that was installed is gone; with no manifest, doctor uses the Git index to know it was installed |
 | `sop.stub.scope_unavailable` | A stub is absent, there is no manifest, and Git could not be asked whether it was ever installed |

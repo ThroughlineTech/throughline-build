@@ -11,7 +11,7 @@ namespace ThroughlineBuild.Cli;
 
 internal sealed record InstallInvocation(string? ProfilePath, string? InvariantsPath, bool Force = false);
 internal sealed record InstallProfileApplyResult(
-    bool Success, int ExitCode, string Message, string? Language, string? Framework);
+    bool Success, int ExitCode, string Message, string? Language, string? Framework, string? ContractAuthority);
 
 internal sealed record InstallDependencies(
     Func<string, TextReader, TextWriter, CancellationToken, Task<int>> EnsureInitAndSetup,
@@ -127,6 +127,10 @@ internal static class InstallCommand
                 var platform = ResolveGeneratedPlatform(cwd, apply.Framework!, apply.Language!);
                 if (!platform.Success)
                     return Failure(json, output, diagnostics, platform.Message, 1);
+
+                var contractAuthority = ResolveContractAuthority(cwd, apply.ContractAuthority ?? "");
+                if (!contractAuthority.Success)
+                    return Failure(json, output, diagnostics, contractAuthority.Message, 1);
 
                 var prompt = ConductorPromptLoader.Load();
                 return Handoff(json, output, "invariants_handoff", prompt,
@@ -247,7 +251,7 @@ internal static class InstallCommand
     {
         var configPath = BuildConfigLoader.FindConfigFile(cwd);
         if (configPath is null)
-            return new(false, 2, "config file not found", null, null);
+            return new(false, 2, "config file not found", null, null, null);
         string json;
         try
         {
@@ -257,28 +261,29 @@ internal static class InstallCommand
         }
         catch (Exception ex)
         {
-            return new(false, 1, $"could not read PROJECT_PROFILE input '{inputPath}': {ex.Message}", null, null);
+            return new(false, 1, $"could not read PROJECT_PROFILE input '{inputPath}': {ex.Message}", null, null, null);
         }
         if (!ProjectProfileParser.TryParse(json, out var profile, out var parseError) || profile is null)
-            return new(false, 2, $"PROJECT_PROFILE JSON was invalid: {parseError}", null, null);
+            return new(false, 2, $"PROJECT_PROFILE JSON was invalid: {parseError}", null, null, null);
 
         var platform = ResolvePlatformAuthority(profile.Framework, profile.Language);
         if (!platform.Success)
-            return new(false, 2, platform.Message, null, null);
+            return new(false, 2, platform.Message, null, null, null);
 
         var original = File.ReadAllText(configPath);
         var outcome = ConfigProfileWriter.Apply(original, profile, force);
         if (outcome.Changed && outcome.NewText is not null)
         {
             File.WriteAllText(configPath, outcome.NewText, new UTF8Encoding(false));
-            return new(true, 0, outcome.Summary ?? "profile applied", profile.Language, profile.Framework);
+            return new(true, 0, outcome.Summary ?? "profile applied",
+                profile.Language, profile.Framework, profile.ContractAuthority);
         }
         // Re-running the installer against an already-installed repository must reach the same handoff
         // without rewriting config; that is stage 2's half of install idempotence. See TLB-639.
         if (outcome.AlreadyMatched)
             return new(true, 0, outcome.Summary ?? ConfigProfileWriter.AlreadyMatchedSummary,
-                profile.Language, profile.Framework);
-        return new(false, 1, outcome.SkipReason ?? "profile apply made no change", null, null);
+                profile.Language, profile.Framework, profile.ContractAuthority);
+        return new(false, 1, outcome.SkipReason ?? "profile apply made no change", null, null, null);
     }
 
     internal static (bool Success, string Message) ResolveGeneratedPlatform(
@@ -314,6 +319,47 @@ internal static class InstallCommand
             return (true, $"resolved constellation.platform as '{platform}'");
         }
         return (false, "missing constellation.platform after SOP install");
+    }
+
+    /// <summary>
+    /// Mirrors <see cref="ResolveGeneratedPlatform"/> exactly, reusing the same single profile pass
+    /// instead of a second mechanism, but tolerant of a blank value: many repositories genuinely
+    /// have no shared-contract directory, and the agent is instructed to leave contract_authority
+    /// "" rather than guess one. A blank value makes no edit, leaving the scaffold's placeholder in
+    /// place for doctor to keep flagging until an operator supplies a real answer. See TLB-628.
+    /// </summary>
+    internal static (bool Success, string Message) ResolveContractAuthority(
+        string cwd,
+        string contractAuthority)
+    {
+        if (string.IsNullOrWhiteSpace(contractAuthority))
+            return (true, "profile did not supply contract_authority");
+
+        var conductorPath = SopDoctorCommand.FindConductorFile(cwd);
+        if (conductorPath is null)
+            return (false, "missing .build/conductor.toml after SOP install");
+
+        var original = File.ReadAllText(conductorPath);
+        var eol = original.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+        var lines = original.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n').ToList();
+        var placeholderLine = $"contract_authority = \"{SopInstaller.ScaffoldContractAuthorityPlaceholder}\"";
+        var inConstellation = false;
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var trimmed = lines[i].Trim();
+            if (trimmed.StartsWith("[", StringComparison.Ordinal))
+                inConstellation = string.Equals(trimmed, "[constellation]", StringComparison.Ordinal);
+            if (!inConstellation || !trimmed.StartsWith("contract_authority", StringComparison.Ordinal))
+                continue;
+            if (!string.Equals(trimmed, placeholderLine, StringComparison.Ordinal))
+                return (true, "preserved existing constellation.contract_authority");
+            var indentLength = lines[i].Length - lines[i].TrimStart().Length;
+            var indent = lines[i][..indentLength];
+            lines[i] = $"{indent}contract_authority = \"{EscapeToml(contractAuthority.Trim())}\"";
+            File.WriteAllText(conductorPath, string.Join(eol, lines), new UTF8Encoding(false));
+            return (true, $"resolved constellation.contract_authority as '{contractAuthority.Trim()}'");
+        }
+        return (false, "missing constellation.contract_authority after SOP install");
     }
 
     private static (bool Success, string Message, string Platform) ResolvePlatformAuthority(

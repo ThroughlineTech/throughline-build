@@ -17,13 +17,20 @@ conductor data, and emits the brief envelope that host stubs consume.
 `profile apply` persists a supplied PROJECT_PROFILE without starting a worker.
 `profile verify-canaries` is a separate explicit opt-in operation that proves
 the proposed gating checks in a temporary worktree without changing config.
+`conductor prompt` and `conductor apply` are the same shape for review
+invariants, the one conductor.toml fact left entirely to human judgment:
+`conductor prompt` emits invariant-authoring rules and `conductor apply` reads
+back TOML containing 2-5 `[[conductor.review.invariants]]` blocks and splices
+that run in place, preserving every other section byte-for-byte.
+`conductor apply` rejects the scaffold's placeholder sentence, prose, Markdown
+fences, and any TOML section other than the invariants it owns.
 They load only the repository configuration sections they consume and do not
 require `[ticketing]`, `[workers]`, or `[events]`, resolve ticketing secrets, or
 construct a Plane client. Missing ticketing credentials therefore do not block
-`worktree`, `gate`, `waves`, `candidate status`, `sop`, `profile prompt`, or
-`profile apply`. Profile prompt and apply never start a worker or execute a
-canary. Other commands still require the full ticketing, worker, and event
-configuration.
+`worktree`, `gate`, `waves`, `candidate status`, `sop`, `profile prompt`,
+`profile apply`, `conductor prompt`, or `conductor apply`. None of these start
+a worker or execute a canary. Other commands still require the full ticketing,
+worker, and event configuration.
 
 The `worker brief` command materializes a role-specific Markdown artifact from
 ticket and worktree evidence for an agent to inspect. It is the exception in
@@ -83,7 +90,36 @@ versions. Run `build sop install [--sop <name>] [--host claude|codex] [--json]`
 to emit host stubs, scaffold a missing `.build/conductor.toml`, and write
 `.build/sop-manifest.json`. By default install emits every known host stub;
 `--host` narrows emitted stubs to Claude or Codex while still including shared
-scaffolded paths. Run `build sop status [--json]` to report catalog drift,
+scaffolded paths.
+
+A scaffolded `conductor.toml` is not a template filled with generic values -
+install derives what it can from the repository itself, deterministically, with
+no worker and no engine code that special-cases a language or framework:
+`ticket_prefix` from the configured Plane project identifier, `source_roots`
+from `git ls-files`'s tracked top-level directories, `branch_prefix` from the
+most common `<prefix>/...` segment among local branches (falling back to
+Build's own `"ticket"` convention when none exists), and `architecture_map`
+from the first tracked file matching a known architecture/contributor-doc name
+(`docs/architecture.md`, `ARCHITECTURE.md`, `docs/contributing.md`,
+`CONTRIBUTING.md`, `AGENTS.md`, `README.md`, checked in that order). Facts that
+need real judgment instead of file-system inspection - `constellation.platform`
+and `constellation.contract_authority` - are resolved from the same
+repository-interrogation pass as the toolchain profile, but only inside the
+`build install --profile PATH` orchestrator, which runs `sop install` before
+that resolution step: it reads the agent-supplied `framework`, `language`, and
+`contract_authority` fields already on hand from the profile and splices them
+into `conductor.toml`, but only while those keys still hold the scaffold's
+placeholder - an already-edited value is always preserved. The standalone
+`profile apply` verb has no conductor.toml to write into if it runs before
+`sop install` and never touches these two keys either way; set them by hand
+when driving the individual verbs instead of `build install`. A value nothing can
+derive is never written as a plausible-looking guess; it is written as a
+sentinel (`"UNRESOLVED_ARCHITECTURE_MAP"`, `"UNRESOLVED_CONTRACT_AUTHORITY"`,
+the pre-existing `"TICKET"` and `"unknown"`) that doctor always rejects, so an
+untouched scaffold cannot read as ready. `[[conductor.review.invariants]]` is
+the one fact left entirely to human judgment; author it with `build conductor
+prompt` and persist it with `build conductor apply`, described below. Run
+`build sop status [--json]` to report catalog drift,
 including missing installed paths. Run
 `build sop upgrade [--sop <name>] [--host claude|codex] [--json]` after
 replacing the binary; it rewrites only emitted files that still match trusted
@@ -107,10 +143,23 @@ manifest-recorded or present emitted host stubs. Doctor validates those stubs
 byte-for-byte against the catalog and reports missing, modified, non-regular, or
 unsafe stub paths as drift. Review invariants are structured prose: doctor
 validates id uniqueness, non-empty statements, optional paths, and optional
-`blocks_done` shape only. It does not judge whether a statement is true. Unknown
-keys in conductor.toml are findings. Doctor also requires local
-`[[review.checks]]` to include at least one setup or gating check with a
-non-empty executable; advisory-only checks cannot make a gate block Done.
+`blocks_done` shape only. It does not judge whether a statement is true, but it
+does reject an unedited scaffold: `conductor.review.invariants.statement.placeholder`
+when a statement still matches the scaffold sentence, and
+`conductor.review.invariants.id.placeholder` when every invariant still carries
+the scaffold's default id even if the statement text changed - editing only the
+sentence is not enough to prove an invariant is repository-specific. Doctor also
+resolves `architecture_map` and every `source_roots` entry against the
+repository, reporting `conductor.architecture_map.not_found` or
+`conductor.source_roots.not_found` when a named path or directory does not
+exist - this catches both a hand-typed wrong path and an unresolved install-time
+sentinel. `conductor.ticket_prefix.placeholder`,
+`constellation.platform.placeholder`, and
+`constellation.contract_authority.placeholder` report the corresponding
+scaffold sentinels left untouched. Unknown keys in conductor.toml are findings.
+Doctor also requires local `[[review.checks]]` to include at least one setup or
+gating check with a non-empty executable; advisory-only checks cannot make a
+gate block Done.
 
 Run `build sop brief <name>` to emit one JSON envelope containing SOP text,
 resolved conductor data, the SOP schema version, SOP version, binary version,

@@ -49,6 +49,24 @@ public class ProjectProfileParserTests
         Assert.Equal(5, build.TimeoutMinutes);
 
         Assert.Single(profile.RegressionChecks);
+        Assert.Equal("", profile.ContractAuthority);
+    }
+
+    [Fact]
+    public void ContractAuthority_ParsesWhenPresentAndTrimsWhitespace()
+    {
+        var json = """
+        {
+          "build_command": "npm run build",
+          "test_command": "npm test",
+          "review_checks": [
+            { "name": "build", "executable": "npm", "arguments": ["run", "build"] }
+          ],
+          "contract_authority": "  packages/shared-types  "
+        }
+        """;
+        Assert.True(ProjectProfileParser.TryParse(json, out var profile, out var err), err);
+        Assert.Equal("packages/shared-types", profile!.ContractAuthority);
     }
 
     [Fact]

@@ -428,6 +428,14 @@ public sealed class SopAdmissionTests
             File.WriteAllText(Path.Combine(buildDir, "conductor.toml"), conductorToml);
         if (configToml is not null)
             File.WriteAllText(Path.Combine(buildDir, "config.toml"), configToml);
+
+        // Doctor now resolves architecture_map and source_roots against the filesystem
+        // (TLB-628), so ValidConductorToml's referenced paths must actually exist here too.
+        Directory.CreateDirectory(Path.Combine(repository, "src"));
+        Directory.CreateDirectory(Path.Combine(repository, "tests"));
+        Directory.CreateDirectory(Path.Combine(repository, "docs"));
+        File.WriteAllText(
+            Path.Combine(repository, "docs", "throughline-build-architecture.md"), "architecture\n");
         return repository;
     }
 
@@ -437,7 +445,17 @@ public sealed class SopAdmissionTests
         await RunGitAsync(repository, "config", "user.email", "test@test.com");
         await RunGitAsync(repository, "config", "user.name", "Test");
         File.WriteAllText(Path.Combine(repository, "tracked.txt"), "tracked");
-        await RunGitAsync(repository, "add", "tracked.txt");
+        // Tracked, so a linked worktree cut from this commit sees them too - doctor now
+        // resolves ValidConductorToml's architecture_map and source_roots against the
+        // filesystem (TLB-628).
+        Directory.CreateDirectory(Path.Combine(repository, "src"));
+        Directory.CreateDirectory(Path.Combine(repository, "tests"));
+        Directory.CreateDirectory(Path.Combine(repository, "docs"));
+        File.WriteAllText(Path.Combine(repository, "src", ".gitkeep"), string.Empty);
+        File.WriteAllText(Path.Combine(repository, "tests", ".gitkeep"), string.Empty);
+        File.WriteAllText(
+            Path.Combine(repository, "docs", "throughline-build-architecture.md"), "architecture\n");
+        await RunGitAsync(repository, "add", "tracked.txt", "src", "tests", "docs");
         await RunGitAsync(repository, "commit", "-m", "initial");
     }
 

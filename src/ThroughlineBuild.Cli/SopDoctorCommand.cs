@@ -167,7 +167,10 @@ internal static class SopDoctorCommand
         }
         else
         {
-            conductor = ReadConductor(conductorPath, runningBuildVersion, findings);
+            // Tracked docs/directories belong to the tree the verb runs in, same reasoning as
+            // ValidateEmittedStubs below - a linked worktree resolves architecture_map/source_roots
+            // against its own checkout, not the main worktree that owns .build. See TLB-628.
+            conductor = ReadConductor(conductorPath, runningBuildVersion, layout.WorktreeRoot, findings);
         }
 
         if (validateReviewChecks)
@@ -233,6 +236,7 @@ internal static class SopDoctorCommand
     private static ConductorConfig? ReadConductor(
         string conductorPath,
         string runningBuildVersion,
+        string worktreeRoot,
         List<SopDoctorFinding> findings)
     {
         TomlTable root;
@@ -282,7 +286,10 @@ internal static class SopDoctorCommand
                 "placeholder 'TICKET'; replace it with the prefix used by this repository's ticket IDs"));
         }
         var sourceRoots = RequiredStringList(conductor, "source_roots", "conductor.source_roots", findings);
+        ValidateSourceRootsExist(sourceRoots, worktreeRoot, findings);
         var architectureMap = RequiredString(conductor, "architecture_map", "conductor.architecture_map", findings);
+        if (architectureMap is not null)
+            ValidateArchitectureMapExists(architectureMap, worktreeRoot, findings);
         var reworkCap = RequiredInt(conductor, "rework_cap", "conductor.rework_cap", findings);
         ValidateReworkCap(reworkCap, findings);
 
@@ -374,6 +381,19 @@ internal static class SopDoctorCommand
                 blocksDone));
         }
 
+        // A statement edit alone does not prove an invariant is repository-specific: every entry
+        // can still carry the scaffold's default id. Additive to the exact-statement check above.
+        if (invariants.Count > 0 &&
+            invariants.All(invariant => string.Equals(
+                invariant.Id, SopInstaller.ScaffoldInvariantId, StringComparison.Ordinal)))
+        {
+            findings.Add(new SopDoctorFinding(
+                "conductor.review.invariants.id.placeholder",
+                "conductor.review.invariants",
+                $"every [[conductor.review.invariants]] entry still uses the scaffold's default id " +
+                $"'{SopInstaller.ScaffoldInvariantId}'; assign repository-specific ids"));
+        }
+
         return invariants.AsReadOnly();
     }
 
@@ -434,6 +454,15 @@ internal static class SopDoctorCommand
             "contract_authority",
             "constellation.contract_authority",
             findings);
+        if (string.Equals(contractAuthority, SopInstaller.ScaffoldContractAuthorityPlaceholder, StringComparison.Ordinal))
+        {
+            findings.Add(new SopDoctorFinding(
+                "constellation.contract_authority.placeholder",
+                "constellation.contract_authority",
+                ".build/conductor.toml key 'constellation.contract_authority' still holds the scaffold " +
+                "placeholder; replace it with the repository's real shared-contract authority, or " +
+                "with an explicit statement (e.g. \"none\") if this repository has none"));
+        }
         var siblings = ReadSiblings(constellation, findings);
 
         return new ConstellationConfig(
@@ -526,6 +555,53 @@ internal static class SopDoctorCommand
                 "conductor.rework_cap.loosened",
                 "conductor.rework_cap",
                 $"rework_cap may tighten the binary default of {BinaryDefaultReworkCap}, not loosen it"));
+        }
+    }
+
+    /// <summary>
+    /// Resolves architecture_map against the repository. A single existence check covers both a
+    /// hand-typed wrong path and the install-time sentinel written when nothing tracked matched a
+    /// known architecture/contributor doc candidate - neither is a real answer. See TLB-628.
+    /// </summary>
+    private static void ValidateArchitectureMapExists(
+        string architectureMap,
+        string worktreeRoot,
+        List<SopDoctorFinding> findings)
+    {
+        var candidate = Path.Combine(worktreeRoot, architectureMap.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(candidate))
+        {
+            findings.Add(new SopDoctorFinding(
+                "conductor.architecture_map.not_found",
+                "conductor.architecture_map",
+                $".build/conductor.toml key 'conductor.architecture_map' names '{architectureMap}', " +
+                "which does not exist in this repository; point it at a real architecture or " +
+                "contributor doc"));
+        }
+    }
+
+    /// <summary>Resolves every source_roots entry against the repository, mirroring the
+    /// architecture_map check above. "." always exists and needs no resolution.</summary>
+    private static void ValidateSourceRootsExist(
+        IReadOnlyList<string> sourceRoots,
+        string worktreeRoot,
+        List<SopDoctorFinding> findings)
+    {
+        for (var i = 0; i < sourceRoots.Count; i++)
+        {
+            var root = sourceRoots[i];
+            if (root == ".")
+                continue;
+
+            var candidate = Path.Combine(worktreeRoot, root.Replace('/', Path.DirectorySeparatorChar));
+            if (!Directory.Exists(candidate))
+            {
+                findings.Add(new SopDoctorFinding(
+                    "conductor.source_roots.not_found",
+                    $"conductor.source_roots[{i}]",
+                    $".build/conductor.toml key 'conductor.source_roots[{i}]' names '{root}', " +
+                    "which is not a directory in this repository"));
+            }
         }
     }
 

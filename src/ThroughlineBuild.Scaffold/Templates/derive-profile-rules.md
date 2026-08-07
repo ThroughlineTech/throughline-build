@@ -12,6 +12,10 @@ Determine:
   should carry. ALWAYS lead with the test harness/setup file the test runner loads automatically
   before any test (when the stack has one), then the build/test config, then ONE canonical test
   example.
+- contract_authority: the repository-relative directory that is the authoritative source for
+  shared, cross-consumer contracts (types/schemas/DTOs that other packages or services depend on),
+  if the repository genuinely has one. Leave it "" when there is no such directory - do not guess
+  one to fill the field.
 
 Rules for checks:
 - "executable" is the BARE tool name, never a shell string and never an OS-specific variant. Use
@@ -141,5 +145,6 @@ The JSON object must follow this shape (values are examples only):
       "required_paths": ["package.json", "src"],
       "canary": [ { "path": "src/__tlb_probe.test.ts", "content": "import { test, expect } from 'vitest';\ntest('canary fails', () => { expect(1).toBe(2); });" } ] }
   ],
-  "convention_files": ["src/setupTests.ts", "vite.config.ts", "src/data/__tests__/repository.test.ts"]
+  "convention_files": ["src/setupTests.ts", "vite.config.ts", "src/data/__tests__/repository.test.ts"],
+  "contract_authority": ""
 }
