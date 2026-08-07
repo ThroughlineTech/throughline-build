@@ -79,6 +79,49 @@ public class AutomatedChecksRunnerTests
         Assert.Same(specs, ordered); // nothing to reorder -> input returned untouched
     }
 
+    // --- Checks must not inherit the caller's stdin ---
+    // A gate verdict may not depend on who invoked 'build'. Left un-redirected, a check inherits
+    // the caller's stdin: an interactive terminal makes a stdin-reading check block until its
+    // timeout, and an agent/CI harness can hand down a handle that is closed or not inheritable,
+    // whose reads fail with ERROR_INVALID_HANDLE inside the check. The runner therefore redirects
+    // stdin and closes it, so every check reads EOF on every machine.
+    //
+    // This test proves it by pointing THIS process's stdin at a file with known content and
+    // asserting a stdin-echoing check cannot see it. Without the redirect the child inherits the
+    // file and echoes the payload, so the assertion fails rather than passing vacuously.
+    [Fact]
+    public async Task Check_DoesNotInheritCallerStdin()
+    {
+        const string payload = "LEAKED-CALLER-STDIN-C0FFEE";
+        var stdinFile = Path.Combine(Path.GetTempPath(), $"tlb-stdin-{Guid.NewGuid():N}.txt");
+        File.WriteAllText(stdinFile, payload + Environment.NewLine);
+
+        // Echo stdin to stdout: `sort` and `cat` both read to EOF and exit 0 on empty input.
+        var (exe, args) = OperatingSystem.IsWindows()
+            ? ("cmd", new[] { "/c", "sort" })
+            : ("sh", new[] { "-c", "cat" });
+
+        try
+        {
+            using (HostStdin.RedirectToFile(stdinFile))
+            {
+                var results = await new AutomatedChecksRunner().RunAsync(
+                    [Spec("echo-stdin", exe, args, TimeSpan.FromSeconds(30))],
+                    Directory.GetCurrentDirectory(),
+                    CancellationToken.None);
+
+                var result = Assert.Single(results);
+                // Not a timeout: the check saw EOF immediately and exited on its own.
+                Assert.True(result.Passed, $"stdin-reading check should exit 0 on EOF; stderr={result.StderrTail}");
+                Assert.DoesNotContain(payload, result.StdoutTail, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            try { File.Delete(stdinFile); } catch { /* best effort */ }
+        }
+    }
+
     // --- Test (b): One-failure-default-mode (run-all) ---
     // spec1: "cmd /c exit 1" -> fails
     // spec2: "dotnet --version" -> succeeds

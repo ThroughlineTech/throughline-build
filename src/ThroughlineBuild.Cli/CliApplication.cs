@@ -25,10 +25,19 @@ public static class CliApplication
     public static Task<int> RunAsync(string[] args) =>
         RunAsync(args, WorkerAgentBuilder.Create);
 
+    /// <param name="consoleOverride">
+    /// Test seam for the verbs that prompt or read stdin. Production passes null and gets
+    /// <see cref="SystemConsole.Instance"/>. Without this, an in-process test of a stdin-reading
+    /// verb (notably 'init') reads the test host's real stdin, which makes the test's outcome a
+    /// function of whichever harness launched the run rather than of the code under test.
+    /// </param>
     internal static async Task<int> RunAsync(
         string[] args,
-        Func<string, AgentConfig, IWorkerAgent> workerAgentBuilder)
+        Func<string, AgentConfig, IWorkerAgent> workerAgentBuilder,
+        IConsole? consoleOverride = null)
     {
+        var console = consoleOverride ?? SystemConsole.Instance;
+
         if (ClaudeStopHookCommand.IsMatch(args))
             return await ClaudeStopHookCommand.RunAsync(args);
 
@@ -291,7 +300,7 @@ public static class CliApplication
                 Console.CancelKeyPress += (_, e) => { e.Cancel = true; initCts.Cancel(); };
                 try
                 {
-                    return await InitCommand.ExecuteAsync(rawCwd, force, printTemplate, SystemConsole.Instance,
+                    return await InitCommand.ExecuteAsync(rawCwd, force, printTemplate, console,
                         planeUrl: initPlaneUrl,
                         workspace: initWorkspace,
                         projectId: initProjectId,
@@ -333,7 +342,7 @@ public static class CliApplication
                 string? stBranch = (filteredArgs.Count > 1 && !filteredArgs[1].StartsWith("--"))
                     ? filteredArgs[1]
                     : null;
-                return SetTargetCommand.Execute(rawCwd, stBranch, unset, SystemConsole.Instance);
+                return SetTargetCommand.Execute(rawCwd, stBranch, unset, console);
             }
 
             // 'build user-guide' writes the embedded operator guide; runs without config.
@@ -341,7 +350,7 @@ public static class CliApplication
             {
                 var force = filteredArgs.Contains("--force");
                 var printTemplate = filteredArgs.Contains("--print-template");
-                return UserGuideCommand.Execute(rawCwd, force, printTemplate, SystemConsole.Instance);
+                return UserGuideCommand.Execute(rawCwd, force, printTemplate, console);
             }
 
             // 'build op-doc <spec|new>' runs without config: 'spec' prints or writes the embedded
@@ -372,7 +381,7 @@ public static class CliApplication
 
                     var write = filteredArgs.Contains("--write");
                     var force = filteredArgs.Contains("--force");
-                    return OpDocSpecCommand.Execute(rawCwd, write, force, SystemConsole.Instance);
+                    return OpDocSpecCommand.Execute(rawCwd, write, force, console);
                 }
 
                 if (opDocSub == "new")
@@ -451,7 +460,7 @@ public static class CliApplication
                     Console.Error.WriteLine("Usage: build models refresh");
                     return 2;
                 }
-                return ModelsRefreshCommand.Execute(rawCwd, SystemConsole.Instance,
+                return ModelsRefreshCommand.Execute(rawCwd, console,
                     () => new CodexModelProbe().ProbeAsync().GetAwaiter().GetResult());
             }
 
@@ -1166,7 +1175,7 @@ public static class CliApplication
             {
                 using var verbCts = new CancellationTokenSource();
                 Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
-                var setupExit = await setupCmd.ExecuteAsync(checkOnly, SystemConsole.Instance, verbCts.Token);
+                var setupExit = await setupCmd.ExecuteAsync(checkOnly, console, verbCts.Token);
                 if (setupExit == 0 && writeTokenFilePath is not null)
                 {
                     var writeResult = TokenFileInstaller.Write(
@@ -1678,7 +1687,7 @@ public static class CliApplication
             if (review)
             {
                 var loop = new ReviewLoop(
-                    SystemConsole.Instance,
+                    console,
                     (text, cancellationToken) => draftPhase.RunAsync(new DraftPhaseOptions(text, debugMode), configuredCwd, cancellationToken),
                     ReviewLoop.DefaultEditorResolver());
                 var loopResult = await loop.RunAsync(draftResult.BodyMarkdown!, draftText, verbCts.Token);

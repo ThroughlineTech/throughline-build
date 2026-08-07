@@ -760,12 +760,31 @@ public static class InitCommand
     /// Reads all remaining lines from <paramref name="console"/> until EOF (ReadLine returns null)
     /// and returns the joined result. Used to consume redirected stdin as a creds file.
     /// </summary>
+    /// <remarks>
+    /// Reads fail soft. "stdin is redirected" is not the same as "stdin is readable": a harness that
+    /// starts 'build' with a closed or non-inheritable stdin handle leaves IsInputRedirected true
+    /// while every read throws ERROR_INVALID_HANDLE. Redirected-but-unreadable stdin carries no
+    /// credentials, which is exactly what an empty result means, so treat an I/O failure as "no creds
+    /// on stdin" and let init continue to the offline path instead of dying with a stack trace.
+    /// Whatever was read before the failure is kept - a partial creds file still beats none.
+    /// </remarks>
     private static string ReadAllLines(IConsole console)
     {
         var sb = new System.Text.StringBuilder();
-        string? line;
-        while ((line = console.ReadLine()) is not null)
-            sb.AppendLine(line);
+        try
+        {
+            string? line;
+            while ((line = console.ReadLine()) is not null)
+                sb.AppendLine(line);
+        }
+        catch (IOException)
+        {
+            // stdin is redirected but not readable; treat as no creds on stdin
+        }
+        catch (ObjectDisposedException)
+        {
+            // stdin was closed underneath us; treat as no creds on stdin
+        }
         return sb.ToString();
     }
 

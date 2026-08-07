@@ -2187,4 +2187,82 @@ public class InitCommandTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    /// <summary>
+    /// Console whose stdin claims to be redirected but throws on every read - the state a process
+    /// is in when its launcher hands it a stdin handle that is closed or was never made inheritable.
+    /// Windows reports that handle as redirected (GetFileType cannot classify it) and then fails the
+    /// read with ERROR_INVALID_HANDLE, surfaced as IOException("The handle is invalid.").
+    /// </summary>
+    private sealed class UnreadableStdinConsole : IConsole
+    {
+        private readonly System.Text.StringBuilder _stdout = new();
+        private readonly System.Text.StringBuilder _stderr = new();
+
+        public string Stdout => _stdout.ToString();
+        public string Stderr => _stderr.ToString();
+        public int ReadAttempts { get; private set; }
+
+        public bool IsInputRedirected => true;
+        public void WriteLine(string value) => _stdout.AppendLine(value);
+        public void Write(string value) => _stdout.Append(value);
+        public void ErrorWriteLine(string value) => _stderr.AppendLine(value);
+
+        public string? ReadLine()
+        {
+            ReadAttempts++;
+            throw new IOException("The handle is invalid.");
+        }
+
+        public char? ReadKeyChar() => throw new IOException("The handle is invalid.");
+    }
+
+    [Fact]
+    public async Task UnreadableRedirectedStdin_StillWritesOfflineConfig()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new UnreadableStdinConsole();
+
+            var result = await InitCommand.ExecuteAsync(
+                dir, force: false, printTemplate: false, console, noInteractive: true);
+
+            // Redirected-but-unreadable stdin carries no credentials. That is the same outcome as
+            // an empty pipe, so init must complete offline rather than crash out of the read.
+            Assert.Equal(0, result);
+            Assert.True(console.ReadAttempts > 0, "the stdin creds read should still have been attempted");
+            Assert.True(File.Exists(Path.Combine(dir, ".build", "config.toml")));
+            Assert.Contains("Created", console.Stdout);
+            Assert.Contains("REQUIRED_PLANE_PROJECT_ID", File.ReadAllText(Path.Combine(dir, ".build", "config.toml")));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task UnreadableRedirectedStdin_DoesNotDiscardCredentialFlags()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new UnreadableStdinConsole();
+
+            var result = await InitCommand.ExecuteAsync(
+                dir, force: false, printTemplate: false, console,
+                planeUrl: "https://api.plane.so", workspace: "acme", tokenEnv: "PLANE_API_TOKEN",
+                noInteractive: true);
+
+            Assert.Equal(0, result);
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+            Assert.Contains("https://api.plane.so", written);
+            Assert.Contains("acme", written);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }

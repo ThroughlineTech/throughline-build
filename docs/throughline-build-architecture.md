@@ -270,6 +270,13 @@ Gating check failures stop before an agent verdict. Advisory failures are
 reported to the reviewer but cannot independently force rework. After review,
 git-state guards detect and clean up prohibited verifier mutations.
 
+Every configured check runs with its own stdout and stderr captured and its
+stdin redirected and closed. A check never inherits the stdin of whatever
+invoked `build`, so it reads EOF identically under an interactive terminal, an
+agent session, and CI, and a check that prompts fails fast instead of blocking
+until its timeout. A gate verdict is a fact about the worktree, never about the
+caller.
+
 ### 5.9 Ship
 
 `ShipPhase` is deterministic. Its path includes repository hygiene, target/base

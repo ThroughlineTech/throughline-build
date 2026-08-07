@@ -1393,6 +1393,23 @@ public sealed class SopInstallCommandTests
         Assert.DoesNotContain("/Users/", content);
     }
 
+    /// <summary>
+    /// Console for in-process CLI runs: writes land in the same buffers as the Console.SetOut /
+    /// Console.SetError capture, and stdin is redirected-but-empty (what automation looks like).
+    /// Injecting this is what keeps these runs off the test host's real stdin - 'build init' reads
+    /// redirected stdin for credentials, and a host whose stdin handle is closed or not inheritable
+    /// (any agent or CI harness) would otherwise fail the read inside the CLI under test.
+    /// </summary>
+    private sealed class CapturingConsole(TextWriter stdout, TextWriter stderr) : IConsole
+    {
+        public bool IsInputRedirected => true;
+        public void WriteLine(string value) => stdout.WriteLine(value);
+        public void Write(string value) => stdout.Write(value);
+        public void ErrorWriteLine(string value) => stderr.WriteLine(value);
+        public string? ReadLine() => null;
+        public char? ReadKeyChar() => null;
+    }
+
     private static async Task<(int Exit, string Stdout, string Stderr)> RunCliInDirectoryAsync(
         string directory,
         string[] args)
@@ -1431,7 +1448,8 @@ public sealed class SopInstallCommandTests
             {
                 exit = await CliApplication.RunAsync(
                     args,
-                    (_, _) => throw new InvalidOperationException("worker must not be constructed"));
+                    (_, _) => throw new InvalidOperationException("worker must not be constructed"),
+                    new CapturingConsole(stdout, stderr));
             }
             return (exit, stdout.ToString(), stderr.ToString());
         }
