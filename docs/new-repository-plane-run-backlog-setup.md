@@ -475,6 +475,13 @@ step 3); it does not touch the committed checks, and it does not need
 `--plane-url`/`--workspace`/`--project-id` repeated since those already came
 with the clone too.
 
+`sop install` on a clone derives the same `branch_prefix` and `source_roots` the
+first machine did: it reads remote-tracking branches as well as local ones (a
+clone has only one local branch, which on its own reveals no convention), and it
+leaves `.build`, `.claude`, and `.agents` out of `source_roots` even though the
+clone now tracks them. If the two machines' conductor facts differ, that is a
+divergence worth investigating, not a normal difference between machines.
+
 `secrets/` is gitignored like `.build/conductor.toml`, so this machine's token
 file does not travel with the clone either; run `build setup --write-token-file`
 again here, same as the first machine.

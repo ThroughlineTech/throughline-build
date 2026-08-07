@@ -19,9 +19,29 @@ internal static class SopInstallCommand
         string repositoryRoot,
         CancellationToken cancellationToken);
 
-    /// <summary>Build's own branch-naming convention, used when no local branch reveals one. Not a
+    /// <summary>Build's own branch-naming convention, used when no branch reveals one. Not a
     /// guess about the repository - the same role "." plays as the source_roots fallback.</summary>
     internal const string DefaultBranchPrefix = "ticket";
+
+    /// <summary>
+    /// Top-level directories Build itself owns in an installed repository, excluded from
+    /// source_roots. Derived from the SOP catalog's own owned paths plus Build's data directory, so
+    /// adding a host stub keeps this correct without a second list to maintain. TLB-627 made these
+    /// directories tracked, which otherwise pulled them into every second machine's source_roots
+    /// and widened the review surface onto the tool's own generated files. See TLB-624.
+    /// </summary>
+    internal static readonly IReadOnlySet<string> BuildManagedRoots =
+        SopBundleCatalog.All
+            .SelectMany(entry => entry.OwnedPaths)
+            .Select(owned => owned.Path.Replace('\\', '/'))
+            .Where(path => path.IndexOf('/') is > 0)
+            .Select(path => path[..path.IndexOf('/')])
+            .Append(BuildDataDirectoryName)
+            .ToHashSet(StringComparer.Ordinal);
+
+    /// <summary>Build's own data directory. Mirrors <c>SopInstaller.BuildDataDirectory</c>, which is
+    /// private to that type.</summary>
+    private const string BuildDataDirectoryName = ".build";
 
     /// <summary>Candidate tracked-file paths for architecture_map, in priority order, matched
     /// case-insensitively. First match wins; the written value keeps the tracked file's real casing.</summary>
@@ -187,6 +207,7 @@ internal static class SopInstallCommand
             .Select(path => path.Replace('\\', '/'))
             .Where(path => path.IndexOf('/') is > 0)
             .Select(path => path[..path.IndexOf('/')])
+            .Where(root => !BuildManagedRoots.Contains(root))
             .Distinct(StringComparer.Ordinal)
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToList();
@@ -232,14 +253,17 @@ internal static class SopInstallCommand
     }
 
     /// <summary>
-    /// Most frequent segment before the first "/" among local branch names that contain one
-    /// (ties broken by ordinal order for determinism). Falls back to <see cref="DefaultBranchPrefix"/>
-    /// when no local branch reveals a convention - Build's own default, not a guess about the
-    /// repository, mirroring the "." fallback source_roots uses when nothing is tracked.
+    /// Most frequent segment before the first "/" among branch names that contain one (ties broken
+    /// by ordinal order for determinism). Names are deduplicated first, so a branch that exists both
+    /// locally and on a remote votes once and a fresh clone derives what its origin repository did.
+    /// Falls back to <see cref="DefaultBranchPrefix"/> when no branch reveals a convention - Build's
+    /// own default, not a guess about the repository, mirroring the "." fallback source_roots uses
+    /// when nothing is tracked.
     /// </summary>
     private static string DeriveBranchPrefix(IReadOnlyList<string> branchNames)
     {
         var best = branchNames
+            .Distinct(StringComparer.Ordinal)
             .Where(name => name.IndexOf('/') > 0)
             .Select(name => name[..name.IndexOf('/')])
             .GroupBy(prefix => prefix, StringComparer.Ordinal)
@@ -282,8 +306,30 @@ internal static class SopInstallCommand
         return output.Split('\0', StringSplitOptions.RemoveEmptyEntries);
     }
 
+    /// <summary>
+    /// Branch names from both refs/heads and refs/remotes, with the remote name stripped so a
+    /// remote-tracking branch reads like a local one. A fresh clone has exactly one local branch, so
+    /// consulting refs/heads alone made branch_prefix fall back to Build's default on every second
+    /// machine no matter what convention the repository actually uses. See TLB-624.
+    /// </summary>
     private static async Task<IReadOnlyList<string>> ListBranchNamesAsync(
         string repositoryRoot,
+        CancellationToken cancellationToken)
+    {
+        // lstrip drops the ref namespace: 2 turns refs/heads/feature/x into feature/x, 3 turns
+        // refs/remotes/origin/feature/x into the same. refs/remotes/origin/HEAD reduces to "HEAD",
+        // which carries no "/" and is ignored by the prefix derivation.
+        var local = await ListRefsAsync(repositoryRoot, "refs/heads", 2, cancellationToken)
+            .ConfigureAwait(false);
+        var remote = await ListRefsAsync(repositoryRoot, "refs/remotes", 3, cancellationToken)
+            .ConfigureAwait(false);
+        return [.. local, .. remote];
+    }
+
+    private static async Task<IReadOnlyList<string>> ListRefsAsync(
+        string repositoryRoot,
+        string refspace,
+        int lstrip,
         CancellationToken cancellationToken)
     {
         var startInfo = new ProcessStartInfo("git")
@@ -295,8 +341,8 @@ internal static class SopInstallCommand
             CreateNoWindow = true,
         };
         startInfo.ArgumentList.Add("for-each-ref");
-        startInfo.ArgumentList.Add("--format=%(refname:short)");
-        startInfo.ArgumentList.Add("refs/heads");
+        startInfo.ArgumentList.Add($"--format=%(refname:lstrip={lstrip})");
+        startInfo.ArgumentList.Add(refspace);
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("git could not be started");

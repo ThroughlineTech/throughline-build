@@ -104,9 +104,14 @@ A scaffolded `conductor.toml` is not a template filled with generic values -
 install derives what it can from the repository itself, deterministically, with
 no worker and no engine code that special-cases a language or framework:
 `ticket_prefix` from the configured Plane project identifier, `source_roots`
-from `git ls-files`'s tracked top-level directories, `branch_prefix` from the
-most common `<prefix>/...` segment among local branches (falling back to
-Build's own `"ticket"` convention when none exists), and `architecture_map`
+from `git ls-files`'s tracked top-level directories excluding the ones Build
+itself owns (`.build`, `.claude`, `.agents` - tracked since the gate started
+travelling with the clone, but Build's output rather than the repository's
+source), `branch_prefix` from the most common `<prefix>/...` segment among
+distinct local and remote-tracking branch names (remotes are read too, so a
+fresh clone - which has exactly one local branch - still derives what its origin
+derived; falling back to Build's own `"ticket"` convention when no branch
+reveals a convention), and `architecture_map`
 from the first tracked file matching a known architecture/contributor-doc name
 (`docs/architecture.md`, `ARCHITECTURE.md`, `docs/contributing.md`,
 `CONTRIBUTING.md`, `AGENTS.md`, `README.md`, checked in that order). Facts that

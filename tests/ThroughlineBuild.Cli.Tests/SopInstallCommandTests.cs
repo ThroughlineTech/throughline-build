@@ -353,6 +353,174 @@ public sealed class SopInstallCommandTests
     }
 
     [Fact]
+    public async Task Install_TrackedBuildManagedDirectories_ExcludedFromSourceRoots()
+    {
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+        var repo = CreateRepo();
+
+        try
+        {
+            // TLB-627 made .build/config.toml and the host stubs tracked, so from the second machine
+            // on they show up in git ls-files. They are Build's own output, not the repository's
+            // source, and must not widen the review surface. See TLB-624.
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: "OWN",
+                configuredProjectId: "project-uuid",
+                new ThrowingProjectDiscovery(),
+                [
+                    ".build/config.toml",
+                    ".claude/commands/run-backlog.md",
+                    ".agents/skills/run-backlog/SKILL.md",
+                    "app/main.ts",
+                    "docs/guide.md",
+                ]);
+
+            Assert.Equal(0, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            var sourceRoots = doc.RootElement
+                .GetProperty("data")
+                .GetProperty("sourceRoots")
+                .EnumerateArray()
+                .Select(item => item.GetString()!)
+                .ToArray();
+
+            Assert.Equal(["app", "docs"], sourceRoots);
+            Assert.DoesNotContain(".build", sourceRoots);
+            Assert.DoesNotContain(".claude", sourceRoots);
+            Assert.DoesNotContain(".agents", sourceRoots);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_OnlyBuildManagedDirectoriesTracked_FallsBackToDotSourceRoot()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: "DOT",
+                configuredProjectId: "project-uuid",
+                new ThrowingProjectDiscovery(),
+                [".build/config.toml", ".claude/commands/run-backlog.md"]);
+
+            Assert.Equal(0, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            Assert.Equal(
+                ["."],
+                doc.RootElement
+                    .GetProperty("data")
+                    .GetProperty("sourceRoots")
+                    .EnumerateArray()
+                    .Select(item => item.GetString()!)
+                    .ToArray());
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_FreshCloneOfInstalledRepository_DerivesOriginBranchPrefixAndRepositoryOwnRoots()
+    {
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+        var root = Path.Combine(Path.GetTempPath(), "sop-install-clone-tests", Guid.NewGuid().ToString("N"));
+        var origin = Path.Combine(root, "origin");
+        var clone = Path.Combine(root, "clone");
+        Directory.CreateDirectory(origin);
+
+        try
+        {
+            // The second-machine case, through real git: the first machine committed the gate and
+            // the host stubs, then someone clones. A clone has exactly one local branch, so the
+            // repository's branch convention only survives in refs/remotes, and the committed
+            // .build/.claude/.agents directories must stay out of source_roots. See TLB-624.
+            await RunGitAsync(origin, "init", "-b", "main");
+            await RunGitAsync(origin, "config", "user.email", "scratch@example.invalid");
+            await RunGitAsync(origin, "config", "user.name", "Scratch User");
+            Directory.CreateDirectory(PathFor(origin, "app"));
+            Directory.CreateDirectory(PathFor(origin, "docs"));
+            Directory.CreateDirectory(PathFor(origin, ".build"));
+            File.WriteAllText(PathFor(origin, "app/index.js"), "console.log('scratch');\n");
+            File.WriteAllText(PathFor(origin, "docs/architecture.md"), "# Scratch app architecture\n");
+
+            var config = ConfigTemplateLoader.Load()
+                .Replace("REQUIRED_PLANE_BASE_URL", "https://api.plane.so", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_WORKSPACE_SLUG", "workspace", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_PROJECT_ID", "configured-uuid", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_API_TOKEN", "token", StringComparison.Ordinal)
+                .Replace(
+                    "plane_project_id = \"configured-uuid\"",
+                    "plane_project_id = \"configured-uuid\"\nplane_project_identifier = \"CLN\"",
+                    StringComparison.Ordinal);
+            File.WriteAllText(PathFor(origin, ".build/config.toml"), config);
+
+            // The first machine's install, then the commit TLB-627 made possible.
+            var firstMachine = await RunCliApplicationInDirectoryAsync(origin, ["sop", "install", "--json"]);
+            Assert.Equal(0, firstMachine.Exit);
+
+            await RunGitAsync(origin, "add", "app", "docs", ".claude", ".agents", ".build/config.toml");
+            await RunGitAsync(origin, "commit", "-m", "install: track gate and host stubs");
+            await RunGitAsync(origin, "checkout", "-b", "feature/one");
+            await RunGitAsync(origin, "checkout", "-b", "feature/two");
+            await RunGitAsync(origin, "checkout", "main");
+
+            await RunGitAsync(root, "clone", origin, clone);
+            await RunGitAsync(clone, "config", "user.email", "scratch@example.invalid");
+            await RunGitAsync(clone, "config", "user.name", "Scratch User");
+
+            var result = await RunCliApplicationInDirectoryAsync(clone, ["sop", "install", "--json"]);
+            Assert.Equal(0, result.Exit);
+
+            var conductor = File.ReadAllText(PathFor(clone, ".build/conductor.toml"));
+            Assert.Contains("branch_prefix = \"feature\"", conductor, StringComparison.Ordinal);
+            Assert.Contains("source_roots = [\"app\", \"docs\"]", conductor, StringComparison.Ordinal);
+            Assert.DoesNotContain(".claude", conductor, StringComparison.Ordinal);
+            Assert.DoesNotContain(".agents", conductor, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public async Task Install_BranchExistsLocallyAndOnRemote_CountsOncePerDistinctName()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            // A clone that has checked out one branch sees it twice - once in refs/heads and once
+            // in refs/remotes. Without dedup the duplicate outvotes a genuinely more common prefix.
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: "DUP",
+                configuredProjectId: "project-uuid",
+                new ThrowingProjectDiscovery(),
+                ["src/main.ts"],
+                branchNames: ["hotfix/urgent", "hotfix/urgent", "release/1", "release/2"]);
+
+            Assert.Equal(0, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            Assert.Equal(
+                "release",
+                doc.RootElement.GetProperty("data").GetProperty("branchPrefix").GetString());
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public async Task CliInstall_UsesConfiguredIdentifierAndGitTrackedRoots()
     {
         AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
