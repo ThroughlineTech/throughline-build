@@ -9,8 +9,8 @@ backend = "plane"
 plane_base_url = "REQUIRED_PLANE_BASE_URL"  # REQUIRED: set to your Plane API base URL (e.g. https://api.plane.so)
 plane_workspace_slug = "REQUIRED_PLANE_WORKSPACE_SLUG"  # REQUIRED: your workspace slug
 plane_project_id = "REQUIRED_PLANE_PROJECT_ID"  # REQUIRED: UUID of your Plane project
-plane_api_token = "REQUIRED_PLANE_API_TOKEN"  # REQUIRED: your Plane API token
-# plane_api_token_env = "PLANE_API_TOKEN"  # alternative for CI: read token from this env var
+plane_api_token_env = "PLANE_API_TOKEN"  # REQUIRED: name of the env var holding your Plane API token; export it before running ticketing commands
+# plane_api_token = "your-token-here"  # NOT RECOMMENDED: a literal token. Never commit a config.toml with this set - use plane_api_token_env or plane_api_token_file instead.
 # plane_api_token_file = "secrets/plane-api-token"  # default for a human developer: a file
 #   whose entire trimmed contents are the token, resolved relative to the project root. Unlike
 #   plane_api_token_env, resolution never depends on which shell (interactive or not) launched

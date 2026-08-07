@@ -64,7 +64,7 @@ Two TOML files have different owners and must not be combined:
 
 | File | Contents | Git policy |
 | --- | --- | --- |
-| `.build/config.toml` | Plane connection, the token environment-variable name and/or token-file path, workers, events, and executable review checks | Machine-local and ignored |
+| `.build/config.toml` | Plane connection, the token environment-variable name and/or token-file path, workers, events, and executable review checks | **Tracked.** `[[review.checks]]`, `[[ship.regression_checks]]`, `[waves]`, and `[worktree]` are repository facts and must travel with a clone. It never holds a literal Plane token by default - the template's active key is `plane_api_token_env`, not `plane_api_token`. |
 | `.build/conductor.toml` | SOP version floor, ticket and branch prefixes, source roots, architecture map, review invariants, and escalation paths | Machine-local and ignored; `build install` recreates it per clone |
 | `secrets/plane-api-token` (or wherever `plane_api_token_file` points) | The Plane API token, trimmed, and nothing else | Machine-local and ignored (`secrets/` is a reserved gitignore entry) |
 
@@ -76,9 +76,12 @@ The SOP installer also emits two tracked host stubs and one installer cache:
 
 The embedded catalog, not the manifest, is the authority for emitted stub
 content. Never put a Plane token in `conductor.toml`, a host stub, or a
-temporary TOML file that Git can see. Note that `.gitignore` covers `.build/`,
-so a hand-made backup directory such as `.build-bak/` is NOT ignored and will
-expose a literal token to `git add -A`.
+temporary TOML file that Git can see - including `config.toml` itself, now
+that it is tracked. If `.build/config.toml` ever ends up with a literal
+`plane_api_token = "..."` value (an older repo, or `--token` used
+deliberately), `build sop doctor` and `build setup --check` both flag it
+before it gets committed; see the `ticketing.plane_api_token.inline_secret`
+finding in the table below.
 
 ## 1. Check prerequisites
 
@@ -171,14 +174,23 @@ To find or create a project by name and provision in one connected command, omit
 resolves or creates the project, writes its UUID, provisions the required Plane
 states and labels, initializes Git when needed, and verifies connectivity.
 
+`--token-env` is now the template's default shape - `build init` writes
+`plane_api_token_env = "PLANE_API_TOKEN"` even with no token flag at all, so
+you rarely need to pass `--token-env` explicitly unless you want a different
+variable name. `--token` still works for a literal value, but writes it
+straight into `config.toml` and prints a warning, since that file is tracked;
+prefer `--token-env` or `build setup --write-token-file` instead.
+
 Do not use `build init --print-template` as the installation step. It prints a
 `config.toml` template to stdout and writes no configuration; do not redirect it
 to `conductor.toml`.
 
-If `.build/config.toml` already exists, stop and inspect it. `build init` refuses
-to overwrite without `--force`. Do not use `--force` on an established repository
-until its `[[review.checks]]` have been preserved; the generated template
-intentionally ships with every check commented out.
+`.build/config.toml` is tracked, so on a clone that already carries it, running
+`build init` again is a no-op: it reports the file as already configured (or
+lists any `REQUIRED_` placeholder still unfilled) and exits 0 without touching
+it. This is expected on a second machine - see step 10. `--force` still
+overwrites; do not use it on an established repository until its
+`[[review.checks]]` have been preserved.
 
 Verify the connection with a real ticket read:
 
@@ -212,7 +224,9 @@ commands need neither ticketing credentials nor worker configuration.
 
 Apply refuses to overwrite customized checks and exits nonzero without changing
 the file. Use `--force` only when you intend to replace them. Applying a profile
-that already matches also exits nonzero instead of reporting a successful no-op.
+that already matches the file exits 0 and reports a no-op instead of rewriting
+it - this is what makes `profile apply` safe to re-run on a second machine that
+already inherited the gate through the clone; see step 10.
 
 ### Optional canary proof
 
@@ -366,16 +380,20 @@ Common doctor findings and what each means:
 | `sop.stub.modified` / `sop.stub.drift` | A stub was hand-edited, or was written by an older binary |
 | `sop.stub.missing` | A stub that was installed is gone; with no manifest, doctor uses the Git index to know it was installed |
 | `sop.stub.scope_unavailable` | A stub is absent, there is no manifest, and Git could not be asked whether it was ever installed |
+| `ticketing.plane_api_token.inline_secret` | `.build/config.toml` sets `plane_api_token` to a literal value. Since the file is tracked, replace the line with `plane_api_token_env = "PLANE_API_TOKEN"` (or a `plane_api_token_file` path) before committing |
 
 ## 8. Check Git ownership before committing
 
 ```sh
 git status --short
-git check-ignore -v .build/config.toml .build/conductor.toml .build/sop-manifest.json
+git check-ignore -v .build/conductor.toml .build/sop-manifest.json
 ```
 
-Both `.build/config.toml` and `.build/conductor.toml` must be ignored. The
-installer commits only its exact readiness paths:
+`.build/conductor.toml` must be ignored; `.build/config.toml` must NOT be -
+it is tracked, and `git status` should show it as a normal file once it holds
+real values. Before staging it, confirm doctor sees no
+`ticketing.plane_api_token.inline_secret` finding (`build sop doctor --json`).
+The installer commits only its exact readiness paths:
 
 ```text
 .gitignore                         # only when Setup created or changed it deterministically
@@ -383,9 +401,11 @@ installer commits only its exact readiness paths:
 .agents/skills/run-backlog/SKILL.md
 ```
 
-Treat `.build/sop-manifest.json` as installer history, not as authority for
-modified stubs. Before committing, confirm no temporary configuration file holds
-a literal Plane token outside the ignored `.build/` directory.
+`.build/config.toml` is not part of that auto-committed set; stage and commit
+it yourself once it is complete. Treat `.build/sop-manifest.json` as installer
+history, not as authority for modified stubs. Before committing, confirm no
+temporary configuration file holds a literal Plane token outside the ignored
+`.build/conductor.toml`/`secrets/` paths.
 
 ## 9. Run a ticket
 
@@ -431,41 +451,52 @@ ls .build/conductor.toml
 migration. Do the whole runbook from step 2. `build sop upgrade` is the wrong
 verb here and will report every path missing.
 
-**If the stubs are present in the clone**, recreate the ignored configuration
-and conductor data for this machine:
+**If the stubs are present in the clone**, `.build/config.toml` came with the
+clone too - the gate travels now (`[[review.checks]]`,
+`[[ship.regression_checks]]`, `[waves]`, `[worktree]`, all committed by the
+first machine). What is genuinely machine-local is the token and the
+conductor data, so that is all this machine needs to (re)create:
 
 ```sh
 build --version                        # must be >= conductor.min_build_version
 export PLANE_API_TOKEN=...
-build init --no-interactive --plane-url ... --workspace ... --project-id ... --token-env PLANE_API_TOKEN
+build init --token-env PLANE_API_TOKEN # config.toml already exists and is complete -> reports so and exits 0
 build setup
 build setup --write-token-file secrets/plane-api-token
-# re-create [[review.checks]] -- see below
 build sop install --json               # creates the missing local conductor without replacing stubs
 # replace the conductor scaffold with this repository's verified facts
 build sop doctor --json
 build sop brief run-backlog --json     # returns sopText => ready
 ```
 
-`secrets/` is gitignored like `.build/`, so this machine's token file does not
-travel with the clone either; run `build setup --write-token-file` again here,
-same as the first machine.
+There is no `[[review.checks]]` step to redo here - that is the point. `build
+init` on a clone that already carries a complete `config.toml` is a no-op (see
+step 3); it does not touch the committed checks, and it does not need
+`--plane-url`/`--workspace`/`--project-id` repeated since those already came
+with the clone too.
 
-The gate does not travel. `.build/config.toml` is gitignored, and it holds
-`[[review.checks]]`, `[[ship.regression_checks]]`, `[waves]`, and `[worktree]`
-alongside the Plane connection. Those are repository facts, not machine facts,
-but they live in the one file a clone never brings. Every new machine therefore
-re-creates the gate, and nothing structurally guarantees it matches the first
-machine's.
+`secrets/` is gitignored like `.build/conductor.toml`, so this machine's token
+file does not travel with the clone either; run `build setup --write-token-file`
+again here, same as the first machine.
 
-Until that is fixed, copy `[[review.checks]]` across by hand rather than
-re-deriving it, and diff the two files. Re-deriving invites two machines to
-enforce different gates while both report green.
+To prove the second machine actually inherited the first machine's gate rather
+than silently diverging, re-run the same profile JSON from step 4 through
+`profile apply`:
 
-The SOP prose itself has no such problem: it lives in the binary, so the only
-thing governing fidelity is the binary version. `min_build_version` in the local
-`conductor.toml` is a floor, not a pin. An older binary is caught; a newer one
-silently supplies different SOP prose to the same repository.
+```sh
+build profile apply profile.json --json   # same profile.json the first machine used
+```
+
+If it reports the config already matches (exit 0, no file change), this
+machine's `[[review.checks]]` are byte-identical to the first machine's - the
+committed file, not a fresh derivation, is the source of truth. If it instead
+wants to change something, the two machines' checks have diverged and that is
+worth investigating before proceeding, not silently accepting.
+
+The SOP prose itself has no equivalent travel problem: it lives in the binary,
+so the only thing governing fidelity is the binary version. `min_build_version`
+in the local `conductor.toml` is a floor, not a pin. An older binary is caught;
+a newer one silently supplies different SOP prose to the same repository.
 
 ## Troubleshooting
 

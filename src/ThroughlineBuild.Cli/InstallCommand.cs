@@ -461,6 +461,20 @@ internal static class InstallReadiness
                     ".gitignore differs from the deterministic build setup merge over HEAD");
             commitPaths.Add(".gitignore");
         }
+        // .build/config.toml is tracked (TLB-627), so on a fresh clone/first install it is a new,
+        // untracked file - one of the exact readiness paths this stage commits, same as the stubs
+        // and .gitignore. The caller already ran sop doctor before this (which now rejects a literal
+        // plane_api_token unconditionally), but re-check here too: this stage is the one place that
+        // actually commits the file, so it must never commit a live secret even if a future caller
+        // reorders the doctor check.
+        if (ContainsPath(expandedPorcelain, ".build/config.toml"))
+        {
+            var configTomlPath = Path.Combine(repositoryRoot, ".build", "config.toml");
+            var tokenFinding = InlineTokenScanner.Scan(File.ReadAllText(configTomlPath));
+            if (tokenFinding is not null)
+                return Fail(branch, porcelain, tokenFinding);
+            commitPaths.Add(".build/config.toml");
+        }
         if (HasUnrelatedChanges(expandedPorcelain, commitPaths))
             return Fail(branch, porcelain, "working tree contains changes outside emitted SOP stubs");
 

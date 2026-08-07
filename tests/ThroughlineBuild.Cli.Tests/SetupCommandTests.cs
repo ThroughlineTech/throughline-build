@@ -244,6 +244,90 @@ public class SetupCommandTests
         Assert.Contains(".gitignore", console.Stderr);
     }
 
+    // ------------------------------------------------------------------ TLB-627: tracked-token safety
+
+    [Fact]
+    public async Task CheckOnly_ConfigHasLiteralToken_ReportsGap_ReturnsOne()
+    {
+        var dir = Directory.CreateTempSubdirectory().FullName;
+        try
+        {
+            var configPath = Path.Combine(dir, "config.toml");
+            File.WriteAllText(configPath, "[ticketing]\nplane_api_token = \"plane_api_live_secret\"\n");
+            var console = new FakeConsole();
+
+            var code = await new SetupCommand(FullyProvisioned(), ReadyRepo(), configPath)
+                .ExecuteAsync(checkOnly: true, console, CancellationToken.None);
+
+            Assert.Equal(1, code);
+            Assert.Contains("plane_api_token", console.Stderr);
+            Assert.DoesNotContain("plane_api_live_secret", console.Stderr);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task NotCheckOnly_ConfigHasLiteralToken_WarnsButDoesNotRewriteFile()
+    {
+        var dir = Directory.CreateTempSubdirectory().FullName;
+        try
+        {
+            var configPath = Path.Combine(dir, "config.toml");
+            var original = "[ticketing]\nplane_api_token = \"plane_api_live_secret\"\n";
+            File.WriteAllText(configPath, original);
+            var console = new FakeConsole();
+
+            var code = await new SetupCommand(FullyProvisioned(), ReadyRepo(), configPath)
+                .ExecuteAsync(checkOnly: false, console, CancellationToken.None);
+
+            Assert.Equal(0, code); // non-checkOnly always returns 0; the warning does not fail the run
+            Assert.Contains("plane_api_token", console.Stderr);
+            Assert.Equal(original, File.ReadAllText(configPath)); // never rewritten
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CheckOnly_ConfigUsesEnvVarForm_NoGapFromTokenScan()
+    {
+        var dir = Directory.CreateTempSubdirectory().FullName;
+        try
+        {
+            var configPath = Path.Combine(dir, "config.toml");
+            File.WriteAllText(configPath, "[ticketing]\nplane_api_token_env = \"PLANE_API_TOKEN\"\n");
+            var console = new FakeConsole();
+
+            var code = await new SetupCommand(FullyProvisioned(), ReadyRepo(), configPath)
+                .ExecuteAsync(checkOnly: true, console, CancellationToken.None);
+
+            Assert.Equal(0, code);
+            Assert.DoesNotContain("plane_api_token", console.Stderr);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task NullConfigPath_SkipsTokenScan()
+    {
+        // Existing call sites (configPath omitted) must keep working unaffected.
+        var console = new FakeConsole();
+
+        var code = await new SetupCommand(FullyProvisioned(), ReadyRepo())
+            .ExecuteAsync(checkOnly: true, console, CancellationToken.None);
+
+        Assert.Equal(0, code);
+        Assert.DoesNotContain("plane_api_token", console.Stderr);
+    }
+
     // ------------------------------------------------------------------ WI-05: welcome commit
 
     [Fact]

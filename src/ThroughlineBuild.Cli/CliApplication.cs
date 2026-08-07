@@ -1161,7 +1161,7 @@ public static class CliApplication
                 return 2;
             }
             var sharedTicketing = cliContext.Ticketing;
-            var setupCmd = new SetupCommand(sharedTicketing, new FileSystemLocalRepoOps(configuredCwd));
+            var setupCmd = new SetupCommand(sharedTicketing, new FileSystemLocalRepoOps(configuredCwd), cliContext.ConfigPath);
             try
             {
                 using var verbCts = new CancellationTokenSource();

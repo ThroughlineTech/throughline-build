@@ -16,8 +16,9 @@ public static class GitignoreManager
 
     public static readonly IReadOnlyList<string> RequiredEntries = new[]
     {
-        // build tool artifacts
-        ".build/config.toml",
+        // build tool artifacts. .build/config.toml is intentionally NOT here - it is tracked (see
+        // TLB-627): it carries repository facts ([[review.checks]], [waves], [worktree], etc.) that
+        // must travel with a clone, and the template default no longer writes a literal token into it.
         ".build/conductor.toml",
         ".build/sop-manifest.json",
         ".build/profile.json",

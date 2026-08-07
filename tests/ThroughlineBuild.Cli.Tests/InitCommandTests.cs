@@ -127,11 +127,12 @@ public class InitCommandTests
     }
 
     // ------------------------------------------------------------------
-    // Execute: clobber guard
+    // Execute: existing config is a no-op (TLB-627 - config.toml is now tracked, so a repeat
+    // 'build init' on an already-configured clone is the NORMAL case, not an error)
     // ------------------------------------------------------------------
 
     [Fact]
-    public async Task Execute_ExistingConfig_NoForce_ReturnsOneAndDoesNotOverwrite()
+    public async Task Execute_ExistingCompleteConfig_NoForce_ReturnsZeroAndDoesNotOverwrite()
     {
         var dir = MakeTempDir();
         try
@@ -139,15 +140,63 @@ public class InitCommandTests
             var buildDir = Path.Combine(dir, ".build");
             Directory.CreateDirectory(buildDir);
             var target = Path.Combine(buildDir, "config.toml");
-            File.WriteAllText(target, "# original");
+            File.WriteAllText(target, "# original, no REQUIRED_ placeholders");
 
             var console = new FakeConsole();
             var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console);
 
-            Assert.Equal(1, result);
-            Assert.Equal("# original", File.ReadAllText(target));
-            Assert.Contains("already exists", console.Stderr);
-            Assert.Contains("--force", console.Stderr);
+            Assert.Equal(0, result);
+            Assert.Equal("# original, no REQUIRED_ placeholders", File.ReadAllText(target));
+            Assert.Contains("already exists", console.Stdout);
+            Assert.Contains("--force", console.Stdout);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Execute_ExistingIncompleteConfig_NoForce_ReturnsZeroButListsPlaceholders()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var buildDir = Path.Combine(dir, ".build");
+            Directory.CreateDirectory(buildDir);
+            var target = Path.Combine(buildDir, "config.toml");
+            File.WriteAllText(target, "plane_base_url = \"REQUIRED_PLANE_BASE_URL\"");
+
+            var console = new FakeConsole();
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console);
+
+            Assert.Equal(0, result);
+            Assert.Equal("plane_base_url = \"REQUIRED_PLANE_BASE_URL\"", File.ReadAllText(target));
+            Assert.Contains("already exists", console.Stdout);
+            Assert.Contains("plane_base_url", console.Stdout);
+            Assert.Contains("--force", console.Stdout);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Execute_RunTwice_SecondRunIsByteIdempotent()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new FakeConsole();
+            await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console);
+            var target = Path.Combine(dir, ".build", "config.toml");
+            var afterFirst = File.ReadAllText(target);
+
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, new FakeConsole());
+
+            Assert.Equal(0, result);
+            Assert.Equal(afterFirst, File.ReadAllText(target));
         }
         finally
         {
@@ -222,10 +271,12 @@ public class InitCommandTests
             Assert.Contains("build setup", console.Stdout);
             // Surfaces the one-shot connected path.
             Assert.Contains("--project-name", console.Stdout);
-            // Names the still-unresolved REQUIRED fields (none supplied here -> all four).
+            // Names the still-unresolved REQUIRED fields (none supplied here -> the three that still
+            // have a REQUIRED_ placeholder; plane_api_token defaults to plane_api_token_env, which
+            // has no placeholder to fill in).
             Assert.Contains("Still REQUIRED", console.Stdout);
             Assert.Contains("plane_project_id", console.Stdout);
-            Assert.Contains("plane_api_token", console.Stdout);
+            Assert.DoesNotContain("plane_api_token", console.Stdout);
         }
         finally
         {
@@ -348,18 +399,21 @@ public class InitCommandTests
     }
 
     [Fact]
-    public async Task Execute_TokenFlag_ReplacesPlaceholder()
+    public async Task Execute_TokenFlag_ReplacesDefaultEnvLineWithLiteral()
     {
         var dir = MakeTempDir();
         try
         {
             var console = new FakeConsole();
-            await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
                 token: "my-secret-token");
 
+            Assert.Equal(0, result);
             var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
-            Assert.Contains("my-secret-token", written);
-            Assert.DoesNotContain("REQUIRED_PLANE_API_TOKEN", written);
+            Assert.Contains("plane_api_token = \"my-secret-token\"", written);
+            Assert.DoesNotContain("plane_api_token_env = \"PLANE_API_TOKEN\"", written);
+            Assert.Contains("Warning", console.Stderr);
+            Assert.Contains("--token", console.Stderr);
         }
         finally
         {
@@ -368,19 +422,41 @@ public class InitCommandTests
     }
 
     [Fact]
-    public async Task Execute_TokenEnvFlag_ReplacesLiteralTokenLineWithEnvLine()
+    public async Task Execute_NoTokenFlags_DefaultsToEnvVarFormAndDoesNotWarn()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new FakeConsole();
+            await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console);
+
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+            Assert.Contains("plane_api_token_env = \"PLANE_API_TOKEN\"", written);
+            // The active (uncommented) plane_api_token key is absent; only the commented-out
+            // alternative ("# plane_api_token = ...") is present, which is expected.
+            Assert.DoesNotContain("\nplane_api_token = \"", written);
+            Assert.DoesNotContain("Warning", console.Stderr);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Execute_TokenEnvFlag_ReplacesDefaultEnvLineWithCustomName()
     {
         var dir = MakeTempDir();
         try
         {
             var console = new FakeConsole();
             await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
-                tokenEnv: "PLANE_API_TOKEN");
+                tokenEnv: "CUSTOM_PLANE_TOKEN");
 
             var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
-            Assert.Contains("plane_api_token_env = \"PLANE_API_TOKEN\"", written);
-            // The literal plane_api_token = "REQUIRED_..." line should be gone.
-            Assert.DoesNotContain("REQUIRED_PLANE_API_TOKEN", written);
+            Assert.Contains("plane_api_token_env = \"CUSTOM_PLANE_TOKEN\"", written);
+            Assert.DoesNotContain("plane_api_token_env = \"PLANE_API_TOKEN\"", written);
+            Assert.DoesNotContain("Warning", console.Stderr);
         }
         finally
         {
@@ -1214,7 +1290,7 @@ public class InitCommandTests
     }
 
     [Fact]
-    public async Task ConnectedMode_ClobberGuardStillApplies()
+    public async Task ConnectedMode_ExistingConfigIsNoOp_ConnectedFlowNeverRuns()
     {
         var dir = MakeTempDir();
         try
@@ -1229,11 +1305,11 @@ public class InitCommandTests
                 workspace: "acme",
                 token: "tok",
                 projectName: "Some Project",
-                // Resolver must NOT be called because the clobber guard fires first.
+                // Resolver must NOT be called because the existing-file no-op fires first.
                 resolverOverride: new ThrowingResolver());
 
-            Assert.Equal(1, result);
-            Assert.Contains("already exists", console.Stderr);
+            Assert.Equal(0, result);
+            Assert.Contains("already exists", console.Stdout);
             // Original file untouched.
             Assert.Equal("# original", File.ReadAllText(Path.Combine(buildDir, "config.toml")));
         }
@@ -1406,9 +1482,10 @@ public class InitCommandTests
                 localRepoOverride: existingRepo);
 
             Assert.Equal(0, result);
-            // No warning and no mention of "Welcome" commit for an already-initialized repo.
+            // No mention of "Welcome" commit for an already-initialized repo. Stderr does carry the
+            // --token literal-value warning (expected - --token was passed above), but nothing else.
             Assert.DoesNotContain("welcome commit", console.Stdout, StringComparison.OrdinalIgnoreCase);
-            Assert.Empty(console.Stderr);
+            Assert.DoesNotContain("welcome commit", console.Stderr, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -1921,7 +1998,8 @@ public class InitCommandTests
             Assert.Equal(0, result);
             var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
             Assert.Contains("REQUIRED_PLANE_PROJECT_ID", written);
-            Assert.Contains("REQUIRED_PLANE_API_TOKEN", written);
+            // Token was never supplied, so the template's default (safe) env-var form is untouched.
+            Assert.Contains("plane_api_token_env = \"PLANE_API_TOKEN\"", written);
             // Offline next-steps hints appear; no create-or-pick prompt was shown.
             Assert.Contains("build setup", console.Stdout);
             Assert.DoesNotContain("Create a new project", console.Stdout);

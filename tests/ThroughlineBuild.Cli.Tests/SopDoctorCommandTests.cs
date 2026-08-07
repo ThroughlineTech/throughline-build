@@ -564,6 +564,59 @@ public sealed class SopDoctorCommandTests
     }
 
     [Fact]
+    public void Doctor_FlagsLiteralPlaneTokenInTrackedConfig()
+    {
+        var repo = CreateRepo(configToml:
+            ValidReviewChecksToml + "\n\n[ticketing]\nplane_api_token = \"plane_api_live_secret\"\n");
+        var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+
+        try
+        {
+            Assert.False(report.Passed);
+            Assert.Contains(report.Findings, finding => finding.Code == InlineTokenScanner.FindingCode);
+            Assert.DoesNotContain(report.Findings, finding => finding.Message.Contains("plane_api_live_secret"));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void Doctor_FlagsLiteralPlaneTokenEvenInConductorOnlyMode()
+    {
+        var repo = CreateRepo(configToml:
+            ValidReviewChecksToml + "\n\n[ticketing]\nplane_api_token = \"plane_api_live_secret\"\n");
+        var report = SopDoctorCommand.RunConductorOnlyDoctor(repo, "0.1.0+test");
+
+        try
+        {
+            Assert.Contains(report.Findings, finding => finding.Code == InlineTokenScanner.FindingCode);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void Doctor_DoesNotFlagEnvVarOrFileTokenForms()
+    {
+        var repo = CreateRepo(configToml:
+            ValidReviewChecksToml + "\n\n[ticketing]\nplane_api_token_env = \"PLANE_API_TOKEN\"\n");
+        var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+
+        try
+        {
+            Assert.DoesNotContain(report.Findings, finding => finding.Code == InlineTokenScanner.FindingCode);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public void Doctor_FailsWhenReviewChecksHaveNoSetupOrGatingRole()
     {
         var repo = CreateRepo(configToml:

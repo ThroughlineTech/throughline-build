@@ -19,11 +19,18 @@ public sealed class SetupCommand
 {
     private readonly ITicketingProvisioner _provisioner;
     private readonly ILocalRepoOps _localRepo;
+    private readonly string? _configPath;
 
-    public SetupCommand(ITicketingProvisioner provisioner, ILocalRepoOps localRepo)
+    /// <param name="configPath">
+    /// Path to .build/config.toml, when known, so RunLocalRepo can scan it for a literal Plane
+    /// token (TLB-627). Optional and defaults to null so existing call sites that predate that
+    /// check keep compiling; null simply skips the scan.
+    /// </param>
+    public SetupCommand(ITicketingProvisioner provisioner, ILocalRepoOps localRepo, string? configPath = null)
     {
         _provisioner = provisioner;
         _localRepo = localRepo;
+        _configPath = configPath;
     }
 
     /// <summary>
@@ -84,6 +91,18 @@ public sealed class SetupCommand
             {
                 _localRepo.WriteGitignore(GitignoreManager.Merge(existing)!);
                 console.WriteLine($"  .gitignore: added {missing.Count} entr(ies): {string.Join(", ", missing)}");
+            }
+        }
+
+        if (_configPath is not null && File.Exists(_configPath))
+        {
+            var remediation = InlineTokenScanner.Scan(File.ReadAllText(_configPath));
+            if (remediation is not null)
+            {
+                // No mutating branch here (unlike git/.gitignore above): build never rewrites a file
+                // that may hold a live secret, so this always just warns, checkOnly or not.
+                gap = true;
+                console.ErrorWriteLine($"  ticketing: {remediation}");
             }
         }
 

@@ -175,6 +175,10 @@ internal static class SopDoctorCommand
 
         if (validateReviewChecks)
             ValidateReviewChecks(configPath, findings);
+        // Runs unconditionally (even in conductor-only mode): config.toml is now tracked (TLB-627),
+        // so a literal token in it is a credential leak risk regardless of which doctor mode is
+        // running. Text scan only - doctor never loads ticketing config or resolves secrets.
+        ValidateTokenSafety(configPath, findings);
         // Emitted stubs are tracked repository content, so they are inspected in the tree the
         // verb actually runs in rather than in the tree that owns the machine-local .build data.
         if (validateStubs)
@@ -603,6 +607,16 @@ internal static class SopDoctorCommand
                     "which is not a directory in this repository"));
             }
         }
+    }
+
+    private static void ValidateTokenSafety(string? configPath, List<SopDoctorFinding> findings)
+    {
+        if (configPath is null || !File.Exists(configPath))
+            return;
+
+        var remediation = InlineTokenScanner.Scan(File.ReadAllText(configPath));
+        if (remediation is not null)
+            findings.Add(new SopDoctorFinding(InlineTokenScanner.FindingCode, "ticketing.plane_api_token", remediation));
     }
 
     private static void ValidateReviewChecks(string? configPath, List<SopDoctorFinding> findings)

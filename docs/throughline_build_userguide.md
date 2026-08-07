@@ -222,8 +222,10 @@ build setup
 
 Setup initializes local repository support, adds the managed ignore rules, provisions the required
 Plane states and labels, checks connectivity, and preflights configured Claude transports. It is
-safe to run again. Keep `.build/config.toml` ignored even when it contains only an environment
-variable name.
+safe to run again. `.build/config.toml` is tracked, not ignored - it carries repository facts like
+`[[review.checks]]` that must travel with a clone - but it should never hold a literal token even
+though it is safe to commit when it only names an environment variable. `sop doctor` and `setup
+--check` both flag a literal `plane_api_token` before you commit it.
 
 If Plane returns 401 or 403, `build` reports the repository-local config path, repository root,
 workspace, and project that were used for the request. The message also reminds you that sibling

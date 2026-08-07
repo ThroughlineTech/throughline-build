@@ -76,6 +76,14 @@ carries the minimum Build version, branch and ticket prefixes, source roots,
 architecture map, review invariants, review escalation rule, rework cap, and
 constellation.
 
+`.build/config.toml`, by contrast, is tracked: it carries repository facts -
+`[[review.checks]]`, `[[ship.regression_checks]]`, `[waves]`, `[worktree]` -
+that must travel with a clone rather than be re-derived per machine. It never
+holds a literal Plane token by default; `plane_api_token_env` (or
+`plane_api_token_file`) is the template's active key, and `sop doctor`/`setup
+--check` both flag a tracked file that has a literal `plane_api_token` set.
+See `docs/new-repository-plane-run-backlog-setup.md` for the full setup flow.
+
 `.build/` belongs to the clone, not to a worktree. A linked worktree, including
 every worktree the conductor cuts under `.worktrees/`, holds no copy of it, so
 `sop doctor`, `sop brief`, and config loading resolve conductor and config data

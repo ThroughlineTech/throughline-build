@@ -178,6 +178,12 @@ public sealed class InstallCommandTests
             Assert.Contains("platform = \"Vite\"", conductorAfterProfile);
             Assert.Contains("contract_authority = \"app\"", conductorAfterProfile);
 
+            // TLB-627: MinimalConfig's literal plane_api_token is only a stage-1 bootstrap
+            // convenience. A real install never reaches "ready" with a literal token in a tracked
+            // config.toml - doctor now rejects it - so swap to the safe file form (still resolving
+            // to the same token) before the readiness stage that is about to commit the file.
+            ReplaceInlineTokenWithFileForm(repo);
+
             Write(repo, ".build/invariants.toml", InvariantsToml);
             var third = await ExecuteStageAsync(
                 repo, new InstallInvocation(null, ".build/invariants.toml"), dependencies);
@@ -192,6 +198,9 @@ public sealed class InstallCommandTests
                 .Where(path => path.Class == SopBundleCatalog.EmittedPathClass)
                 .Select(path => path.Path)
                 .Append(".gitignore")
+                // .build/config.toml is tracked (TLB-627): it is a new, untracked file on this fresh
+                // repo, so readiness commits it alongside the stubs and .gitignore.
+                .Append(".build/config.toml")
                 .Order(StringComparer.Ordinal);
             Assert.Equal(expected, committed.Order(StringComparer.Ordinal));
 
@@ -744,6 +753,20 @@ public sealed class InstallCommandTests
         public void Write(string value) => diagnostics.Write(value);
         public void WriteLine(string value) => diagnostics.WriteLine(value);
         public void ErrorWriteLine(string value) => diagnostics.WriteLine(value);
+    }
+
+    // Replaces MinimalConfig's literal plane_api_token with plane_api_token_file, pointing at a
+    // gitignored file holding the same value, so resolution keeps working without a literal token
+    // ending up in the tracked config.toml (TLB-627).
+    private static void ReplaceInlineTokenWithFileForm(string repo)
+    {
+        Directory.CreateDirectory(Path.Combine(repo, "secrets"));
+        File.WriteAllText(Path.Combine(repo, "secrets", "plane-api-token"), "test-plane-token");
+        var configPath = Path.Combine(repo, ".build", "config.toml");
+        File.WriteAllText(configPath, File.ReadAllText(configPath).Replace(
+            "plane_api_token = \"test-plane-token\"",
+            "plane_api_token_file = \"secrets/plane-api-token\"",
+            StringComparison.Ordinal));
     }
 
     private static async Task<string> CreateRepositoryAsync()

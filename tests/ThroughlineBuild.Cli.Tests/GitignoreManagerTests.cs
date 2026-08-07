@@ -69,6 +69,14 @@ public class GitignoreManagerTests
     }
 
     [Fact]
+    public void RequiredEntries_DoesNotIgnoreConfigToml()
+    {
+        // config.toml is tracked (TLB-627): it carries repository facts ([[review.checks]], [waves],
+        // [worktree], etc.) that must travel with a clone, so it must never be in the ignore list.
+        Assert.DoesNotContain(".build/config.toml", GitignoreManager.RequiredEntries);
+    }
+
+    [Fact]
     public void Merge_IsIdempotent_SecondPassReturnsNull()
     {
         var first = GitignoreManager.Merge("node_modules/\n")!;

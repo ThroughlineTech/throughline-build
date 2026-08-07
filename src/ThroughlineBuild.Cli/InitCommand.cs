@@ -86,6 +86,25 @@ public static class InitCommand
         Func<HttpClient>? httpClientFactory = null,
         CancellationToken ct = default)
     {
+        var target = Path.Combine(cwd, ".build", "config.toml");
+
+        // An existing config.toml is now the NORMAL state of every clone (config.toml is tracked -
+        // see TLB-627), so a repeat 'build init' without --force is a no-op, not an error. Checked
+        // first, before any creds-file/stdin loading or interactive prompting, so re-running init on
+        // an already-configured repo does zero I/O beyond this existence check and never prompts for
+        // values that are about to be discarded. --print-template is exempt: it never touches the
+        // target file regardless of whether one exists.
+        if (!printTemplate && File.Exists(target) && !force)
+        {
+            var existingContent = File.ReadAllText(target);
+            var stillRequired = FindStillRequiredPlaceholders(existingContent);
+            if (stillRequired.Count == 0)
+                console.WriteLine($"{target} already exists and is fully configured; nothing to do. Use --force to overwrite.");
+            else
+                console.WriteLine($"{target} already exists but still has REQUIRED placeholder(s): {string.Join(", ", stillRequired)}. Fill these in, or use --force to regenerate from the template.");
+            return 0;
+        }
+
         var template = ConfigTemplateLoader.Load();
         // Each PlaneTicketingClient owns its own HttpClient: the client's constructor sets
         // BaseAddress and a default header, which throw once an HttpClient has sent a request,
@@ -121,20 +140,22 @@ public static class InitCommand
 
         var content = ApplyFlags(template, planeUrl, workspace, projectId, token, tokenEnv);
 
+        // --token (without --token-env, which takes precedence) writes a literal token into
+        // config.toml. Warn regardless of --print-template - the operator may pipe that output
+        // straight into a tracked file.
+        if (!string.IsNullOrEmpty(token) && string.IsNullOrEmpty(tokenEnv))
+        {
+            console.ErrorWriteLine(
+                "Warning: --token writes a literal Plane API token into config.toml. Do not commit this "
+                + "file with a literal token set; prefer --token-env, or run 'build setup --write-token-file' "
+                + "to persist the token to a file instead.");
+        }
+
         // --print-template NEVER probes: it stays offline-safe even when a probe is injected.
         if (printTemplate)
         {
             console.Write(content);
             return 0;
-        }
-
-        var target = Path.Combine(cwd, ".build", "config.toml");
-
-        // Clobber guard runs BEFORE probing so the no-op path never spawns codex.
-        if (File.Exists(target) && !force)
-        {
-            console.ErrorWriteLine($"Error: {target} already exists. Use --force to overwrite.");
-            return 1;
         }
 
         // The effective token is the literal token flag value; if only --token-env is given,
@@ -202,11 +223,7 @@ public static class InitCommand
         // unresolved (so the operator does not have to diff the template), point at
         // 'build setup' as the required provisioning step, and surface connected mode as
         // the one-shot path that avoids pasting a project UUID.
-        var stillRequired = new List<string>();
-        if (content.Contains("REQUIRED_PLANE_BASE_URL")) stillRequired.Add("plane_base_url");
-        if (content.Contains("REQUIRED_PLANE_WORKSPACE_SLUG")) stillRequired.Add("plane_workspace_slug");
-        if (content.Contains("REQUIRED_PLANE_PROJECT_ID")) stillRequired.Add("plane_project_id");
-        if (content.Contains("REQUIRED_PLANE_API_TOKEN")) stillRequired.Add("plane_api_token");
+        var stillRequired = FindStillRequiredPlaceholders(content);
 
         if (stillRequired.Count > 0)
             console.WriteLine($"Still REQUIRED in {Path.GetFileName(target)}: {string.Join(", ", stillRequired)} - fill these in before running other build commands.");
@@ -217,6 +234,23 @@ public static class InitCommand
         console.WriteLine("One-shot: re-run 'build init --project-name <name> --plane-url <url> --workspace <slug> --token <token>' (or interactive mode) to resolve or create the project and provision in one step - no UUID to paste.");
         console.WriteLine("Run 'build user-guide' to write the operator setup guide to docs/.");
         return 0;
+    }
+
+    /// <summary>
+    /// Names the config fields whose REQUIRED_ scaffold placeholder is still present in
+    /// <paramref name="content"/>. Shared by the offline-write "still REQUIRED" guidance and the
+    /// top-of-function no-op path for an already-existing config.toml. plane_api_token is checked
+    /// for backward compatibility with a config.toml written before the template's default moved to
+    /// plane_api_token_env - the current template never emits that placeholder.
+    /// </summary>
+    private static List<string> FindStillRequiredPlaceholders(string content)
+    {
+        var stillRequired = new List<string>();
+        if (content.Contains("REQUIRED_PLANE_BASE_URL")) stillRequired.Add("plane_base_url");
+        if (content.Contains("REQUIRED_PLANE_WORKSPACE_SLUG")) stillRequired.Add("plane_workspace_slug");
+        if (content.Contains("REQUIRED_PLANE_PROJECT_ID")) stillRequired.Add("plane_project_id");
+        if (content.Contains("REQUIRED_PLANE_API_TOKEN")) stillRequired.Add("plane_api_token");
+        return stillRequired;
     }
 
     /// <summary>
@@ -757,21 +791,27 @@ public static class InitCommand
         if (!string.IsNullOrEmpty(projectId))
             content = content.Replace("REQUIRED_PLANE_PROJECT_ID", projectId);
 
-        // --token-env: replace the plane_api_token = "..." line with plane_api_token_env = "VALUE"
-        // --token: replace just the placeholder value inside the existing line
+        // Both flags rewrite whichever active token key is currently in the template - normally
+        // plane_api_token_env (the default), but a legacy plane_api_token line works the same way.
+        // The match requires "=" immediately after the key name (allowing whitespace), so it never
+        // matches plane_api_token_file, and it is anchored at the start of a line so a commented-out
+        // alternative (# plane_api_token = "...") is never touched.
         // The two flags are mutually exclusive: --token-env takes precedence if both are given.
         if (!string.IsNullOrEmpty(tokenEnv))
         {
-            // Replace the literal token line with an env-var line.
-            // Match the line that starts with plane_api_token = (not plane_api_token_env).
             content = System.Text.RegularExpressions.Regex.Replace(
                 content,
-                @"plane_api_token\s*=\s*""[^""]*""([^\n]*)",
-                $"plane_api_token_env = \"{tokenEnv}\"");
+                @"^plane_api_token(_env)?\s*=\s*""[^""]*""",
+                _ => $"plane_api_token_env = \"{tokenEnv}\"",
+                System.Text.RegularExpressions.RegexOptions.Multiline);
         }
         else if (!string.IsNullOrEmpty(token))
         {
-            content = content.Replace("REQUIRED_PLANE_API_TOKEN", token);
+            content = System.Text.RegularExpressions.Regex.Replace(
+                content,
+                @"^plane_api_token(_env)?\s*=\s*""[^""]*""",
+                _ => $"plane_api_token = \"{token}\"",
+                System.Text.RegularExpressions.RegexOptions.Multiline);
         }
 
         return content;
