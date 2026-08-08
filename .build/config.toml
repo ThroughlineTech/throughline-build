@@ -110,19 +110,19 @@ verifier_allowed_tools = ["Read", "Grep", "Glob"]
 name = "build"
 executable = "dotnet"
 arguments = ["build", "throughline-build.sln", "--nologo", "-v", "q"]
-timeout_minutes = 10
+timeout_minutes = 5
 role = "gating"
-canary = [{ path = "src/ThroughlineBuild.Contracts/__TlbProbe.cs", content = "namespace ThroughlineBuild.Contracts;\n\ninternal static class TlbProbe\n{\n    internal static int Value = \"deliberate type error\";\n}\n" }]
-required_paths = ["throughline-build.sln", "src"]
+canary = [{ path = "src/ThroughlineBuild.Contracts/TlbCanary.cs", content = "namespace ThroughlineBuild.Contracts;\n\ninternal static class TlbCanary\n{\n    internal static int Value = \"deliberate type mismatch\";\n}\n" }]
+required_paths = ["throughline-build.sln", "src", "tests"]
 
 [[review.checks]]
 name = "test"
 executable = "dotnet"
-arguments = ["test", "throughline-build.sln", "--nologo", "-v", "q", "--logger", "console;verbosity=minimal"]
-timeout_minutes = 20
+arguments = ["test", "--nologo", "-v", "q", "--logger", "console;verbosity=minimal"]
+timeout_minutes = 10
 role = "gating"
-canary = [{ path = "tests/ThroughlineBuild.Contracts.Tests/__TlbProbeCanaryTests.cs", content = "using Xunit;\n\nnamespace ThroughlineBuild.Contracts.Tests;\n\npublic class TlbProbeCanaryTests\n{\n    [Fact]\n    public void CanaryMustFail() => Assert.Equal(1, 2);\n}\n" }]
-required_paths = ["throughline-build.sln", "tests"]
+canary = [{ path = "tests/ThroughlineBuild.Contracts.Tests/TlbCanaryTests.cs", content = "using Xunit;\n\nnamespace ThroughlineBuild.Contracts.Tests;\n\npublic sealed class TlbCanaryTests\n{\n    [Fact]\n    public void CanaryMustFail() => Assert.Equal(1, 2);\n}\n" }]
+required_paths = ["throughline-build.sln", "src", "tests"]
 
 # Review checks are LEFT EMPTY on purpose. They are derived from your op-doc at
 # 'build scaffold' time: the op-doc states the real toolchain in prose and the scaffold
@@ -195,19 +195,19 @@ delete_feature_branch = true
 name = "build"
 executable = "dotnet"
 arguments = ["build", "throughline-build.sln", "--nologo", "-v", "q"]
-timeout_minutes = 10
+timeout_minutes = 5
 role = "gating"
-canary = [{ path = "src/ThroughlineBuild.Contracts/__TlbProbe.cs", content = "namespace ThroughlineBuild.Contracts;\n\ninternal static class TlbProbe\n{\n    internal static int Value = \"deliberate type error\";\n}\n" }]
-required_paths = ["throughline-build.sln", "src"]
+canary = [{ path = "src/ThroughlineBuild.Contracts/TlbCanary.cs", content = "namespace ThroughlineBuild.Contracts;\n\ninternal static class TlbCanary\n{\n    internal static int Value = \"deliberate type mismatch\";\n}\n" }]
+required_paths = ["throughline-build.sln", "src", "tests"]
 
 [[ship.regression_checks]]
 name = "test"
 executable = "dotnet"
-arguments = ["test", "throughline-build.sln", "--nologo", "-v", "q", "--logger", "console;verbosity=minimal"]
-timeout_minutes = 20
+arguments = ["test", "--nologo", "-v", "q", "--logger", "console;verbosity=minimal"]
+timeout_minutes = 10
 role = "gating"
-canary = [{ path = "tests/ThroughlineBuild.Contracts.Tests/__TlbProbeCanaryTests.cs", content = "using Xunit;\n\nnamespace ThroughlineBuild.Contracts.Tests;\n\npublic class TlbProbeCanaryTests\n{\n    [Fact]\n    public void CanaryMustFail() => Assert.Equal(1, 2);\n}\n" }]
-required_paths = ["throughline-build.sln", "tests"]
+canary = [{ path = "tests/ThroughlineBuild.Contracts.Tests/TlbCanaryTests.cs", content = "using Xunit;\n\nnamespace ThroughlineBuild.Contracts.Tests;\n\npublic sealed class TlbCanaryTests\n{\n    [Fact]\n    public void CanaryMustFail() => Assert.Equal(1, 2);\n}\n" }]
+required_paths = ["throughline-build.sln", "src", "tests"]
 
 # Regression checks run after rebase and conflict-marker scan, before the fast-forward
 # merge. LEFT EMPTY on purpose - derived from your op-doc at 'build scaffold', same as
@@ -281,7 +281,7 @@ cap = 2
 # at 'build scaffold' time. An all-blank toolchain assumes no stack (no phantom dotnet).
 # Fill them in by hand only if you are not scaffolding from an op-doc.
 [project]
-convention_files = ["tests/AGENTS.md", "tests/Directory.Build.props", "tests/ThroughlineBuild.Scaffold.Tests/OpDocValidatorTests.cs"]
+convention_files = ["tests/Directory.Build.props", "test.runsettings", "global.json", "tests/ThroughlineBuild.Contracts.Tests/WorkspaceSchemaTests.cs"]
 # Primary implementation language (e.g. "csharp", "typescript", "python").
 language = "csharp"
 # Framework or top-level stack (e.g. "dotnet", "react-vite", "django").
@@ -290,9 +290,9 @@ framework = "dotnet"
 package_manager = "dotnet"
 # Common shell commands the brief can suggest to the worker.
 build_command = "dotnet build throughline-build.sln --nologo -v q"
-test_command = "dotnet test throughline-build.sln --nologo -v q --logger \"console;verbosity=minimal\""
-install_command = "dotnet restore throughline-build.sln"
-dev_command = ""
+test_command = "dotnet test --nologo -v q --logger \"console;verbosity=minimal\""
+install_command = "dotnet restore --locked-mode --nologo -v q"
+dev_command = "dotnet run --project src/ThroughlineBuild.Cli --"
 # REQUIRED: "build" if using this CLI; "claude-config" if using Claude Code slash commands.
 workflow_tool = "build"
 # Plane project browse URL prefix; informational for the worker.
