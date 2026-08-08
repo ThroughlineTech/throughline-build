@@ -1,6 +1,6 @@
 # 03 - External Dependencies
 
-Last refreshed: 2026-07-27 (TLB-580)
+Last refreshed: 2026-08-08 (HEAD 5961f807)
 
 Every service, API, CLI, and runtime library this repo depends on; what specific endpoints or tools it touches; what happens when the dependency is missing or unauthenticated.
 
@@ -75,7 +75,7 @@ Status: Functional. New surface since the last refresh; consumed by `build setup
 
 Status: Functional.
 
-The Plane work-item URL printed to the operator uses the `?next_path=` redirect pattern: `{base}/?next_path=/{workspaceSlug}/browse/{ticketId}`, built by the local function `BuildPlaneUrl` ([src/ThroughlineBuild.Cli/Program.cs:2166-2173](../../src/ThroughlineBuild.Cli/Program.cs#L2166-L2173)) and duplicated in `NewCommand` ([src/ThroughlineBuild.Commands/NewCommand.cs](../../src/ThroughlineBuild.Commands/NewCommand.cs)). Empty if any of base URL / slug / ticket id is unset.
+The Plane work-item URL printed to the operator uses the `?next_path=` redirect pattern: `{base}/?next_path=/{workspaceSlug}/browse/{ticketId}`, built by the local function `BuildPlaneUrl` ([src/ThroughlineBuild.Cli/CliApplication.cs:2166-2173](../../src/ThroughlineBuild.Cli/CliApplication.cs#L2166-L2173)) and duplicated in `NewCommand` ([src/ThroughlineBuild.Commands/NewCommand.cs](../../src/ThroughlineBuild.Commands/NewCommand.cs)). Empty if any of base URL / slug / ticket id is unset.
 
 ### Per-run issue snapshot cache (TLB-366)
 
@@ -104,7 +104,7 @@ The `Capabilities` property returns `BackendCapabilities(TypedRelations: true, T
 
 ### Handshake when missing or unauthenticated
 
-- **No token in config or env:** `BuildConfigLoader.ResolveSecrets` throws `ConfigException` with message `plane_api_token not set in config and required environment variable '<env_name>' is not set` ([src/ThroughlineBuild.Cli/Config.cs:186-189](../../src/ThroughlineBuild.Cli/Config.cs#L186-L189)). The CLI catches it eagerly and exits 3, prefixing the message with `Secret error:` ([src/ThroughlineBuild.Cli/Program.cs:454-464](../../src/ThroughlineBuild.Cli/Program.cs#L454-L464)).
+- **No token in config or env:** `BuildConfigLoader.ResolveSecrets` throws `ConfigException` with message `plane_api_token not set in config and required environment variable '<env_name>' is not set` ([src/ThroughlineBuild.Cli/Config.cs:186-189](../../src/ThroughlineBuild.Cli/Config.cs#L186-L189)). The CLI catches it eagerly and exits 3, prefixing the message with `Secret error:` ([src/ThroughlineBuild.Cli/CliApplication.cs:454-464](../../src/ThroughlineBuild.Cli/CliApplication.cs#L454-L464)).
 - **Unauthorized (401/403) response from Plane:** raised as `PlaneApiException(status, body)` and surfaces as a phase failure with exit 1. During `build setup`/connectivity probing, 401/403 is rendered as a "token is not authorized to create issues" message instead ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:133-138](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L133-L138)).
 - **Rate limit (429) or transient 5xx:** retried up to `MaxRetryAttempts` (default 5) by the Polly pipeline before raising.
 - **Workspace or project UUID wrong:** Plane returns 404. `build setup`, connected `build init`, and the connectivity probe map it to the actionable `BuildProjectNotFoundMessage` remedy; phase verbs still surface it as a `PlaneApiException` failure.
@@ -127,9 +127,9 @@ The `Capabilities` property returns `BackendCapabilities(TypedRelations: true, T
 
 Status: Functional but fully optional (single production caller, degrades gracefully when absent).
 
-Direct REST calls. Still exactly one production caller: `ReasonTranslator` for `close` / `defer` / `reopen` - this is the **only** LLM consumer left in the deterministic CLI, and it is non-essential. The client is built lazily by `LlmClientFactory.Create` only when one of those three verbs runs, from `WireUpConditionalCommands` ([src/ThroughlineBuild.Cli/Program.cs:2235-2298](../../src/ThroughlineBuild.Cli/Program.cs#L2235-L2298), [src/ThroughlineBuild.Cli/LlmClientFactory.cs:8-30](../../src/ThroughlineBuild.Cli/LlmClientFactory.cs#L8-L30)). All other verbs never touch the Anthropic REST API - workers reach Anthropic through the `claude` CLI's own OAuth.
+Direct REST calls. Still exactly one production caller: `ReasonTranslator` for `close` / `defer` / `reopen` - this is the **only** LLM consumer left in the deterministic CLI, and it is non-essential. The client is built lazily by `LlmClientFactory.Create` only when one of those three verbs runs, from `WireUpConditionalCommands` ([src/ThroughlineBuild.Cli/CliApplication.cs:2235-2298](../../src/ThroughlineBuild.Cli/CliApplication.cs#L2235-L2298), [src/ThroughlineBuild.Cli/LlmClientFactory.cs:8-30](../../src/ThroughlineBuild.Cli/LlmClientFactory.cs#L8-L30)). All other verbs never touch the Anthropic REST API - workers reach Anthropic through the `claude` CLI's own OAuth.
 
-TLB-371 degradation: when the factory throws because no key/model is configured, `WireUpConditionalCommands` does not abort. It catches the `ConfigException`, logs `WARNING: LLM unavailable (...); recording reason verbatim without translation.`, and substitutes an `EchoLlmClient` ([src/ThroughlineBuild.Cli/EchoLlmClient.cs](../../src/ThroughlineBuild.Cli/EchoLlmClient.cs)) that returns the last user message unchanged ([src/ThroughlineBuild.Cli/Program.cs:2252-2262](../../src/ThroughlineBuild.Cli/Program.cs#L2252-L2262)). The reason is recorded verbatim and the ticket transition still runs. So `close` / `defer` / `reopen` work with no Anthropic key at all - only non-English reason text would go untranslated.
+TLB-371 degradation: when the factory throws because no key/model is configured, `WireUpConditionalCommands` does not abort. It catches the `ConfigException`, logs `WARNING: LLM unavailable (...); recording reason verbatim without translation.`, and substitutes an `EchoLlmClient` ([src/ThroughlineBuild.Cli/EchoLlmClient.cs](../../src/ThroughlineBuild.Cli/EchoLlmClient.cs)) that returns the last user message unchanged ([src/ThroughlineBuild.Cli/CliApplication.cs:2252-2262](../../src/ThroughlineBuild.Cli/CliApplication.cs#L2252-L2262)). The reason is recorded verbatim and the ticket transition still runs. So `close` / `defer` / `reopen` work with no Anthropic key at all - only non-English reason text would go untranslated.
 
 The production path goes through `AnthropicClient` (implements `ILlmClient`):
 
@@ -166,7 +166,7 @@ A parallel client abstraction `IModelClient` ([src/ThroughlineBuild.ModelClient/
 
 Status: Functional (all four agents). Which CLI must be installed depends on `[workers] default_agent` in the live config, not on a hardcoded vendor default.
 
-**Which external CLI the repo requires depends on config.** `default_agent` is a required string read by `ReadWorkersSection` ([src/ThroughlineBuild.Cli/Config.cs:578](../../src/ThroughlineBuild.Cli/Config.cs#L578)) and `WorkerAgentBuilder.Create` dispatches off whatever name is configured ([src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs:16-45](../../src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs#L16-L45)). The shipped `build init` template sets `default_agent = "claude-code"` ([src/ThroughlineBuild.Commands/Templates/config.toml.template:28](../../src/ThroughlineBuild.Commands/Templates/config.toml.template#L28)), with active `[workers.codex]` blocks as the configured alternate. The live `.build/config.toml` is gitignored and may select a different agent. Config load fail-fasts when the named default (or a phase agent) has no `[workers.<name>]` sub-table (TLB-512; [src/ThroughlineBuild.Cli/Config.cs:679-686](../../src/ThroughlineBuild.Cli/Config.cs#L679-L686)).
+**Which external CLI the repo requires depends on tracked config.** `default_agent` is required and `WorkerAgentBuilder.Create` dispatches the configured name ([src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs:16](../../src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs#L16)). The embedded init template defaults to `claude-code` with Codex available as an alternate; each repository can commit a different choice. Config load fails fast when the named default or phase agent has no matching `[workers.<name>]` table.
 
 There are four `IWorkerAgent` implementations, one per vendor CLI. Each shells out to a subprocess, delivers the brief, and reads a `WORKER_RESULT` envelope back. The envelope parser is shared in `ThroughlineBuild.Workers.Common` ([src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs](../../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs)); since the last refresh it grew substantially:
 
@@ -219,8 +219,12 @@ Two layers prevent an unresolvable Claude Code model from failing opaquely mid-c
 
 ### Worker subprocesses outside the phases
 
-- **Scaffold profile derivation.** `build scaffold` (after a successful creation run, unless `--no-profile`) spawns the **default worker** to derive review/ship checks, convention files, and setup steps from the op-doc: `ScaffoldProfileRunner.RunAsync` builds the agent via `WorkerAgentBuilder`, and `ScaffoldProfileDeriver.DeriveAsync` runs it read-only (`AllowedTools: Read/Grep/Glob`, `WorkerSize.Small`, timeout clamped to 1-30 min) expecting a `PROJECT_PROFILE` fenced block ([src/ThroughlineBuild.Cli/ScaffoldProfileRunner.cs:17-120](../../src/ThroughlineBuild.Cli/ScaffoldProfileRunner.cs#L17-L120), [src/ThroughlineBuild.Scaffold/ScaffoldProfileDeriver.cs:36-76](../../src/ThroughlineBuild.Scaffold/ScaffoldProfileDeriver.cs#L36-L76)). The derivation prompt instructs the worker to emit non-vacuous checks with per-check canaries, hermetic test commands, `role` on every check (including `setup` prerequisite steps), and linter invocations with user-global caches disabled ([src/ThroughlineBuild.Scaffold/Templates/derive-profile-prompt.md](../../src/ThroughlineBuild.Scaffold/Templates/derive-profile-prompt.md)). Best-effort by design: every failure is reported loudly but swallowed - derivation never changes the scaffold exit code. Skipped when the config already looks customized (TLB-491) unless `--force-profile`.
+- **Profile and conductor generation are external handoffs, not subprocesses.** `build profile prompt` and `build conductor prompt` only emit embedded instructions; an operator or outer agent runs the model and feeds the artifact to deterministic `apply`. Profile application can run the proposed target-stack install/check commands in an isolated temporary worktree, but it never starts a model worker ([ProfileCommand.cs:155](../../src/ThroughlineBuild.Cli/ProfileCommand.cs#L155), [ProfileGateVerifier.cs:27](../../src/ThroughlineBuild.Cli/ProfileGateVerifier.cs#L27)).
 - **Codex model probe.** `build init` and `build models refresh` spawn `codex debug models` via `CodexModelProbe.ProbeAsync` (60s timeout, read-only, no bypass flags, never throws - typed `CodexProbeResult` failure instead) to discover the operator-selectable model slugs and reasoning-effort levels ([src/ThroughlineBuild.Workers.Codex/CodexModelProbe.cs:41-60](../../src/ThroughlineBuild.Workers.Codex/CodexModelProbe.cs#L41-L60)).
+
+### Deterministic conductor subprocesses
+
+The conductor layer adds no service dependency, but it relies heavily on host processes. `candidate status`, `worktree`, install readiness, SOP doctor, and profile canary verification call `git`. Worktree lease runs `[project].install_command` with stdin closed through `cmd.exe /d /s /c` on Windows or `/bin/sh -c` elsewhere ([ProcessInstallCommandRunner.RunAsync:64](../../src/ThroughlineBuild.Helpers/WorktreeLease.cs#L64)). `gate` and profile verification execute configured setup/gating commands through `AutomatedChecksRunner`. `waves`, conductor apply, SOP catalog operations, and candidate hashing otherwise remain local deterministic code; only evidence and worker brief require Plane.
 
 ### Handshake when CLI missing or unauthenticated
 
@@ -243,6 +247,8 @@ Two layers prevent an unresolvable Claude Code model from failing opaquely mid-c
 ## NuGet packages
 
 Direct dependencies only (verify by grepping `PackageReference` across the `.csproj` files). All 20 production projects target `net10.0` (`LangVersion 14`, `Nullable enable`); only `Cli` sets `PublishAot=true`.
+
+Every source and test project has a tracked `packages.lock.json`; CI restores with `--locked-mode`, so registry access is required only when the cache is cold and lock drift is a hard failure ([.github/workflows/build.yml:27](../../.github/workflows/build.yml#L27)).
 
 ### Cli project ([src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj))
 

@@ -1,6 +1,6 @@
 # 08 - Workspace and Environment Assumptions
 
-Last refreshed: 2026-07-27 (TLB-579)
+Last refreshed: 2026-08-08 (HEAD 5961f807)
 
 What `build` assumes about the environment it runs in beyond the obvious - branch conventions, required tooling, OS specifics, CI behavior, places where the code branches on stack or platform.
 
@@ -13,9 +13,9 @@ For pure prerequisite tooling see [02-install-build-run.md](02-install-build-run
 Status: Functional.
 
 - A git repository, working tree (not a bare repo). A directory that is *not* yet a repo can be brought up by `build setup`, which runs `git init`, appends the managed `.gitignore` block, and makes the welcome commit (see below).
-- A `.build/config.toml` exists somewhere at or above the cwd. `BuildConfig.FindConfigFile` walks up from cwd ([src/ThroughlineBuild.Cli/Config.cs:106-117](../../src/ThroughlineBuild.Cli/Config.cs#L106-L117)). Verbs that dispatch **before** config load in `Program`: `init` (:231), `settarget` (:294), `user-guide` (:304), `op-doc` (:313, `op-doc new` pre-pass at :137), and `models` (:403) ([src/ThroughlineBuild.Cli/Program.cs:231](../../src/ThroughlineBuild.Cli/Program.cs#L231)).
+- A `.build/config.toml` exists somewhere at or above the cwd. `BuildConfig.FindConfigFile` walks up from cwd ([src/ThroughlineBuild.Cli/Config.cs:106-117](../../src/ThroughlineBuild.Cli/Config.cs#L106-L117)). Verbs that dispatch **before** config load in `Program`: `init` (:231), `settarget` (:294), `user-guide` (:304), `op-doc` (:313, `op-doc new` pre-pass at :137), and `models` (:403) ([src/ThroughlineBuild.Cli/CliApplication.cs:231](../../src/ThroughlineBuild.Cli/CliApplication.cs#L231)).
 - The directory holding `.build/` is the project root - relative `events.log_directory` resolves against the config file's parent via `ResolveLogDirectory` ([src/ThroughlineBuild.Cli/Config.cs:174](../../src/ThroughlineBuild.Cli/Config.cs#L174)).
-- `MainWorktreeResolver.ResolveAsync` ([src/ThroughlineBuild.Helpers/MainWorktreeResolver.cs:12](../../src/ThroughlineBuild.Helpers/MainWorktreeResolver.cs#L12)) returns the first entry from `git worktree list` (git porcelain reports the main worktree first), falling back to the raw cwd on error, so `build` can be invoked from inside a feature worktree.
+- `RepositoryLayout.Resolve` asks git for both `--show-toplevel` and `--git-common-dir`, distinguishing the tree where the verb runs from the clone's main worktree. Without git it performs a boundary-limited directory walk and never adopts an unrelated ancestor's `.build` ([RepositoryLayout.cs:59](../../src/ThroughlineBuild.Cli/RepositoryLayout.cs#L59), [RepositoryLayout.cs:150](../../src/ThroughlineBuild.Cli/RepositoryLayout.cs#L150)).
 
 ### Loose ends
 
@@ -125,7 +125,7 @@ Status: Functional. [.github/workflows/build.yml](../../.github/workflows/build.
 
 OS x RID matrix (the `artifact` matrix key carries `.exe` only on Windows): `macos-latest`/`osx-arm64`, `windows-latest`/`win-x64`, `ubuntu-latest`/`linux-x64`.
 
-Steps ([.github/workflows/build.yml:25-36](../../.github/workflows/build.yml#L25-L36)): checkout@v4; setup-dotnet@v4 with `dotnet-version: '10.x'`; `dotnet restore --nologo -v q`; `dotnet test --no-restore --nologo -v q --logger "console;verbosity=minimal"` (quiet flags are new since the last refresh); `dotnet publish src/ThroughlineBuild.Cli -r <rid> -c Release`; upload-artifact@v4 named `build-<rid>`.
+Steps ([.github/workflows/build.yml:25](../../.github/workflows/build.yml#L25)): checkout; setup .NET from `global.json` with lockfile caching; `dotnet restore --locked-mode`; full tests; `dotnet format --verify-no-changes`; native publish; `tools/publication_audit.py`; upload `build-<rid>`.
 
 CI builds **only the main `build` binary**; `token-audit` and `analyze-event-log` are built only by the local `build.sh`. Still absent: release tagging, signing, coverage, SAST, deployment. Note CI's Windows leg publishes *without* the local `Directory.Build.props` (untracked), so it exercises default toolchain discovery.
 
@@ -146,7 +146,7 @@ The verifier and ship checks know nothing about languages: `AutomatedChecksRunne
 - **`role`** - `gating` / `advisory` / `setup`, validated in config ([src/ThroughlineBuild.Cli/Config.cs:468](../../src/ThroughlineBuild.Cli/Config.cs#L468)). Lint/format are derived as advisory so they never hard-gate.
 - **`canary`** - per-check broken-input files parsed by `ParseCanary` ([src/ThroughlineBuild.Cli/Config.cs:475-489](../../src/ThroughlineBuild.Cli/Config.cs#L475-L489)), used by the gate's vacuity prover (see 09). The workspace must tolerate a canary file being briefly materialized and removed in the ticket worktree.
 
-**Derived-profile hygiene requirements (NEW).** The scaffold profile deriver's prompt ([src/ThroughlineBuild.Scaffold/Templates/derive-profile-prompt.md:69-84](../../src/ThroughlineBuild.Scaffold/Templates/derive-profile-prompt.md#L69-L84)) imposes two workspace-relevant rules on every derived check, in the target stack's own idiom:
+**Derived-profile hygiene requirements.** The repository-profile prompt and stable rules ([derive-profile-repository-prompt.md](../../src/ThroughlineBuild.Scaffold/Templates/derive-profile-repository-prompt.md), [derive-profile-rules.md](../../src/ThroughlineBuild.Scaffold/Templates/derive-profile-rules.md)) impose workspace-relevant rules on every derived check in the target stack's own idiom; canary proof runs before apply in a temporary worktree.
 
 - **Hermetic test command** (8a90e5f): the test command must exclude the engine's working directories (`.worktrees/`, `.build/`) and nested installs - e.g. vitest `test.exclude`, pytest `--ignore`/`norecursedirs`, jest `testPathIgnorePatterns`; project-scoped runners like `dotnet test` are already hermetic.
 - **No user-global tool caches** (50645c7): checks run in throwaway worktrees against different code, so path/mtime-keyed user-global caches (e.g. SwiftLint's `~/Library/Caches/SwiftLint`) can replay wrong results into the ship baseline; derived checks must pass cache-disabling flags (`swiftlint --no-cache` always) and never opt into linter caches.
@@ -167,10 +167,13 @@ Status: Functional.
 - **Ship regression checks run in the feature worktree;** the baseline run executes the same checks in the detached `.worktrees/baseline-<sha>` worktree, and the contradiction recheck runs them once more in a fresh control worktree on the base SHA ([src/ThroughlineBuild.Phases/ShipPhase.cs:544-595](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L544-L595)). Under a chain, ship advances the **integration branch inside the integration worktree** (children) while only the root landing touches the main worktree.
 - **Pre-flight: exe-in-worktree.** Ship refuses if the running binary lives inside the worktree being rebased ([src/ThroughlineBuild.Phases/ShipPhase.cs:186-203](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L186-L203)).
 - **Gate control runs use throwaway worktrees.** `GateControlProber` (TLB-538) creates a temporary worktree at the base SHA to re-run failed gate checks, and `GateVacuityProver` materializes canaries in the ticket worktree with leak-back assertions (see 09); both assume `.worktrees/` has room for short-lived extra checkouts.
+- **Conductor leases are separately namespaced and manifest-backed.** `[worktree].root` defaults to `.worktrees/conductor`; ticket/slug-derived paths must stay below it, helper branches must not collide, and `.build-worktree-lease.json` must agree with the actual repository, main worktree, branch, and lease path before list/teardown/candidate operations trust it ([WorktreeLeaseManager.cs:32](../../src/ThroughlineBuild.Helpers/WorktreeLeaseManager.cs#L32)).
+- **Seed and install behavior is explicit.** `--require-seed` can copy only a path present in `[worktree].seed_files`; after creation, `[project].install_command` runs with stdin closed through `cmd.exe` on Windows or `/bin/sh` on Unix ([WorktreeLease.cs:64](../../src/ThroughlineBuild.Helpers/WorktreeLease.cs#L64)). A failed install is recorded in the manifest/result and the partial lease is not misreported as ready.
 
 ### Loose ends
 
 - A worktree whose branch was renamed *and* whose path no longer matches the layout still reports "feature worktree not found".
+- Concurrent `build worktree lease` processes have git/path collision checks but no repository-wide cross-process mutex; callers should serialize leases targeting the same ticket.
 
 ---
 

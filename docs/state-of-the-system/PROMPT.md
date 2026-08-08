@@ -1,5 +1,7 @@
 # PROMPT
 
+Last refreshed: 2026-08-08 (HEAD 5961f807)
+
 The verbatim prompt that produced the `state-of-the-system` doc set in this directory, the interpretation notes for how it was answered, the doc set listing, and the refresh history.
 
 ---
@@ -256,7 +258,7 @@ prose, `file:line` references throughout.
 | File | Description |
 |---|---|
 | `00-index.md` | Architectural map + one-line summary per doc + status legend. |
-| `01-inventory.md` | The 26 CLI action verbs, 20 src projects (1 entry + 19 libraries), 2 AOT tools (`token-audit`, `analyze-event-log`), scripts and CI - what each is, what it reads/writes, status. |
+| `01-inventory.md` | The 36 CLI action verbs, 20 src projects (1 entry + 19 libraries), 2 AOT tools (`token-audit`, `analyze-event-log`), scripts and CI - what each is, what it reads/writes, status. |
 | `02-install-build-run.md` | Toolchain, `build.sh`, atomic local/global install, `dotnet publish` flow, host requirements, update / uninstall. |
 | `03-external-dependencies.md` | Plane REST API, Anthropic REST API, `claude` CLI, NuGet packages, handshake on missing dependency. |
 | `04-configuration.md` | `.build/config.toml` sections, env vars, secrets, precedence. |
@@ -292,6 +294,7 @@ Set evolution:
 - 2026-06-11 - full code-true refresh against HEAD `3a73eb9` (~250 commits past `420d9c4`). No numbered docs added or removed; all 13 files updated in place. The verbatim PROMPT body changed upstream on 2026-06-10 (commit `202ba8d` to `state-of-the-system-prompt.md`): symbol-bearing citations (no bare line-number table columns), registry-pointer rule for enumerable surfaces, per-doc `Last refreshed` freshness headers, two standing notes in the `00` index ("Trusting this set", "Keeping this set current"), a new "Keeping the set current (update-as-you-go)" section, and a `scope` column in the refresh history. All of these were applied across the set this pass, and the scope column was backfilled onto prior rows. Two breadcrumb pairs added (`src/ThroughlineBuild.Scaffold/`, `src/ThroughlineBuild.Verification/`), bringing the breadcrumb set to 11 directories.
 
 - 2026-07-26 - full code-true refresh against HEAD `00dc074`. All numbered documents were refreshed in place. Major deltas: 26 action verbs and the schema-versioned JSON ticket API; typed relation commands and chain dependency normalization; expanded non-transactional amend; label-derived risk/type reads; best-effort informational Plane writes with hard state transitions; interactive Claude transport as the default; the new reusable `ThroughlineBuild.ClaudeCode` facade; atomic three-binary install to `INSTALL_DIR`; and 20 mirrored source/test projects. Breadcrumbs were reverified and the new facade pair brought the set to 12 directories.
+- 2026-08-08 - full code-true refresh against HEAD `5961f807`. No documents were added or removed; all 12 numbered documents plus this prompt record were updated in place. Major deltas: 36 registered verbs and 34 help entries; the deterministic conductor toolkit, SOP catalog, staged `install` readiness flow, profile prompt/apply and invariant-canary verification, worker briefs, worktree leases, waves, candidate status, standalone gates, and evidence attachment; tracked `.build/config.toml` with token-file, worktree, wave, canary, and required-path configuration; lock-file-enforced restore and publication audit in CI. The solution remains 20 source projects and 20 mirrored test projects. The 12 breadcrumb pairs were reverified read-only but not edited, as required by the operator's repository write boundary.
 
 ---
 
@@ -304,7 +307,7 @@ Set evolution:
 - **Related sets: `"none"`** - no cross-reference to other doc sets was attempted. The doc set assumes the reader has only this repository open.
 - **Must-answer Qs: `"none, derive them"`** - taken to mean: answer only the ten universal questions in the PROMPT body, no additions.
 - **Output dir: `docs/state-of-the-system/`** - used verbatim.
-- **Notify on done: `notify me`** - executed at the end of the run via `bin/notify` per the user's global `CLAUDE.md` convention.
+- **Notify on done: `notify me`** - satisfied by the completion response. No repository or PATH notification helper is present at this HEAD.
 
 **Doc structure choice.** A numbered scheme with `00-index` was chosen per the spec. The ten universal questions map cleanly to `01` through `10`, in the order the prompt lists them. The architectural map and status legend live in `00`.
 
@@ -326,6 +329,13 @@ Set evolution:
 - The architecture mentions "MCP tools" as an invocation surface (the binary as an MCP server). No such code path exists today; [03-external-dependencies.md](03-external-dependencies.md) names this explicitly under "Architecture-named services that are not yet wired".
 - "Backend" in `.build/config.toml` is read but only `"plane"` is meaningfully supported. The doc set surfaces this as a loose end in [04-configuration.md](04-configuration.md).
 - The `Phase.Command` enum value is documented as "used by `ITicketCommand` implementations for `WorkflowEvent.Phase` when no specific workflow phase applies" - that is the observed usage, not a documented intent.
+
+**2026-08-08 refresh judgment calls.**
+
+- **No new documents.** The new readiness, conductor, SOP, profile, worktree, wave, gate, candidate, and evidence surfaces fit the existing ten-question structure, so the same 13-file set was refreshed in place.
+- **Tracked configuration is intentional.** `.build/config.toml` is no longer globally ignored; repository policy and install behavior treat it as a shareable, secret-free input. Session, event, conductor, SOP-cache, and profile-derived state remains ignored unless a command deliberately emits a tracked operator artifact.
+- **Prompt/apply is an outer-agent workflow.** `profile prompt` and `conductor prompt` emit deterministic handoffs, while `profile apply` and `conductor apply` validate and install their returned artifacts. These are not worker-spawning CLI phases and are documented separately from the four-provider `IWorkerAgent` layer.
+- **Breadcrumbs remained read-only.** All 12 nested breadcrumb pairs were reverified against the refreshed set, but the operator explicitly limited writes to `docs/state-of-the-system/`; no breadcrumb file or other repository file was changed.
 
 **2026-05-30 refresh judgment calls.**
 
@@ -387,3 +397,4 @@ Set evolution:
 | 2026-07-26 | `00dc074` on `main` | full | Full code-true refresh. Updated all 12 numbered documents plus this prompt record; reverified 12 nested breadcrumb pairs and added the new `ThroughlineBuild.ClaudeCode` pair. Absorbed the 26-verb CLI and 24-entry help registry, versioned `--json` ticket envelopes, `get`/comments/transition/typed relation verbs, structured `new`, expanded amend, corrected Plane issue-relation routes and risk/type projection, relation-aware multi-ticket chain ordering, best-effort informational ticket writes with hard lifecycle writes, interactive Claude default transport and host-side state, the reusable Claude Code public facade, atomic `INSTALL_DIR` installation, and the 20-project/20-test-project solution. |
 | 2026-07-27 | `TLB-579` on `gate/579` | targeted | TLB-579 output-boundary refresh. Updated [01-inventory.md](01-inventory.md), [05-state-and-persistence.md](05-state-and-persistence.md), [08-workspace-assumptions.md](08-workspace-assumptions.md), [09-failure-modes.md](09-failure-modes.md), and [10-lifecycle-orchestration.md](10-lifecycle-orchestration.md) for the removal of direct `Console` access from `ThroughlineBuild.Phases`, the required chain output/diagnostics writers, writer-aware dispatch/integration helpers, the retained `ChainPhaseOptions.OnStep` progress path, and the code-true cleanup contract: successful chains decruft worktrees while retaining ticket and integration branches, and `build sweep` separately merged-gates branch deletion. Retargeted persistence, workspace, and failure-mode citations from the former monolithic `ChainPhase` to `ImplementReviewLoop`, `ChainResumeResolver`, `ParentChainRunner`, `BatchImplementRunner`, `ChainPreflight`, and `ChainIntegrationBranch`. |
 | 2026-07-27 | `TLB-580` on `main` | targeted | Completed the TLB-579 sweep, which had missed three files. Retargeted the last dangling post-decomposition citations: [00-index.md](00-index.md) (`ChainIntegrationBranchFromId` at the deleted `ChainPhase.cs:2966` -> `ChainIntegrationBranch.BranchNameFromId`), [06-public-surfaces.md](06-public-surfaces.md) (chain progress-digest prefix -> `PhaseOptionsBuilder`; `ChainPhase.EmitCostLedgerAsync` -> `ChainEventEmitter.EmitCostLedgerAsync` driven from `ImplementReviewLoop`), and [03-external-dependencies.md](03-external-dependencies.md) (`TicketingUnavailableException` boundary line range). Bumped those three headers. Also corrected the [01-inventory.md](01-inventory.md) output-discipline entry: the chain verb emits no `--summary-json` envelope, so its human writer stays on stdout under that flag rather than being replaced with `TextWriter.Null`. No numbered docs added or removed. |
+| 2026-08-08 | `5961f807` on `run/backlog` | full | Full code-true refresh. Updated all 12 numbered documents plus this prompt record in place; no branch was created and no document was added or removed. Reverified all 12 nested breadcrumb pairs read-only under the operator's repository write boundary. Absorbed the 36-verb CLI and 34-entry help registry; deterministic conductor prompt/apply/status, SOP catalog and admission, staged `install`, profile prompt/apply with invariant canaries, worker briefs, worktree leases, wave scheduling, candidate status, standalone gates, and evidence attachment; tracked secret-free `.build/config.toml` plus token-file/worktree/wave/canary/required-path configuration; source-controlled NuGet lock files, locked restore, formatting, and publication audit in CI. The solution remains 20 source projects and 20 mirrored test projects, with 2,834 test declarations across 323 C# test files. |

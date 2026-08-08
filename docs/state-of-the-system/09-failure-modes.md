@@ -1,10 +1,10 @@
 # 09 - Failure Modes and Idempotency
 
-Last refreshed: 2026-07-27 (TLB-579)
+Last refreshed: 2026-08-08 (HEAD 5961f807)
 
 For each major operation, how it fails and whether re-running is safe. Exit codes summarized in [06-public-surfaces.md](06-public-surfaces.md); chain/dispatch outcomes in [10-lifecycle-orchestration.md](10-lifecycle-orchestration.md).
 
-The headline change since the last refresh is **failure classification**: the system now distinguishes *the ticket's fault* (rework/fail) from *the environment's fault* (resumable, no rework, siblings skipped) across review (provider quota, TLB-527), gate checks (base-ref control run, TLB-538), and ticketing transport (TLB-545), and proves its own gating checks are non-vacuous (da544ff).
+The existing phase classification remains, while the new conductor/install layer adds fail-closed containment, manifest, canary, read-back, and staged-handoff boundaries. These commands generally make no remote mutation; the exceptions are worker brief reads and evidence comment creation.
 
 ---
 
@@ -15,7 +15,7 @@ The headline change since the last refresh is **failure classification**: the sy
 | `plan` (promote mode, default) | ticket exists; not a parent; state == `Backlog`; base ref resolves | ticketing write failure | partial transitions possible | rerun refuses once out of `Backlog` |
 | `plan` (`mode = "investigate"`) | same | worker non-Ok; unresolvable `plan_body_ref`; missing scalar metadata keys | `Planning` once the worker has run (transition lands after the worker, before the status check) | partial - rerun fails the `Backlog` guard; operator must reset state |
 | `implement` | ticket exists; not a parent; state == `Ready` (initial) or `InProgress` (rework); hygiene gate; worktree/branch create succeeds | hygiene block; worktree creation fails; worker non-Ok; missing `commit_sha`; dirty worktree after exit (one bounded retry) | `Ready` if pre-worker; `InProgress` if worker ran but did not deliver | yes - rerun resumes via the rework path; a missing rework worktree is recreated from the branch |
-| `gate` (chain-only, TLB-506) | runs after implement, before review | setup-check failure; gating-check failure; invalid completion claim; vacuous gating check; environment failure on base ref | gating fail -> `InProgress` (rework); vacuity/environment fail -> stays `InReview`, resumable | yes - checks re-run; vacuity probes are once-per-check-per-run |
+| `gate` | standalone: configured checks and persisted canary policy; chain-composed: after implement, before review, with completion-claim context | setup-check failure; gating-check failure; invalid completion claim in the chain path; vacuous gating check; environment failure on base ref | chain gating fail -> `InProgress` (rework); vacuity/environment fail -> stays `InReview`; standalone reports an exit result without lifecycle transition | yes - checks re-run; chain vacuity probes are once-per-check-per-run |
 | `review` | ticket exists; state == `InReview`; worktree locatable (reconstructed from branch if missing); `[implemented_at]` marker | provider quota/auth block (-> `ReviewUnavailable`, no verdict posted); verifier crash; missing verdict metadata; dirty worktree after verifier (hard fail) | state unchanged (only `Rework` changes it) | yes - rerun re-runs checks and verifier |
 | `ship` | state == `InReview`; worktree locatable; exe not inside it; both worktrees clean; main worktree on target; bases reconcilable; rebase, marker scan, regression checks, FF merge, push | per stage via `ShipFailureStage` | enum value identifies stage | partially - rebase + checks idempotent; post-merge transitions not retried |
 | `decompose` | ticket exists; base ref resolves | worker non-Ok; malformed / <2 `child_specs`; `DecomposeVerdict` quality gate; all child creates fail | no parent transition | no - rerun duplicates child sub-issues |
@@ -24,6 +24,12 @@ The headline change since the last refresh is **failure classification**: the sy
 | `rework` | state == `InProgress`; `--feedback` or a `Rework` verdict in the log | feedback retrieval fails; implement fails | `ImplementFailed` / `NoFeedbackAvailable` / `TicketNotInProgress` | yes |
 | `new` / `scaffold` / `amend` / `close` / `defer` / `reopen` | unchanged shapes | unchanged | unchanged | `scaffold` still duplicates on rerun |
 | `sweep` (NEW, TLB-531) | config resolves a target branch | a worktree removal halts mid-ladder | nothing transitioned; partial removal possible | yes - merged-gated; safe to re-run |
+| `profile apply` / `verify-canaries` | valid profile JSON; at least one gating check; temp worktree/install/checks succeed | missing/ineffective canary, dirty/failed setup, existing differing config | config unchanged until proof; atomic write after proof | yes; identical apply is no-op |
+| `conductor apply` / SOP lifecycle | repository root and target containment; no symlink/reparse traversal; valid schema/hashes | malformed invariants, local stub edits, missing trusted history, doctor finding | temp files/cache or hash-matching targets only | yes; install restores missing files, status/doctor read-only |
+| `worktree lease/list/teardown` | git roots, contained path/branch, optional allowlisted seed, manifest identity | collision, failed install, dirty tree, unmerged branch, invalid manifest | partial lease is reported/manifested; no ticket state | yes after fixing cause; force teardown explicitly discards dirty worktree content |
+| `gate` (standalone) / `waves` / `candidate status` | standalone config slice or valid input/base | zero checks with `--require-checks`, unverified canaries, cycle, invalid path/hash input | no remote state | yes; read/execute only |
+| `evidence add` | kind-specific fields and Plane ticket | post succeeds but read-back fails | comment may exist; id is reported | inspect comments before retry; blind retry can duplicate |
+| `install` | correct stage input and readiness prerequisites | profile/SOP failure rolls local edits back; final readiness finding stops | explicit handoff or rollback; READY only after all probes | yes; stages are designed to be re-run |
 
 ### Loose ends
 
@@ -138,7 +144,15 @@ When batching is configured and a parent chain has eligible leaf siblings, `Batc
 
 ### `rework` / `new` / `scaffold` / `amend` / `close` / `defer` / `reopen`
 
-Shapes unchanged: `ReworkOutcome` enum (`Implemented` / `NoFeedbackAvailable` / `TicketNotInProgress` / `ImplementFailed`, [src/ThroughlineBuild.Phases/ReworkPhase.cs:8](../../src/ThroughlineBuild.Phases/ReworkPhase.cs#L8)); `new` validation exceptions; scaffold's collected `ScaffoldFailure[]` with duplicate-on-rerun; close/defer cascade soft-failures; reopen never reopens children. A missing Anthropic key degrades `close`/`defer`/`reopen` to verbatim-reason recording via `EchoLlmClient` with a stderr warning ([src/ThroughlineBuild.Cli/Program.cs:2255-2263](../../src/ThroughlineBuild.Cli/Program.cs#L2255-L2263), TLB-371).
+Shapes unchanged: `ReworkOutcome` enum (`Implemented` / `NoFeedbackAvailable` / `TicketNotInProgress` / `ImplementFailed`, [src/ThroughlineBuild.Phases/ReworkPhase.cs:8](../../src/ThroughlineBuild.Phases/ReworkPhase.cs#L8)); `new` validation exceptions; scaffold's collected `ScaffoldFailure[]` with duplicate-on-rerun; close/defer cascade soft-failures; reopen never reopens children. A missing Anthropic key degrades `close`/`defer`/`reopen` to verbatim-reason recording via `EchoLlmClient` with a stderr warning ([src/ThroughlineBuild.Cli/CliApplication.cs:2255-2263](../../src/ThroughlineBuild.Cli/CliApplication.cs#L2255-L2263), TLB-371).
+
+### Conductor and readiness commands
+
+- **Profile proof fails before write.** Proposed gating checks must exist and each canary must be rejected in an isolated worktree; setup/check failure, ineffective canary, cleanup leak, or install failure returns nonzero and leaves config unchanged (`ProfileGateVerifier.VerifyAsync`, [ProfileGateVerifier.cs:27](../../src/ThroughlineBuild.Cli/ProfileGateVerifier.cs#L27)).
+- **SOP mutations are catalog/hash bounded.** Upgrade preserves locally edited emitted stubs unless their bytes match a trusted previous catalog hash; uninstall removes only current catalog-owned regular files whose bytes still match. All target and manifest paths are containment- and link-checked ([SopInstallCommand.cs:992](../../src/ThroughlineBuild.Cli/SopInstallCommand.cs#L992)).
+- **Lease failures retain evidence.** Install failure is represented in `WorktreeInstallRecord`; teardown refuses manifest mismatch, containment violation, dirty state, and unmerged helper branches unless the relevant explicit option is supplied ([WorktreeLease.cs:13](../../src/ThroughlineBuild.Helpers/WorktreeLease.cs#L13), [WorktreeLeaseManager.cs:282](../../src/ThroughlineBuild.Helpers/WorktreeLeaseManager.cs#L282)).
+- **Evidence is intentionally at-least-once only when the caller chooses.** A successful POST followed by failed read-back is not retried by the command, preventing automatic duplicate audit comments ([EvidenceCommand.cs:49](../../src/ThroughlineBuild.Cli/EvidenceCommand.cs#L49)).
+- **Install handoffs are success-with-stop, not completion.** `profile_handoff` and `invariants_handoff` exit 0 but carry `Ready=false`, a prompt, and canonical next command; only the final readiness stage returns READY ([InstallCommand.cs:545](../../src/ThroughlineBuild.Cli/InstallCommand.cs#L545)).
 
 ### Loose ends
 
@@ -208,6 +222,7 @@ Structured `build new - --json` resolves all referenced tickets before creation,
 - A phase that already transitioned fails its state guard on rerun. Worker-backed `plan` still parks failed runs in `Planning`; promotion (the chain default, or explicit via `--from-brief`) has almost no window to fail mid-flight.
 - **Chain / multi-ticket / parent chain are safe to re-run** and now stronger than before: stuck states are reconciled (`Planning` reset, `InProgress` resumed with persisted check evidence), a reused integration branch is refreshed against its moved base (TLB-546) so resumed children never implement against a stale snapshot, and environmental stops (`GateEnvironmentFailure`, `TicketingUnavailable`, `ReviewUnavailable`) leave tickets cleanly resumable with no rework round burned.
 - **Cleanup is idempotent:** the chain success sweep decrufts only ticket and chain worktrees, retaining their branches. `build sweep` merged-gates branch deletion; `--force` widens worktree removal but never branch deletion.
+- **Conductor install is staged and idempotent:** profile apply no-ops when identical; SOP install restores missing catalog paths without clobbering edits; conductor apply atomically replaces only invariants; readiness rechecks rather than recording a stale success.
 - **Marker staleness** remains solved by freshest-marker selection (TLB-412) and HEAD attribution (TLB-414).
 - The most expensive non-idempotent verbs are still `scaffold` and `decompose` (duplicate ticket trees, hand cleanup in Plane).
 

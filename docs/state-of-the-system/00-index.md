@@ -1,6 +1,6 @@
 # 00 - State of the System: Throughline Build
 
-Last refreshed: 2026-07-27 (TLB-580)
+Last refreshed: 2026-08-08 (HEAD 5961f807)
 
 This doc set is a detailed historical snapshot of the Throughline Build repository
 at the HEAD stamped above (refresh history in [PROMPT.md](PROMPT.md)). It is not
@@ -12,9 +12,12 @@ point-in-time implementation detail.
 At that commit, the repository was **Throughline Build** - a `.NET 10`
 native-AOT CLI named `build` that orchestrated an Agile ticket workflow against
 a Plane backend by spawning an external coding-agent CLI for LLM-bearing phases
-and running everything else as deterministic C# code. The snapshot documents
-four selectable workers (`claude-code`, `codex`, `gemini`, and `copilot`) and
-the configuration and architecture that existed at that point.
+and running everything else as deterministic C# code. It also exposed a
+worker-free conductor toolkit for leasing worktrees, producing role briefs,
+running gates, scheduling waves, fingerprinting candidates, recording evidence,
+and installing binary-hosted SOPs. The snapshot documents four selectable
+workers (`claude-code`, `codex`, `gemini`, and `copilot`) and the configuration
+and architecture that existed at that point.
 
 Voice: technical, `file:line` references throughout, status-tagged. The reader is expected to have all sets open side-by-side.
 
@@ -37,7 +40,7 @@ The set has two maintenance modes, both first-class: full refreshes run from the
                                 |
                                 v
         +--------------------------------------------------+
-        |  ThroughlineBuild.Cli (Program.cs verb dispatch) |
+        |  ThroughlineBuild.Cli (CliApplication verb dispatch) |
         |  config load + tiered Help/ + WorkerAgentBuilder |
         |  -> WorkerAgentFactory, ChainPhaseComposition    |
         +-------------------+---------------+--------------+
@@ -47,11 +50,11 @@ The set has two maintenance modes, both first-class: full refreshes run from the
                   |  Phases     |    |  Commands + Cli      |
                   | Plan        |    |  New / Amend / List  |
                   | Implement   |    |  Close/Defer/Reopen  |
-                  | Gate        |    |  Init / Setup        |
+                  | Gate        |    |  Init/Setup/Install  |
                   | Review      |    |  SetTarget / Sweep   |
                   | Ship        |    |  UserGuide / OpDoc   |
-                  | Chain       |    |  ModelsRefresh       |
-                  | Rework      |    |  Scaffold (+profile) |
+                  | Chain       |    |  Models / Scaffold   |
+                  | Rework      |    |  Conductor + SOP     |
                   | Decompose   |    +---+---+---+----+----+
                   +--+---+---+--+        |   |   |    |
                      |   |   |           |   |   |    |
@@ -83,18 +86,20 @@ The set has two maintenance modes, both first-class: full refreshes run from the
             +-------+ ModelClient / IModelClient (built + tested, UNWIRED)
 ```
 
-The CLI dispatches one of twenty-six action verbs (`init`, `settarget`, `user-guide`, `op-doc`, `models`, `sweep`, `list`, `get`, `comments`, `comment`, `transition`, `relate`, `setup`, `amend`, `close`, `defer`, `reopen`, `new`, `scaffold`, `rework`, `decompose`, `plan`, `implement`, `review`, `ship`, `chain`), plus help and version meta-surfaces. Dispatch begins in `RunAsync` ([Program.cs:23](../../src/ThroughlineBuild.Cli/Program.cs#L23)); the authoritative per-verb inventory is [01-inventory.md](01-inventory.md). Help is served by `HelpRegistryFactory.Build` ([HelpRegistryFactory.cs:7](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs#L7)); `models` and `sweep` are the only visible verbs omitted from its twenty-four entries. Five verbs run ahead of config load: `init`, `settarget`, `user-guide`, `op-doc`, and `models refresh`. The global `--json` pre-pass enables versioned machine-readable envelopes for supported ticket verbs through `CliEnvelopeWriter` ([CliEnvelopeWriter.cs:8](../../src/ThroughlineBuild.Cli/Json/CliEnvelopeWriter.cs#L8)). Most verbs route to a phase or command, which composes calls against `ITicketing`, `IWorkerAgent`, `IGitClient`, and `IEventSink`. The binary exits at the end of each verb; there is no daemon or shared in-process state across invocations.
+The CLI dispatches 36 action verbs. The authoritative registration site is
+`CliVerbRegistryFactory.Verbs` ([CliVerbRegistryFactory.cs:7](../../src/ThroughlineBuild.Cli/CliVerbRegistryFactory.cs#L7)); the per-verb inventory is [01-inventory.md](01-inventory.md). Nine verbs run before full configuration bootstrap: `init`, `install`, `settarget`, `user-guide`, `op-doc`, `models`, `sop`, `conductor`, and `profile`. Help is served by the 34-entry `HelpRegistryFactory.Build` registry ([HelpRegistryFactory.cs:25](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs#L25)); `models` and `sweep` are the only registered action verbs without tier-1 entries. The global `--json` pre-pass enables versioned machine-readable envelopes for supported verbs through `CliEnvelopeWriter` ([CliEnvelopeWriter.cs:8](../../src/ThroughlineBuild.Cli/Json/CliEnvelopeWriter.cs#L8)). Most configured verbs route to a phase or deterministic command composed against `ITicketing`, `IWorkerAgent`, `IGitClient`, and `IEventSink`; the conductor commands intentionally expose smaller worker-free steps. The binary exits at the end of each verb; there is no daemon or shared in-process state across invocations.
 
 Coordination between phases happens through three persistent channels:
 
 - **Plane**: ticket state, labels, description, comments (with markers like `[planned_at: <sha>]`), and parent/child sub-issue links. `build setup` provisions the canonical state/label set from `WorkspaceSchema` (Contracts).
 - **Git**: the feature branch `ticket/<id>` and its worktree under `.worktrees/`; a chain runs its subtree inside one shared worktree on a `chain/<slug>` **integration branch** (built by `ChainIntegrationBranch.BranchNameFromId`, [src/ThroughlineBuild.Phases/ChainIntegrationBranch.cs:36](../../src/ThroughlineBuild.Phases/ChainIntegrationBranch.cs#L36)) that accumulates child ships and is landed onto the resolved target branch at the root (rebase, fast-forward merge, push unless `--no-push`/`[ship].push=false`). Chain sweeps its worktrees on success and preserves them on failure; `build sweep` is the standalone recovery verb.
 - **`.build/events/<stem>.jsonl`**: the append-only event log (`EventKind` now has 14 values including `CostLedger`; `Phase` has 11 including `Gate`).
+- **Conductor state**: tracked `.build/config.toml` carries repository-wide checks, worktree, and wave policy; ignored `.build/conductor.toml` carries derived repository identity and review invariants; `.build/sop-manifest.json` caches catalog writes; each conductor worktree carries `.build-worktree-lease.json` ([.gitignore:1](../../.gitignore#L1), [WorktreeLease.cs:7](../../src/ThroughlineBuild.Helpers/WorktreeLease.cs#L7)).
 
 LLM contact splits into three tiers (architecture Section 3), but at two different maturity levels - see [11-llm-architecture.md](11-llm-architecture.md):
 - **Deterministic** code paths - state machines, gates, scans (e.g. `Ship`, `GatePhase` with its vacuity and control provers).
 - **Judgment slots** - scoped Anthropic API calls. Today the only live consumer is the `ReasonTranslator` for close/defer/reopen, through `ILlmClient`/`AnthropicClient` (anthropic-only, non-streaming), degrading to `EchoLlmClient` (verbatim reason) when no API key is configured. A newer `IModelClient`/`AnthropicModelClient` with working SSE streaming exists and is tested but is not wired onto any production path.
-- **Agentic work** - a worker CLI dispatched in a worktree for plan / implement / review / draft / decompose / scaffold profile derivation. This layer is genuinely multi-vendor and wired: `WorkerAgentFactory` selects one of four `IWorkerAgent` implementations from config or `--agent`. `[plan].mode` controls planning inside `build chain`; standalone `build plan` always spawns a worker unless `--from-brief` explicitly requests promotion.
+- **Agentic work** - a worker CLI dispatched in a worktree for plan / implement / review / draft / decompose. This layer is genuinely multi-vendor and wired: `WorkerAgentFactory` selects one of four `IWorkerAgent` implementations from config or `--agent`. Repository-profile and conductor-invariant generation no longer nest a worker: `profile prompt` and `conductor prompt` emit instructions for an external agent, and deterministic `apply` commands validate the returned artifact ([HelpRegistryFactory.cs:347](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs#L347), [HelpRegistryFactory.cs:380](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs#L380)). `[plan].mode` controls planning inside `build chain`; standalone `build plan` always spawns a worker unless `--from-brief` explicitly requests promotion.
 
 ---
 
@@ -103,11 +108,11 @@ LLM contact splits into three tiers (architecture Section 3), but at two differe
 | Doc | One-line summary |
 |---|---|
 | [00-index.md](00-index.md) | This file. Architectural map + index + standing notes. |
-| [01-inventory.md](01-inventory.md) | Every CLI verb (21), library project (19), tool, script, and CI workflow - what it does, what it reads/writes, status. |
-| [02-install-build-run.md](02-install-build-run.md) | Toolchain prerequisites, `build.sh` and `dotnet publish` paths, runtime host requirements, the `build init`/`build setup` bootstrap, update/uninstall. |
+| [01-inventory.md](01-inventory.md) | Every CLI verb (36), source project (20), tool, script, and CI workflow - what it does, what it reads/writes, status. |
+| [02-install-build-run.md](02-install-build-run.md) | Toolchain prerequisites, locked restore and native publish paths, runtime host requirements, `init`/`setup`/three-stage `install`, update/uninstall. |
 | [03-external-dependencies.md](03-external-dependencies.md) | Plane REST API (incl. transport retry + provisioning), Anthropic API, the worker CLIs (claude/codex/gemini/copilot), NuGet packages, what failure looks like for each. |
-| [04-configuration.md](04-configuration.md) | `.build/config.toml` sections key-by-key, per-agent worker blocks and model tiers, per-phase agent selection, environment variables, secrets, precedence. |
-| [05-state-and-persistence.md](05-state-and-persistence.md) | Everything written to disk and to Plane during a session - locations, lifetime, cleanup posture, the sweep story. |
+| [04-configuration.md](04-configuration.md) | Tracked `.build/config.toml`, ignored conductor/SOP files, per-agent worker blocks, worktree/wave policy, environment variables, secrets, precedence. |
+| [05-state-and-persistence.md](05-state-and-persistence.md) | Everything written to disk and to Plane during a session - config, leases, SOP manifests/stubs, evidence, logs, lifetime, and cleanup posture. |
 | [06-public-surfaces.md](06-public-surfaces.md) | CLI exit codes, versioned `--json` envelopes, summary contract, `WORKER_RESULT` + fenced blocks + `COMPLETION_CLAIM`, JSONL schema, tiered help, and the reusable Claude Code facade. |
 | [07-contracts.md](07-contracts.md) | Inter-project type contracts inside the repo (incl. the gate contract), and shared artifacts with Plane / the worker CLIs / the older claude-config workflow. |
 | [08-workspace-assumptions.md](08-workspace-assumptions.md) | Branch conventions, auto-rebase/push, required tooling, OS / shell / git / encoding assumptions, CI matrix, worktree-aware behavior. |
@@ -130,10 +135,10 @@ Every command and major code path is tagged with one of these throughout the set
 
 As of the refresh stamped in this doc's header:
 
-- The four worker agents (`claude-code`, `codex`, `gemini`, `copilot`) are all **Functional** and reachable from `WorkerAgentFactory` by config name or `--agent` flag. The new gate machinery (`GatePhase`, `GateVacuityProver`, `GateControlProber`, `SmokeCollector`), the bootstrap verbs (`setup`, connected `init`), and the recovery verb (`sweep`) entered as **Functional**.
+- The four worker agents (`claude-code`, `codex`, `gemini`, `copilot`) are all **Functional** and reachable from `WorkerAgentFactory` by config name or `--agent` flag. Gate machinery, connected bootstrap, sweep, the conductor commands, structured evidence, SOP lifecycle/doctor/admission, profile canary verification, and staged install are **Functional**.
 - **Legacy**: `CliUsage.UsageText` - superseded by the tiered help registry, kept alive only by tests, and already lagging the code (it documents chain exit codes only through 9 while `ChainExitCodeMapper` emits 10 and 11).
 - **Partial / Aspirational** items centre on the model-client layer: `AnthropicClient.InvokeStreamAsync` still throws `NotImplementedException`, and the entire `ThroughlineBuild.ModelClient` layer (`IModelClient`, `AnthropicModelClient` with real SSE streaming, `ModelClientLlmAdapter`) is built and unit-tested but constructed on no production path. The new `ThroughlineBuild.ClaudeCode` public facade is Functional and tested, but NuGet publication is Partial because neither `build.sh` nor CI packs or publishes it. The `BackendCapabilities` plumbing declared in `ITicketing` is still never read, and the `CompletionClaim` hook fields are declared but unenforced.
-- **Aspirational** items named in the architecture but absent from the source tree: the `install` verb (the real bootstrap pair is `init` + `setup`), the OpenAI / Google `ILlmClient` implementations, the GitHub `ITicketing` adapter, MCP server packaging, and the replay verb. `src/ThroughlineBuild.Linear/` exists on disk as untracked build debris only - there is no Linear backend in the tree.
+- **Aspirational** items named in the architecture but absent from the source tree: OpenAI / Google `ILlmClient` implementations, a GitHub `ITicketing` adapter, MCP server packaging, and a replay verb. `build install` is now Functional, but it installs repository workflow readiness rather than worker CLIs or MCP registrations. There is no Linear backend in the tree.
 - There are no **Broken** components.
 
 ---
@@ -148,5 +153,6 @@ As of the refresh stamped in this doc's header:
 ## Loose ends
 
 - `models` and `sweep` remain outside the tiered help registry even though both action verbs are Functional.
+- `RepositoryLayout` still describes `.build` wholesale as machine-local, while `.gitignore` and install readiness deliberately make `.build/config.toml` tracked; only conductor state, SOP cache, prompts, events, and sessions are ignored.
 - The public Claude Code facade has package metadata but no pack/publish pipeline.
 - The direct model-client abstraction remains unwired, and no GitHub ticketing or MCP server adapter exists.
