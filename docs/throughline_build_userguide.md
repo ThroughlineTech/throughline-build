@@ -447,10 +447,14 @@ brief refusal, admission mutation refusal, drift, or a safety finding, exit 2
 means bad arguments, and exit 9 means an unknown SOP name.
 
 Lease prints the absolute worktree path for use as an agent working directory,
-runs `[project].install_command`, and writes a safety manifest. Configure the
-root and the only untracked local files Build may copy with `[worktree] root`
-and `[worktree] seed_files`. Use `--require-seed <path>` when a listed file must
-exist before lease creation. Concurrent attempts for one ticket are serialized,
+runs `[project].install_command` exactly once in the new worktree, and writes a
+safety manifest. It never runs `build install`. Dependencies in the primary
+working tree remain human-managed; creating or switching an ordinary branch in
+that tree runs no install command. Configure the root and the only untracked
+local files Build may copy with `[worktree] root` and `[worktree] seed_files`.
+Seed files are copied before the project install command runs. Use
+`--require-seed <path>` when a listed file must exist before lease creation.
+Concurrent attempts for one ticket are serialized,
 and rollback removes only branch and worktree artifacts owned by the failing
 attempt. Teardown is safe by default: it refuses tracked work and unexpected
 untracked files before removing the worktree. Add
@@ -460,7 +464,10 @@ unless `--force` is present. `--force` skips the worktree cleanliness proof and
 may permanently discard work. All three forms support `--json`.
 
 Run `build gate` from the leased worktree to execute its configured
-`[[review.checks]]`. Setup checks run first. Gating and setup failures exit 1;
+`[[review.checks]]`. Setup checks run first on every gate invocation. They are
+for repeatable prerequisites such as code generation, not dependency
+installation. A setup check matching `[project].install_command` is refused,
+and any check that changes tracked files fails the gate. Gating and setup failures exit 1;
 advisory failures remain visible but do not change the exit code. Use
 `--role gating|advisory|all` to select a role, and `--json` for typed per-check
 exit codes, durations, captured output, inconclusive missing-path results, and

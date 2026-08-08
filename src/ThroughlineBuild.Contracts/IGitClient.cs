@@ -18,6 +18,11 @@ public record GitPathQueryResult(
     IReadOnlyList<string> Paths,
     string? FailureReason);
 
+public record GitFingerprintQueryResult(
+    bool Success,
+    string? Fingerprint,
+    string? FailureReason);
+
 public record GitAncestorResult(
     bool Success,
     bool IsAncestor,
@@ -98,6 +103,13 @@ public interface IGitClient
     // Never throws - returns empty on git failure.
     Task<IReadOnlyList<string>> GetTrackedChangesAsync(string workingDirectory, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+    // Fingerprints the complete tracked working state, including staged and unstaged changes.
+    // Callers compare snapshots around commands that must not alter the candidate tree.
+    Task<GitFingerprintQueryResult> GetTrackedStateFingerprintAsync(
+        string workingDirectory,
+        CancellationToken ct) =>
+        Task.FromResult(new GitFingerprintQueryResult(false, null, "tracked-state fingerprint is not implemented"));
 
     // Returns true if ancestor is an ancestor of descendant (i.e., descendant is reachable from ancestor).
     // Distinguishes a proven false result from a git-level failure.

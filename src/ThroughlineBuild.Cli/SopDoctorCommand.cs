@@ -727,9 +727,16 @@ internal static class SopDoctorCommand
         }
 
         var hasBlockingCheck = false;
+        var installCommand = root.TryGetValue("project", out var projectRaw) &&
+            projectRaw is TomlTable project &&
+            project.TryGetValue("install_command", out var installRaw) &&
+            installRaw is string configuredInstall
+                ? configuredInstall
+                : string.Empty;
         for (var i = 0; i < checks.Count; i++)
         {
             var check = checks[i];
+            var executable = string.Empty;
             if (!check.TryGetValue("name", out var nameRaw) ||
                 nameRaw is not string name ||
                 string.IsNullOrEmpty(name))
@@ -741,13 +748,17 @@ internal static class SopDoctorCommand
             }
 
             if (!check.TryGetValue("executable", out var executableRaw) ||
-                executableRaw is not string executable ||
-                string.IsNullOrWhiteSpace(executable))
+                executableRaw is not string parsedExecutable ||
+                string.IsNullOrWhiteSpace(parsedExecutable))
             {
                 findings.Add(new SopDoctorFinding(
                     "review.checks.command.missing",
                     $"review.checks[{i}].executable",
                     "review check has no runnable command; set executable to a non-empty command name"));
+            }
+            else
+            {
+                executable = parsedExecutable;
             }
 
             var rolePath = $"review.checks[{i}].role";
@@ -767,8 +778,26 @@ internal static class SopDoctorCommand
                 switch (role.ToLowerInvariant())
                 {
                     case "gating":
+                        hasBlockingCheck = true;
+                        break;
                     case "setup":
                         hasBlockingCheck = true;
+                        var arguments = check.TryGetValue("arguments", out var argumentsRaw) &&
+                            argumentsRaw is TomlArray argumentArray
+                                ? argumentArray.OfType<string>().ToList()
+                                : [];
+                        if (DependencyInstallSetupPolicy.Matches(
+                            installCommand,
+                            executable,
+                            arguments))
+                        {
+                            findings.Add(new SopDoctorFinding(
+                                DependencyInstallSetupPolicy.FindingCode,
+                                $"review.checks[{i}]",
+                                "setup check duplicates project.install_command; lease worktree " +
+                                "creation already runs that command once, while setup runs before " +
+                                "every gate invocation"));
+                        }
                         break;
                     case "advisory":
                         break;

@@ -650,7 +650,9 @@ public static class CliApplication
                     Console.Out,
                     Console.Error,
                     gateCts.Token,
-                    config.Review.CanariesVerified);
+                    config.Review.CanariesVerified,
+                    config.Project.InstallCommand,
+                    new ProcessGitClient(rawCwd));
             }
             catch (OperationCanceledException)
             {

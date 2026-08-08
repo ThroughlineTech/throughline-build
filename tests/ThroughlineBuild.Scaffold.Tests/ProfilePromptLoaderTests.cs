@@ -18,6 +18,11 @@ public class ProfilePromptLoaderTests
         Assert.Contains("contract_authority", prompt);
         Assert.Contains("lowercase kebab-case", prompt);
         Assert.Contains("toolchain actually compiles or collects", prompt);
+        Assert.Contains("Dependencies in the primary tree are human-managed", prompt);
+        Assert.Contains("runs it exactly once after creating each lease", prompt);
+        Assert.Contains("on EVERY gate invocation", prompt);
+        Assert.Contains("NEVER emit `install_command`", prompt);
+        Assert.Contains("Setup must not write tracked files", prompt);
         Assert.DoesNotContain("__tlb_probe", prompt);
         Assert.Contains("Return ONLY the JSON object", prompt);
         Assert.Contains("build install --profile .build/profile.json", prompt);

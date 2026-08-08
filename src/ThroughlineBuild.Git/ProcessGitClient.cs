@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using ThroughlineBuild.Contracts;
 
 namespace ThroughlineBuild.Git;
@@ -784,6 +786,76 @@ public sealed class ProcessGitClient : IGitClient
     {
         var result = await GetTrackedChangesResultAsync(workingDirectory, ct).ConfigureAwait(false);
         return result.Success ? result.Paths : Array.Empty<string>();
+    }
+
+    public async Task<GitFingerprintQueryResult> GetTrackedStateFingerprintAsync(
+        string workingDirectory,
+        CancellationToken ct)
+    {
+        try
+        {
+            var unstaged = await RunTrackedDiffAsync(workingDirectory, cached: false, ct)
+                .ConfigureAwait(false);
+            if (unstaged.ExitCode != 0)
+                return new GitFingerprintQueryResult(
+                    false,
+                    null,
+                    FailureDetail(unstaged, "git diff"));
+
+            var staged = await RunTrackedDiffAsync(workingDirectory, cached: true, ct)
+                .ConfigureAwait(false);
+            if (staged.ExitCode != 0)
+                return new GitFingerprintQueryResult(
+                    false,
+                    null,
+                    FailureDetail(staged, "git diff --cached"));
+
+            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            AppendFingerprintPart(hash, "unstaged", unstaged.Stdout);
+            AppendFingerprintPart(hash, "staged", staged.Stdout);
+            return new GitFingerprintQueryResult(
+                true,
+                "sha256:" + Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant(),
+                null);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return new GitFingerprintQueryResult(false, null, ex.Message);
+        }
+    }
+
+    private static Task<GitRun> RunTrackedDiffAsync(
+        string workingDirectory,
+        bool cached,
+        CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo("git") { WorkingDirectory = workingDirectory };
+        psi.ArgumentList.Add("diff");
+        if (cached)
+            psi.ArgumentList.Add("--cached");
+        psi.ArgumentList.Add("--binary");
+        psi.ArgumentList.Add("--full-index");
+        psi.ArgumentList.Add("--no-ext-diff");
+        psi.ArgumentList.Add("--no-textconv");
+        psi.ArgumentList.Add("--no-color");
+        psi.ArgumentList.Add("--find-renames");
+        psi.ArgumentList.Add("--");
+        return RunGitCaptureAsync(psi, ct);
+    }
+
+    private static void AppendFingerprintPart(
+        IncrementalHash hash,
+        string name,
+        string contents)
+    {
+        hash.AppendData(Encoding.UTF8.GetBytes(name));
+        hash.AppendData([0]);
+        hash.AppendData(Encoding.UTF8.GetBytes(contents));
+        hash.AppendData([0]);
     }
 
     public async Task<IReadOnlyList<string>> GetConflictedPathsAsync(string workingDirectory, CancellationToken ct)

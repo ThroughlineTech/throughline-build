@@ -38,6 +38,8 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
         Assert.Equal([".dev.vars"], leased.Manifest.SeededFiles);
         Assert.True(File.Exists(Path.Combine(leased.Manifest.WorktreePath, ".dev.vars")));
         Assert.Equal(leased.Manifest.WorktreePath, installer.WorkingDirectory);
+        Assert.Equal(1, installer.CallCount);
+        Assert.True(installer.SeedWasPresent);
         Assert.True(File.Exists(Path.Combine(
             leased.Manifest.WorktreePath, WorktreeLeaseConstants.ManifestFileName)));
 
@@ -780,11 +782,13 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
     public async Task ListReportsLeasesAndUnmanifestedDirectoriesWithoutMutation()
     {
         var git = new FakeGit(Sha);
-        var manager = CreateManager(git, new FakeInstaller());
+        var installer = new FakeInstaller();
+        var manager = CreateManager(git, installer);
         var leased = await manager.LeaseAsync(
             new WorktreeLeaseRequest("TLB-582"), CancellationToken.None);
         var stray = Path.Combine(_root, "stray");
         Directory.CreateDirectory(stray);
+        var installCallsBeforeList = installer.CallCount;
 
         var result = await manager.ListAsync();
 
@@ -795,6 +799,7 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
         Assert.Equal([Path.GetFullPath(stray)], result.UnmanifestedDirectories);
         Assert.Equal(1, git.CreateCount);
         Assert.Empty(git.DeletedBranches);
+        Assert.Equal(installCallsBeforeList, installer.CallCount);
     }
 
     private WorktreeLeaseManager CreateManager(
@@ -865,6 +870,8 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
     private class FakeInstaller : IInstallCommandRunner
     {
         public string? WorkingDirectory { get; private set; }
+        public int CallCount { get; private set; }
+        public bool SeedWasPresent { get; private set; }
 
         public virtual Task<InstallCommandResult> RunAsync(
             string command,
@@ -872,6 +879,8 @@ public sealed class WorktreeLeaseManagerTests : IDisposable
             CancellationToken ct)
         {
             WorkingDirectory = workingDirectory;
+            CallCount++;
+            SeedWasPresent = File.Exists(Path.Combine(workingDirectory, ".dev.vars"));
             return Task.FromResult(new InstallCommandResult(true, null));
         }
     }

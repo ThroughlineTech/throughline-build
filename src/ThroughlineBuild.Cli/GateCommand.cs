@@ -1,5 +1,6 @@
 using ThroughlineBuild.Cli.Json;
 using ThroughlineBuild.Contracts;
+using ThroughlineBuild.Git;
 using ThroughlineBuild.Verification;
 
 namespace ThroughlineBuild.Cli;
@@ -15,7 +16,9 @@ public static class GateCommand
         TextWriter output,
         TextWriter error,
         CancellationToken ct,
-        bool? canariesVerified = null)
+        bool? canariesVerified = null,
+        string projectInstallCommand = "",
+        IGitClient? git = null)
     {
         var parsed = Parse(args);
         if (parsed.Error is not null)
@@ -23,24 +26,76 @@ public static class GateCommand
 
         var selected = SelectChecks(configuredChecks, parsed.Role);
         IReadOnlyList<CheckResult> results;
+        string? integrityFailure = null;
         if (selected.Count == 0)
         {
             results = Array.Empty<CheckResult>();
         }
         else
         {
-            results = await runner.RunAsync(
-                selected,
-                workingDirectory,
-                ct,
-                AutomatedChecksRunner.RequiredPathHandling.Inconclusive).ConfigureAwait(false);
+            var dependencySetup = DependencyInstallSetupPolicy.Find(selected, projectInstallCommand);
+            if (dependencySetup is not null)
+            {
+                integrityFailure =
+                    $"setup check '{dependencySetup.Name}' duplicates project.install_command; " +
+                    "project dependencies are installed once when a lease worktree is created, " +
+                    "not before every gate";
+                results =
+                [
+                    new CheckResult(
+                        dependencySetup.Name,
+                        Passed: false,
+                        ExitCode: -1,
+                        StdoutTail: "",
+                        StderrTail: integrityFailure,
+                        Elapsed: TimeSpan.Zero,
+                        Role: CheckRole.Setup,
+                        CommandLine: AutomatedChecksRunner.FormatCommandLine(dependencySetup))
+                ];
+            }
+            else
+            {
+                git ??= new ProcessGitClient(workingDirectory);
+                var before = await git.GetTrackedStateFingerprintAsync(workingDirectory, ct)
+                    .ConfigureAwait(false);
+                if (!before.Success || before.Fingerprint is null)
+                {
+                    integrityFailure =
+                        $"could not snapshot tracked files before gate checks: {before.FailureReason}";
+                    results = Array.Empty<CheckResult>();
+                }
+                else
+                {
+                    results = await runner.RunAsync(
+                        selected,
+                        workingDirectory,
+                        ct,
+                        AutomatedChecksRunner.RequiredPathHandling.Inconclusive).ConfigureAwait(false);
+
+                    var after = await git.GetTrackedStateFingerprintAsync(workingDirectory, ct)
+                        .ConfigureAwait(false);
+                    if (!after.Success || after.Fingerprint is null)
+                    {
+                        integrityFailure =
+                            $"could not snapshot tracked files after gate checks: {after.FailureReason}";
+                    }
+                    else if (!string.Equals(before.Fingerprint, after.Fingerprint, StringComparison.Ordinal))
+                    {
+                        integrityFailure =
+                            "gate checks modified tracked files; setup and check commands must leave " +
+                            "the candidate tree unchanged";
+                    }
+                }
+            }
         }
 
         var hasSelectedChecks = selected.Count > 0;
         var passed = hasSelectedChecks
-            ? results.All(IsNonBlocking)
+            ? integrityFailure is null && results.All(IsNonBlocking)
             : !parsed.RequireChecks;
-        var message = !hasSelectedChecks && parsed.RequireChecks
+        var message = integrityFailure is not null
+            ? $"gate failed: {integrityFailure}"
+            : !hasSelectedChecks && parsed.RequireChecks
             ? "no checks configured or selected"
             : configuredChecks.Count == 0
                 ? "no checks configured"

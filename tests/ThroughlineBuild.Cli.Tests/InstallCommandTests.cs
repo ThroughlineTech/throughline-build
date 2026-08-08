@@ -748,6 +748,30 @@ public sealed class InstallCommandTests
         }
     }
 
+    [Fact]
+    public async Task Readiness_DoesNotRunConfiguredProjectInstallCommand()
+    {
+        var repo = await CreateRepositoryAsync();
+        try
+        {
+            var result = await InstallReadiness.PrepareAndAssertAsync(
+                repo,
+                "main",
+                "run/backlog",
+                StubPaths,
+                ".worktrees/conductor",
+                [],
+                "this-project-install-command-must-not-run",
+                CancellationToken.None);
+
+            Assert.True(result.Success, result.Message);
+        }
+        finally
+        {
+            TryDelete(repo);
+        }
+    }
+
     private static Task<InstallReadinessResult> ReadyAsync(
         string repo,
         Func<CancellationToken, Task>? query = null) =>

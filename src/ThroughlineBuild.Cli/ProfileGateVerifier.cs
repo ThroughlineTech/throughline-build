@@ -1,4 +1,5 @@
 using ThroughlineBuild.Contracts;
+using ThroughlineBuild.Helpers;
 using ThroughlineBuild.Scaffold;
 using ThroughlineBuild.Verification;
 
@@ -16,6 +17,13 @@ public sealed record ProfileGateVerificationResult(bool Success, string? Failure
 /// </summary>
 public class ProfileGateVerifier
 {
+    private readonly IInstallCommandRunner _installer;
+
+    public ProfileGateVerifier(IInstallCommandRunner? installer = null)
+    {
+        _installer = installer ?? new ProcessInstallCommandRunner();
+    }
+
     public virtual async Task<ProfileGateVerificationResult> VerifyAsync(
         ProjectProfile profile,
         string mainWorktreePath,
@@ -28,6 +36,16 @@ public class ProfileGateVerifier
         if (gatingChecks.Count == 0)
             return ProfileGateVerificationResult.Fail(
                 "profile has no gating review check; it cannot produce a blocking gate");
+
+        var dependencySetup = DependencyInstallSetupPolicy.Find(
+            allReviewChecks,
+            profile.InstallCommand);
+        if (dependencySetup is not null)
+        {
+            return ProfileGateVerificationResult.Fail(
+                $"setup check '{dependencySetup.Name}' duplicates install_command; dependency " +
+                "installation belongs to one-time lease worktree creation, not gate setup");
+        }
 
         string baseSha;
         try
@@ -67,6 +85,17 @@ public class ProfileGateVerifier
 
             created = true;
             var verificationWorktree = create.AbsolutePath ?? worktreePath;
+
+            var install = await _installer.RunAsync(
+                profile.InstallCommand,
+                verificationWorktree,
+                ct).ConfigureAwait(false);
+            if (!install.Success)
+            {
+                return ProfileGateVerificationResult.Fail(
+                    $"project install command failed in the throwaway verification worktree: " +
+                    install.FailureReason);
+            }
 
             // Run setup and gating checks once before probing. This catches a profile that only
             // works after a previous local build, such as a --no-restore command in a fresh tree.

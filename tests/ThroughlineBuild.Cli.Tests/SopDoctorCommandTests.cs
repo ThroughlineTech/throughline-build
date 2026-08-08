@@ -673,6 +673,79 @@ public sealed class SopDoctorCommandTests
     }
 
     [Fact]
+    public void Doctor_FlagsDependencyInstallConfiguredAsSetup()
+    {
+        var repo = CreateRepo(configToml:
+            """
+            [project]
+            install_command = "npm install"
+
+            [review]
+
+            [[review.checks]]
+            name = "install"
+            executable = "npm"
+            arguments = ["install"]
+            role = "setup"
+
+            [[review.checks]]
+            name = "test"
+            executable = "npm"
+            arguments = ["test"]
+            role = "gating"
+            """);
+        var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+
+        try
+        {
+            Assert.False(report.Passed);
+            Assert.Contains(
+                report.Findings,
+                finding => finding.Code == DependencyInstallSetupPolicy.FindingCode);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void Doctor_AllowsGenuineCodegenSetup()
+    {
+        var repo = CreateRepo(configToml:
+            """
+            [project]
+            install_command = "npm install"
+
+            [review]
+
+            [[review.checks]]
+            name = "generate"
+            executable = "npm"
+            arguments = ["run", "generate"]
+            role = "setup"
+
+            [[review.checks]]
+            name = "test"
+            executable = "npm"
+            arguments = ["test"]
+            role = "gating"
+            """);
+        var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+
+        try
+        {
+            Assert.DoesNotContain(
+                report.Findings,
+                finding => finding.Code == DependencyInstallSetupPolicy.FindingCode);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public void Doctor_FailsWhenReviewCheckHasNoName()
     {
         var repo = CreateRepo(configToml:
