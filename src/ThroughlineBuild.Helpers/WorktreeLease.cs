@@ -72,6 +72,7 @@ public sealed class ProcessInstallCommandRunner : IInstallCommandRunner
         var psi = new ProcessStartInfo
         {
             WorkingDirectory = workingDirectory,
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -96,6 +97,7 @@ public sealed class ProcessInstallCommandRunner : IInstallCommandRunner
         {
             using var process = new Process { StartInfo = psi };
             process.Start();
+            try { process.StandardInput.Close(); } catch { /* best effort */ }
             try
             {
                 var stdout = process.StandardOutput.ReadToEndAsync(ct);

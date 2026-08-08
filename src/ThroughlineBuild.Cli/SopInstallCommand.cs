@@ -282,16 +282,19 @@ internal static class SopInstallCommand
         var startInfo = new ProcessStartInfo("git")
         {
             WorkingDirectory = repositoryRoot,
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
         startInfo.ArgumentList.Add("ls-files");
         startInfo.ArgumentList.Add("-z");
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("git could not be started");
+        try { process.StandardInput.Close(); } catch { /* best effort */ }
         var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
         await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
@@ -335,17 +338,20 @@ internal static class SopInstallCommand
         var startInfo = new ProcessStartInfo("git")
         {
             WorkingDirectory = repositoryRoot,
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
         startInfo.ArgumentList.Add("for-each-ref");
         startInfo.ArgumentList.Add($"--format=%(refname:lstrip={lstrip})");
         startInfo.ArgumentList.Add(refspace);
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("git could not be started");
+        try { process.StandardInput.Close(); } catch { /* best effort */ }
         var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
         await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);

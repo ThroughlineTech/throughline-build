@@ -614,13 +614,16 @@ internal sealed class InstallGit(string repositoryRoot)
         var start = new ProcessStartInfo("git")
         {
             WorkingDirectory = repositoryRoot,
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        start.Environment["GIT_TERMINAL_PROMPT"] = "0";
         foreach (var arg in args) start.ArgumentList.Add(arg);
         using var process = Process.Start(start) ?? throw new InvalidOperationException("git could not be started");
+        try { process.StandardInput.Close(); } catch { /* best effort */ }
         var stdout = process.StandardOutput.ReadToEndAsync(ct);
         var stderr = process.StandardError.ReadToEndAsync(ct);
         await process.WaitForExitAsync(ct).ConfigureAwait(false);

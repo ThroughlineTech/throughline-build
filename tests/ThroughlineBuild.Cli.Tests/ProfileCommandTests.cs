@@ -78,7 +78,8 @@ public sealed class ProfileCommandTests
 
             var exit = await CliApplication.RunAsync(
                 ["profile", "prompt", "--json"],
-                (_, _) => throw new InvalidOperationException("worker must not be constructed"));
+                (_, _) => throw new InvalidOperationException("worker must not be constructed"),
+                new InProcessCliConsole(TextReader.Null, stdout, stderr));
 
             Assert.Equal(0, exit);
             Assert.Equal(string.Empty, stderr.ToString());
@@ -205,7 +206,11 @@ public sealed class ProfileCommandTests
             Console.SetError(stderr);
             var exit = await CliApplication.RunAsync(
                 args,
-                (_, _) => throw new InvalidOperationException("worker must not be constructed"));
+                (_, _) => throw new InvalidOperationException("worker must not be constructed"),
+                new InProcessCliConsole(
+                    stdin is null ? TextReader.Null : new StringReader(stdin),
+                    stdout,
+                    stderr));
             var config = File.ReadAllText(Path.Combine(repository, ".build", "config.toml"));
             return (exit, stdout.ToString(), stderr.ToString(), config, repository);
         }

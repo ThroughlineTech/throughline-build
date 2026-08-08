@@ -367,7 +367,8 @@ public sealed class ConductorCommandTests
             Console.SetError(stderr);
             var exit = await CliApplication.RunAsync(
                 args,
-                (_, _) => throw new InvalidOperationException("worker must not be constructed"));
+                (_, _) => throw new InvalidOperationException("worker must not be constructed"),
+                new InProcessCliConsole(TextReader.Null, stdout, stderr));
             return (exit, stdout.ToString(), stderr.ToString());
         }
         finally

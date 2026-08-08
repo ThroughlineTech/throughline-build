@@ -480,7 +480,11 @@ public sealed class SopAdmissionTests
                 Console.SetIn(new StringReader(stdin));
             var exit = await CliApplication.RunAsync(
                 args,
-                (_, _) => throw new InvalidOperationException("worker must not be constructed"));
+                (_, _) => throw new InvalidOperationException("worker must not be constructed"),
+                new InProcessCliConsole(
+                    stdin is null ? TextReader.Null : new StringReader(stdin),
+                    stdout,
+                    stderr));
             return (exit, stdout.ToString(), stderr.ToString());
         }
         finally

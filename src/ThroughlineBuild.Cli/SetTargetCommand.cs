@@ -216,15 +216,18 @@ public static class SetTargetCommand
             var psi = new ProcessStartInfo("git")
             {
                 WorkingDirectory = cwd,
+                RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
             };
+            psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
             psi.ArgumentList.Add("rev-parse");
             psi.ArgumentList.Add("--verify");
             psi.ArgumentList.Add($"refs/heads/{branch}");
             using var proc = Process.Start(psi);
             if (proc is null) return false;
+            try { proc.StandardInput.Close(); } catch { /* best effort */ }
             proc.WaitForExit();
             return proc.ExitCode == 0;
         }

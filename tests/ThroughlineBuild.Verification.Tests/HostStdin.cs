@@ -27,6 +27,7 @@ internal sealed class HostStdin : IDisposable
     private readonly IntPtr _windowsOpened;
     private readonly int _unixSavedFd = -1;
     private readonly int _unixOpenedFd = -1;
+    private bool _disposed;
 
     private HostStdin(IntPtr windowsOriginal, IntPtr windowsOpened)
     {
@@ -51,11 +52,17 @@ internal sealed class HostStdin : IDisposable
 
             // A non-inheritable handle would be its own (different) leak; make it inheritable so the
             // test measures the redirect and not handle-inheritance rules.
-            SetHandleInformation(opened, HandleFlagInherit, HandleFlagInherit);
+            if (!SetHandleInformation(opened, HandleFlagInherit, HandleFlagInherit))
+            {
+                var error = Marshal.GetLastWin32Error();
+                CloseHandle(opened);
+                throw new IOException($"could not make stdin handle inheritable: win32 {error}");
+            }
             if (!SetStdHandle(StdInputHandle, opened))
             {
+                var error = Marshal.GetLastWin32Error();
                 CloseHandle(opened);
-                throw new IOException($"could not set stdin handle: win32 {Marshal.GetLastWin32Error()}");
+                throw new IOException($"could not set stdin handle: win32 {error}");
             }
 
             return new HostStdin(original, opened);
@@ -84,22 +91,43 @@ internal sealed class HostStdin : IDisposable
 
     public void Dispose()
     {
+        if (_disposed)
+            return;
+        _disposed = true;
+
         if (OperatingSystem.IsWindows())
         {
-            SetStdHandle(StdInputHandle, _windowsOriginal);
-            if (_windowsOpened != IntPtr.Zero)
-                CloseHandle(_windowsOpened);
+            if (!SetStdHandle(StdInputHandle, _windowsOriginal))
+            {
+                throw new IOException(
+                    $"could not restore stdin handle: win32 {Marshal.GetLastWin32Error()}");
+            }
+
+            if (_windowsOpened != IntPtr.Zero && !CloseHandle(_windowsOpened))
+            {
+                throw new IOException(
+                    $"could not close redirected stdin handle: win32 {Marshal.GetLastWin32Error()}");
+            }
             return;
         }
 
         if (_unixSavedFd >= 0)
         {
-            dup2(_unixSavedFd, 0);
-            close(_unixSavedFd);
+            if (dup2(_unixSavedFd, 0) < 0)
+                throw new IOException($"could not restore stdin: errno {Marshal.GetLastWin32Error()}");
         }
 
-        if (_unixOpenedFd >= 0)
-            close(_unixOpenedFd);
+        var savedCloseError = _unixSavedFd >= 0 && close(_unixSavedFd) < 0
+            ? Marshal.GetLastWin32Error()
+            : 0;
+        var openedCloseError = _unixOpenedFd >= 0 && close(_unixOpenedFd) < 0
+            ? Marshal.GetLastWin32Error()
+            : 0;
+        if (savedCloseError != 0 || openedCloseError != 0)
+        {
+            throw new IOException(
+                $"could not close stdin descriptors: saved errno {savedCloseError}, redirected errno {openedCloseError}");
+        }
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]

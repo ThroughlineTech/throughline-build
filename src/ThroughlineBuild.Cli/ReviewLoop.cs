@@ -286,12 +286,14 @@ public sealed class ReviewLoop
             var psi = new ProcessStartInfo(whichCmd, executable)
             {
                 UseShellExecute = false,
+                RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
             using var proc = Process.Start(psi);
             if (proc is null) return false;
+            try { proc.StandardInput.Close(); } catch { /* best effort */ }
             proc.WaitForExit();
             return proc.ExitCode == 0;
         }

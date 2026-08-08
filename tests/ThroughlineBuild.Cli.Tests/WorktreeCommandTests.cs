@@ -104,7 +104,8 @@ public sealed class WorktreeCommandTests
 
             var exit = await CliApplication.RunAsync(
                 ["worktree", "list"],
-                (_, _) => throw new InvalidOperationException("worker must not be constructed"));
+                (_, _) => throw new InvalidOperationException("worker must not be constructed"),
+                new InProcessCliConsole(TextReader.Null, Console.Out, Console.Error));
 
             Assert.Equal(0, exit);
         }

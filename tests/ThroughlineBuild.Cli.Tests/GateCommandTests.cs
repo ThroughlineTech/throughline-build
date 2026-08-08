@@ -366,7 +366,8 @@ public sealed class GateCommandTests
                 {
                     constructionCount++;
                     return worker;
-                });
+                },
+                new InProcessCliConsole(TextReader.Null, Console.Out, Console.Error));
 
             Assert.Equal(0, exit);
             Assert.Equal(0, constructionCount);

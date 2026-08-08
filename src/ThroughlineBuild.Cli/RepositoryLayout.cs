@@ -176,10 +176,13 @@ internal sealed class RepositoryLayout
             process.StartInfo.ArgumentList.Add("rev-parse");
             process.StartInfo.ArgumentList.Add("--show-toplevel");
             process.StartInfo.ArgumentList.Add("--git-common-dir");
+            process.StartInfo.RedirectStandardInput = true;
             process.StartInfo.RedirectStandardOutput = true;
             process.StartInfo.RedirectStandardError = true;
             process.StartInfo.UseShellExecute = false;
+            process.StartInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
             process.Start();
+            try { process.StandardInput.Close(); } catch { /* best effort */ }
             stdout = process.StandardOutput.ReadToEnd();
             process.StandardError.ReadToEnd();
             process.WaitForExit();

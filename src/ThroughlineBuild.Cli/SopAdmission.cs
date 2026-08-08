@@ -281,10 +281,13 @@ internal static partial class SopAdmission
         process.StartInfo.WorkingDirectory = workingDirectory;
         foreach (var argument in arguments)
             process.StartInfo.ArgumentList.Add(argument);
+        process.StartInfo.RedirectStandardInput = true;
         process.StartInfo.RedirectStandardOutput = true;
         process.StartInfo.RedirectStandardError = true;
         process.StartInfo.UseShellExecute = false;
+        process.StartInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
         process.Start();
+        try { process.StandardInput.Close(); } catch { /* best effort */ }
         var stdout = process.StandardOutput.ReadToEnd();
         var stderr = process.StandardError.ReadToEnd();
         process.WaitForExit();

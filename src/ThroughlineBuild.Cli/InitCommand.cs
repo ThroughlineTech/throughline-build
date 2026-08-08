@@ -18,6 +18,8 @@ namespace ThroughlineBuild.Cli;
 /// </summary>
 public static class InitCommand
 {
+    private static readonly TimeSpan RedirectedInputReadTimeout = TimeSpan.FromSeconds(1);
+
     /// <summary>
     /// Execute the init command asynchronously.
     /// </summary>
@@ -125,9 +127,11 @@ public static class InitCommand
         }
         else if (console.IsInputRedirected)
         {
-            var stdinContent = ReadAllLines(console);
-            if (stdinContent.Length > 0)
-                ApplyCredsToParams(CredsFileParser.Parse(stdinContent), ref planeUrl, ref workspace, ref projectId, ref projectName, ref token);
+            var stdinRead = await ReadAllLinesAsync(console, ct).ConfigureAwait(false);
+            if (stdinRead.Warning is not null)
+                console.ErrorWriteLine(stdinRead.Warning);
+            else if (stdinRead.Content.Length > 0)
+                ApplyCredsToParams(CredsFileParser.Parse(stdinRead.Content), ref planeUrl, ref workspace, ref projectId, ref projectName, ref token);
         }
 
         // Interactive guided onboarding is available only at a real TTY, with no creds file and
@@ -712,22 +716,14 @@ public static class InitCommand
     /// - 'q' / 'quit' (any case): throws InitAbortedException -> "Aborted." (exit 5). Blank and every
     ///   other value pass through unchanged, so each prompt keeps its own meaning for empty input.
     ///
-    /// Redirected stdin (automation) reads synchronously: it never blocks indefinitely and returns
-    /// null at EOF, so the background-task race is skipped there.
+    /// This helper is only reached for an interactive console. Redirected stdin is consumed by the
+    /// separately bounded credentials reader before interactive prompting is considered.
     /// </summary>
     private static string? ReadPrompt(IConsole console, CancellationToken ct)
     {
-        string? line;
-        if (console.IsInputRedirected)
-        {
-            line = console.ReadLine();
-        }
-        else
-        {
-            var task = Task.Run(console.ReadLine);
-            task.Wait(ct); // throws OperationCanceledException when Ctrl-C fires ct while we block on input
-            line = task.GetAwaiter().GetResult();
-        }
+        var task = Task.Run(console.ReadLine);
+        task.Wait(ct); // throws OperationCanceledException when Ctrl-C fires ct while we block on input
+        var line = task.GetAwaiter().GetResult();
 
         var trimmed = line?.Trim();
         if (string.Equals(trimmed, "q", StringComparison.OrdinalIgnoreCase)
@@ -757,35 +753,64 @@ public static class InitCommand
     }
 
     /// <summary>
-    /// Reads all remaining lines from <paramref name="console"/> until EOF (ReadLine returns null)
-    /// and returns the joined result. Used to consume redirected stdin as a creds file.
+    /// Reads all remaining lines from <paramref name="console"/> until EOF (ReadLine returns null).
+    /// Used to consume redirected stdin as a credentials file.
     /// </summary>
     /// <remarks>
-    /// Reads fail soft. "stdin is redirected" is not the same as "stdin is readable": a harness that
-    /// starts 'build' with a closed or non-inheritable stdin handle leaves IsInputRedirected true
-    /// while every read throws ERROR_INVALID_HANDLE. Redirected-but-unreadable stdin carries no
-    /// credentials, which is exactly what an empty result means, so treat an I/O failure as "no creds
-    /// on stdin" and let init continue to the offline path instead of dying with a stack trace.
-    /// Whatever was read before the failure is kept - a partial creds file still beats none.
+    /// "stdin is redirected" means neither readable nor bounded: an invalid handle can throw, while
+    /// an open pipe whose writer never closes can block forever. Each line read therefore has a hard
+    /// inactivity bound. A failed or timed-out read discards the complete input, including any lines
+    /// already read, and returns a warning so truncated credentials are never applied silently.
     /// </remarks>
-    private static string ReadAllLines(IConsole console)
+    private static async Task<RedirectedInputRead> ReadAllLinesAsync(
+        IConsole console,
+        CancellationToken ct)
     {
         var sb = new System.Text.StringBuilder();
-        try
+        while (true)
         {
+            var readTask = Task.Run(console.ReadLine);
+            var timeoutTask = Task.Delay(RedirectedInputReadTimeout, ct);
+            var completed = await Task.WhenAny(readTask, timeoutTask).ConfigureAwait(false);
+
+            if (completed != readTask)
+            {
+                ct.ThrowIfCancellationRequested();
+                _ = readTask.ContinueWith(
+                    static task => _ = task.Exception,
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+                return RedirectedInputRead.Failed(
+                    $"redirected stdin did not reach EOF within {RedirectedInputReadTimeout.TotalSeconds:0} second");
+            }
+
             string? line;
-            while ((line = console.ReadLine()) is not null)
-                sb.AppendLine(line);
+            try
+            {
+                line = await readTask.ConfigureAwait(false);
+            }
+            catch (IOException ex)
+            {
+                return RedirectedInputRead.Failed(ex.Message);
+            }
+            catch (ObjectDisposedException ex)
+            {
+                return RedirectedInputRead.Failed(ex.Message);
+            }
+
+            if (line is null)
+                return new RedirectedInputRead(sb.ToString(), null);
+
+            sb.AppendLine(line);
         }
-        catch (IOException)
-        {
-            // stdin is redirected but not readable; treat as no creds on stdin
-        }
-        catch (ObjectDisposedException)
-        {
-            // stdin was closed underneath us; treat as no creds on stdin
-        }
-        return sb.ToString();
+    }
+
+    private sealed record RedirectedInputRead(string Content, string? Warning)
+    {
+        public static RedirectedInputRead Failed(string reason) => new(
+            string.Empty,
+            $"Warning: could not read complete credentials from redirected stdin ({reason}); ignoring stdin credentials.");
     }
 
     /// <summary>

@@ -2217,6 +2217,47 @@ public class InitCommandTests
         public char? ReadKeyChar() => throw new IOException("The handle is invalid.");
     }
 
+    private sealed class BlockingStdinConsole : IConsole, IDisposable
+    {
+        private readonly ManualResetEventSlim _release = new(initialState: false);
+        private readonly System.Text.StringBuilder _stdout = new();
+        private readonly System.Text.StringBuilder _stderr = new();
+
+        public string Stdout => _stdout.ToString();
+        public string Stderr => _stderr.ToString();
+        public bool IsInputRedirected => true;
+        public void WriteLine(string value) => _stdout.AppendLine(value);
+        public void Write(string value) => _stdout.Append(value);
+        public void ErrorWriteLine(string value) => _stderr.AppendLine(value);
+
+        public string? ReadLine()
+        {
+            _release.Wait();
+            return null;
+        }
+
+        public char? ReadKeyChar() => null;
+        public void Dispose() => _release.Set();
+    }
+
+    private sealed class PartialThenUnreadableStdinConsole : IConsole
+    {
+        private readonly System.Text.StringBuilder _stdout = new();
+        private readonly System.Text.StringBuilder _stderr = new();
+        private int _readCount;
+
+        public string Stdout => _stdout.ToString();
+        public string Stderr => _stderr.ToString();
+        public bool IsInputRedirected => true;
+        public void WriteLine(string value) => _stdout.AppendLine(value);
+        public void Write(string value) => _stdout.Append(value);
+        public void ErrorWriteLine(string value) => _stderr.AppendLine(value);
+        public string? ReadLine() => _readCount++ == 0
+            ? "plane_base_url = \"https://partial.example.test\""
+            : throw new IOException("pipe failed before EOF");
+        public char? ReadKeyChar() => null;
+    }
+
     [Fact]
     public async Task UnreadableRedirectedStdin_StillWritesOfflineConfig()
     {
@@ -2234,6 +2275,7 @@ public class InitCommandTests
             Assert.True(console.ReadAttempts > 0, "the stdin creds read should still have been attempted");
             Assert.True(File.Exists(Path.Combine(dir, ".build", "config.toml")));
             Assert.Contains("Created", console.Stdout);
+            Assert.Contains("ignoring stdin credentials", console.Stderr);
             Assert.Contains("REQUIRED_PLANE_PROJECT_ID", File.ReadAllText(Path.Combine(dir, ".build", "config.toml")));
         }
         finally
@@ -2256,9 +2298,57 @@ public class InitCommandTests
                 noInteractive: true);
 
             Assert.Equal(0, result);
+            Assert.Contains("ignoring stdin credentials", console.Stderr);
             var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
             Assert.Contains("https://api.plane.so", written);
             Assert.Contains("acme", written);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BlockingRedirectedStdin_PrintTemplateReturnsWithinBound()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            using var console = new BlockingStdinConsole();
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+            var result = await InitCommand.ExecuteAsync(
+                dir, force: false, printTemplate: true, console, noInteractive: true);
+
+            stopwatch.Stop();
+            Assert.Equal(0, result);
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5), $"init took {stopwatch.Elapsed}");
+            Assert.Contains("[ticketing]", console.Stdout);
+            Assert.Contains("did not reach EOF", console.Stderr);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PartiallyReadRedirectedStdin_IsDiscardedWithWarning()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new PartialThenUnreadableStdinConsole();
+
+            var result = await InitCommand.ExecuteAsync(
+                dir, force: false, printTemplate: false, console, noInteractive: true);
+
+            Assert.Equal(0, result);
+            Assert.Contains("ignoring stdin credentials", console.Stderr);
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+            Assert.Contains("REQUIRED_PLANE_BASE_URL", written);
+            Assert.DoesNotContain("partial.example.test", written);
         }
         finally
         {

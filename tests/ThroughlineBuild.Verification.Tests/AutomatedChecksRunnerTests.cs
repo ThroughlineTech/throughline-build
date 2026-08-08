@@ -4,6 +4,7 @@ using Xunit;
 
 namespace ThroughlineBuild.Verification.Tests;
 
+[Collection(ProcessStdinCollection.Name)]
 public class AutomatedChecksRunnerTests
 {
     // Helper: build a CheckSpec with a generous default timeout
