@@ -524,7 +524,8 @@ public static class HelpRegistryFactory
             to consult, so there doctor can only see stubs still present on disk.
 
             Review invariants are structured prose. Doctor validates ids, statements, optional
-            paths, and optional blocks_done shape only. It does not evaluate whether a statement is true.
+            paths, and optional blocks_done shape, and requires each configured review path to match
+            repository content. It does not evaluate whether a statement is true.
 
             Review checks must contain at least one setup or gating check with a non-empty executable.
             Advisory-only checks are visible, but they do not make the gate capable of blocking Done.

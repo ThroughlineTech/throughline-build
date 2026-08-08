@@ -245,7 +245,10 @@ build profile apply profile.json --skip-canary --json
 The command prints a warning, reports `canaryVerified: false`, and records
 `review.canaries_verified = false`, which `build gate` exposes on later runs.
 The prompt's rules require role-tagged checks, required paths, hermetic test
-discovery, no user-global cache poisoning, and one canary per gating check.
+discovery, no user-global cache poisoning, and one canary per gating check. Each
+canary path must be a file the target toolchain actually compiles or collects.
+The `language` and optional `framework` identifiers must use canonical lowercase
+kebab-case; a repository with no named framework uses an empty `framework`.
 
 `build profile verify-canaries profile.json --json` remains available when only
 the proof is needed; it never changes `.build/config.toml`.
@@ -313,6 +316,10 @@ hand). Open the file and verify, rather than retype:
 - `ticket_prefix` matches the Plane project identifier;
 - `source_roots` covers the code and current architecture documentation; and
 - `architecture_map` names a tracked, current file.
+
+The scaffold derives its starter invariant and escalation path globs from
+`source_roots`. Doctor reports `conductor.review.paths.not_found` if any edited
+or scaffolded review path matches no repository content.
 
 `platform` and `contract_authority` still need real values, but not necessarily
 by hand: the `build install --profile PATH` orchestrator (the "fixed
@@ -382,6 +389,7 @@ Common doctor findings and what each means:
 | `conductor.ticket_prefix.placeholder` | `sop install` could not resolve a Plane project identifier (unusual - it normally fails install outright instead) |
 | `conductor.architecture_map.not_found` | `architecture_map` names a path that is not a tracked file in this repository |
 | `conductor.source_roots.not_found` | A `source_roots` entry is not a directory in this repository |
+| `conductor.review.paths.not_found` | An invariant or escalation path matches no repository content |
 | `constellation.platform.placeholder` | Step 4's profile pass has not run yet, or supplied an empty framework and language |
 | `constellation.contract_authority.placeholder` | Step 4's profile pass left `contract_authority` blank; set it by hand if the repository genuinely has none |
 | `sop.stub.modified` / `sop.stub.drift` | A stub was hand-edited, or was written by an older binary |

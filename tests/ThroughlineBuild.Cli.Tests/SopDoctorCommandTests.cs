@@ -459,6 +459,36 @@ public sealed class SopDoctorCommandTests
         }
     }
 
+    [Theory]
+    [InlineData(
+        "paths = [\"src/ThroughlineBuild.Contracts/**\"]",
+        "paths = [\"missing-contracts/**\"]",
+        "conductor.review.invariants[0].paths[0]")]
+    [InlineData(
+        "paths = [\"src/ThroughlineBuild.Cli/**\", \"src/ThroughlineBuild.Contracts/**\"]",
+        "paths = [\"missing-escalation/**\"]",
+        "conductor.review.escalation.paths[0]")]
+    public void Doctor_FailsWhenAReviewPathMatchesNothing(
+        string original,
+        string replacement,
+        string expectedPath)
+    {
+        var repo = CreateRepo(ValidConductorToml.Replace(original, replacement, StringComparison.Ordinal));
+        var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+
+        try
+        {
+            Assert.False(report.Passed);
+            var finding = Assert.Single(report.Findings, finding =>
+                finding.Code == "conductor.review.paths.not_found" && finding.Path == expectedPath);
+            Assert.Contains("matches no repository path", finding.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
     [Fact]
     public void Doctor_PassesWhenSourceRootsContainOnlyDot()
     {
@@ -1164,8 +1194,13 @@ public sealed class SopDoctorCommandTests
         // fully-edited conductor.toml" tests to still see zero findings. Harmless for tests that
         // pass a conductorToml referencing different paths - these directories simply go unused.
         Directory.CreateDirectory(Path.Combine(repository, "src"));
+        Directory.CreateDirectory(Path.Combine(repository, "src", "ThroughlineBuild.Cli"));
+        Directory.CreateDirectory(Path.Combine(repository, "src", "ThroughlineBuild.Contracts"));
         Directory.CreateDirectory(Path.Combine(repository, "tests"));
         Directory.CreateDirectory(Path.Combine(repository, "docs"));
+        File.WriteAllText(Path.Combine(repository, "src", "ThroughlineBuild.Cli", "placeholder.cs"), "// test\n");
+        File.WriteAllText(
+            Path.Combine(repository, "src", "ThroughlineBuild.Contracts", "placeholder.cs"), "// test\n");
         File.WriteAllText(
             Path.Combine(repository, "docs", "throughline-build-architecture.md"), "architecture\n");
         return repository;

@@ -10,8 +10,8 @@ public sealed class InstallCommandTests
 {
     private const string ProfileJson = """
     {
-      "language": "TypeScript",
-      "framework": "Vite",
+      "language": "typescript",
+      "framework": "vite",
       "package_manager": "pnpm",
       "build_command": "pnpm build",
       "test_command": "pnpm test",
@@ -230,7 +230,7 @@ public sealed class InstallCommandTests
             Assert.Equal("invariants_handoff", Stage(second.Stdout));
             Assert.Contains(".build/invariants.toml", second.Stdout);
             var conductorAfterProfile = File.ReadAllText(Path.Combine(repo, ".build/conductor.toml"));
-            Assert.Contains("platform = \"Vite\"", conductorAfterProfile);
+            Assert.Contains("platform = \"vite\"", conductorAfterProfile);
             Assert.Contains("contract_authority = \"app\"", conductorAfterProfile);
 
             // TLB-627: MinimalConfig's literal plane_api_token is only a stage-1 bootstrap
@@ -355,7 +355,7 @@ public sealed class InstallCommandTests
                 repo, new InstallInvocation(".build/profile.json", null), dependencies);
             Assert.Equal(0, recovered.Exit);
             Assert.Equal("invariants_handoff", Stage(recovered.Stdout));
-            Assert.Contains("platform = \"Vite\"", File.ReadAllText(Path.Combine(repo, ".build", "conductor.toml")));
+            Assert.Contains("platform = \"vite\"", File.ReadAllText(Path.Combine(repo, ".build", "conductor.toml")));
 
             ReplaceInlineTokenWithFileForm(repo);
             Write(repo, ".build/invariants.toml", InvariantsToml);
@@ -445,8 +445,8 @@ public sealed class InstallCommandTests
                 StringComparer.Ordinal);
 
             var emptyProfile = ProfileJson
-                .Replace("\"language\": \"TypeScript\"", "\"language\": \"  \"", StringComparison.Ordinal)
-                .Replace("\"framework\": \"Vite\"", "\"framework\": \"\"", StringComparison.Ordinal);
+                .Replace("\"language\": \"typescript\"", "\"language\": \"  \"", StringComparison.Ordinal)
+                .Replace("\"framework\": \"vite\"", "\"framework\": \"\"", StringComparison.Ordinal);
             Write(repo, ".build/profile.json", emptyProfile);
             var failed = await ExecuteStageAsync(
                 repo, new InstallInvocation(".build/profile.json", null), dependencies);
@@ -464,7 +464,7 @@ public sealed class InstallCommandTests
             Assert.Equal(0, corrected.Exit);
             Assert.Equal("invariants_handoff", Stage(corrected.Stdout));
             Assert.Equal(1, sopCalls);
-            Assert.Contains("platform = \"Vite\"",
+            Assert.Contains("platform = \"vite\"",
                 File.ReadAllText(Path.Combine(repo, ".build/conductor.toml")));
         }
         finally

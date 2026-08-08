@@ -291,7 +291,7 @@ public sealed class SopInstallCommandTests
     }
 
     [Fact]
-    public async Task Install_NonDotnetScratchRepository_ProducesRepositoryOwnFactsWithNoThroughlinePaths()
+    public async Task Install_RepositoryWithNoSrcDirectory_EmitsOnlyExistingRepositoryPaths()
     {
         AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
         var repo = Path.Combine(Path.GetTempPath(), "sop-install-cross-stack-tests", Guid.NewGuid().ToString("N"));
@@ -299,18 +299,17 @@ public sealed class SopInstallCommandTests
 
         try
         {
-            // A real Node/TypeScript-shaped repository - nothing about it resembles this engine's
-            // own .NET layout. Proves TLB-628's "verify against a scratch repository of a different
-            // stack, not by inspection" requirement end to end, through real git.
+            // A real Node/TypeScript-shaped repository with no src directory. This exercises the
+            // stack leak that TLB-641 found end to end, through real git.
             await RunGitAsync(repo, "init", "-b", "main");
             await RunGitAsync(repo, "config", "user.email", "scratch@example.invalid");
             await RunGitAsync(repo, "config", "user.name", "Scratch User");
-            Directory.CreateDirectory(PathFor(repo, "src"));
+            Directory.CreateDirectory(PathFor(repo, "app"));
             Directory.CreateDirectory(PathFor(repo, "docs"));
             File.WriteAllText(PathFor(repo, "package.json"), "{ \"name\": \"scratch-app\" }\n");
-            File.WriteAllText(PathFor(repo, "src/index.js"), "console.log('scratch');\n");
+            File.WriteAllText(PathFor(repo, "app/index.js"), "console.log('scratch');\n");
             File.WriteAllText(PathFor(repo, "docs/architecture.md"), "# Scratch app architecture\n");
-            await RunGitAsync(repo, "add", "package.json", "src", "docs");
+            await RunGitAsync(repo, "add", "package.json", "app", "docs");
             await RunGitAsync(repo, "commit", "-m", "initial");
             await RunGitAsync(repo, "checkout", "-b", "ticket/scratch-1");
             await RunGitAsync(repo, "checkout", "main");
@@ -332,19 +331,28 @@ public sealed class SopInstallCommandTests
 
             var conductor = File.ReadAllText(PathFor(repo, ".build/conductor.toml"));
             Assert.Contains("ticket_prefix = \"SCR\"", conductor, StringComparison.Ordinal);
-            Assert.Contains("source_roots = [\"docs\", \"src\"]", conductor, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(PathFor(repo, "src")));
+            Assert.Contains("source_roots = [\"app\", \"docs\"]", conductor, StringComparison.Ordinal);
             Assert.Contains("branch_prefix = \"ticket\"", conductor, StringComparison.Ordinal);
             Assert.Contains("architecture_map = \"docs/architecture.md\"", conductor, StringComparison.Ordinal);
+            Assert.Equal(
+                2,
+                conductor.Split(
+                    "paths = [\"app/**\", \"docs/**\"]",
+                    StringSplitOptions.None).Length - 1);
 
             Assert.DoesNotContain("ThroughlineBuild", conductor, StringComparison.Ordinal);
             Assert.DoesNotContain("throughline-build-architecture", conductor, StringComparison.Ordinal);
             Assert.DoesNotContain("dotnet", conductor, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("src", conductor, StringComparison.Ordinal);
 
             var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
             Assert.DoesNotContain(
                 report.Findings, finding => finding.Code == "conductor.architecture_map.not_found");
             Assert.DoesNotContain(
                 report.Findings, finding => finding.Code == "conductor.source_roots.not_found");
+            Assert.DoesNotContain(
+                report.Findings, finding => finding.Code == "conductor.review.paths.not_found");
         }
         finally
         {

@@ -114,7 +114,9 @@ derived; falling back to Build's own `"ticket"` convention when no branch
 reveals a convention), and `architecture_map`
 from the first tracked file matching a known architecture/contributor-doc name
 (`docs/architecture.md`, `ARCHITECTURE.md`, `docs/contributing.md`,
-`CONTRIBUTING.md`, `AGENTS.md`, `README.md`, checked in that order). Facts that
+`CONTRIBUTING.md`, `AGENTS.md`, `README.md`, checked in that order). The
+scaffold's invariant and escalation path globs come from those same resolved
+`source_roots`, not from a fixed source-directory convention. Facts that
 need real judgment instead of file-system inspection - `constellation.platform`
 and `constellation.contract_authority` - are resolved from the same
 repository-interrogation pass as the toolchain profile, but only inside the
@@ -156,7 +158,8 @@ manifest-recorded or present emitted host stubs. Doctor validates those stubs
 byte-for-byte against the catalog and reports missing, modified, non-regular, or
 unsafe stub paths as drift. Review invariants are structured prose: doctor
 validates id uniqueness, non-empty statements, optional paths, and optional
-`blocks_done` shape only. It does not judge whether a statement is true, but it
+`blocks_done` shape, and reports any invariant or escalation path that matches
+no repository content. It does not judge whether a statement is true, but it
 does reject an unedited scaffold: `conductor.review.invariants.statement.placeholder`
 when a statement still matches the scaffold sentence, and
 `conductor.review.invariants.id.placeholder` when every invariant still carries

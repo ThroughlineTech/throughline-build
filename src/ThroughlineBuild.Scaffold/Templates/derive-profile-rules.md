@@ -1,7 +1,11 @@
 Determine:
 
-- language (e.g. "typescript", "python", "csharp", "go")
-- framework / stack (e.g. "react-vite", "django", "dotnet")
+- language as its canonical lowercase kebab-case identifier (e.g. "typescript", "python", "csharp",
+  "go")
+- framework / stack as the repository's canonical lowercase kebab-case identifier (e.g.
+  "react-vite", "django", "dotnet"). Use "" when the repository has no named framework; do not
+  invent qualifiers such as "cli", "monorepo", or the package manager. This field feeds
+  constellation.platform and is validated, so the same tracked stack must yield the same value.
 - package_manager (e.g. "npm", "pnpm", "pip", "uv", "dotnet")
 - install_command, build_command, test_command, dev_command (the exact shell commands the source
   expects, e.g. "npm install", "npm run build", "npm test", "npm run dev")
@@ -61,6 +65,9 @@ Rules for checks:
   (typecheck, build, test). For a test check, the canary is a deliberately-failing test the runner
   MUST report red - this guards against a test gate that collects zero tests and falsely reports
   green. Advisory checks (lint, format) may carry a canary too but it is optional.
+- The canary path MUST name a file the target toolchain actually compiles or collects. Follow the
+  target language's filename rules and avoid names its toolchain ignores (for example, Go ignores
+  source files whose names begin with `_` or `.`).
 - Stack notes (examples, not exhaustive): for TypeScript with a project-references tsconfig
   (`files: []` + `references`), bare `tsc --noEmit` follows no references and checks nothing - use
   build mode `tsc -b --noEmit` and put the canary inside a REFERENCED source directory (a canary
@@ -125,25 +132,25 @@ The JSON object must follow this shape (values are examples only):
   "review_checks": [
     { "name": "typecheck", "executable": "npm", "arguments": ["run", "typecheck"], "timeout_minutes": 5, "role": "gating",
       "required_paths": ["package.json", "src"],
-      "canary": [ { "path": "src/__tlb_probe.ts", "content": "import { useState } from 'react';\nexport const x: number = null;" } ] },
+      "canary": [ { "path": "src/tlb_canary.ts", "content": "import { useState } from 'react';\nexport const x: number = null;" } ] },
     { "name": "build", "executable": "npm", "arguments": ["run", "build"], "timeout_minutes": 5, "role": "gating",
       "required_paths": ["package.json", "src"],
-      "canary": [ { "path": "src/__tlb_probe.ts", "content": "import { useState } from 'react';\nexport const x: number = null;" } ] },
+      "canary": [ { "path": "src/tlb_canary.ts", "content": "import { useState } from 'react';\nexport const x: number = null;" } ] },
     { "name": "test", "executable": "npm", "arguments": ["test"], "timeout_minutes": 10, "role": "gating",
       "required_paths": ["package.json", "src"],
-      "canary": [ { "path": "src/__tlb_probe.test.ts", "content": "import { test, expect } from 'vitest';\ntest('canary fails', () => { expect(1).toBe(2); });" } ] },
+      "canary": [ { "path": "src/tlb_canary.test.ts", "content": "import { test, expect } from 'vitest';\ntest('canary fails', () => { expect(1).toBe(2); });" } ] },
     { "name": "lint", "executable": "npm", "arguments": ["run", "lint"], "timeout_minutes": 5, "role": "advisory" }
   ],
   "regression_checks": [
     { "name": "typecheck", "executable": "npm", "arguments": ["run", "typecheck"], "timeout_minutes": 5, "role": "gating",
       "required_paths": ["package.json", "src"],
-      "canary": [ { "path": "src/__tlb_probe.ts", "content": "import { useState } from 'react';\nexport const x: number = null;" } ] },
+      "canary": [ { "path": "src/tlb_canary.ts", "content": "import { useState } from 'react';\nexport const x: number = null;" } ] },
     { "name": "build", "executable": "npm", "arguments": ["run", "build"], "timeout_minutes": 5, "role": "gating",
       "required_paths": ["package.json", "src"],
-      "canary": [ { "path": "src/__tlb_probe.ts", "content": "import { useState } from 'react';\nexport const x: number = null;" } ] },
+      "canary": [ { "path": "src/tlb_canary.ts", "content": "import { useState } from 'react';\nexport const x: number = null;" } ] },
     { "name": "test", "executable": "npm", "arguments": ["test"], "timeout_minutes": 10, "role": "gating",
       "required_paths": ["package.json", "src"],
-      "canary": [ { "path": "src/__tlb_probe.test.ts", "content": "import { test, expect } from 'vitest';\ntest('canary fails', () => { expect(1).toBe(2); });" } ] }
+      "canary": [ { "path": "src/tlb_canary.test.ts", "content": "import { test, expect } from 'vitest';\ntest('canary fails', () => { expect(1).toBe(2); });" } ] }
   ],
   "convention_files": ["src/setupTests.ts", "vite.config.ts", "src/data/__tests__/repository.test.ts"],
   "contract_authority": ""

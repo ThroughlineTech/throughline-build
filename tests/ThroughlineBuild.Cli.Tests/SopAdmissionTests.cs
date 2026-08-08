@@ -432,8 +432,11 @@ public sealed class SopAdmissionTests
         // Doctor now resolves architecture_map and source_roots against the filesystem
         // (TLB-628), so ValidConductorToml's referenced paths must actually exist here too.
         Directory.CreateDirectory(Path.Combine(repository, "src"));
+        Directory.CreateDirectory(Path.Combine(repository, "src", "ThroughlineBuild.Cli"));
         Directory.CreateDirectory(Path.Combine(repository, "tests"));
         Directory.CreateDirectory(Path.Combine(repository, "docs"));
+        File.WriteAllText(
+            Path.Combine(repository, "src", "ThroughlineBuild.Cli", "placeholder.cs"), "// test\n");
         File.WriteAllText(
             Path.Combine(repository, "docs", "throughline-build-architecture.md"), "architecture\n");
         return repository;
@@ -449,9 +452,12 @@ public sealed class SopAdmissionTests
         // resolves ValidConductorToml's architecture_map and source_roots against the
         // filesystem (TLB-628).
         Directory.CreateDirectory(Path.Combine(repository, "src"));
+        Directory.CreateDirectory(Path.Combine(repository, "src", "ThroughlineBuild.Cli"));
         Directory.CreateDirectory(Path.Combine(repository, "tests"));
         Directory.CreateDirectory(Path.Combine(repository, "docs"));
         File.WriteAllText(Path.Combine(repository, "src", ".gitkeep"), string.Empty);
+        File.WriteAllText(
+            Path.Combine(repository, "src", "ThroughlineBuild.Cli", "placeholder.cs"), "// test\n");
         File.WriteAllText(Path.Combine(repository, "tests", ".gitkeep"), string.Empty);
         File.WriteAllText(
             Path.Combine(repository, "docs", "throughline-build-architecture.md"), "architecture\n");

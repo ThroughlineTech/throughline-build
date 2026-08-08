@@ -1712,6 +1712,9 @@ internal static class SopInstaller
         var branchPrefix = QuoteTomlBasicString(conductorIdentity.BranchPrefix);
         var sourceRoots = string.Join(", ", conductorIdentity.SourceRoots.Select(QuoteTomlBasicString));
         var architectureMap = QuoteTomlBasicString(conductorIdentity.ArchitectureMap);
+        var reviewPaths = string.Join(", ", conductorIdentity.SourceRoots
+            .Select(root => root == "." ? "**" : $"{root}/**")
+            .Select(QuoteTomlBasicString));
         return $$"""
             [conductor]
             min_build_version = "{{minVersion}}"
@@ -1724,12 +1727,12 @@ internal static class SopInstaller
             [[conductor.review.invariants]]
             id = "{{ScaffoldInvariantId}}"
             statement = "Replace this sentence with a true review invariant for this repository."
-            paths = ["src/**"]
+            paths = [{{reviewPaths}}]
             blocks_done = true
 
             [conductor.review.escalation]
             model_size = "large"
-            paths = ["src/**"]
+            paths = [{{reviewPaths}}]
 
             [constellation]
             platform = "unknown"

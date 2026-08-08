@@ -69,6 +69,37 @@ public class ProjectProfileParserTests
         Assert.Equal("packages/shared-types", profile!.ContractAuthority);
     }
 
+    [Theory]
+    [InlineData("React Vite")]
+    [InlineData("react_vite")]
+    [InlineData("React-Vite")]
+    [InlineData("react--vite")]
+    public void Framework_NotCanonicalLowercaseKebabCase_Fails(string framework)
+    {
+        var json = ValidJson.Replace("react-vite", framework, StringComparison.Ordinal);
+
+        Assert.False(ProjectProfileParser.TryParse(json, out _, out var error));
+        Assert.Contains("lowercase kebab-case", error);
+    }
+
+    [Fact]
+    public void Framework_Empty_IsAllowedForRepositoriesWithoutANamedFramework()
+    {
+        var json = ValidJson.Replace("react-vite", string.Empty, StringComparison.Ordinal);
+
+        Assert.True(ProjectProfileParser.TryParse(json, out var profile, out var error), error);
+        Assert.Equal(string.Empty, profile!.Framework);
+    }
+
+    [Fact]
+    public void Language_NotCanonicalLowercaseKebabCase_Fails()
+    {
+        var json = ValidJson.Replace("typescript", "TypeScript", StringComparison.Ordinal);
+
+        Assert.False(ProjectProfileParser.TryParse(json, out _, out var error));
+        Assert.Contains("profile language", error);
+    }
+
     [Fact]
     public void MissingRegressionChecks_DefaultsToReviewChecks()
     {

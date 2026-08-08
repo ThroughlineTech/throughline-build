@@ -1,5 +1,6 @@
 using ThroughlineBuild.Cli.Json;
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Helpers;
 using Tomlyn;
 using Tomlyn.Model;
 
@@ -297,7 +298,8 @@ internal static class SopDoctorCommand
         var reworkCap = RequiredInt(conductor, "rework_cap", "conductor.rework_cap", findings);
         ValidateReworkCap(reworkCap, findings);
 
-        var review = ReadReview(conductor, findings);
+        var repositoryPaths = ListRepositoryPaths(worktreeRoot);
+        var review = ReadReview(conductor, repositoryPaths, findings);
         var constellation = ReadConstellation(root, findings);
 
         return new ConductorConfig(
@@ -313,6 +315,7 @@ internal static class SopDoctorCommand
 
     private static ConductorReviewConfig ReadReview(
         TomlTable conductor,
+        IReadOnlyList<string> repositoryPaths,
         List<SopDoctorFinding> findings)
     {
         if (!TryGetTable(conductor, "review", "conductor.review", findings, out var review))
@@ -324,13 +327,14 @@ internal static class SopDoctorCommand
 
         AddUnknownKeyFindings(review, "conductor.review", KnownConductorReviewKeys, findings);
 
-        var invariants = ReadInvariants(review, findings);
-        var escalation = ReadEscalation(review, findings);
+        var invariants = ReadInvariants(review, repositoryPaths, findings);
+        var escalation = ReadEscalation(review, repositoryPaths, findings);
         return new ConductorReviewConfig(invariants, escalation);
     }
 
     private static IReadOnlyList<ConductorReviewInvariant> ReadInvariants(
         TomlTable review,
+        IReadOnlyList<string> repositoryPaths,
         List<SopDoctorFinding> findings)
     {
         if (!review.TryGetValue("invariants", out var raw) || raw is not TomlTableArray array)
@@ -377,6 +381,8 @@ internal static class SopDoctorCommand
             }
 
             var paths = OptionalStringList(entry, "paths", $"{path}.paths", findings);
+            if (paths is not null)
+                ValidateReviewPathsMatch(paths, $"{path}.paths", repositoryPaths, findings);
             var blocksDone = OptionalBool(entry, "blocks_done", $"{path}.blocks_done", findings);
             invariants.Add(new ConductorReviewInvariant(
                 id ?? string.Empty,
@@ -403,6 +409,7 @@ internal static class SopDoctorCommand
 
     private static ConductorReviewEscalation ReadEscalation(
         TomlTable review,
+        IReadOnlyList<string> repositoryPaths,
         List<SopDoctorFinding> findings)
     {
         if (!TryGetTable(review, "escalation", "conductor.review.escalation", findings, out var escalation))
@@ -431,6 +438,11 @@ internal static class SopDoctorCommand
             escalation,
             "paths",
             "conductor.review.escalation.paths",
+            findings);
+        ValidateReviewPathsMatch(
+            paths,
+            "conductor.review.escalation.paths",
+            repositoryPaths,
             findings);
         return new ConductorReviewEscalation(modelSize ?? string.Empty, paths);
     }
@@ -606,6 +618,62 @@ internal static class SopDoctorCommand
                     $".build/conductor.toml key 'conductor.source_roots[{i}]' names '{root}', " +
                     "which is not a directory in this repository"));
             }
+        }
+    }
+
+    private static IReadOnlyList<string> ListRepositoryPaths(string worktreeRoot)
+    {
+        var paths = new List<string>();
+        var pending = new Stack<string>();
+        pending.Push(worktreeRoot);
+
+        while (pending.Count > 0)
+        {
+            var directory = pending.Pop();
+            try
+            {
+                foreach (var file in Directory.EnumerateFiles(directory))
+                {
+                    paths.Add(Path.GetRelativePath(worktreeRoot, file).Replace('\\', '/'));
+                }
+
+                foreach (var child in Directory.EnumerateDirectories(directory))
+                {
+                    var relative = Path.GetRelativePath(worktreeRoot, child).Replace('\\', '/');
+                    var topLevel = relative.Split('/', 2)[0];
+                    if (topLevel == ".git" || SopInstallCommand.BuildManagedRoots.Contains(topLevel))
+                        continue;
+                    if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) != 0)
+                        continue;
+                    pending.Push(child);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // An inaccessible subtree cannot prove that a configured review path matches.
+            }
+        }
+
+        return paths.AsReadOnly();
+    }
+
+    private static void ValidateReviewPathsMatch(
+        IReadOnlyList<string> patterns,
+        string fieldPath,
+        IReadOnlyList<string> repositoryPaths,
+        List<SopDoctorFinding> findings)
+    {
+        for (var i = 0; i < patterns.Count; i++)
+        {
+            var pattern = patterns[i].Replace('\\', '/');
+            if (repositoryPaths.Any(path => WavePlanner.PatternMatches(pattern, path)))
+                continue;
+
+            findings.Add(new SopDoctorFinding(
+                "conductor.review.paths.not_found",
+                $"{fieldPath}[{i}]",
+                $".build/conductor.toml key '{fieldPath}[{i}]' names '{patterns[i]}', " +
+                "which matches no repository path"));
         }
     }
 

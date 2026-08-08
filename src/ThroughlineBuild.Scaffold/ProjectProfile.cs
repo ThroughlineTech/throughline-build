@@ -141,6 +141,16 @@ public static class ProjectProfileParser
             error = "profile is missing test_command";
             return false;
         }
+        if (!IsCanonicalIdentifier(dto.Language))
+        {
+            error = "profile language must be empty or a lowercase kebab-case identifier";
+            return false;
+        }
+        if (!IsCanonicalIdentifier(dto.Framework))
+        {
+            error = "profile framework must be empty or a lowercase kebab-case identifier";
+            return false;
+        }
 
         if (!TryMapChecks(dto.ReviewChecks, "review_checks", out var reviewChecks, out error))
             return false;
@@ -184,6 +194,34 @@ public static class ProjectProfileParser
             ConventionFiles = conventionFiles,
             ContractAuthority = dto.ContractAuthority?.Trim() ?? "",
         };
+        return true;
+    }
+
+    private static bool IsCanonicalIdentifier(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return true;
+
+        var identifier = value.Trim();
+        if (identifier[0] is < 'a' or > 'z' || identifier[^1] == '-')
+            return false;
+
+        var previousWasHyphen = false;
+        foreach (var character in identifier)
+        {
+            if (character == '-')
+            {
+                if (previousWasHyphen)
+                    return false;
+                previousWasHyphen = true;
+                continue;
+            }
+
+            if (character is not (>= 'a' and <= 'z') and not (>= '0' and <= '9'))
+                return false;
+            previousWasHyphen = false;
+        }
+
         return true;
     }
 
