@@ -39,6 +39,13 @@ that are already in config and say something else - checks a human wrote. Pass
 `build install --profile .build/profile.json --force` to replace them
 deliberately.
 
+If stage 2 cannot install a binary-hosted SOP because an emitted stub differs
+from the catalog, it rolls back the profile-config and generated-conductor
+changes from that stage. Build preserves the local stub. Resolve that stub
+according to your intent, then rerun the command named in the failure message,
+normally `build install --profile .build/profile.json`; no hand-editing of
+`.build/config.toml` or `.build/conductor.toml` is required.
+
 ### Install
 
 **git** - Any recent version. Confirm it is on your PATH with `git --version`. The `build ship`

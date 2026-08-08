@@ -11,11 +11,16 @@ namespace ThroughlineBuild.Cli;
 
 internal sealed record InstallInvocation(string? ProfilePath, string? InvariantsPath, bool Force = false);
 internal sealed record InstallProfileApplyResult(
-    bool Success, int ExitCode, string Message, string? Language, string? Framework, string? ContractAuthority);
+    bool Success, int ExitCode, string Message, string? Language, string? Framework, string? ContractAuthority,
+    string? ConfigPath = null, string? OriginalConfig = null);
+
+internal sealed record InstallSopResult(int ExitCode, SopOperationView? Operation);
+
+internal sealed record FileSnapshot(bool Exists, string? Contents);
 
 internal sealed record InstallDependencies(
     Func<string, TextReader, TextWriter, CancellationToken, Task<int>> EnsureInitAndSetup,
-    Func<string, TextWriter, CancellationToken, Task<int>> InstallSop,
+    Func<string, TextWriter, CancellationToken, Task<InstallSopResult>> InstallSop,
     Func<string, SopDoctorView> RunDoctor,
     Func<string, string, IReadOnlyList<string>, BuildConfig, CancellationToken, Task<InstallReadinessResult>> AssertReadiness);
 
@@ -120,17 +125,28 @@ internal static class InstallCommand
                 if (!apply.Success)
                     return Failure(json, output, diagnostics, apply.Message, apply.ExitCode);
 
+                var conductorBeforeSop = SnapshotFile(Path.Combine(cwd, ".build", "conductor.toml"));
                 Progress(diagnostics, "stage 2/3: installing binary-hosted SOP stubs");
-                var sopExit = await deps.InstallSop(cwd, diagnostics, ct).ConfigureAwait(false);
-                if (sopExit != 0)
-                    return Failure(json, output, diagnostics, "SOP installation failed", sopExit);
+                var sop = await deps.InstallSop(cwd, diagnostics, ct).ConfigureAwait(false);
+                if (sop.ExitCode != 0)
+                {
+                    RollbackStageTwo(apply, conductorBeforeSop, cwd);
+                    return Failure(json, output, diagnostics,
+                        SopInstallationFailure(sop.Operation, invocation.ProfilePath), sop.ExitCode);
+                }
                 var platform = ResolveGeneratedPlatform(cwd, apply.Framework!, apply.Language!);
                 if (!platform.Success)
+                {
+                    RollbackStageTwo(apply, conductorBeforeSop, cwd);
                     return Failure(json, output, diagnostics, platform.Message, 1);
+                }
 
                 var contractAuthority = ResolveContractAuthority(cwd, apply.ContractAuthority ?? "");
                 if (!contractAuthority.Success)
+                {
+                    RollbackStageTwo(apply, conductorBeforeSop, cwd);
                     return Failure(json, output, diagnostics, contractAuthority.Message, 1);
+                }
 
                 var prompt = ConductorPromptLoader.Load();
                 return Handoff(json, output, "invariants_handoff", prompt,
@@ -212,9 +228,11 @@ internal static class InstallCommand
         EnsureInitAndSetupAsync,
         async (cwd, diagnostics, ct) =>
         {
-            var ignoredOutput = new StringWriter();
-            return await SopCommand.ExecuteInstallAsync(
-                ["sop", "install"], true, cwd, ignoredOutput, diagnostics, ct).ConfigureAwait(false);
+            var sopOutput = new StringWriter();
+            var exitCode = await SopCommand.ExecuteInstallAsync(
+                ["sop", "install"], true, cwd, sopOutput, diagnostics, ct).ConfigureAwait(false);
+            var operation = TryReadSopOperation(sopOutput.ToString());
+            return new InstallSopResult(exitCode, operation);
         },
         cwd => SopDoctorCommand.RunDoctor(cwd, BuildVersion.Current),
         (cwd, protectedBranch, stubPaths, config, ct) =>
@@ -276,7 +294,7 @@ internal static class InstallCommand
         {
             File.WriteAllText(configPath, outcome.NewText, new UTF8Encoding(false));
             return new(true, 0, outcome.Summary ?? "profile applied",
-                profile.Language, profile.Framework, profile.ContractAuthority);
+                profile.Language, profile.Framework, profile.ContractAuthority, configPath, original);
         }
         // Re-running the installer against an already-installed repository must reach the same handoff
         // without rewriting config; that is stage 2's half of install idempotence. See TLB-639.
@@ -284,6 +302,46 @@ internal static class InstallCommand
             return new(true, 0, outcome.Summary ?? ConfigProfileWriter.AlreadyMatchedSummary,
                 profile.Language, profile.Framework, profile.ContractAuthority);
         return new(false, 1, outcome.SkipReason ?? "profile apply made no change", null, null, null);
+    }
+
+    private static SopOperationView? TryReadSopOperation(string output)
+    {
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize(
+                output, CliJsonContext.Default.SopOperationEnvelope)?.Data;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static FileSnapshot SnapshotFile(string path) =>
+        File.Exists(path) ? new(true, File.ReadAllText(path)) : new(false, null);
+
+    private static void RollbackStageTwo(InstallProfileApplyResult apply, FileSnapshot conductorBeforeSop, string cwd)
+    {
+        if (apply.ConfigPath is not null && apply.OriginalConfig is not null)
+            File.WriteAllText(apply.ConfigPath, apply.OriginalConfig, new UTF8Encoding(false));
+
+        var conductorPath = Path.Combine(cwd, ".build", "conductor.toml");
+        if (conductorBeforeSop.Exists)
+            File.WriteAllText(conductorPath, conductorBeforeSop.Contents!, new UTF8Encoding(false));
+        else if (File.Exists(conductorPath))
+            File.Delete(conductorPath);
+    }
+
+    private static string SopInstallationFailure(SopOperationView? operation, string profilePath)
+    {
+        var details = operation?.Results
+            .Where(result => result.Status is "modified" or "not_regular" or "unsafe_path" or "invalid_class")
+            .Select(result => $"{result.Path}: {result.Message}")
+            .ToList();
+        var reason = details is { Count: > 0 }
+            ? string.Join("; ", details)
+            : "SOP installation failed without a path result";
+        return $"SOP installation failed: {reason}. Preserve the local stub, resolve the conflict, then rerun 'build install --profile {profilePath}'.";
     }
 
     internal static (bool Success, string Message) ResolveGeneratedPlatform(

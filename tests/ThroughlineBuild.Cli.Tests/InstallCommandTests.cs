@@ -262,6 +262,59 @@ public sealed class InstallCommandTests
         }
     }
 
+    [Fact]
+    public async Task ExecuteAsync_StageTwoSopConflict_RollsBackAndReportsRecoveryDetails()
+    {
+        var repo = await CreateRepositoryAsync();
+        try
+        {
+            var dependencies = EndToEndDependencies(() => { });
+            Assert.Equal(0, (await ExecuteStageAsync(repo, new InstallInvocation(null, null), dependencies)).Exit);
+            var configBefore = ReadBytesIfPresent(repo, ".build/config.toml");
+
+            Write(repo, ".build/profile.json", ProfileJson);
+            Write(repo, ".claude/commands/run-backlog.md", "retired slash command\n");
+            var failed = await ExecuteStageAsync(
+                repo, new InstallInvocation(".build/profile.json", null));
+
+            Assert.NotEqual(0, failed.Exit);
+            Assert.Equal(configBefore, ReadBytesIfPresent(repo, ".build/config.toml"));
+            Assert.False(File.Exists(Path.Combine(repo, ".build", "conductor.toml")));
+            using (var failure = System.Text.Json.JsonDocument.Parse(failed.Stdout))
+            {
+                var message = failure.RootElement.GetProperty("error").GetProperty("message").GetString()!;
+                Assert.Contains(".claude/commands/run-backlog.md", message);
+                Assert.Contains("emitted file differs from the catalog", message);
+                Assert.Contains("build install --profile .build/profile.json", message);
+            }
+
+            var humanFailure = await ExecuteStageAsync(
+                repo, new InstallInvocation(".build/profile.json", null), json: false);
+            Assert.NotEqual(0, humanFailure.Exit);
+            Assert.Contains(".claude/commands/run-backlog.md", humanFailure.Stderr);
+            Assert.Contains("emitted file differs from the catalog", humanFailure.Stderr);
+            Assert.Contains("build install --profile .build/profile.json", humanFailure.Stderr);
+
+            File.Delete(Path.Combine(repo, ".claude", "commands", "run-backlog.md"));
+            var recovered = await ExecuteStageAsync(
+                repo, new InstallInvocation(".build/profile.json", null), dependencies);
+            Assert.Equal(0, recovered.Exit);
+            Assert.Equal("invariants_handoff", Stage(recovered.Stdout));
+            Assert.Contains("platform = \"Vite\"", File.ReadAllText(Path.Combine(repo, ".build", "conductor.toml")));
+
+            ReplaceInlineTokenWithFileForm(repo);
+            Write(repo, ".build/invariants.toml", InvariantsToml);
+            var ready = await ExecuteStageAsync(
+                repo, new InstallInvocation(null, ".build/invariants.toml"), dependencies);
+            Assert.Equal(0, ready.Exit);
+            Assert.Equal("ready", Stage(ready.Stdout));
+        }
+        finally
+        {
+            TryDelete(repo);
+        }
+    }
+
     // Checks a human wrote are still protected, and the --force the refusal names is reachable from
     // the installer that printed it.
     [Fact]
@@ -667,7 +720,7 @@ public sealed class InstallCommandTests
             var result = SopInstaller.Run(
                 "install", repo, SopBundleCatalog.All, BuildVersion.Current, DateTimeOffset.UtcNow,
                 conductorIdentity: new SopConductorIdentity("WEB", ["app", "public"], "ticket", "README.md"));
-            return Task.FromResult(result.Passed ? 0 : 1);
+            return Task.FromResult(new InstallSopResult(result.Passed ? 0 : 1, result));
         },
         repo => SopDoctorCommand.RunDoctor(repo, BuildVersion.Current),
         async (repo, protectedBranch, stubPaths, config, ct) =>
@@ -680,12 +733,12 @@ public sealed class InstallCommandTests
         });
 
     private static async Task<(int Exit, string Stdout, string Stderr)> ExecuteStageAsync(
-        string repo, InstallInvocation invocation, InstallDependencies dependencies)
+        string repo, InstallInvocation invocation, InstallDependencies? dependencies = null, bool json = true)
     {
         var stdout = new StringWriter();
         var stderr = new StringWriter();
         var exit = await InstallCommand.ExecuteAsync(
-            invocation, true, repo, new StringReader(string.Empty), stdout, stderr,
+            invocation, json, repo, new StringReader(string.Empty), stdout, stderr,
             CancellationToken.None, dependencies);
         return (exit, stdout.ToString(), stderr.ToString());
     }
