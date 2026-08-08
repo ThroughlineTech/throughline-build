@@ -244,6 +244,7 @@ public sealed record GateView(
     string Role,
     string WorkingDirectory,
     bool ChecksConfigured,
+    bool? CanariesVerified,
     bool Passed,
     string Message,
     IReadOnlyList<GateCheckView> Checks);

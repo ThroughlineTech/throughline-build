@@ -60,7 +60,11 @@ public static class ConfigProfileWriter
     /// The decision is made purely by comparing rendered content against existing content, so it
     /// carries no knowledge of any toolchain, executable, or stack. See TLB-639.
     /// </summary>
-    public static WriteOutcome Apply(string configText, ProjectProfile profile, bool force)
+    public static WriteOutcome Apply(
+        string configText,
+        ProjectProfile profile,
+        bool force,
+        bool? canariesVerified = null)
     {
         var (lines, sep) = SplitLines(configText);
         var list = lines.ToList();
@@ -68,10 +72,13 @@ public static class ConfigProfileWriter
         bool projectChanged = ApplyProjectKeys(list, profile);
         var reviewEdit = ApplyArrayTables(
             list, "[[review.checks]]", "review", profile.ReviewChecks);
+        bool canaryStatusChanged = canariesVerified is not null
+            && ApplySectionScalar(list, "review", "canaries_verified", canariesVerified.Value ? "true" : "false");
         var shipEdit = ApplyArrayTables(
             list, "[[ship.regression_checks]]", "ship", profile.RegressionChecks);
 
         bool changed = projectChanged
+            || canaryStatusChanged
             || reviewEdit != ArrayTableEdit.Unchanged
             || shipEdit != ArrayTableEdit.Unchanged;
         if (!changed)
@@ -179,6 +186,40 @@ public static class ConfigProfileWriter
             }
         }
         return changed;
+    }
+
+    private static bool ApplySectionScalar(
+        List<string> lines,
+        string section,
+        string key,
+        string value)
+    {
+        var header = $"[{section}]";
+        int start = IndexOfTrimmed(lines, header, 0);
+        if (start < 0)
+        {
+            EnsureTrailingBlank(lines);
+            lines.Add(header);
+            lines.Add($"{key} = {value}");
+            return true;
+        }
+
+        int end = start + 1;
+        while (end < lines.Count && !IsHeader(lines[end]))
+            end++;
+
+        int keyLine = FindKeyLine(lines, start + 1, end, key);
+        var newLine = $"{key} = {value}";
+        if (keyLine >= 0)
+        {
+            if (lines[keyLine] == newLine)
+                return false;
+            lines[keyLine] = newLine;
+            return true;
+        }
+
+        lines.Insert(start + 1, newLine);
+        return true;
     }
 
     // ------------------------------------------------------------------

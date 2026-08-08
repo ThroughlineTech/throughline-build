@@ -14,7 +14,8 @@ public static class GateCommand
         AutomatedChecksRunner runner,
         TextWriter output,
         TextWriter error,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool? canariesVerified = null)
     {
         var parsed = Parse(args);
         if (parsed.Error is not null)
@@ -52,6 +53,7 @@ public static class GateCommand
             parsed.Role,
             Path.GetFullPath(workingDirectory),
             configuredChecks.Count > 0,
+            canariesVerified,
             passed,
             message,
             results.Select(ToView).ToList());
@@ -105,6 +107,12 @@ public static class GateCommand
         if (view.Ticket is not null)
             output.WriteLine($"ticket: {view.Ticket}");
         output.WriteLine($"role: {view.Role}");
+        output.WriteLine($"canaries verified: {view.CanariesVerified switch
+        {
+            true => "yes",
+            false => "no",
+            null => "unknown",
+        }}");
         output.WriteLine($"working directory: {view.WorkingDirectory}");
         foreach (var check in view.Checks)
         {

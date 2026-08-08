@@ -2112,6 +2112,45 @@ verify_gate_vacuity = false
         }
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Load_CanariesVerified_ParsesAndDoesNotWarnAsUnknownKey(bool expected)
+    {
+        var toml = ValidToml + $"""
+
+[review]
+canaries_verified = {expected.ToString().ToLowerInvariant()}
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            var config = BuildConfigLoader.Load(path, w => captured.Add(w));
+            Assert.Equal(expected, config.Review.CanariesVerified);
+            Assert.DoesNotContain(captured, w => w.Contains("canaries_verified"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_CanariesVerified_IsUnknownWhenOmitted()
+    {
+        var path = WriteToml(ValidToml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Null(config.Review.CanariesVerified);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     [Fact]
     public void Load_ConventionFiles_ParsedIntoProjectContext()
     {

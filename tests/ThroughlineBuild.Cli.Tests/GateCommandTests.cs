@@ -110,6 +110,31 @@ public sealed class GateCommandTests
         Assert.Single(data.GetProperty("checks").EnumerateArray());
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task JsonDistinguishesPersistedCanaryVerificationState(bool canariesVerified)
+    {
+        var output = new StringWriter();
+
+        var exit = await GateCommand.ExecuteAsync(
+            ["gate"],
+            json: true,
+            [Spec("test", CheckRole.Gating)],
+            Directory.GetCurrentDirectory(),
+            new RecordingRunner(),
+            output,
+            TextWriter.Null,
+            CancellationToken.None,
+            canariesVerified);
+
+        Assert.Equal(0, exit);
+        using var json = JsonDocument.Parse(output.ToString());
+        Assert.Equal(
+            canariesVerified,
+            json.RootElement.GetProperty("data").GetProperty("canariesVerified").GetBoolean());
+    }
+
     [Fact]
     public async Task AdvisoryFailure_IsReportedButDoesNotFailGate()
     {

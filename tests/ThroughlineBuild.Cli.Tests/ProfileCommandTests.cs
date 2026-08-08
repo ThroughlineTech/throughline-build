@@ -1,5 +1,8 @@
 using System.Text.Json;
 using ThroughlineBuild.Cli;
+using ThroughlineBuild.Contracts;
+using ThroughlineBuild.Scaffold;
+using ThroughlineBuild.Verification;
 using Xunit;
 
 namespace ThroughlineBuild.Cli.Tests;
@@ -7,6 +10,22 @@ namespace ThroughlineBuild.Cli.Tests;
 [Collection("Cli Tests Environment")]
 public sealed class ProfileCommandTests
 {
+    private sealed class RecordingVerifier(ProfileGateVerificationResult result) : ProfileGateVerifier
+    {
+        public int CallCount { get; private set; }
+
+        public override Task<ProfileGateVerificationResult> VerifyAsync(
+            ProjectProfile profile,
+            string mainWorktreePath,
+            IGitClient git,
+            AutomatedChecksRunner runner,
+            CancellationToken ct)
+        {
+            CallCount++;
+            return Task.FromResult(result);
+        }
+    }
+
     private const string ProfileJson = """
     {
       "language": "example",
@@ -29,19 +48,90 @@ public sealed class ProfileCommandTests
     """;
 
     [Fact]
-    public async Task ApplyFromStdin_WritesProfileWithoutTicketingOrWorkerConfiguration()
+    public async Task ApplyFromStdin_VerifiesCanaryAndReportsTrue()
     {
+        var verifier = new RecordingVerifier(ProfileGateVerificationResult.Ok());
         var result = await RunInRepositoryAsync(
             "# profile apply consumes only valid TOML\n",
             ["profile", "apply", "-", "--json"],
-            stdin: ProfileJson);
+            stdin: ProfileJson,
+            verifier: verifier);
 
         Assert.Equal(0, result.Exit);
         Assert.Equal(string.Empty, result.Stderr);
+        Assert.Equal(1, verifier.CallCount);
         using var json = JsonDocument.Parse(result.Stdout);
         Assert.True(json.RootElement.GetProperty("ok").GetBoolean());
-        Assert.True(json.RootElement.GetProperty("data").GetProperty("changed").GetBoolean());
+        var data = json.RootElement.GetProperty("data");
+        Assert.True(data.GetProperty("changed").GetBoolean());
+        Assert.True(data.GetProperty("canaryVerified").GetBoolean());
+        Assert.Contains("canaries_verified = true", result.ConfigText);
         Assert.Contains("executable = \"tool\"", result.ConfigText);
+    }
+
+    [Fact]
+    public async Task ApplyRejectsVacuousCheckWithoutWritingConfig()
+    {
+        const string initial = "# unchanged\n";
+        var verifier = new RecordingVerifier(ProfileGateVerificationResult.Fail(
+            "gating check 'build' is structurally vacuous"));
+
+        var result = await RunInRepositoryAsync(
+            initial,
+            ["profile", "apply", "-", "--json"],
+            stdin: ProfileJson,
+            verifier: verifier);
+
+        Assert.Equal(1, result.Exit);
+        Assert.Equal(1, verifier.CallCount);
+        Assert.Equal(initial, result.ConfigText);
+        using var json = JsonDocument.Parse(result.Stdout);
+        Assert.False(json.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Contains("structurally vacuous",
+            json.RootElement.GetProperty("error").GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task ApplySkipCanaryWarnsRecordsFalseAndDoesNotVerify()
+    {
+        var verifier = new RecordingVerifier(ProfileGateVerificationResult.Fail("must not be called"));
+
+        var result = await RunInRepositoryAsync(
+            "# minimal\n",
+            ["profile", "apply", "-", "--skip-canary", "--json"],
+            stdin: ProfileJson,
+            verifier: verifier);
+
+        Assert.Equal(0, result.Exit);
+        Assert.Equal(0, verifier.CallCount);
+        Assert.Contains("Warning:", result.Stderr);
+        Assert.Contains("were not proven capable of rejecting their canaries", result.Stderr);
+        using var json = JsonDocument.Parse(result.Stdout);
+        Assert.False(json.RootElement.GetProperty("data").GetProperty("canaryVerified").GetBoolean());
+        Assert.Contains("canaries_verified = false", result.ConfigText);
+    }
+
+    [Fact]
+    public async Task ApplyRejectsGatingCheckWithMissingCanary()
+    {
+        var verifier = new RecordingVerifier(ProfileGateVerificationResult.Fail(
+            "gating check 'build' has no canary; cannot prove it is non-vacuous"));
+        var profileWithoutCanary = ProfileJson.Replace(
+            ",\n          \"canary\": [{ \"path\": \"src/__probe.txt\", \"content\": \"broken\" }]",
+            "",
+            StringComparison.Ordinal);
+
+        var result = await RunInRepositoryAsync(
+            "# unchanged\n",
+            ["profile", "apply", "-", "--json"],
+            stdin: profileWithoutCanary,
+            verifier: verifier);
+
+        Assert.Equal(1, result.Exit);
+        Assert.Equal("# unchanged\n", result.ConfigText);
+        using var json = JsonDocument.Parse(result.Stdout);
+        Assert.Contains("has no canary",
+            json.RootElement.GetProperty("error").GetProperty("message").GetString());
     }
 
     [Fact]
@@ -163,19 +253,24 @@ public sealed class ProfileCommandTests
         Assert.False(ProfileCommand.TryParse(
             ["profile", "verify-canaries", "profile.json", "--force"], out _, out var forceError));
         Assert.Contains("does not accept --force", forceError);
+
+        Assert.False(ProfileCommand.TryParse(
+            ["profile", "verify-canaries", "profile.json", "--skip-canary"], out _, out var skipError));
+        Assert.Contains("does not accept --skip-canary", skipError);
     }
 
     private static async Task<(int Exit, string Stdout, string Stderr, string ConfigText, string? Repository)> RunInRepositoryAsync(
         string config,
         string[] args,
         string? stdin = null,
-        bool keepRepository = false)
+        bool keepRepository = false,
+        ProfileGateVerifier? verifier = null)
     {
         var repository = Path.Combine(Path.GetTempPath(), "profile-command-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(repository, ".build"));
         await RunGitAsync(repository, "init");
         File.WriteAllText(Path.Combine(repository, ".build", "config.toml"), config);
-        var result = await RunAtRepositoryAsync(repository, args, stdin);
+        var result = await RunAtRepositoryAsync(repository, args, stdin, verifier);
         if (!keepRepository)
         {
             TryDeleteDirectory(repository);
@@ -188,7 +283,8 @@ public sealed class ProfileCommandTests
     private static async Task<(int Exit, string Stdout, string Stderr, string ConfigText, string? Repository)> RunAtRepositoryAsync(
         string repository,
         string[] args,
-        string? stdin)
+        string? stdin,
+        ProfileGateVerifier? verifier = null)
     {
         var originalDirectory = Directory.GetCurrentDirectory();
         var originalIn = Console.In;
@@ -210,7 +306,8 @@ public sealed class ProfileCommandTests
                 new InProcessCliConsole(
                     stdin is null ? TextReader.Null : new StringReader(stdin),
                     stdout,
-                    stderr));
+                    stderr),
+                verifier ?? new RecordingVerifier(ProfileGateVerificationResult.Ok()));
             var config = File.ReadAllText(Path.Combine(repository, ".build", "config.toml"));
             return (exit, stdout.ToString(), stderr.ToString(), config, repository);
         }

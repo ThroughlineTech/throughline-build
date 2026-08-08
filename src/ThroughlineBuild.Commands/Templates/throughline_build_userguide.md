@@ -463,7 +463,8 @@ Run `build gate` from the leased worktree to execute its configured
 `[[review.checks]]`. Setup checks run first. Gating and setup failures exit 1;
 advisory failures remain visible but do not change the exit code. Use
 `--role gating|advisory|all` to select a role, and `--json` for typed per-check
-exit codes, durations, captured output, and inconclusive missing-path results.
+exit codes, durations, captured output, inconclusive missing-path results, and
+the persisted canary-proof status (`true`, `false`, or unknown).
 By default an empty selected check list exits 0 for compatibility; add
 `--require-checks` to make that condition exit 1.
 

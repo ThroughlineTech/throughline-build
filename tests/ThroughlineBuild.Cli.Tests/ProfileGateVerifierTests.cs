@@ -108,4 +108,49 @@ public sealed class ProfileGateVerifierTests
                 Directory.Delete(root, recursive: true);
         }
     }
+
+    [Fact]
+    public async Task VerifyAsync_RejectsAGatingCheckWithNoCanary()
+    {
+        var profile = new ProjectProfile(
+            "example",
+            "example-stack",
+            "tool",
+            "",
+            "tool build",
+            "tool test",
+            "",
+            new[]
+            {
+                new ProfileCheck(
+                    "build",
+                    "tool",
+                    Array.Empty<string>(),
+                    1,
+                    null,
+                    CheckRole.Gating)
+            },
+            Array.Empty<ProfileCheck>());
+        var root = Path.Combine(Path.GetTempPath(), "profile-gate-verifier-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+
+        try
+        {
+            var result = await new ProfileGateVerifier().VerifyAsync(
+                profile,
+                root,
+                new TemporaryWorktreeGit(),
+                new AlwaysGreenRunner(),
+                CancellationToken.None);
+
+            Assert.False(result.Success);
+            Assert.Contains("has no canary", result.FailureReason);
+            Assert.Contains("cannot prove it is non-vacuous", result.FailureReason);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
 }

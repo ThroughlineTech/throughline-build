@@ -13,7 +13,11 @@ public enum ProfileAction
     VerifyCanaries
 }
 
-public sealed record ProfileInvocation(ProfileAction Action, bool Force, string? InputPath);
+public sealed record ProfileInvocation(
+    ProfileAction Action,
+    bool Force,
+    string? InputPath,
+    bool SkipCanary = false);
 
 /// <summary>
 /// Implements the standalone profile surface. Apply is intentionally worker-free so an agent
@@ -63,6 +67,7 @@ public static class ProfileCommand
         }
 
         bool force = false;
+        bool skipCanary = false;
         var positional = new List<string>();
         for (var i = 2; i < args.Count; i++)
         {
@@ -75,6 +80,18 @@ public static class ProfileCommand
                 }
 
                 force = true;
+                continue;
+            }
+
+            if (args[i] == "--skip-canary")
+            {
+                if (skipCanary)
+                {
+                    error = "--skip-canary may be specified only once";
+                    return false;
+                }
+
+                skipCanary = true;
                 continue;
             }
 
@@ -95,6 +112,12 @@ public static class ProfileCommand
                 return false;
             }
 
+            if (skipCanary)
+            {
+                error = "profile verify-canaries does not accept --skip-canary";
+                return false;
+            }
+
             if (positional.Count != 1)
             {
                 error = "profile verify-canaries requires exactly one JSON input path or '-'";
@@ -111,7 +134,7 @@ public static class ProfileCommand
             return false;
         }
 
-        invocation = new ProfileInvocation(ProfileAction.Apply, force, positional[0]);
+        invocation = new ProfileInvocation(ProfileAction.Apply, force, positional[0], skipCanary);
         return true;
     }
 
@@ -122,7 +145,7 @@ public static class ProfileCommand
         else
         {
             error.WriteLine($"Error: {message}");
-            error.WriteLine("Usage: build profile apply <file|-> [--force] [--json]");
+            error.WriteLine("Usage: build profile apply <file|-> [--force] [--skip-canary] [--json]");
             error.WriteLine("       build profile prompt [--json]");
             error.WriteLine("       build profile verify-canaries <file|-> [--json]");
         }
@@ -144,6 +167,7 @@ public static class ProfileCommand
         bool json,
         string configPath,
         string inputDirectory,
+        ProfileGateVerifier verifier,
         TextWriter output,
         TextWriter error,
         CancellationToken ct)
@@ -167,13 +191,39 @@ public static class ProfileCommand
                 $"could not read configuration '{configPath}': {ex.Message}", 2);
         }
 
-        var outcome = ConfigProfileWriter.Apply(configText, profile, invocation.Force);
+        var canaryVerified = !invocation.SkipCanary;
+        if (invocation.SkipCanary)
+        {
+            error.WriteLine(
+                "Warning: profile canary verification was skipped; gating checks were not proven " +
+                "capable of rejecting their canaries.");
+        }
+        else
+        {
+            var verification = await verifier.VerifyAsync(
+                profile,
+                inputDirectory,
+                new ProcessGitClient(inputDirectory),
+                new AutomatedChecksRunner(),
+                ct).ConfigureAwait(false);
+            if (!verification.Success)
+            {
+                return Failure(json, output, error, CliErrorCodes.Failure,
+                    $"profile canary verification failed: {verification.FailureReason}", 1);
+            }
+        }
+
+        var outcome = ConfigProfileWriter.Apply(
+            configText,
+            profile,
+            invocation.Force,
+            canaryVerified);
         if (outcome.AlreadyMatched)
         {
             // Re-applying the same profile is a no-op success, not a failure: the installer and any
             // repeated automation must be able to run this twice. See TLB-639.
             WriteOperation(json, output, "apply", configPath, false,
-                outcome.Summary ?? ConfigProfileWriter.AlreadyMatchedSummary, canaryVerified: null);
+                outcome.Summary ?? ConfigProfileWriter.AlreadyMatchedSummary, canaryVerified);
             return 0;
         }
 
@@ -195,7 +245,7 @@ public static class ProfileCommand
         }
 
         WriteOperation(json, output, "apply", configPath, true,
-            outcome.Summary ?? "wrote profile", canaryVerified: null);
+            outcome.Summary ?? "wrote profile", canaryVerified);
         return 0;
     }
 

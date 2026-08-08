@@ -237,6 +237,39 @@ public class ConfigProfileWriterTests
         Assert.Null(second.SkipReason);
     }
 
+    [Fact]
+    public void CanaryVerificationStatus_IsPersistedUnderReviewAndParticipatesInIdempotence()
+    {
+        var profile = ProfileFor("npm");
+        var verified = ConfigProfileWriter.Apply(
+            NoChecksConfig,
+            profile,
+            force: false,
+            canariesVerified: true);
+
+        Assert.True(verified.Changed, verified.SkipReason);
+        var text = verified.NewText!;
+        var reviewStart = text.IndexOf("[review]", StringComparison.Ordinal);
+        var status = text.IndexOf("canaries_verified = true", StringComparison.Ordinal);
+        var firstCheck = text.IndexOf("[[review.checks]]", StringComparison.Ordinal);
+        Assert.True(reviewStart >= 0 && status > reviewStart && status < firstCheck);
+
+        var repeated = ConfigProfileWriter.Apply(
+            text,
+            profile,
+            force: false,
+            canariesVerified: true);
+        Assert.True(repeated.AlreadyMatched);
+
+        var skipped = ConfigProfileWriter.Apply(
+            text,
+            profile,
+            force: false,
+            canariesVerified: false);
+        Assert.True(skipped.Changed, skipped.SkipReason);
+        Assert.Contains("canaries_verified = false", skipped.NewText);
+    }
+
     // The gate guards checks, not the whole file: a profile that keeps the checks byte-identical and
     // only moves a [project] key writes without an override.
     [Fact]

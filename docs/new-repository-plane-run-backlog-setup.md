@@ -216,8 +216,12 @@ build profile prompt > profile-rules.md
 build profile apply profile.json --json
 ```
 
-`profile prompt` starts no worker. `profile apply` writes only the
-profile-managed values in `.build/config.toml`: `[project]`,
+`profile prompt` starts no worker. Before writing, `profile apply` creates a
+temporary worktree, runs the proposed setup and gating checks there, and proves
+that every gating check rejects its deliberately broken canary. A missing canary
+or a check that remains green blocks the write. On success, apply records
+`review.canaries_verified = true`. It writes only the profile-managed values in
+`.build/config.toml`: `[project]`, `review.canaries_verified`,
 `[[review.checks]]`, and `[[ship.regression_checks]]`. It preserves every other
 section and comment. `profile apply -` reads the JSON from standard input. These
 commands need neither ticketing credentials nor worker configuration.
@@ -228,20 +232,23 @@ that already matches the file exits 0 and reports a no-op instead of rewriting
 it - this is what makes `profile apply` safe to re-run on a second machine that
 already inherited the gate through the clone; see step 10.
 
-### Optional canary proof
+### Canary proof opt-out
 
-Canary proving is an explicit opt-in step. It creates a temporary worktree, runs
-the proposed setup and gating checks there, and writes each gating check's
-deliberately broken canary. A check that remains green is rejected as vacuous:
+Canary proving is the default. On a machine that genuinely cannot run the checks,
+such as CI applying a known-good profile or a host without the toolchain, skip it
+deliberately:
 
 ```sh
-build profile verify-canaries profile.json --json
+build profile apply profile.json --skip-canary --json
 ```
 
-This verb never changes `.build/config.toml` and is not run by profile prompt,
-profile apply, scaffold, or SOP installation. The prompt's rules require
-role-tagged checks, required paths, hermetic test discovery, no user-global cache
-poisoning, and one canary per gating check.
+The command prints a warning, reports `canaryVerified: false`, and records
+`review.canaries_verified = false`, which `build gate` exposes on later runs.
+The prompt's rules require role-tagged checks, required paths, hermetic test
+discovery, no user-global cache poisoning, and one canary per gating check.
+
+`build profile verify-canaries profile.json --json` remains available when only
+the proof is needed; it never changes `.build/config.toml`.
 
 ### Offline fallback
 
@@ -554,10 +561,10 @@ of `[[review.checks]]`; it never loads or tests Plane configuration. Use
 
 ### The gate passes but nothing was really checked
 
-Run `build profile verify-canaries profile.json --json`. A gating check with no
-canary has never been proven able to fail, and a check that inspects an empty
-aggregate root passes forever. Regenerate the JSON with the full rules from
-step 4, verify it, then apply it.
+Re-run `build profile apply profile.json --json`. A gating check with no canary
+is a hard failure because it cannot be proven able to fail, and a check that
+inspects an empty aggregate root passes forever. Regenerate the JSON with the
+full rules from step 4, then apply it again.
 
 ### Only one host stub exists
 

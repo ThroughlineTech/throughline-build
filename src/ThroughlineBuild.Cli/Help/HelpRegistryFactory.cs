@@ -329,7 +329,7 @@ public static class HelpRegistryFactory
             new("--ticket <id>", "Optional ticket identity included in the result", false),
             new("--role <role>", "Run gating, advisory, or all checks (default: all); setup always runs first", false),
             new("--require-checks", "Fail when the selected check list is empty", false),
-            new("--json", "Emit a versioned JSON envelope with typed per-check results", false),
+            new("--json", "Emit typed per-check results and the persisted canary-proof status", false),
         ],
         ExitCodes:
         [
@@ -349,12 +349,13 @@ public static class HelpRegistryFactory
         Group: CommandGroup.Configure,
         Summary: "Prompt for, apply, or verify repository-specific review and ship checks",
         Usage:
-            "profile apply <file|-> [--force] [--json]\n" +
+            "profile apply <file|-> [--force] [--skip-canary] [--json]\n" +
             "profile prompt [--json]\n" +
             "profile verify-canaries <file|-> [--json]",
         Options:
         [
             new("--force", "Overwrite existing checks that differ from the supplied profile", false),
+            new("--skip-canary", "Apply without proving gating checks reject their canaries; records the skipped proof", false),
             new("<file|->", "Read PROJECT_PROFILE JSON from a file or standard input", false),
             new("--json", "Emit a versioned JSON envelope", false),
         ],
@@ -368,11 +369,11 @@ public static class HelpRegistryFactory
         [
             new("profile prompt | agent > profile.json && build profile apply profile.json", "Let an interactive agent derive JSON without spawning a nested worker"),
             new("agent > profile.json && build profile apply profile.json --force", "Replace previously customized checks deliberately"),
-            new("profile verify-canaries profile.json --json", "Explicitly prove every proposed gating check rejects its canary"),
+            new("profile apply profile.json --skip-canary", "Apply on a constrained machine and record that canary proof was skipped"),
         ],
         Details:
         [
-            "`profile prompt` needs no configuration or ticketing credentials. `profile apply` reads only config.toml and spawns no worker. Applying a profile the config already matches is a no-op success, so the command is safe to repeat; applying one that would overwrite existing, differing checks exits nonzero until `--force` is passed. `profile verify-canaries` is an explicit opt-in operation that uses a temporary worktree and never changes config.toml."
+            "`profile prompt` needs no configuration or ticketing credentials. `profile apply` spawns no worker, but by default it uses a temporary worktree to prove every gating check rejects its canary before writing config.toml. A missing or ineffective canary blocks the write. `--skip-canary` is the explicit constrained-machine opt-out and records the skipped proof. Applying a profile the config already matches is a no-op success, so the command is safe to repeat; applying one that would overwrite existing, differing checks exits nonzero until `--force` is passed. `profile verify-canaries` runs the same proof without changing config.toml."
         ]
     );
 

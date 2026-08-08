@@ -34,7 +34,8 @@ public static class CliApplication
     internal static async Task<int> RunAsync(
         string[] args,
         Func<string, AgentConfig, IWorkerAgent> workerAgentBuilder,
-        IConsole? consoleOverride = null)
+        IConsole? consoleOverride = null,
+        ProfileGateVerifier? profileGateVerifier = null)
     {
         var console = consoleOverride ?? SystemConsole.Instance;
 
@@ -499,7 +500,7 @@ public static class CliApplication
                         profileInvocation,
                         jsonOutput,
                         rawCwd,
-                        new ProfileGateVerifier(),
+                        profileGateVerifier ?? new ProfileGateVerifier(),
                         Console.Out,
                         Console.Error,
                         CancellationToken.None);
@@ -525,6 +526,7 @@ public static class CliApplication
                     jsonOutput,
                     profileContext.ConfigPath,
                     rawCwd,
+                    profileGateVerifier ?? new ProfileGateVerifier(),
                     Console.Out,
                     Console.Error,
                     CancellationToken.None);
@@ -647,7 +649,8 @@ public static class CliApplication
                     new AutomatedChecksRunner(),
                     Console.Out,
                     Console.Error,
-                    gateCts.Token);
+                    gateCts.Token,
+                    config.Review.CanariesVerified);
             }
             catch (OperationCanceledException)
             {
