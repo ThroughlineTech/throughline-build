@@ -17,6 +17,8 @@ public class ProfilePromptLoaderTests
         Assert.Contains("setupFiles", prompt);
         Assert.Contains("contract_authority", prompt);
         Assert.Contains("Return ONLY the JSON object", prompt);
+        Assert.Contains("build install --profile .build/profile.json", prompt);
+        Assert.DoesNotContain("build profile apply", prompt);
         Assert.DoesNotContain("{{op_doc_markdown}}", prompt);
     }
 }

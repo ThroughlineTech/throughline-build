@@ -50,7 +50,11 @@ public sealed class SetupCommand
         var planeGap = await RunPlaneAsync(checkOnly, console, ct).ConfigureAwait(false);
 
         if (checkOnly)
+        {
+            console.WriteLine($"Backend readiness: {(planeGap ? "BLOCKED" : "READY")}");
+            console.WriteLine($"Local hygiene: {(localGap ? "NEEDS ATTENTION" : "READY")}");
             return (localGap || planeGap) ? 1 : 0;
+        }
         return 0;
     }
 

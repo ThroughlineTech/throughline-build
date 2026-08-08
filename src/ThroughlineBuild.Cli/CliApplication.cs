@@ -243,14 +243,15 @@ public static class CliApplication
                     else
                     {
                         Console.Error.WriteLine($"Error: {installError}");
-                        Console.Error.WriteLine("Usage: build install [--profile <path|-> [--force] | --invariants <path|->] [--json]");
+                        Console.Error.WriteLine("Usage: build install [--no-interactive] [--from FILE] [--plane-url URL] [--workspace SLUG] [--project-id UUID] [--project-name NAME] [--token TOKEN | --token-env VAR] [--profile <path|-> [--force] | --invariants <path|->] [--json]");
                     }
                     return 2;
                 }
                 using var installCts = new CancellationTokenSource();
                 Console.CancelKeyPress += (_, e) => { e.Cancel = true; installCts.Cancel(); };
                 return await InstallCommand.ExecuteAsync(
-                    installInvocation!, jsonOutput, rawCwd, Console.In, Console.Out, Console.Error, installCts.Token);
+                    installInvocation!, jsonOutput, rawCwd, Console.In, Console.Out, Console.Error, installCts.Token,
+                    inputRedirected: console.IsInputRedirected);
             }
 
             if (verbKind == CliVerbKind.Conductor)

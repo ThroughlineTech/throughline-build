@@ -10,4 +10,5 @@ Prefer those real entry points over guesses based on file extensions.
 ## Output
 
 Return ONLY the JSON object described above. Do not wrap it in Markdown, a named block, or a
-WORKER_RESULT envelope. This response is intended to be piped directly into `build profile apply -`.
+WORKER_RESULT envelope. Save the response as `.build/profile.json`, then run
+`build install --profile .build/profile.json`.

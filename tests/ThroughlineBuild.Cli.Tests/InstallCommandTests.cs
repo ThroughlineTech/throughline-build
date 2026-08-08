@@ -89,6 +89,52 @@ public sealed class InstallCommandTests
     }
 
     [Fact]
+    public void Parse_ForwardsInitConfigurationOnTheFirstStageOnly()
+    {
+        Assert.True(InstallCommand.TryParse(
+            ["install", "--no-interactive", "--plane-url", "https://plane.example", "--workspace", "team",
+             "--project-id", "project-id", "--token-env", "PLANE_API_TOKEN"], out var invocation, out var error), error);
+
+        Assert.NotNull(invocation!.Init);
+        Assert.True(invocation.Init!.NoInteractive);
+        Assert.Equal("https://plane.example", invocation.Init.PlaneUrl);
+        Assert.Equal("team", invocation.Init.Workspace);
+        Assert.Equal("project-id", invocation.Init.ProjectId);
+        Assert.Equal("PLANE_API_TOKEN", invocation.Init.TokenEnv);
+        Assert.True(invocation.Init.HasCompleteNonInteractiveConfiguration);
+
+        Assert.False(InstallCommand.TryParse(
+            ["install", "--profile", "profile.json", "--no-interactive"], out _, out var stageError));
+        Assert.Contains("first install invocation", stageError);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NonInteractiveWithoutConfig_FailsBeforeWritingPlaceholders()
+    {
+        var repo = Directory.CreateTempSubdirectory().FullName;
+        try
+        {
+            var stdout = new StringWriter();
+            var stderr = new StringWriter();
+
+            var exit = await InstallCommand.ExecuteAsync(
+                new InstallInvocation(null, null), true, repo, new StringReader(string.Empty), stdout, stderr,
+                CancellationToken.None, inputRedirected: true);
+
+            Assert.Equal(2, exit);
+            Assert.False(Directory.Exists(Path.Combine(repo, ".build")));
+            using var envelope = System.Text.Json.JsonDocument.Parse(stdout.ToString());
+            var message = envelope.RootElement.GetProperty("error").GetProperty("message").GetString()!;
+            Assert.Contains("build install --no-interactive", message);
+            Assert.Contains("--token-env PLANE_API_TOKEN", message);
+        }
+        finally
+        {
+            TryDelete(repo);
+        }
+    }
+
+    [Fact]
     public void JsonHandoffEnvelope_IsSourceGeneratedAndMachineReadable()
     {
         AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
@@ -154,15 +200,24 @@ public sealed class InstallCommandTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_AllThreeStages_ReachesReadyInNonDotnetRepoAndRerunsIdempotently()
+    public async Task ExecuteAsync_AllThreeStages_ReachesReadyNonInteractivelyWithoutAnEditorAndRerunsIdempotently()
     {
         var repo = await CreateRepositoryAsync();
         try
         {
             var readinessCalls = 0;
-            var dependencies = EndToEndDependencies(() => readinessCalls++);
+            var init = new InstallInitOptions(
+                NoInteractive: true,
+                PlaneUrl: "https://plane.invalid",
+                Workspace: "workspace",
+                ProjectId: "project-id",
+                TokenEnv: "PLANE_API_TOKEN");
+            var dependencies = EndToEndDependencies(
+                () => readinessCalls++,
+                received => Assert.Equal(init, received));
 
-            var first = await ExecuteStageAsync(repo, new InstallInvocation(null, null), dependencies);
+            var first = await ExecuteStageAsync(
+                repo, new InstallInvocation(null, null, Init: init), dependencies, inputRedirected: true);
             Assert.Equal(0, first.Exit);
             Assert.Equal("profile_handoff", Stage(first.Stdout));
             Assert.Contains(".build/profile.json", first.Stdout);
@@ -707,9 +762,12 @@ public sealed class InstallCommandTests
             CancellationToken.None,
             query ?? (_ => Task.CompletedTask));
 
-    private static InstallDependencies EndToEndDependencies(Action readinessCalled) => new(
-        async (repo, _, diagnostics, ct) =>
+    private static InstallDependencies EndToEndDependencies(
+        Action readinessCalled,
+        Action<InstallInitOptions?>? initialized = null) => new(
+        async (repo, init, _, _, diagnostics, ct) =>
         {
+            initialized?.Invoke(init);
             Write(repo, ".build/config.toml", MinimalConfig);
             return await new SetupCommand(
                 new FullyProvisionedFake(),
@@ -733,13 +791,17 @@ public sealed class InstallCommandTests
         });
 
     private static async Task<(int Exit, string Stdout, string Stderr)> ExecuteStageAsync(
-        string repo, InstallInvocation invocation, InstallDependencies? dependencies = null, bool json = true)
+        string repo,
+        InstallInvocation invocation,
+        InstallDependencies? dependencies = null,
+        bool json = true,
+        bool inputRedirected = false)
     {
         var stdout = new StringWriter();
         var stderr = new StringWriter();
         var exit = await InstallCommand.ExecuteAsync(
             invocation, json, repo, new StringReader(string.Empty), stdout, stderr,
-            CancellationToken.None, dependencies);
+            CancellationToken.None, dependencies, inputRedirected);
         return (exit, stdout.ToString(), stderr.ToString());
     }
 

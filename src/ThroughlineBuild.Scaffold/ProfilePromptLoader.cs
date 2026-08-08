@@ -16,7 +16,7 @@ public static class ProfilePromptLoader
 
     /// <summary>
     /// Returns the repository-interrogation prompt. Its response contract is a single JSON object,
-    /// so an interactive agent can pipe its result directly to <c>build profile apply -</c>.
+    /// and is saved as the profile input for the next install invocation.
     /// </summary>
     public static string LoadRepository()
     {

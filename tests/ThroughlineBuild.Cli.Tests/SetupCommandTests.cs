@@ -242,6 +242,8 @@ public class SetupCommandTests
         Assert.Equal(0, repo.WriteCalls);
         Assert.Contains("not a git repository", console.Stderr);
         Assert.Contains(".gitignore", console.Stderr);
+        Assert.Contains("Backend readiness: READY", console.Stdout);
+        Assert.Contains("Local hygiene: NEEDS ATTENTION", console.Stdout);
     }
 
     // ------------------------------------------------------------------ TLB-627: tracked-token safety

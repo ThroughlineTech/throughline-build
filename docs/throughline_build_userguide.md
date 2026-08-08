@@ -21,6 +21,16 @@ build install --profile .build/profile.json
 build install --invariants .build/invariants.toml
 ```
 
+On a fresh repository, the first command forwards init configuration for a
+fully non-interactive run. For example:
+
+```sh
+build install --no-interactive --plane-url URL --workspace SLUG --project-id UUID --token-env PLANE_API_TOKEN
+```
+
+With no existing config, a bare redirected `build install` stops before writing
+placeholders and prints this required command instead.
+
 Each of the first two commands emits a canonical prompt and stops. Give that
 prompt to an agent that can read the repository, save only the requested JSON
 or TOML, and pass the file to the next invocation. The command never starts a

@@ -857,9 +857,17 @@ public static class HelpRegistryFactory
         Name: "install",
         Group: CommandGroup.Configure,
         Summary: "Install and prove run-backlog readiness through two explicit agent handoffs",
-        Usage: "install [--profile <path|-> [--force] | --invariants <path|->] [--json]",
+        Usage: "install [--no-interactive] [--from FILE] [--plane-url URL] [--workspace SLUG] [--project-id UUID] [--project-name NAME] [--token TOKEN | --token-env VAR] [--profile <path|-> [--force] | --invariants <path|->] [--json]",
         Options:
         [
+            new("--no-interactive", "Forward to init for first-stage automation; requires complete init configuration", false),
+            new("--from FILE", "Forward init credentials from a key=value file on the first invocation", false),
+            new("--plane-url URL", "Forward the Plane base URL to init on the first invocation", false),
+            new("--workspace SLUG", "Forward the Plane workspace slug to init on the first invocation", false),
+            new("--project-id UUID", "Forward the Plane project UUID to init on the first invocation", false),
+            new("--project-name NAME", "Forward the project name to init on the first invocation", false),
+            new("--token TOKEN", "Forward the Plane API token to init on the first invocation", false),
+            new("--token-env VAR", "Forward the Plane API token environment-variable name to init on the first invocation", false),
             new("--profile <path|->", "Apply PROJECT_PROFILE JSON, install SOPs, and stop at the invariant prompt", false),
             new("--force", "With --profile, overwrite existing checks that differ from the profile", false),
             new("--invariants <path|->", "Apply invariant TOML and finish deterministic readiness preparation", false),
@@ -868,7 +876,7 @@ public static class HelpRegistryFactory
         ExitCodes: [s_exit0, s_exit1, s_exit2, s_exit3, s_exit5],
         Examples:
         [
-            new("install", "Initialize/setup, then stop with the canonical profile prompt"),
+            new("install --no-interactive --plane-url URL --workspace SLUG --project-id UUID --token-env PLANE_API_TOKEN", "Initialize/setup non-interactively, then stop with the canonical profile prompt"),
             new("install --profile .build/profile.json", "Apply the profile, install SOPs, then stop with the conductor prompt"),
             new("install --profile .build/profile.json --force", "Replace checks a human wrote with the ones the profile derives"),
             new("install --invariants .build/invariants.toml --json", "Apply invariants and report READY only after SOP preflight passes"),
@@ -876,7 +884,8 @@ public static class HelpRegistryFactory
         Details:
         [
             "The verb never starts a worker or runs target-stack build/test commands. Final readiness requires doctor success, configured checks, resolved conductor data, a clean non-protected branch, no merge/rebase operation, and a queryable worktree lease surface.",
-            "Every stage is re-runnable on an installed repository regardless of its toolchain: a profile that already matches config is a no-op success, and the second run produces no additional commit or branch change."
+            "Every stage is re-runnable on an installed repository regardless of its toolchain: a profile that already matches config is a no-op success, and the second run produces no additional commit or branch change.",
+            "Init options apply only to the first invocation. A bare redirected install never writes placeholder configuration; it names the complete non-interactive command required to begin."
         ]
     );
 
@@ -933,7 +942,7 @@ public static class HelpRegistryFactory
         Usage: "setup [--check] [--write-token-file <path>]",
         Options:
         [
-            new("--check", "Verify only: report any missing git repo, .gitignore entries, or Plane states/labels and exit 1; mutate nothing", false),
+            new("--check", "Verify only: report backend readiness separately from local hygiene, exit 1 for any gap, and mutate nothing", false),
             new("--write-token-file <path>", "Write the Plane API token this run already resolved to <path> and set plane_api_token_file in config.toml, so a non-interactive process (an agent, CI, an editor with no login shell) can find it too; never combine with --check", false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2, s_exit3],

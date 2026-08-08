@@ -9,7 +9,29 @@ using ThroughlineBuild.Scaffold;
 
 namespace ThroughlineBuild.Cli;
 
-internal sealed record InstallInvocation(string? ProfilePath, string? InvariantsPath, bool Force = false);
+internal sealed record InstallInitOptions(
+    bool NoInteractive = false,
+    string? FromFile = null,
+    string? PlaneUrl = null,
+    string? Workspace = null,
+    string? ProjectId = null,
+    string? ProjectName = null,
+    string? Token = null,
+    string? TokenEnv = null)
+{
+    public bool HasCompleteNonInteractiveConfiguration =>
+        FromFile is not null ||
+        (!string.IsNullOrWhiteSpace(PlaneUrl) &&
+         !string.IsNullOrWhiteSpace(Workspace) &&
+         (!string.IsNullOrWhiteSpace(ProjectId) || !string.IsNullOrWhiteSpace(ProjectName)) &&
+         (!string.IsNullOrWhiteSpace(Token) || !string.IsNullOrWhiteSpace(TokenEnv)));
+}
+
+internal sealed record InstallInvocation(
+    string? ProfilePath,
+    string? InvariantsPath,
+    bool Force = false,
+    InstallInitOptions? Init = null);
 internal sealed record InstallProfileApplyResult(
     bool Success, int ExitCode, string Message, string? Language, string? Framework, string? ContractAuthority,
     string? ConfigPath = null, string? OriginalConfig = null);
@@ -19,7 +41,7 @@ internal sealed record InstallSopResult(int ExitCode, SopOperationView? Operatio
 internal sealed record FileSnapshot(bool Exists, string? Contents);
 
 internal sealed record InstallDependencies(
-    Func<string, TextReader, TextWriter, CancellationToken, Task<int>> EnsureInitAndSetup,
+    Func<string, InstallInitOptions?, TextReader, bool, TextWriter, CancellationToken, Task<int>> EnsureInitAndSetup,
     Func<string, TextWriter, CancellationToken, Task<InstallSopResult>> InstallSop,
     Func<string, SopDoctorView> RunDoctor,
     Func<string, string, IReadOnlyList<string>, BuildConfig, CancellationToken, Task<InstallReadinessResult>> AssertReadiness);
@@ -47,6 +69,14 @@ internal static class InstallCommand
         string? profile = null;
         string? invariants = null;
         var force = false;
+        var noInteractive = false;
+        string? fromFile = null;
+        string? planeUrl = null;
+        string? workspace = null;
+        string? projectId = null;
+        string? projectName = null;
+        string? token = null;
+        string? tokenEnv = null;
         for (var i = 1; i < args.Count; i++)
         {
             var option = args[i];
@@ -56,7 +86,14 @@ internal static class InstallCommand
                 force = true;
                 continue;
             }
-            if (option is not ("--profile" or "--invariants"))
+            if (option == "--no-interactive")
+            {
+                if (noInteractive) { error = "--no-interactive may be specified only once"; return false; }
+                noInteractive = true;
+                continue;
+            }
+            if (option is not ("--profile" or "--invariants" or "--from" or "--plane-url" or "--workspace" or
+                "--project-id" or "--project-name" or "--token" or "--token-env"))
             {
                 error = $"unknown install option: {option}";
                 return false;
@@ -71,15 +108,56 @@ internal static class InstallCommand
                 if (profile is not null) { error = "--profile may be specified only once"; return false; }
                 profile = args[i];
             }
-            else
+            else if (option == "--invariants")
             {
                 if (invariants is not null) { error = "--invariants may be specified only once"; return false; }
                 invariants = args[i];
+            }
+            else if (option == "--from")
+            {
+                if (fromFile is not null) { error = "--from may be specified only once"; return false; }
+                fromFile = args[i];
+            }
+            else if (option == "--plane-url")
+            {
+                if (planeUrl is not null) { error = "--plane-url may be specified only once"; return false; }
+                planeUrl = args[i];
+            }
+            else if (option == "--workspace")
+            {
+                if (workspace is not null) { error = "--workspace may be specified only once"; return false; }
+                workspace = args[i];
+            }
+            else if (option == "--project-id")
+            {
+                if (projectId is not null) { error = "--project-id may be specified only once"; return false; }
+                projectId = args[i];
+            }
+            else if (option == "--project-name")
+            {
+                if (projectName is not null) { error = "--project-name may be specified only once"; return false; }
+                projectName = args[i];
+            }
+            else if (option == "--token")
+            {
+                if (token is not null) { error = "--token may be specified only once"; return false; }
+                token = args[i];
+            }
+            else
+            {
+                if (tokenEnv is not null) { error = "--token-env may be specified only once"; return false; }
+                tokenEnv = args[i];
             }
         }
         if (profile is not null && invariants is not null)
         {
             error = "install accepts either --profile or --invariants, not both";
+            return false;
+        }
+        var init = new InstallInitOptions(noInteractive, fromFile, planeUrl, workspace, projectId, projectName, token, tokenEnv);
+        if ((profile is not null || invariants is not null) && init != new InstallInitOptions())
+        {
+            error = "init options apply only to the first install invocation";
             return false;
         }
         // --force is the override the profile-apply refusal names, so it has to be reachable from the
@@ -89,7 +167,8 @@ internal static class InstallCommand
             error = "install --force applies only to --profile";
             return false;
         }
-        invocation = new InstallInvocation(profile, invariants, force);
+        invocation = new InstallInvocation(profile, invariants, force,
+            init == new InstallInitOptions() ? null : init);
         return true;
     }
 
@@ -101,15 +180,26 @@ internal static class InstallCommand
         TextWriter output,
         TextWriter diagnostics,
         CancellationToken ct,
-        InstallDependencies? dependencies = null)
+        InstallDependencies? dependencies = null,
+        bool inputRedirected = false)
     {
         var deps = dependencies ?? DefaultDependencies();
         try
         {
             if (invocation.ProfilePath is null && invocation.InvariantsPath is null)
             {
+                var needsConfiguration = BuildConfigLoader.FindConfigFile(cwd) is null;
+                var nonInteractive = inputRedirected || invocation.Init?.NoInteractive == true;
+                if (needsConfiguration && nonInteractive && invocation.Init?.HasCompleteNonInteractiveConfiguration != true)
+                {
+                    return Failure(json, output, diagnostics,
+                        "no configuration is present for non-interactive install. Run " +
+                        "'build install --no-interactive --plane-url URL --workspace SLUG --project-id ID --token-env PLANE_API_TOKEN' " +
+                        "to initialize it without placeholders, then rerun 'build install'.", 2);
+                }
                 Progress(diagnostics, "stage 1/3: initializing configuration and provisioning setup");
-                var prepareExit = await deps.EnsureInitAndSetup(cwd, input, diagnostics, ct).ConfigureAwait(false);
+                var prepareExit = await deps.EnsureInitAndSetup(
+                    cwd, invocation.Init, input, inputRedirected, diagnostics, ct).ConfigureAwait(false);
                 if (prepareExit != 0)
                     return Failure(json, output, diagnostics, "install initialization/setup failed", prepareExit);
 
@@ -241,13 +331,28 @@ internal static class InstallCommand
                 config.Worktree.Root, config.Worktree.SeedFiles, config.Project.InstallCommand, ct));
 
     private static async Task<int> EnsureInitAndSetupAsync(
-        string cwd, TextReader input, TextWriter diagnostics, CancellationToken ct)
+        string cwd,
+        InstallInitOptions? init,
+        TextReader input,
+        bool inputRedirected,
+        TextWriter diagnostics,
+        CancellationToken ct)
     {
         if (BuildConfigLoader.FindConfigFile(cwd) is null)
         {
-            var initConsole = new InstallConsole(input, diagnostics);
+            var initConsole = new InstallConsole(input, inputRedirected, diagnostics);
             var initExit = await InitCommand.ExecuteAsync(
-                cwd, false, false, initConsole, probeCodex: null, ct: ct).ConfigureAwait(false);
+                cwd, false, false, initConsole,
+                planeUrl: init?.PlaneUrl,
+                workspace: init?.Workspace,
+                projectId: init?.ProjectId,
+                projectName: init?.ProjectName,
+                token: init?.Token,
+                tokenEnv: init?.TokenEnv,
+                fromFile: init?.FromFile,
+                probeCodex: null,
+                noInteractive: init?.NoInteractive == true,
+                ct: ct).ConfigureAwait(false);
             if (initExit != 0)
                 return initExit;
         }
@@ -261,7 +366,7 @@ internal static class InstallCommand
 
         using var context = bootstrap.Context!;
         var setup = new SetupCommand(context.Ticketing, new FileSystemLocalRepoOps(context.WorkingDirectory));
-        return await setup.ExecuteAsync(false, new InstallConsole(input, diagnostics), ct).ConfigureAwait(false);
+        return await setup.ExecuteAsync(false, new InstallConsole(input, inputRedirected, diagnostics), ct).ConfigureAwait(false);
     }
 
     private static InstallProfileApplyResult ApplyProfile(
@@ -476,9 +581,9 @@ internal static class InstallCommand
     private static void Progress(TextWriter diagnostics, string message) =>
         diagnostics.WriteLine($"[install] {message}");
 
-    private sealed class InstallConsole(TextReader input, TextWriter diagnostics) : IConsole
+    private sealed class InstallConsole(TextReader input, bool inputRedirected, TextWriter diagnostics) : IConsole
     {
-        public bool IsInputRedirected => false;
+        public bool IsInputRedirected => inputRedirected;
         public string? ReadLine() => input.ReadLine();
         public char? ReadKeyChar()
         {
