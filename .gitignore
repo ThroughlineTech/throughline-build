@@ -28,3 +28,8 @@ src/tools/artifacts/
 .gitignored
 Thumbs.db
 *.swp
+
+# Lock file for the src/tools file-based apps. Not in throughline-build.sln; NuGet pins it to
+# the local RID and SDK feature band, so a Mac-generated copy is rewritten on Windows (and vice
+# versa) by the analyze-event-log integration test, dirtying a tracked file mid-gate.
+src/tools/packages.lock.json
