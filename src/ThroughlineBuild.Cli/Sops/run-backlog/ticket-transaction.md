@@ -189,6 +189,12 @@ Keep the whole manifest: absolute path, branch, `baseSha`, seeded files, install
 - **Success ->** `baseline`. **Failure** (collision, seed refused, install failed) -> ABORTED-PRECLAIM.
 - A `lease_collision` means a lease for this ticket already exists: that is a recovery case.
   **Never tear down an existing lease to make room for a new one.**
+- Hydration reports success on exit code alone, so a mutating `install_command` can leave tracked
+  residue in an otherwise healthy lease. Apply the same classification as `baseline` below: a
+  dependency lockfile rewritten by hydration is benign - revert it, record it, continue, and note
+  that the project's `install_command` should be switched to its frozen form (`npm ci`,
+  `pnpm install --frozen-lockfile`, `uv sync --frozen`, `dotnet restore --locked-mode`). Residue in
+  tracked source is real: STOP.
 - **Preserve:** whatever the failed lease left behind. `build worktree lease` rolls back its own
   partial creations; a lease that survives a failure is inspected, not deleted.
 
@@ -212,6 +218,31 @@ tree. Read two fields:
 
 Keep the baseline JSON: it is the attribution evidence for everything after. Any gate failure not
 present in the baseline was caused by this change.
+
+### Tracked-file residue is not automatically a red baseline
+
+`gate failed: gate checks modified tracked files` is an INTEGRITY failure, not a check failure. The
+configured checks may all have passed. It usually means the environment differs from the one that
+last generated a tracked artifact, not that the base is broken. Classify before you stop:
+
+- **Benign** - residue is confined to regenerable, host-dependent files (dependency lockfiles,
+  restore or codegen manifests), `git restore` reverts it cleanly, and no ticket diff touches those
+  paths. A repo last built on another OS, tool version, or SDK band produces exactly this. Revert
+  the paths, record them and the suspected cause in the run log, re-run the gate once, and
+  CONTINUE. Reverting first is what preserves attribution: the candidate and the base-ref control
+  must start from the same tree.
+- **Real** - residue touches tracked SOURCE, or it does not revert cleanly, or it reappears after a
+  clean re-run. STOP.
+
+When you believe it is benign but are not certain, do not stop dead and do not proceed silently.
+State the finding, the suspected cause, and the proposed action, and ask once:
+
+> Baseline gate on `<ID>` reported residue in `<paths>`. The configured checks passed. This looks
+> like `<cause, e.g. a lockfile regenerated for this platform and tool version>` rather than a
+> broken base. I propose reverting those paths and continuing. OK to proceed?
+
+Act on the answer. Abandoning a run over a lockfile that reverts cleanly is a worse outcome than
+asking a single question.
 
 - **Success ->** `claim`. **Failure ->** ABORTED-PRECLAIM, lease preserved.
 
@@ -549,6 +580,7 @@ scope creep blew the ticket up. They only work as a set.
 | lease collision / install failure | unchanged | lease preserved if any | ABORTED-PRECLAIM, recovery triage |
 | `checksConfigured: false` | unchanged | lease preserved | abort the WHOLE run |
 | baseline red | unchanged | lease preserved | ABORTED-PRECLAIM; broken base is its own ticket |
+| baseline residue, benign | unchanged | lease preserved | revert the paths, record, re-gate once, CONTINUE |
 | semantic contract missing / authority or parent-intent conflict | In Progress | lease preserved, no commit | ESCALATED before code edits |
 | worker committed (`HEAD != baseSha`) | In Progress | nothing touched | ESCALATED |
 | three failed rework rounds | In Progress | lease preserved, no commit | ESCALATED |
