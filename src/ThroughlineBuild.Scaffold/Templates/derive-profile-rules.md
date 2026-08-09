@@ -13,6 +13,15 @@ Determine:
   worktree. Dependencies in the primary tree are human-managed; neither `build install` nor
   `build gate` runs this command there. Derive it by reading repository manifests and guidance.
   Do not run dependency installation, builds, or tests while deriving the profile.
+  FROZEN INSTALL: `install_command` MUST be non-mutating - it installs exactly what the lockfile
+  pins and never rewrites a tracked file. Use the ecosystem's frozen form: `npm ci`, `pnpm install
+  --frozen-lockfile`, `yarn install --immutable`, `uv sync --frozen`, `poetry install --sync`,
+  `bundle install --deployment`, `cargo fetch --locked`, `dotnet restore --locked-mode`,
+  `go mod download` (never `go mod tidy`). A mutating install such as bare `npm install`
+  renormalizes the lockfile against the local tool version and platform, so it dirties a tracked
+  file in every lease worktree it hydrates. When the README tells a human to run the mutating form
+  but CI runs the frozen form, follow CI - lease worktrees are disposable and must reproduce the
+  lockfile exactly, not update it.
 - review_checks: the automated checks the reviewer should run after each implementation. Normally a
   build check and a test check, expressed as a discrete executable plus an argument array.
 - regression_checks: the checks to run before shipping (usually the same as review_checks).
