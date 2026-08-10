@@ -836,6 +836,49 @@ public class GetCommentsAsyncTests
 
         Assert.Empty(comments);
     }
+
+    [Fact]
+    public async Task GetCommentsAsync_ReturnsLaterPageCommentOnce_AndStopsOnTerminalPage()
+    {
+        var page1 = $$"""
+            {
+              "results": [
+                { "id": "{{CommentUuid1}}", "comment_html": "<p>first comment</p>", "created_at": "2025-01-01T00:00:00Z" }
+              ],
+              "next_cursor": "100:1:0",
+              "next_page_results": true
+            }
+            """;
+        var page2 = $$"""
+            {
+              "results": [
+                { "id": "{{CommentUuid2}}", "comment_html": "<p>later comment</p>", "created_at": "2025-01-02T00:00:00Z" }
+              ],
+              "next_cursor": "100:2:0",
+              "next_page_results": false
+            }
+            """;
+
+        var handler = new FakeMessageHandler();
+        handler.Enqueue(FakeMessageHandler.OkJson(TestData.IssueListJson()));
+        handler.Enqueue(FakeMessageHandler.OkJson(page1));
+        handler.Enqueue(FakeMessageHandler.OkJson(page2));
+
+        var client = new PlaneTicketingClient(new HttpClient(handler), TestData.Options());
+        var comments = await client.GetCommentsAsync("TLB-24", CancellationToken.None);
+
+        Assert.Equal(2, comments.Count);
+        Assert.Single(comments, comment => comment.Id == CommentUuid1);
+        Assert.Single(comments, comment => comment.Id == CommentUuid2 && comment.Body == "<p>later comment</p>");
+
+        var commentGets = handler.Requests
+            .Where(request => request.Method == HttpMethod.Get
+                && request.RequestUri!.AbsolutePath.Contains("/comments/"))
+            .ToList();
+        Assert.Equal(2, commentGets.Count);
+        Assert.Contains("cursor=100%3A1%3A0", commentGets[1].RequestUri!.ToString());
+        Assert.DoesNotContain("%25", commentGets[1].RequestUri!.ToString());
+    }
 }
 
 public class ApplyLabelsAsyncTests

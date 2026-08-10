@@ -58,7 +58,9 @@ public record PlaneCommentListItem(
 );
 
 public record PlaneCommentList(
-    [property: JsonPropertyName("results")] List<PlaneCommentListItem> Results
+    [property: JsonPropertyName("results")] List<PlaneCommentListItem> Results,
+    [property: JsonPropertyName("next_cursor")] string? NextCursor = null,
+    [property: JsonPropertyName("next_page_results")] bool? NextPageResults = null
 );
 
 // The relations GET response nests the related issue as an object, not a bare UUID

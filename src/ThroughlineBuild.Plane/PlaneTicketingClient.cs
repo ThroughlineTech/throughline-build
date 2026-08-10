@@ -1153,13 +1153,13 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
                 var seq = ParseSequenceId(id);
                 var issue = await FindIssueAsync(seq, token).ConfigureAwait(false);
 
-                var list = await GetJsonAsync<PlaneCommentList>(
-                    $"{IssuesBase}{issue.Id}/comments/", PlaneJsonContext.Default, token).ConfigureAwait(false);
+                var comments = await FetchAllCommentsAsync(
+                    $"{IssuesBase}{issue.Id}/comments/?per_page=100", token).ConfigureAwait(false);
 
-                if (list.Results is null || list.Results.Count == 0)
+                if (comments.Count == 0)
                     return (IReadOnlyList<TicketComment>)Array.Empty<TicketComment>();
 
-                return (IReadOnlyList<TicketComment>)list.Results
+                return (IReadOnlyList<TicketComment>)comments
                     .Select(c => new TicketComment(c.Id, c.CommentHtml ?? string.Empty, c.CreatedAt))
                     .ToList();
             }
@@ -1454,6 +1454,37 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
             $"[plane] WARNING: issue-list pagination hit the {MaxListPages}-page cap ({MaxListPages * 100} issues) " +
             "with more pages available - the project snapshot is TRUNCATED for this run and lookups for issues " +
             "beyond the cap will throw 'not found'. Raise MaxListPages or narrow the project.");
+        return all;
+    }
+
+    /// <summary>
+    /// Walks every cursor page for an issue-comments URL and returns the flattened results.
+    /// Uses the same bounded and defensive terminal-page rules as issue-list reads.
+    /// </summary>
+    private async Task<List<PlaneCommentListItem>> FetchAllCommentsAsync(string baseUrl, CancellationToken ct)
+    {
+        var all = new List<PlaneCommentListItem>();
+        string? cursor = null;
+        for (var page = 0; page < MaxListPages; page++)
+        {
+            var url = string.IsNullOrEmpty(cursor)
+                ? baseUrl
+                : $"{baseUrl}&cursor={Uri.EscapeDataString(cursor)}";
+            var list = await GetJsonAsync<PlaneCommentList>(url, PlaneJsonContext.Default, ct).ConfigureAwait(false);
+            var batch = list.Results ?? [];
+            all.AddRange(batch);
+
+            if (list.NextPageResults == false
+                || batch.Count == 0
+                || string.IsNullOrEmpty(list.NextCursor)
+                || string.Equals(list.NextCursor, cursor, StringComparison.Ordinal))
+                return all;
+            cursor = list.NextCursor;
+        }
+
+        Console.Error.WriteLine(
+            $"[plane] WARNING: comment-list pagination hit the {MaxListPages}-page cap " +
+            "with more pages available - some ticket comments are NOT listed for this run.");
         return all;
     }
 
