@@ -245,4 +245,5 @@ public record PlaneCreateProjectResponse(
 [JsonSerializable(typeof(List<PlaneLabel>))]
 [JsonSerializable(typeof(List<PlaneRelationItem>))]
 [JsonSerializable(typeof(List<string>))]
+[JsonSerializable(typeof(JsonElement))]
 internal partial class PlaneJsonContext : JsonSerializerContext { }

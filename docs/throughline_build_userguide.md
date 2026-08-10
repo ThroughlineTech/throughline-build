@@ -171,6 +171,31 @@ Ticket reads expose the same stable IDs that operators type. `build get --json` 
 ticket IDs such as `TLB-42` rather than Plane UUIDs. `build list --parent` accepts stable ticket IDs
 and legacy Plane UUIDs.
 
+## Ticket attachments
+
+List a ticket's normal files and supported inline description images with:
+
+```
+build attachments TLB-620
+build attachments TLB-620 --json
+```
+
+Normal work-item attachments appear first in Plane response order, followed by inline images in
+description order. Duplicate asset UUIDs appear once. The JSON form reports `id`, `source`, `name`,
+`contentType`, and `sizeBytes`; an empty attachment list is a successful empty `data` array.
+
+Download one discovered attachment to an explicit path:
+
+```
+build attachment TLB-620 11111111-2222-3333-4444-555555555555 --output evidence.png
+build attachment TLB-620 11111111-2222-3333-4444-555555555555 --output evidence.png --json
+```
+
+`--output` is required. The command never writes binary data to stdout, never overwrites an
+existing path, and does not leave the requested output partially written when a download fails.
+The JSON form reports the attachment metadata, the output path exactly as requested, and the byte
+count.
+
 ## Structured evidence comments
 
 Use `build evidence add` to record one structured audit entry without changing

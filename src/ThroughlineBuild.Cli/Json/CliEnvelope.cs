@@ -136,6 +136,32 @@ public sealed record CommentCreatedView(string Id);
 /// <summary>Success envelope for <c>build comment --json</c>.</summary>
 public sealed record CommentCreatedEnvelope(int SchemaVersion, bool Ok, CommentCreatedView Data);
 
+// ---- build attachments / attachment --json ----------------------------------------
+
+public sealed record AttachmentView(
+    string Id,
+    string Source,
+    string? Name,
+    string? ContentType,
+    long? SizeBytes);
+
+public sealed record AttachmentsEnvelope(
+    int SchemaVersion,
+    bool Ok,
+    IReadOnlyList<AttachmentView> Data);
+
+public sealed record AttachmentDownloadView(
+    string Id,
+    string Source,
+    string? Name,
+    string Path,
+    long BytesWritten);
+
+public sealed record AttachmentDownloadEnvelope(
+    int SchemaVersion,
+    bool Ok,
+    AttachmentDownloadView Data);
+
 /// <summary>Read-back evidence for a structured comment mutation.</summary>
 public sealed record EvidenceView(
     string Ticket,
@@ -419,6 +445,8 @@ public sealed record WorkerBriefEnvelope(int SchemaVersion, bool Ok, WorkerBrief
 [JsonSerializable(typeof(ListEnvelope))]
 [JsonSerializable(typeof(CommentsEnvelope))]
 [JsonSerializable(typeof(CommentCreatedEnvelope))]
+[JsonSerializable(typeof(AttachmentsEnvelope))]
+[JsonSerializable(typeof(AttachmentDownloadEnvelope))]
 [JsonSerializable(typeof(EvidenceEnvelope))]
 [JsonSerializable(typeof(TransitionEnvelope))]
 [JsonSerializable(typeof(RelationsEnvelope))]

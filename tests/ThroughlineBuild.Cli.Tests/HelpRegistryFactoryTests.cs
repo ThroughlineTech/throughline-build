@@ -32,6 +32,8 @@ public class HelpRegistryFactoryTests
     [InlineData("conductor")]
     [InlineData("new")]
     [InlineData("list")]
+    [InlineData("attachments")]
+    [InlineData("attachment")]
     [InlineData("amend")]
     [InlineData("close")]
     [InlineData("defer")]

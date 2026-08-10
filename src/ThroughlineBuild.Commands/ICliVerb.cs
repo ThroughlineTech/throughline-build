@@ -32,6 +32,8 @@ public enum CliVerbKind
     Get,
     Comments,
     Comment,
+    Attachments,
+    Attachment,
     Evidence,
     Transition,
     Relate,

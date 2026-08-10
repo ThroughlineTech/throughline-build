@@ -984,6 +984,158 @@ public static class CliApplication
             }
         }
 
+        // List all ticket-owned attachments. Discovery includes work-item attachments first,
+        // followed by supported inline description images in document order.
+        if (verbKind == CliVerbKind.Attachments)
+        {
+            if (args.Length != 2 || string.IsNullOrWhiteSpace(args[1]) || args[1].StartsWith("--"))
+            {
+                if (jsonOutput)
+                    CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "ticket-id is required");
+                else
+                {
+                    Console.Error.WriteLine("Error: ticket-id is required");
+                    Console.Error.WriteLine("Usage: build attachments <ticket-id> [--json]");
+                }
+                return 2;
+            }
+
+            try
+            {
+                using var verbCts = new CancellationTokenSource();
+                Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+                var attachments = await cliContext.Ticketing.GetAttachmentsAsync(args[1], verbCts.Token);
+                if (jsonOutput)
+                {
+                    CliEnvelopeWriter.WriteAttachments(Console.Out, attachments);
+                }
+                else if (attachments.Count == 0)
+                {
+                    Console.WriteLine("no attachments");
+                }
+                else
+                {
+                    foreach (var attachment in attachments)
+                    {
+                        var size = attachment.SizeBytes?.ToString(
+                            System.Globalization.CultureInfo.InvariantCulture) ?? "-";
+                        Console.WriteLine(
+                            $"{attachment.Id}  {attachment.Source}  {attachment.Name ?? "-"}  " +
+                            $"{attachment.ContentType ?? "-"}  {size}");
+                    }
+                }
+                return 0;
+            }
+            catch (ArgumentException ex)
+            {
+                return WriteAttachmentError(jsonOutput, CliErrorCodes.Usage, ex.Message, 2, "attachments");
+            }
+            catch (KeyNotFoundException)
+            {
+                return WriteAttachmentError(jsonOutput, CliErrorCodes.NotFound, "Ticket not found.", 1, "attachments");
+            }
+            catch (PlaneApiException ex)
+            {
+                return WriteAttachmentError(
+                    jsonOutput, CliErrorCodes.Failure,
+                    $"Plane attachment request failed with HTTP {ex.Status}.", 1, "attachments");
+            }
+            catch (OperationCanceledException)
+            {
+                return WriteAttachmentError(jsonOutput, CliErrorCodes.Failure, "cancelled", 1, "attachments");
+            }
+            catch (Exception)
+            {
+                return WriteAttachmentError(
+                    jsonOutput, CliErrorCodes.Failure, "Attachment listing failed.", 1, "attachments");
+            }
+        }
+
+        // Download bytes to an explicit local path. The bytes never pass through stdout and the
+        // final name appears only after a complete same-directory atomic write.
+        if (verbKind == CliVerbKind.Attachment)
+        {
+            if (!TryParseAttachmentDownloadArgs(args, out var ticketId, out var assetId, out var outputPath, out var parseError))
+                return WriteAttachmentError(jsonOutput, CliErrorCodes.Usage, parseError!, 2, "attachment");
+
+            string fullOutputPath;
+            try
+            {
+                fullOutputPath = Path.GetFullPath(outputPath!);
+            }
+            catch
+            {
+                return WriteAttachmentError(
+                    jsonOutput, CliErrorCodes.Failure, "Output path is invalid.", 1, "attachment");
+            }
+
+            if (File.Exists(fullOutputPath) || Directory.Exists(fullOutputPath))
+            {
+                return WriteAttachmentError(
+                    jsonOutput, CliErrorCodes.Failure, "Output path already exists.", 1, "attachment");
+            }
+
+            try
+            {
+                using var verbCts = new CancellationTokenSource();
+                Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+                var downloaded = await cliContext.Ticketing.DownloadAttachmentAsync(
+                    ticketId!, assetId!, verbCts.Token);
+                await WriteAttachmentAtomicallyAsync(fullOutputPath, downloaded.Content, verbCts.Token);
+
+                if (jsonOutput)
+                {
+                    CliEnvelopeWriter.WriteAttachmentDownload(
+                        Console.Out,
+                        downloaded.Attachment,
+                        outputPath!,
+                        downloaded.Content.LongLength);
+                }
+                else
+                {
+                    Console.WriteLine(
+                        $"Downloaded {downloaded.Attachment.Id} to {outputPath} " +
+                        $"({downloaded.Content.LongLength} bytes)");
+                }
+                return 0;
+            }
+            catch (ArgumentException ex)
+            {
+                return WriteAttachmentError(jsonOutput, CliErrorCodes.Usage, ex.Message, 2, "attachment");
+            }
+            catch (KeyNotFoundException)
+            {
+                return WriteAttachmentError(
+                    jsonOutput, CliErrorCodes.NotFound,
+                    "Attachment is not present on this ticket.", 1, "attachment");
+            }
+            catch (PlaneApiException ex)
+            {
+                return WriteAttachmentError(
+                    jsonOutput, CliErrorCodes.Failure,
+                    $"Plane attachment request failed with HTTP {ex.Status}.", 1, "attachment");
+            }
+            catch (OperationCanceledException)
+            {
+                return WriteAttachmentError(jsonOutput, CliErrorCodes.Failure, "cancelled", 1, "attachment");
+            }
+            catch (IOException)
+            {
+                return WriteAttachmentError(
+                    jsonOutput, CliErrorCodes.Failure, "Attachment output write failed.", 1, "attachment");
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return WriteAttachmentError(
+                    jsonOutput, CliErrorCodes.Failure, "Attachment output write failed.", 1, "attachment");
+            }
+            catch (Exception)
+            {
+                return WriteAttachmentError(
+                    jsonOutput, CliErrorCodes.Failure, "Attachment download failed.", 1, "attachment");
+            }
+        }
+
         // 'build comment <ticket-id> <body|-> [--json]' posts a comment (write). The body is markdown
         // (or "-" to read from stdin) and is rendered to Plane HTML. This is the agent's write-back path.
         if (verbKind == CliVerbKind.Comment)
@@ -2979,6 +3131,95 @@ public static class CliApplication
         var trace = ex.StackTrace;
         if (string.IsNullOrEmpty(trace)) return "(no stack trace)";
         return trace.TrimStart().Split('\n')[0].Trim();
+    }
+
+    private static bool TryParseAttachmentDownloadArgs(
+        string[] args,
+        out string? ticketId,
+        out string? assetId,
+        out string? outputPath,
+        out string? error)
+    {
+        ticketId = args.Length > 1 ? args[1] : null;
+        assetId = args.Length > 2 ? args[2] : null;
+        outputPath = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(ticketId) || ticketId.StartsWith("--"))
+            error = "ticket-id is required";
+        else if (string.IsNullOrWhiteSpace(assetId) || assetId.StartsWith("--"))
+            error = "asset-id is required";
+        else
+        {
+            for (var i = 3; i < args.Length; i++)
+            {
+                if (args[i] != "--output")
+                {
+                    error = $"unknown argument: {args[i]}";
+                    break;
+                }
+                if (outputPath is not null || i + 1 >= args.Length || args[i + 1].StartsWith("--"))
+                {
+                    error = "--output requires one path";
+                    break;
+                }
+                outputPath = args[++i];
+            }
+            if (error is null && string.IsNullOrWhiteSpace(outputPath))
+                error = "--output is required";
+        }
+
+        return error is null;
+    }
+
+    private static async Task WriteAttachmentAtomicallyAsync(
+        string outputPath,
+        byte[] content,
+        CancellationToken ct)
+    {
+        var directory = Path.GetDirectoryName(outputPath)
+            ?? throw new IOException("Output directory is invalid.");
+        var tempPath = Path.Combine(
+            directory,
+            $".{Path.GetFileName(outputPath)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            await using (var stream = new FileStream(
+                tempPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                81920,
+                FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                await stream.WriteAsync(content, ct);
+                await stream.FlushAsync(ct);
+                stream.Flush(flushToDisk: true);
+            }
+            File.Move(tempPath, outputPath, overwrite: false);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); }
+                catch { /* The requested output path was never made partial. */ }
+            }
+        }
+    }
+
+    private static int WriteAttachmentError(
+        bool jsonOutput,
+        string code,
+        string message,
+        int exitCode,
+        string verb)
+    {
+        if (jsonOutput)
+            CliEnvelopeWriter.WriteError(Console.Out, code, message);
+        else
+            Console.Error.WriteLine($"Command '{verb}' failed: {message}");
+        return exitCode;
     }
 
     static string? WireUpConditionalCommands(

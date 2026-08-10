@@ -50,6 +50,8 @@ public static class HelpRegistryFactory
         r.Register(Get());
         r.Register(Comments());
         r.Register(Comment());
+        r.Register(Attachments());
+        r.Register(Attachment());
         r.Register(Evidence());
         r.Register(Transition());
         r.Register(Relate());
@@ -708,6 +710,41 @@ public static class HelpRegistryFactory
         [
             new("comment TLB-541 \"investigated; root cause is X\"", "Post a short note"),
             new("build review-notes.md | build comment TLB-541 -", "Post a long body from stdin"),
+        ]
+    );
+
+    private static CommandHelp Attachments() => new(
+        Name: "attachments",
+        Group: CommandGroup.WorkItems,
+        Summary: "List files attached to a ticket",
+        Usage: "attachments <ticket-id> [--json]",
+        Options:
+        [
+            new("--json", "Emit normalized attachment metadata in a versioned JSON envelope", false),
+        ],
+        ExitCodes: [s_exit0, s_exit1, s_exit2, s_exit3],
+        Examples:
+        [
+            new("attachments TLB-620", "List work-item files and supported inline description images"),
+            new("attachments TLB-620 --json", "Emit attachment ids and metadata for automation"),
+        ]
+    );
+
+    private static CommandHelp Attachment() => new(
+        Name: "attachment",
+        Group: CommandGroup.WorkItems,
+        Summary: "Download one ticket attachment to a file",
+        Usage: "attachment <ticket-id> <asset-id> --output <path> [--json]",
+        Options:
+        [
+            new("--output <path>", "Required destination; the command never overwrites an existing path", false),
+            new("--json", "Emit download metadata in a versioned JSON envelope; binary bytes never use stdout", false),
+        ],
+        ExitCodes: [s_exit0, s_exit1, s_exit2, s_exit3],
+        Examples:
+        [
+            new("attachment TLB-620 11111111-2222-3333-4444-555555555555 --output evidence.png", "Download one attachment without overwriting evidence.png"),
+            new("attachment TLB-620 11111111-2222-3333-4444-555555555555 --output evidence.png --json", "Download bytes to disk and emit only metadata on stdout"),
         ]
     );
 

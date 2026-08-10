@@ -67,6 +67,34 @@ public static class CliEnvelopeWriter
         output.WriteLine(JsonSerializer.Serialize(envelope, CliJsonContext.Default.CommentCreatedEnvelope));
     }
 
+    public static void WriteAttachments(TextWriter output, IReadOnlyList<TicketAttachment> attachments)
+    {
+        var rows = attachments.Select(a => new AttachmentView(
+            a.Id, a.Source, a.Name, a.ContentType, a.SizeBytes)).ToList();
+        var envelope = new AttachmentsEnvelope(SchemaVersion, Ok: true, rows);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.AttachmentsEnvelope));
+    }
+
+    public static void WriteAttachmentDownload(
+        TextWriter output,
+        TicketAttachment attachment,
+        string path,
+        long bytesWritten)
+    {
+        var envelope = new AttachmentDownloadEnvelope(
+            SchemaVersion,
+            Ok: true,
+            new AttachmentDownloadView(
+                attachment.Id,
+                attachment.Source,
+                attachment.Name,
+                path,
+                bytesWritten));
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.AttachmentDownloadEnvelope));
+    }
+
     /// <summary>Write the created structured evidence comment and its read-back proof.</summary>
     public static void WriteEvidence(TextWriter output, EvidenceView evidence)
     {

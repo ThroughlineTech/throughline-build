@@ -139,6 +139,50 @@ public class CliEnvelopeWriterTests
     }
 
     [Fact]
+    public void WriteAttachments_UsesSourceGeneratedNormalizedEnvelope()
+    {
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+        var sw = new StringWriter();
+
+        CliEnvelopeWriter.WriteAttachments(sw,
+        [
+            new TicketAttachment(
+                "11111111-1111-1111-1111-111111111111",
+                "description_inline_image",
+                null,
+                "image/png",
+                null)
+        ]);
+
+        using var doc = JsonDocument.Parse(sw.ToString());
+        var root = doc.RootElement;
+        Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+        Assert.True(root.GetProperty("ok").GetBoolean());
+        var item = root.GetProperty("data").EnumerateArray().Single();
+        Assert.Equal("description_inline_image", item.GetProperty("source").GetString());
+        Assert.False(item.TryGetProperty("name", out _));
+    }
+
+    [Fact]
+    public void WriteAttachmentDownload_PreservesRequestedPathAndByteCount()
+    {
+        var sw = new StringWriter();
+        var attachment = new TicketAttachment(
+            "11111111-1111-1111-1111-111111111111",
+            "work_item_attachment",
+            "evidence.bin",
+            null,
+            4);
+
+        CliEnvelopeWriter.WriteAttachmentDownload(sw, attachment, "out/evidence.bin", 4);
+
+        using var doc = JsonDocument.Parse(sw.ToString());
+        var data = doc.RootElement.GetProperty("data");
+        Assert.Equal("out/evidence.bin", data.GetProperty("path").GetString());
+        Assert.Equal(4, data.GetProperty("bytesWritten").GetInt64());
+    }
+
+    [Fact]
     public void WriteWorktreeLease_UsesSourceGeneratedManifestEnvelope()
     {
         var manifest = new WorktreeLeaseManifest(
