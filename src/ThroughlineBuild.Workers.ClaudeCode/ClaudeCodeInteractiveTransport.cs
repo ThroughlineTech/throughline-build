@@ -66,6 +66,7 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
     private readonly IInteractiveTurnSignal _turnSignal;
     private readonly IReadOnlyList<string>? _hookCommandPrefix;
     private readonly Func<string, CancellationToken, Task<ClaudePreflightResult>> _preflight;
+    private readonly Action<string> _trustSeeder;
 
     internal ClaudeCodeInteractiveTransport(ClaudeCodeOptions options)
         : this(options, InteractiveClaudeProcessLauncherFactory.Create(), new ClaudeCompletionWaiter(),
@@ -78,13 +79,19 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
         IClaudeCompletionWaiter completionWaiter,
         IInteractiveTurnSignal turnSignal,
         IReadOnlyList<string>? hookCommandPrefix = null,
-        Func<string, CancellationToken, Task<ClaudePreflightResult>>? preflight = null)
+        Func<string, CancellationToken, Task<ClaudePreflightResult>>? preflight = null,
+        Action<string>? trustSeeder = null)
     {
         _options = options;
         _launcher = launcher;
         _completionWaiter = completionWaiter;
         _turnSignal = turnSignal;
         _hookCommandPrefix = hookCommandPrefix;
+        // Production seeds real workspace trust. Unit tests inject a fake: the real seeder
+        // read-modify-writes the operator's global ~/.claude.json once per unique worktree,
+        // so a fake-launcher suite would silently rewrite (and grow without bound) a file
+        // the tests have no business touching. See TLB-619.
+        _trustSeeder = trustSeeder ?? ClaudeWorkspaceTrust.TryEnsureTrusted;
         // Production construction passes the real claude --version capability check. Direct (test)
         // construction defaults to a permissive preflight so unit tests with fake launchers and
         // arbitrary executable paths are unaffected.
@@ -185,8 +192,11 @@ internal sealed class ClaudeCodeInteractiveTransport : IClaudeCodeTransport
 
             // Pre-seed workspace trust so the interactive launch does not hang at
             // claude's trust dialog on a fresh worktree (which --dangerously-skip-
-            // permissions does NOT bypass). Best-effort: never throws.
-            ClaudeWorkspaceTrust.TryEnsureTrusted(canonicalWorktree);
+            // permissions does NOT bypass). Best-effort: never throws. The production
+            // seeder already swallows its own failures; the guard here keeps that
+            // invariant a property of the TRANSPORT rather than of whatever is injected.
+            try { _trustSeeder(canonicalWorktree); }
+            catch { /* trust seeding is best-effort; the trust-dialog timeout surfaces a missed seed */ }
 
             try
             {
