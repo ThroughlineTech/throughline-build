@@ -236,28 +236,9 @@ public sealed class CandidateStatusCommandTests
         var repository = await InitializeRepositoryAsync();
         try
         {
-            var baseSha = (await RunGitOutputAsync(repository, "rev-parse", "HEAD")).Trim();
-            var manifest = new WorktreeLeaseManifest(
-                WorktreeLeaseConstants.ManifestSchemaVersion,
-                "TLB-600",
-                "candidate-status",
-                "lease/tlb-600-candidate-status",
-                baseSha,
-                repository,
-                repository,
-                Path.Combine(repository, ".worktrees", "conductor"),
-                repository,
-                Array.Empty<string>(),
-                Array.Empty<string>(),
-                new WorktreeInstallRecord("skipped", 0));
-            var manifestJson = JsonSerializer.Serialize(
-                manifest,
-                CliJsonContext.Default.WorktreeLeaseManifest);
-            File.WriteAllText(
-                Path.Combine(repository, WorktreeLeaseConstants.ManifestFileName),
-                manifestJson);
+            await WriteLeaseManifestAsync(repository, "TLB-600");
 
-            var (exit, stdout, _) = await RunStatusAsync(repository, ticket: "600");
+            var (exit, stdout, _) = await RunStatusAsync(repository, ticket: "TLB-600");
 
             Assert.Equal(0, exit);
             using var json = JsonDocument.Parse(stdout);
@@ -265,6 +246,107 @@ public sealed class CandidateStatusCommandTests
             Assert.True(lease.GetProperty("present").GetBoolean());
             Assert.True(lease.GetProperty("ticketMatches").GetBoolean());
             Assert.Equal("TLB-600", lease.GetProperty("manifest").GetProperty("ticket").GetString());
+        }
+        finally
+        {
+            TryDeleteDirectory(repository);
+        }
+    }
+
+    [Fact]
+    public async Task LeaseManifestPresent_BareTicketUsesConfiguredConductorPrefix()
+    {
+        var repository = await InitializeRepositoryAsync();
+        try
+        {
+            await WriteLeaseManifestAsync(repository, "TLB-600");
+            WriteConductorTicketPrefix(repository, "TLB");
+
+            var (exit, stdout, _) = await RunStatusAsync(repository, ticket: "600");
+
+            Assert.Equal(0, exit);
+            using var json = JsonDocument.Parse(stdout);
+            Assert.True(json.RootElement.GetProperty("data").GetProperty("lease").GetProperty("ticketMatches").GetBoolean());
+        }
+        finally
+        {
+            TryDeleteDirectory(repository);
+        }
+    }
+
+    [Fact]
+    public async Task LeaseManifestPresent_BareTicketWithoutConfiguredPrefixDoesNotMatch()
+    {
+        var repository = await InitializeRepositoryAsync();
+        try
+        {
+            await WriteLeaseManifestAsync(repository, "TLB-600");
+
+            var (exit, stdout, _) = await RunStatusAsync(repository, ticket: "600");
+
+            Assert.Equal(0, exit);
+            using var json = JsonDocument.Parse(stdout);
+            Assert.False(json.RootElement.GetProperty("data").GetProperty("lease").GetProperty("ticketMatches").GetBoolean());
+        }
+        finally
+        {
+            TryDeleteDirectory(repository);
+        }
+    }
+
+    [Fact]
+    public async Task LeaseManifestPresent_NumericManifestDoesNotBypassBareTicketResolution()
+    {
+        var repository = await InitializeRepositoryAsync();
+        try
+        {
+            await WriteLeaseManifestAsync(repository, "600");
+
+            var (exit, stdout, _) = await RunStatusAsync(repository, ticket: "600");
+
+            Assert.Equal(0, exit);
+            using var json = JsonDocument.Parse(stdout);
+            Assert.False(json.RootElement.GetProperty("data").GetProperty("lease").GetProperty("ticketMatches").GetBoolean());
+        }
+        finally
+        {
+            TryDeleteDirectory(repository);
+        }
+    }
+
+    [Fact]
+    public async Task LeaseManifestPresent_ForeignPrefixWithSameDigitsDoesNotMatch()
+    {
+        var repository = await InitializeRepositoryAsync();
+        try
+        {
+            await WriteLeaseManifestAsync(repository, "TLB-600");
+
+            var (exit, stdout, _) = await RunStatusAsync(repository, ticket: "ABC-600");
+
+            Assert.Equal(0, exit);
+            using var json = JsonDocument.Parse(stdout);
+            Assert.False(json.RootElement.GetProperty("data").GetProperty("lease").GetProperty("ticketMatches").GetBoolean());
+        }
+        finally
+        {
+            TryDeleteDirectory(repository);
+        }
+    }
+
+    [Fact]
+    public async Task LeaseManifestPresent_DifferentTicketDigitsDoNotMatch()
+    {
+        var repository = await InitializeRepositoryAsync();
+        try
+        {
+            await WriteLeaseManifestAsync(repository, "TLB-600");
+
+            var (exit, stdout, _) = await RunStatusAsync(repository, ticket: "TLB-601");
+
+            Assert.Equal(0, exit);
+            using var json = JsonDocument.Parse(stdout);
+            Assert.False(json.RootElement.GetProperty("data").GetProperty("lease").GetProperty("ticketMatches").GetBoolean());
         }
         finally
         {
@@ -450,6 +532,39 @@ public sealed class CandidateStatusCommandTests
             stderr,
             CancellationToken.None);
         return (exit, stdout.ToString(), stderr.ToString());
+    }
+
+    private static async Task WriteLeaseManifestAsync(string repository, string ticket)
+    {
+        var baseSha = (await RunGitOutputAsync(repository, "rev-parse", "HEAD")).Trim();
+        var manifest = new WorktreeLeaseManifest(
+            WorktreeLeaseConstants.ManifestSchemaVersion,
+            ticket,
+            "candidate-status",
+            "lease/tlb-600-candidate-status",
+            baseSha,
+            repository,
+            repository,
+            Path.Combine(repository, ".worktrees", "conductor"),
+            repository,
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            new WorktreeInstallRecord("skipped", 0));
+        var manifestJson = JsonSerializer.Serialize(
+            manifest,
+            CliJsonContext.Default.WorktreeLeaseManifest);
+        File.WriteAllText(
+            Path.Combine(repository, WorktreeLeaseConstants.ManifestFileName),
+            manifestJson);
+    }
+
+    private static void WriteConductorTicketPrefix(string repository, string ticketPrefix)
+    {
+        var buildDirectory = Path.Combine(repository, ".build");
+        Directory.CreateDirectory(buildDirectory);
+        File.WriteAllText(
+            Path.Combine(buildDirectory, "conductor.toml"),
+            $"[conductor]{Environment.NewLine}ticket_prefix = \"{ticketPrefix}\"{Environment.NewLine}");
     }
 
     private static IReadOnlyList<string> JsonArrayStrings(JsonElement array) =>

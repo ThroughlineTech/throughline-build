@@ -438,7 +438,7 @@ public static class HelpRegistryFactory
         Usage: "candidate status --ticket <id> --base <ref> [--json]",
         Options:
         [
-            new("--ticket <id>", "Ticket identity echoed in the result and compared with any lease manifest", false),
+            new("--ticket <id>", "Ticket identity echoed in the result and compared with any lease manifest; bare numbers require conductor.ticket_prefix", false),
             new("--base <ref>", "Base commit/ref used for tracked and cached/index diff fingerprints", false),
             new("--json", "Emit a versioned JSON envelope with source-generated candidate status data", false),
         ],
@@ -466,6 +466,11 @@ public static class HelpRegistryFactory
             modes, and file-content hashes. Missing base refs, non-git directories, conflicted worktrees, invalid
             lease manifests, unreadable paths, untracked directories, and untracked symlink/reparse-point paths fail
             with a JSON error envelope.
+
+            Lease ticket matching compares normalized full ticket IDs. A bare numeric `--ticket` is resolved only with
+            `.build/conductor.toml` `conductor.ticket_prefix`; when that prefix cannot be resolved, `lease.ticketMatches`
+            is false. Prefixes are never inferred from the lease manifest, so a foreign ticket prefix with the same digits
+            does not match.
             """
         ]
     );

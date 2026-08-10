@@ -4,6 +4,8 @@ using System.Text;
 using System.Text.Json;
 using ThroughlineBuild.Cli.Json;
 using ThroughlineBuild.Helpers;
+using Tomlyn;
+using Tomlyn.Model;
 
 namespace ThroughlineBuild.Cli;
 
@@ -167,7 +169,10 @@ public static class CandidateStatusCommand
                 CliErrorCodes.UnhashablePath,
                 untrackedHash.Message!);
 
-        var lease = ReadLease(worktreeRoot, ticket);
+        var lease = ReadLease(
+            worktreeRoot,
+            ticket,
+            ResolveConfiguredTicketPrefix(worktreeRoot));
         if (!lease.Success)
             return CandidateStatusResult.Failed(
                 CliErrorCodes.InvalidWorktreeState,
@@ -281,7 +286,10 @@ public static class CandidateStatusCommand
         }
     }
 
-    private static CandidateLeaseReadResult ReadLease(string worktreeRoot, string requestedTicket)
+    private static CandidateLeaseReadResult ReadLease(
+        string worktreeRoot,
+        string requestedTicket,
+        string? configuredTicketPrefix)
     {
         var manifestPath = Path.Combine(worktreeRoot, WorktreeLeaseConstants.ManifestFileName);
         if (!File.Exists(manifestPath))
@@ -314,7 +322,7 @@ public static class CandidateStatusCommand
         return CandidateLeaseReadResult.Ok(new CandidateLeaseView(
             Present: true,
             Path: manifestPath,
-            TicketMatches: TicketMatches(requestedTicket, manifest.Ticket),
+            TicketMatches: TicketMatches(requestedTicket, manifest.Ticket, configuredTicketPrefix),
             Manifest: manifest));
     }
 
@@ -418,23 +426,59 @@ public static class CandidateStatusCommand
         return string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), comparison);
     }
 
-    private static bool TicketMatches(string requested, string manifestTicket)
+    private static bool TicketMatches(
+        string requested,
+        string manifestTicket,
+        string? configuredTicketPrefix)
     {
-        var requestedNormalized = NormalizeTicket(requested);
         var manifestNormalized = NormalizeTicket(manifestTicket);
-        if (requestedNormalized.Length > 0 && string.Equals(requestedNormalized, manifestNormalized, StringComparison.Ordinal))
-            return true;
+        if (IsBareTicketNumber(requested))
+        {
+            if (string.IsNullOrEmpty(configuredTicketPrefix))
+                return false;
 
-        var requestedDigits = DigitsOnly(requested);
-        return requestedDigits.Length > 0
-            && string.Equals(requestedDigits, DigitsOnly(manifestTicket), StringComparison.Ordinal);
+            var resolvedRequested = NormalizeTicket($"{configuredTicketPrefix}-{requested}");
+            return string.Equals(resolvedRequested, manifestNormalized, StringComparison.Ordinal);
+        }
+
+        var requestedNormalized = NormalizeTicket(requested);
+        return requestedNormalized.Length > 0 &&
+            string.Equals(requestedNormalized, manifestNormalized, StringComparison.Ordinal);
     }
+
+    private static string? ResolveConfiguredTicketPrefix(string worktreeRoot)
+    {
+        var conductorPath = RepositoryLayout.Resolve(worktreeRoot).FindBuildDataFile("conductor.toml");
+        if (conductorPath is null)
+            return null;
+
+        try
+        {
+            var root = TomlSerializer.Deserialize(
+                File.ReadAllText(conductorPath),
+                BuildTomlSerializerContext.Default.TomlTable);
+            if (root is null ||
+                !root.TryGetValue("conductor", out var conductorRaw) ||
+                conductorRaw is not TomlTable conductor ||
+                !conductor.TryGetValue("ticket_prefix", out var ticketPrefixRaw) ||
+                ticketPrefixRaw is not string ticketPrefix ||
+                string.IsNullOrWhiteSpace(ticketPrefix))
+                return null;
+
+            var normalizedPrefix = NormalizeTicket(ticketPrefix);
+            return normalizedPrefix.Length > 0 ? normalizedPrefix : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TomlException)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsBareTicketNumber(string value) =>
+        value.Length > 0 && value.All(char.IsDigit);
 
     private static string NormalizeTicket(string value) =>
         new(value.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
-
-    private static string DigitsOnly(string value) =>
-        new(value.Where(char.IsDigit).ToArray());
 
     private static string HashBytes(byte[] bytes) =>
         ToSha256(SHA256.HashData(bytes));

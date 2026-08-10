@@ -577,8 +577,8 @@ public static class CliApplication
         var sessionContext = cliContext.SessionContext;
 
         // Standalone candidate fingerprinting for caller-owned conductor loops.
-        // This path reads only git state and an optional lease manifest in the invocation
-        // worktree; it never constructs a worker agent or touches ticketing.
+        // This path reads only git state, an optional lease manifest, and an optional conductor
+        // ticket prefix in the invocation worktree; it never constructs a worker agent or touches ticketing.
         if (verbKind == CliVerbKind.Candidate)
         {
             using var candidateCts = new CancellationTokenSource();

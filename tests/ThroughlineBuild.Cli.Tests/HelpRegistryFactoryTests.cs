@@ -224,6 +224,8 @@ public class HelpRegistryFactoryTests
         Assert.Contains("untrackedHash", output);
         Assert.Contains("lease", output);
         Assert.Contains("dirtyState", output);
+        Assert.Contains("conductor.ticket_prefix", output);
+        Assert.Contains("foreign ticket prefix", output);
     }
 
     [Fact]
