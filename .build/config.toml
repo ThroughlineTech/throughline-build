@@ -106,6 +106,24 @@ verifier_timeout_minutes = 15
 # git-state guard. See TLB-478.
 verifier_allowed_tools = ["Read", "Grep", "Glob"]
 
+# Precondition, not a pass/fail check: refuse to start while a previous `dotnet test`
+# testhost is still alive. Such an orphan has broken this gate twice, each time presenting
+# as something other than what it was: once as a 10-minute "hang" (two processes serializing
+# 20 MB read-modify-writes behind the cross-process trust lock), once as a build failure
+# (testhost holding a write lock on build.dll while the build check tried to overwrite it).
+# In both cases the check that FAILED was not the check that caused the problem, which is
+# what made them expensive to diagnose. role = "setup" runs this before every check
+# (AutomatedChecksRunner.OrderSetupFirst) and hard-fails on non-zero, and setup roles are
+# exempt from canary/vacuity proving (GatePhase only probes gating checks). Both exit paths
+# were verified by hand: 0 when clear, 1 with the offending PID when not.
+# Windows-specific by design - this is derived project config, not engine logic.
+[[review.checks]]
+name = "no-orphan-testhost"
+executable = "powershell"
+arguments = ["-NoProfile", "-NonInteractive", "-Command", '$names = @("testhost","testhost.x86","vstest.console"); $deadline=(Get-Date).AddSeconds(45); while($true){ $p=@(Get-Process -Name $names -ErrorAction SilentlyContinue); if($p.Count -eq 0){ exit 0 }; if((Get-Date) -ge $deadline){ break }; Start-Sleep -Seconds 3 }; $p | ForEach-Object { Write-Host ("orphaned test process: " + $_.ProcessName + " PID " + $_.Id) }; Write-Host "A previous dotnet test left a testhost alive; it locks build output (build.dll) and contends with the next run. Kill it, then retry."; exit 1']
+timeout_minutes = 2
+role = "setup"
+
 [[review.checks]]
 name = "build"
 executable = "dotnet"
