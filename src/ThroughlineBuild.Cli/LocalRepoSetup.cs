@@ -16,8 +16,13 @@ public static class GitignoreManager
 
     public static readonly IReadOnlyList<string> RequiredEntries = new[]
     {
-        // build tool artifacts
-        ".build/config.toml",
+        // build tool artifacts. .build/config.toml is intentionally NOT here - it is tracked (see
+        // TLB-627): it carries repository facts ([[review.checks]], [waves], [worktree], etc.) that
+        // must travel with a clone, and the template default no longer writes a literal token into it.
+        ".build/conductor.toml",
+        ".build/sop-manifest.json",
+        ".build/profile.json",
+        ".build/invariants.toml",
         ".build/*.md",
         ".build/events/",
         ".build/sessions/",
@@ -118,11 +123,14 @@ public sealed class FileSystemLocalRepoOps : ILocalRepoOps
         {
             WorkingDirectory = _cwd,
             UseShellExecute = false,
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
+        psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
         using var proc = Process.Start(psi)
             ?? throw new InvalidOperationException("failed to start 'git init' (is git on PATH?)");
+        try { proc.StandardInput.Close(); } catch { /* best effort */ }
         var stderr = proc.StandardError.ReadToEnd();
         proc.WaitForExit();
         if (proc.ExitCode != 0)
@@ -142,11 +150,14 @@ public sealed class FileSystemLocalRepoOps : ILocalRepoOps
         {
             WorkingDirectory = _cwd,
             UseShellExecute = false,
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
+        psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
         using var proc = Process.Start(psi)
             ?? throw new InvalidOperationException("failed to start 'git rev-parse HEAD' (is git on PATH?)");
+        try { proc.StandardInput.Close(); } catch { /* best effort */ }
         proc.StandardOutput.ReadToEnd();
         proc.StandardError.ReadToEnd();
         proc.WaitForExit();
@@ -160,15 +171,18 @@ public sealed class FileSystemLocalRepoOps : ILocalRepoOps
         {
             WorkingDirectory = _cwd,
             UseShellExecute = false,
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
+        psiAdd.Environment["GIT_TERMINAL_PROMPT"] = "0";
         psiAdd.ArgumentList.Add("add");
         psiAdd.ArgumentList.Add("--");
         foreach (var p in paths) psiAdd.ArgumentList.Add(p);
 
         using var addProc = Process.Start(psiAdd)
             ?? throw new InvalidOperationException("failed to start 'git add' (is git on PATH?)");
+        try { addProc.StandardInput.Close(); } catch { /* best effort */ }
         var addStderr = addProc.StandardError.ReadToEnd();
         addProc.WaitForExit();
         if (addProc.ExitCode != 0)
@@ -179,15 +193,18 @@ public sealed class FileSystemLocalRepoOps : ILocalRepoOps
         {
             WorkingDirectory = _cwd,
             UseShellExecute = false,
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
+        psiCommit.Environment["GIT_TERMINAL_PROMPT"] = "0";
         psiCommit.ArgumentList.Add("commit");
         psiCommit.ArgumentList.Add("-m");
         psiCommit.ArgumentList.Add(message);
 
         using var commitProc = Process.Start(psiCommit)
             ?? throw new InvalidOperationException("failed to start 'git commit' (is git on PATH?)");
+        try { commitProc.StandardInput.Close(); } catch { /* best effort */ }
         var commitStderr = commitProc.StandardError.ReadToEnd();
         commitProc.WaitForExit();
         if (commitProc.ExitCode != 0)

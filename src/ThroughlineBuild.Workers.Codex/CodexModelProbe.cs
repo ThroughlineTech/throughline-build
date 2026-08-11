@@ -54,6 +54,7 @@ public sealed class CodexModelProbe
     {
         var psi = new ProcessStartInfo(_executablePath)
         {
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -68,6 +69,7 @@ public sealed class CodexModelProbe
         try
         {
             process.Start();
+            try { process.StandardInput.Close(); } catch { /* best effort */ }
         }
         catch (System.ComponentModel.Win32Exception ex)
         {

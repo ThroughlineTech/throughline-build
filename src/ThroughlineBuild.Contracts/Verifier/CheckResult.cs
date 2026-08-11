@@ -2,8 +2,9 @@ namespace ThroughlineBuild.Contracts;
 
 // Gating: a non-zero exit code hard-fails the gate (build, test, typecheck).
 // Advisory: failures are recorded and surfaced to the verifier but never hard-fail (lint, format).
-// Setup: a prerequisite command (e.g. a codegen/install step) the runner executes BEFORE the gating
-//   and advisory checks; it proves nothing, it prepares the worktree so the real checks can run. A
+// Setup: a repeatable prerequisite command (e.g. codegen) the runner executes BEFORE the gating
+//   and advisory checks on every invocation; dependency installation belongs to lease creation. It
+//   proves nothing, it prepares the worktree so the real checks can run. A
 //   non-zero exit hard-fails the gate (the prerequisites the checks depend on could not be established).
 public enum CheckRole { Gating, Advisory, Setup }
 

@@ -6,10 +6,10 @@ unless `--accept-warnings`), and creates the plan-ticket plus brief-ticket tree
 in Plane. `--dry-run` makes zero API calls. `OpDocSkeletonGenerator` backs
 `build op-doc new`.
 
-`ScaffoldProfileDeriver` is the LLM step: a worker emits a `PROJECT_PROFILE`
-fenced block inside the standard `WORKER_RESULT`; parsing then becomes
-deterministic. Cli's `ScaffoldProfileRunner` drives it and `ConfigProfileWriter`
-writes it.
+`ProfilePromptLoader` exposes the binary-hosted repository interrogation rules
+used by `build profile prompt`. `ProjectProfileParser` validates the resulting
+plain JSON deterministically before the CLI writes it. Scaffold itself does not
+derive or apply a profile.
 
 GOTCHA - embedded out-of-tree docs: the csproj embeds
 `docs/op-docs/op-doc-spec.md` from outside this project. The canonical example is

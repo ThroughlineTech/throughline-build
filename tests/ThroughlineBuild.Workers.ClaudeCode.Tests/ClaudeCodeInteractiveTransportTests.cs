@@ -11,6 +11,14 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"lattice interactive tests {Guid.NewGuid():N}");
 
+    // Every transport test seeds trust through this fake. The real seeder rewrites the
+    // OPERATOR'S global ~/.claude.json once per unique worktree, so running it here made
+    // the suite non-hermetic: each run appended one entry per test worktree and never
+    // removed any. That grew the file to 20 MB / 92k entries, turned this assembly from
+    // 12s into 3m23s, and hung the baseline gate (TLB-619). Real trust-file behavior is
+    // covered by ClaudeWorkspaceTrustTests against explicit temp config paths.
+    private readonly RecordingTrustSeeder _trustSeeder = new();
+
     [Fact]
     public async Task CompletionBeforeExit_KillsProcessParsesFullResponseAndCleansRun()
     {
@@ -576,6 +584,44 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task TrustSeeding_RunsOnceForTheCanonicalWorktree()
+    {
+        // The transport must seed trust for claude's OWN spelling of the worktree (the
+        // same canonical path it spawns in); a differently-spelled key looks trusted to us
+        // but leaves claude waiting at the interactive trust prompt.
+        var worktree = Path.Combine(_root, "trust seed worktree");
+        var launcher = new FakeLauncher(new FakeProcess());
+        var waiter = new FakeWaiter((run, _) => Task.FromResult(Completion(run.RunId, WorkerResultText("ok"))));
+
+        var result = await ExecuteAsync(launcher, waiter, worktree: worktree);
+
+        Assert.Equal(Status.Ok, result.Status);
+        Assert.Equal(new[] { ClaudeRealPath.Resolve(worktree) }, _trustSeeder.Paths);
+        Assert.Equal(ClaudeRealPath.Resolve(worktree), launcher.Spec!.WorkingDirectory);
+    }
+
+    [Fact]
+    public async Task TrustSeedingFailure_NeverBreaksTheLaunch()
+    {
+        // Trust seeding is best-effort: a seeder that throws must not fail the run. A
+        // missed seed surfaces later as the trust-dialog timeout, which is actionable and
+        // non-destructive - unlike aborting a launch that would have worked.
+        var seeder = new RecordingTrustSeeder(new IOException("config unreadable"));
+        var launcher = new FakeLauncher(new FakeProcess());
+        var waiter = new FakeWaiter((run, _) => Task.FromResult(Completion(run.RunId, WorkerResultText("seeded badly"))));
+
+        var result = await ExecuteAsync(launcher, waiter, trustSeeder: seeder.Seed);
+
+        Assert.True(result.Status == Status.Ok, $"{result.Summary}: {result.FailureReason}");
+        Assert.Equal("seeded badly", result.Summary);
+        Assert.Single(seeder.Paths);
+    }
+
+    // Timeout is the regression guard for TLB-619: hermetically these 200 iterations take
+    // about a second, but when an iteration reaches real global state (the operator's
+    // ~/.claude.json) the loop degrades to minutes. Without a bound the only symptom is a
+    // hung baseline gate; with one, the offending change fails this test instead.
+    [Fact(Timeout = 120_000)]
     public async Task CancellationCompletionRace_StaysDeterministicUnderRepetition()
     {
         for (var i = 0; i < 200; i++)
@@ -709,7 +755,8 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
                 "transport = \"interactive-hook\" requires Claude Code >= 2.1.177, but the installed claude is 2.1.150.",
                 new Version(2, 1, 150), "2.1.150")));
         var transport = new ClaudeCodeInteractiveTransport(
-            options, launcher, NeverCompletes(), new NeverTurnSignal(), ["build.exe"], failingPreflight);
+            options, launcher, NeverCompletes(), new NeverTurnSignal(), ["build.exe"], failingPreflight,
+            trustSeeder: _trustSeeder.Seed);
 
         var worktree = Path.Combine(_root, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(worktree);
@@ -747,15 +794,19 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
         string? debugDirectory = null,
         TextWriter? progressSink = null,
         string? worktree = null,
-        IInteractiveTurnSignal? turnSignal = null)
+        IInteractiveTurnSignal? turnSignal = null,
+        Action<string>? trustSeeder = null)
     {
         worktree ??= Path.Combine(_root, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(worktree);
         var options = new ClaudeCodeOptions { Transport = ClaudeCodeTransport.InteractiveHook };
         // Default to a turn signal that never fires so the existing tests exercise the
-        // completion-first path (a per-turn hook firing) exactly as before.
+        // completion-first path (a per-turn hook firing) exactly as before. The trust
+        // seeder defaults to the recording fake so no test here can reach the real
+        // ~/.claude.json - including tests added later.
         var transport = new ClaudeCodeInteractiveTransport(
-            options, launcher, waiter, turnSignal ?? new NeverTurnSignal(), ["build.exe"]);
+            options, launcher, waiter, turnSignal ?? new NeverTurnSignal(), ["build.exe"],
+            preflight: null, trustSeeder: trustSeeder ?? _trustSeeder.Seed);
         return await transport.ExecuteAsync(
             new Brief("TLB-live", Phase.Implement, "test brief", [], [], new Dictionary<string, string>()),
             worktree,
@@ -804,6 +855,24 @@ public sealed class ClaudeCodeInteractiveTransportTests : IDisposable
     public void Dispose()
     {
         if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
+    }
+
+    // Records the worktrees the transport asked to trust, standing in for the real
+    // ClaudeWorkspaceTrust seeding. Thread-safe: some tests run two transports at once.
+    private sealed class RecordingTrustSeeder(Exception? throwOnSeed = null)
+    {
+        private readonly List<string> _paths = [];
+
+        public IReadOnlyList<string> Paths
+        {
+            get { lock (_paths) return _paths.ToArray(); }
+        }
+
+        public void Seed(string workingDirectory)
+        {
+            lock (_paths) _paths.Add(workingDirectory);
+            if (throwOnSeed is not null) throw throwOnSeed;
+        }
     }
 
     private sealed class FakeLauncher(FakeProcess process, Exception? launchException = null) : IInteractiveClaudeProcessLauncher

@@ -1,0 +1,1589 @@
+using System.Text.Json;
+using ThroughlineBuild.Cli;
+using ThroughlineBuild.Cli.Json;
+using ThroughlineBuild.Commands;
+using ThroughlineBuild.Contracts;
+using ThroughlineBuild.Contracts.Models;
+using Xunit;
+
+namespace ThroughlineBuild.Cli.Tests;
+
+[Collection("Cli Tests Environment")]
+public sealed class SopInstallCommandTests
+{
+    [Fact]
+    public void Catalog_EmittedPathHashChangesRequireTrustedPreviousHistory()
+    {
+        var pinnedCurrentHashes = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [".claude/commands/run-backlog.md"] = "3c5a332a7504fa59cdd6653fe525a7e9e888bc4b0fe1a42e255f18914d689231",
+            [".agents/skills/run-backlog/SKILL.md"] = "ab63e2b4e8ded304152970cb1c3e47cbe97570736946db4f72c5d28453133f77",
+            [".claude/commands/cross-impact.md"] = "48bceacc9b28d3f6f8dcdd7776716344936038473f001b545055ec12be23b86a",
+            [".agents/skills/cross-impact/SKILL.md"] = "ba33b78666fcb9cf0745c6f42dde0d48e60d72830ffe8e45908f6620dfa0c764",
+        };
+
+        foreach (var path in SopBundleCatalog.All.SelectMany(entry => entry.OwnedPaths)
+                     .Where(path => path.Class == SopBundleCatalog.EmittedPathClass))
+        {
+            Assert.True(
+                pinnedCurrentHashes.TryGetValue(path.Path, out var pinnedHash),
+                $"pin a release-history guard hash for {path.Path}");
+            Assert.NotNull(path.PreviousContentHashes);
+            if (!string.Equals(path.ExpectedContentHash, pinnedHash, StringComparison.Ordinal))
+            {
+                Assert.Contains(
+                    pinnedHash,
+                    path.PreviousContentHashes);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Install_IsIdempotentAndReportsNoChangeOnSecondRun()
+    {
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+        var repo = CreateRepo();
+
+        try
+        {
+            var first = await RunCliInDirectoryAsync(repo, ["sop", "install", "--json"]);
+            Assert.Equal(0, first.Exit);
+            using (var doc = JsonDocument.Parse(first.Stdout))
+            {
+                var data = doc.RootElement.GetProperty("data");
+                Assert.True(data.GetProperty("changed").GetBoolean());
+                Assert.Contains("created", ResultStatuses(data));
+                Assert.Contains("scaffolded", ResultStatuses(data));
+            }
+
+            Assert.True(File.Exists(PathFor(repo, ".claude/commands/run-backlog.md")));
+            Assert.True(File.Exists(PathFor(repo, ".agents/skills/run-backlog/SKILL.md")));
+            Assert.True(File.Exists(PathFor(repo, ".claude/commands/cross-impact.md")));
+            Assert.True(File.Exists(PathFor(repo, ".agents/skills/cross-impact/SKILL.md")));
+            Assert.True(File.Exists(PathFor(repo, ".build/conductor.toml")));
+            Assert.True(File.Exists(PathFor(repo, ".build/sop-manifest.json")));
+
+            var second = await RunCliInDirectoryAsync(repo, ["sop", "install", "--json"]);
+
+            Assert.Equal(0, second.Exit);
+            Assert.Equal(string.Empty, second.Stderr);
+            using var secondDoc = JsonDocument.Parse(second.Stdout);
+            var secondData = secondDoc.RootElement.GetProperty("data");
+            Assert.True(secondDoc.RootElement.GetProperty("ok").GetBoolean());
+            Assert.False(secondData.GetProperty("changed").GetBoolean());
+            Assert.DoesNotContain("created", ResultStatuses(secondData));
+            Assert.DoesNotContain("scaffolded", ResultStatuses(secondData));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_ConfiguredIdentifier_DerivesSortedDistinctTrackedRootsAndJsonValues()
+    {
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: "SQZ",
+                configuredProjectId: "project-uuid",
+                new ThrowingProjectDiscovery(),
+                ["zeta/file.txt", "docs/guide.md", "app/main.ts", "docs/reference.md", "README.md"]);
+
+            Assert.Equal(0, result.Exit);
+            Assert.Equal(string.Empty, result.Stderr);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            var data = doc.RootElement.GetProperty("data");
+            Assert.Equal("SQZ", data.GetProperty("ticketPrefix").GetString());
+            Assert.Equal(
+                ["app", "docs", "zeta"],
+                data.GetProperty("sourceRoots").EnumerateArray().Select(item => item.GetString()!).ToArray());
+
+            var conductor = File.ReadAllText(PathFor(repo, ".build/conductor.toml"));
+            Assert.Contains("ticket_prefix = \"SQZ\"", conductor, StringComparison.Ordinal);
+            Assert.Contains("source_roots = [\"app\", \"docs\", \"zeta\"]", conductor, StringComparison.Ordinal);
+
+            var human = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: "SQZ",
+                configuredProjectId: "project-uuid",
+                new ThrowingProjectDiscovery(),
+                ["zeta/file.txt", "docs/guide.md", "app/main.ts"],
+                json: false);
+            Assert.Equal(0, human.Exit);
+            Assert.Contains("ticket prefix: SQZ", human.Stdout, StringComparison.Ordinal);
+            Assert.Contains("source roots: app, docs, zeta", human.Stdout, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_ArchitectureMapCandidatePresent_UsesTrackedFileRealCasing()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: "ARC",
+                configuredProjectId: "project-uuid",
+                new ThrowingProjectDiscovery(),
+                ["src/main.ts", "docs/ARCHITECTURE.md", "README.md"]);
+
+            Assert.Equal(0, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            Assert.Equal(
+                "docs/ARCHITECTURE.md",
+                doc.RootElement.GetProperty("data").GetProperty("architectureMap").GetString());
+            Assert.Contains(
+                "architecture_map = \"docs/ARCHITECTURE.md\"",
+                File.ReadAllText(PathFor(repo, ".build/conductor.toml")),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_NoArchitectureMapCandidate_WritesSentinelDoctorRejects()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: "NOA",
+                configuredProjectId: "project-uuid",
+                new ThrowingProjectDiscovery(),
+                ["src/main.ts", "src/util.ts"]);
+
+            Assert.Equal(0, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            Assert.Equal(
+                "UNRESOLVED_ARCHITECTURE_MAP",
+                doc.RootElement.GetProperty("data").GetProperty("architectureMap").GetString());
+
+            var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+            Assert.Contains(report.Findings, finding => finding.Code == "conductor.architecture_map.not_found");
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_NoContractAuthorityDerivedAtScaffoldTime_DoctorRejectsSentinel()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: "CTA",
+                configuredProjectId: "project-uuid",
+                new ThrowingProjectDiscovery(),
+                ["src/main.ts"]);
+
+            Assert.Equal(0, result.Exit);
+            Assert.Contains(
+                "contract_authority = \"UNRESOLVED_CONTRACT_AUTHORITY\"",
+                File.ReadAllText(PathFor(repo, ".build/conductor.toml")),
+                StringComparison.Ordinal);
+
+            var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+            Assert.Contains(
+                report.Findings, finding => finding.Code == "constellation.contract_authority.placeholder");
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task CliInstall_BranchWithCommonPrefix_DerivesMostFrequentSegment()
+    {
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+        var repo = CreateRepo();
+
+        try
+        {
+            Directory.Delete(PathFor(repo, ".git"));
+            await RunGitAsync(repo, "init");
+            await RunGitAsync(repo, "config", "user.email", "test@example.invalid");
+            await RunGitAsync(repo, "config", "user.name", "Test User");
+            File.WriteAllText(PathFor(repo, "README.md"), "readme\n");
+            await RunGitAsync(repo, "add", "README.md");
+            await RunGitAsync(repo, "commit", "-m", "initial");
+            await RunGitAsync(repo, "branch", "feature/one");
+            await RunGitAsync(repo, "branch", "feature/two");
+            await RunGitAsync(repo, "branch", "chore/three");
+
+            var config = ConfigTemplateLoader.Load()
+                .Replace("REQUIRED_PLANE_BASE_URL", "https://api.plane.so", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_WORKSPACE_SLUG", "workspace", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_PROJECT_ID", "configured-uuid", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_API_TOKEN", "token", StringComparison.Ordinal)
+                .Replace(
+                    "plane_project_id = \"configured-uuid\"",
+                    "plane_project_id = \"configured-uuid\"\nplane_project_identifier = \"BRN\"",
+                    StringComparison.Ordinal);
+            Directory.CreateDirectory(PathFor(repo, ".build"));
+            File.WriteAllText(PathFor(repo, ".build/config.toml"), config);
+
+            var result = await RunCliApplicationInDirectoryAsync(repo, ["sop", "install", "--json"]);
+
+            Assert.Equal(0, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            Assert.Equal(
+                "feature",
+                doc.RootElement.GetProperty("data").GetProperty("branchPrefix").GetString());
+            Assert.Contains(
+                "branch_prefix = \"feature\"",
+                File.ReadAllText(PathFor(repo, ".build/conductor.toml")),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_NoSlashBranches_FallsBackToTicketBranchPrefix()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: "SLA",
+                configuredProjectId: "project-uuid",
+                new ThrowingProjectDiscovery(),
+                ["src/main.ts"],
+                branchNames: ["main", "develop"]);
+
+            Assert.Equal(0, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            Assert.Equal(
+                "ticket",
+                doc.RootElement.GetProperty("data").GetProperty("branchPrefix").GetString());
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_RepositoryWithNoSrcDirectory_EmitsOnlyExistingRepositoryPaths()
+    {
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+        var repo = Path.Combine(Path.GetTempPath(), "sop-install-cross-stack-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(repo);
+
+        try
+        {
+            // A real Node/TypeScript-shaped repository with no src directory. This exercises the
+            // stack leak that TLB-641 found end to end, through real git.
+            await RunGitAsync(repo, "init", "-b", "main");
+            await RunGitAsync(repo, "config", "user.email", "scratch@example.invalid");
+            await RunGitAsync(repo, "config", "user.name", "Scratch User");
+            Directory.CreateDirectory(PathFor(repo, "app"));
+            Directory.CreateDirectory(PathFor(repo, "docs"));
+            File.WriteAllText(PathFor(repo, "package.json"), "{ \"name\": \"scratch-app\" }\n");
+            File.WriteAllText(PathFor(repo, "app/index.js"), "console.log('scratch');\n");
+            File.WriteAllText(PathFor(repo, "docs/architecture.md"), "# Scratch app architecture\n");
+            await RunGitAsync(repo, "add", "package.json", "app", "docs");
+            await RunGitAsync(repo, "commit", "-m", "initial");
+            await RunGitAsync(repo, "checkout", "-b", "ticket/scratch-1");
+            await RunGitAsync(repo, "checkout", "main");
+
+            var config = ConfigTemplateLoader.Load()
+                .Replace("REQUIRED_PLANE_BASE_URL", "https://api.plane.so", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_WORKSPACE_SLUG", "workspace", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_PROJECT_ID", "configured-uuid", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_API_TOKEN", "token", StringComparison.Ordinal)
+                .Replace(
+                    "plane_project_id = \"configured-uuid\"",
+                    "plane_project_id = \"configured-uuid\"\nplane_project_identifier = \"SCR\"",
+                    StringComparison.Ordinal);
+            Directory.CreateDirectory(PathFor(repo, ".build"));
+            File.WriteAllText(PathFor(repo, ".build/config.toml"), config);
+
+            var result = await RunCliApplicationInDirectoryAsync(repo, ["sop", "install", "--json"]);
+            Assert.Equal(0, result.Exit);
+
+            var conductor = File.ReadAllText(PathFor(repo, ".build/conductor.toml"));
+            Assert.Contains("ticket_prefix = \"SCR\"", conductor, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(PathFor(repo, "src")));
+            Assert.Contains("source_roots = [\"app\", \"docs\"]", conductor, StringComparison.Ordinal);
+            Assert.Contains("branch_prefix = \"ticket\"", conductor, StringComparison.Ordinal);
+            Assert.Contains("architecture_map = \"docs/architecture.md\"", conductor, StringComparison.Ordinal);
+            Assert.Equal(
+                2,
+                conductor.Split(
+                    "paths = [\"app/**\", \"docs/**\"]",
+                    StringSplitOptions.None).Length - 1);
+
+            Assert.DoesNotContain("ThroughlineBuild", conductor, StringComparison.Ordinal);
+            Assert.DoesNotContain("throughline-build-architecture", conductor, StringComparison.Ordinal);
+            Assert.DoesNotContain("dotnet", conductor, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("src", conductor, StringComparison.Ordinal);
+
+            var report = SopDoctorCommand.RunDoctor(repo, "0.1.0+test");
+            Assert.DoesNotContain(
+                report.Findings, finding => finding.Code == "conductor.architecture_map.not_found");
+            Assert.DoesNotContain(
+                report.Findings, finding => finding.Code == "conductor.source_roots.not_found");
+            Assert.DoesNotContain(
+                report.Findings, finding => finding.Code == "conductor.review.paths.not_found");
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_TrackedBuildManagedDirectories_ExcludedFromSourceRoots()
+    {
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+        var repo = CreateRepo();
+
+        try
+        {
+            // TLB-627 made .build/config.toml and the host stubs tracked, so from the second machine
+            // on they show up in git ls-files. They are Build's own output, not the repository's
+            // source, and must not widen the review surface. See TLB-624.
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: "OWN",
+                configuredProjectId: "project-uuid",
+                new ThrowingProjectDiscovery(),
+                [
+                    ".build/config.toml",
+                    ".claude/commands/run-backlog.md",
+                    ".agents/skills/run-backlog/SKILL.md",
+                    "app/main.ts",
+                    "docs/guide.md",
+                ]);
+
+            Assert.Equal(0, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            var sourceRoots = doc.RootElement
+                .GetProperty("data")
+                .GetProperty("sourceRoots")
+                .EnumerateArray()
+                .Select(item => item.GetString()!)
+                .ToArray();
+
+            Assert.Equal(["app", "docs"], sourceRoots);
+            Assert.DoesNotContain(".build", sourceRoots);
+            Assert.DoesNotContain(".claude", sourceRoots);
+            Assert.DoesNotContain(".agents", sourceRoots);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_OnlyBuildManagedDirectoriesTracked_FallsBackToDotSourceRoot()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: "DOT",
+                configuredProjectId: "project-uuid",
+                new ThrowingProjectDiscovery(),
+                [".build/config.toml", ".claude/commands/run-backlog.md"]);
+
+            Assert.Equal(0, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            Assert.Equal(
+                ["."],
+                doc.RootElement
+                    .GetProperty("data")
+                    .GetProperty("sourceRoots")
+                    .EnumerateArray()
+                    .Select(item => item.GetString()!)
+                    .ToArray());
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_FreshCloneOfInstalledRepository_DerivesOriginBranchPrefixAndRepositoryOwnRoots()
+    {
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+        var root = Path.Combine(Path.GetTempPath(), "sop-install-clone-tests", Guid.NewGuid().ToString("N"));
+        var origin = Path.Combine(root, "origin");
+        var clone = Path.Combine(root, "clone");
+        Directory.CreateDirectory(origin);
+
+        try
+        {
+            // The second-machine case, through real git: the first machine committed the gate and
+            // the host stubs, then someone clones. A clone has exactly one local branch, so the
+            // repository's branch convention only survives in refs/remotes, and the committed
+            // .build/.claude/.agents directories must stay out of source_roots. See TLB-624.
+            await RunGitAsync(origin, "init", "-b", "main");
+            await RunGitAsync(origin, "config", "user.email", "scratch@example.invalid");
+            await RunGitAsync(origin, "config", "user.name", "Scratch User");
+            Directory.CreateDirectory(PathFor(origin, "app"));
+            Directory.CreateDirectory(PathFor(origin, "docs"));
+            Directory.CreateDirectory(PathFor(origin, ".build"));
+            File.WriteAllText(PathFor(origin, "app/index.js"), "console.log('scratch');\n");
+            File.WriteAllText(PathFor(origin, "docs/architecture.md"), "# Scratch app architecture\n");
+
+            var config = ConfigTemplateLoader.Load()
+                .Replace("REQUIRED_PLANE_BASE_URL", "https://api.plane.so", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_WORKSPACE_SLUG", "workspace", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_PROJECT_ID", "configured-uuid", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_API_TOKEN", "token", StringComparison.Ordinal)
+                .Replace(
+                    "plane_project_id = \"configured-uuid\"",
+                    "plane_project_id = \"configured-uuid\"\nplane_project_identifier = \"CLN\"",
+                    StringComparison.Ordinal);
+            File.WriteAllText(PathFor(origin, ".build/config.toml"), config);
+
+            // The first machine's install, then the commit TLB-627 made possible.
+            var firstMachine = await RunCliApplicationInDirectoryAsync(origin, ["sop", "install", "--json"]);
+            Assert.Equal(0, firstMachine.Exit);
+
+            await RunGitAsync(origin, "add", "app", "docs", ".claude", ".agents", ".build/config.toml");
+            await RunGitAsync(origin, "commit", "-m", "install: track gate and host stubs");
+            await RunGitAsync(origin, "checkout", "-b", "feature/one");
+            await RunGitAsync(origin, "checkout", "-b", "feature/two");
+            await RunGitAsync(origin, "checkout", "main");
+
+            await RunGitAsync(root, "clone", origin, clone);
+            await RunGitAsync(clone, "config", "user.email", "scratch@example.invalid");
+            await RunGitAsync(clone, "config", "user.name", "Scratch User");
+
+            var result = await RunCliApplicationInDirectoryAsync(clone, ["sop", "install", "--json"]);
+            Assert.Equal(0, result.Exit);
+
+            var conductor = File.ReadAllText(PathFor(clone, ".build/conductor.toml"));
+            Assert.Contains("branch_prefix = \"feature\"", conductor, StringComparison.Ordinal);
+            Assert.Contains("source_roots = [\"app\", \"docs\"]", conductor, StringComparison.Ordinal);
+            Assert.DoesNotContain(".claude", conductor, StringComparison.Ordinal);
+            Assert.DoesNotContain(".agents", conductor, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public async Task Install_BranchExistsLocallyAndOnRemote_CountsOncePerDistinctName()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            // A clone that has checked out one branch sees it twice - once in refs/heads and once
+            // in refs/remotes. Without dedup the duplicate outvotes a genuinely more common prefix.
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: "DUP",
+                configuredProjectId: "project-uuid",
+                new ThrowingProjectDiscovery(),
+                ["src/main.ts"],
+                branchNames: ["hotfix/urgent", "hotfix/urgent", "release/1", "release/2"]);
+
+            Assert.Equal(0, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            Assert.Equal(
+                "release",
+                doc.RootElement.GetProperty("data").GetProperty("branchPrefix").GetString());
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task CliInstall_UsesConfiguredIdentifierAndGitTrackedRoots()
+    {
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+        var repo = CreateRepo();
+
+        try
+        {
+            Directory.Delete(PathFor(repo, ".git"));
+            await RunGitAsync(repo, "init");
+            Directory.CreateDirectory(PathFor(repo, "ios"));
+            Directory.CreateDirectory(PathFor(repo, "docs"));
+            File.WriteAllText(PathFor(repo, "ios/App.swift"), "struct App {}\n");
+            File.WriteAllText(PathFor(repo, "docs/guide.md"), "guide\n");
+            await RunGitAsync(repo, "add", "ios/App.swift", "docs/guide.md");
+
+            var config = ConfigTemplateLoader.Load()
+                .Replace("REQUIRED_PLANE_BASE_URL", "https://api.plane.so", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_WORKSPACE_SLUG", "workspace", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_PROJECT_ID", "configured-uuid", StringComparison.Ordinal)
+                .Replace("REQUIRED_PLANE_API_TOKEN", "token", StringComparison.Ordinal)
+                .Replace(
+                    "plane_project_id = \"configured-uuid\"",
+                    "plane_project_id = \"configured-uuid\"\nplane_project_identifier = \"CLI\"",
+                    StringComparison.Ordinal);
+            Directory.CreateDirectory(PathFor(repo, ".build"));
+            File.WriteAllText(PathFor(repo, ".build/config.toml"), config);
+
+            var result = await RunCliApplicationInDirectoryAsync(repo, ["sop", "install", "--json"]);
+
+            Assert.Equal(0, result.Exit);
+            Assert.Equal(string.Empty, result.Stderr);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            var data = doc.RootElement.GetProperty("data");
+            Assert.Equal("CLI", data.GetProperty("ticketPrefix").GetString());
+            Assert.Equal(
+                ["docs", "ios"],
+                data.GetProperty("sourceRoots").EnumerateArray().Select(item => item.GetString()!).ToArray());
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_LegacyProjectId_ResolvesUniquePlaneIdentifier()
+    {
+        var repo = CreateRepo();
+        var discovery = new FakeProjectDiscovery(
+        [
+            new ProjectInfo("other-uuid", "Other", "OTH"),
+            new ProjectInfo("configured-uuid", "Configured", "LEG"),
+        ]);
+
+        try
+        {
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: string.Empty,
+                configuredProjectId: "configured-uuid",
+                discovery,
+                ["client/app.swift"]);
+
+            Assert.Equal(0, result.Exit);
+            Assert.Equal(1, discovery.ListCalls);
+            Assert.Contains(
+                "ticket_prefix = \"LEG\"",
+                File.ReadAllText(PathFor(repo, ".build/conductor.toml")),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_MissingConfiguredProject_FailsBeforeWriting()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: string.Empty,
+                configuredProjectId: "missing-uuid",
+                new FakeProjectDiscovery([new ProjectInfo("other-uuid", "Other", "OTH")]),
+                ["src/main.cs"]);
+
+            Assert.Equal(1, result.Exit);
+            Assert.Contains("did not resolve to exactly one", result.Stdout, StringComparison.Ordinal);
+            Assert.False(File.Exists(PathFor(repo, ".build/conductor.toml")));
+            Assert.False(File.Exists(PathFor(repo, ".agents/skills/run-backlog/SKILL.md")));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_AmbiguousConfiguredProject_FailsBeforeWriting()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: string.Empty,
+                configuredProjectId: "duplicate-uuid",
+                new FakeProjectDiscovery(
+                [
+                    new ProjectInfo("duplicate-uuid", "First", "ONE"),
+                    new ProjectInfo("duplicate-uuid", "Second", "TWO"),
+                ]),
+                ["src/main.cs"]);
+
+            Assert.Equal(1, result.Exit);
+            Assert.Contains("did not resolve to exactly one", result.Stdout, StringComparison.Ordinal);
+            Assert.False(File.Exists(PathFor(repo, ".build/conductor.toml")));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_UnavailableProjectDiscovery_FailsBeforeWriting()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: string.Empty,
+                configuredProjectId: "configured-uuid",
+                new ThrowingProjectDiscovery(),
+                ["src/main.cs"]);
+
+            Assert.Equal(1, result.Exit);
+            Assert.Contains("project discovery unavailable", result.Stdout, StringComparison.Ordinal);
+            Assert.False(File.Exists(PathFor(repo, ".build/conductor.toml")));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void Installer_WithoutDerivedIdentity_FailsBeforeAnyWrite()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = SopInstaller.Run(
+                "install",
+                repo,
+                SopBundleCatalog.All,
+                "0.1.0+test",
+                DateTimeOffset.UtcNow);
+
+            Assert.False(result.Passed);
+            Assert.False(result.Changed);
+            Assert.Contains(result.Results, item => item.Status == "identity_unavailable");
+            Assert.False(File.Exists(PathFor(repo, ".build/conductor.toml")));
+            Assert.False(File.Exists(PathFor(repo, ".claude/commands/run-backlog.md")));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_TrackedRootFilesOnly_FallsBackToDotSourceRoot()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunDerivedInstallAsync(
+                repo,
+                configuredProjectIdentifier: "ROOT",
+                configuredProjectId: "project-uuid",
+                new ThrowingProjectDiscovery(),
+                ["README.md", "solution.sln"]);
+
+            Assert.Equal(0, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            Assert.Equal(
+                ["."],
+                doc.RootElement.GetProperty("data").GetProperty("sourceRoots")
+                    .EnumerateArray().Select(item => item.GetString()!).ToArray());
+            Assert.Contains(
+                "source_roots = [\".\"]",
+                File.ReadAllText(PathFor(repo, ".build/conductor.toml")),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task InitThenSopInstall_LeavesDoctorFailingOnUnresolvedScaffoldValues()
+    {
+        AppContext.SetSwitch("System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault", false);
+        var repo = CreateRepo();
+
+        try
+        {
+            var init = await RunCliInDirectoryAsync(repo, ["init", "--no-interactive"]);
+            Assert.Equal(0, init.Exit);
+
+            var install = await RunCliInDirectoryAsync(
+                repo,
+                ["sop", "install", "--sop", "run-backlog", "--json"]);
+            Assert.Equal(0, install.Exit);
+
+            var doctor = await RunCliInDirectoryAsync(repo, ["sop", "doctor", "--json"]);
+
+            Assert.Equal(1, doctor.Exit);
+            Assert.Equal(string.Empty, doctor.Stderr);
+            using var doc = JsonDocument.Parse(doctor.Stdout);
+            var data = doc.RootElement.GetProperty("data");
+            Assert.False(data.GetProperty("passed").GetBoolean());
+            var codes = data.GetProperty("findings")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("code").GetString())
+                .ToList();
+            Assert.DoesNotContain("conductor.ticket_prefix.placeholder", codes);
+            Assert.Contains("conductor.review.invariants.statement.placeholder", codes);
+            Assert.Contains("conductor.review.invariants.id.placeholder", codes);
+            Assert.Contains("constellation.platform.placeholder", codes);
+            Assert.Contains("constellation.contract_authority.placeholder", codes);
+            Assert.Contains("conductor.architecture_map.not_found", codes);
+            Assert.Contains("conductor.source_roots.not_found", codes);
+            Assert.Contains("review.checks.empty", codes);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void StubResources_AreThinFailClosedAndHostBodiesMatch()
+    {
+        var runBacklogClaude = SopResourceLoader.LoadResource(SopBundleCatalog.RunBacklogClaudeCommandResource);
+        var runBacklogCodex = SopResourceLoader.LoadResource(SopBundleCatalog.RunBacklogCodexSkillResource);
+        var crossImpactClaude = SopResourceLoader.LoadResource(SopBundleCatalog.CrossImpactClaudeCommandResource);
+        var crossImpactCodex = SopResourceLoader.LoadResource(SopBundleCatalog.CrossImpactCodexSkillResource);
+
+        Assert.Equal(runBacklogClaude, StripCodexFrontmatter(runBacklogCodex));
+        Assert.Equal(crossImpactClaude, StripCodexFrontmatter(crossImpactCodex));
+        AssertThinFailClosedStub(runBacklogClaude, "run-backlog");
+        AssertThinFailClosedStub(crossImpactClaude, "cross-impact");
+
+        Assert.Contains(SopBundleCatalog.RunBacklog.OwnedPaths, path =>
+            path.Path == ".claude/commands/run-backlog.md" &&
+            path.Class == SopBundleCatalog.EmittedPathClass);
+        Assert.DoesNotContain(SopBundleCatalog.RunBacklog.OwnedPaths, path =>
+            path.Path.StartsWith(".claude/skills/", StringComparison.Ordinal));
+        Assert.Contains(SopBundleCatalog.RunBacklog.OwnedPaths, path =>
+            path.Path == ".agents/skills/run-backlog/SKILL.md" &&
+            path.Class == SopBundleCatalog.EmittedPathClass);
+    }
+
+    [Fact]
+    public async Task Install_NeverOverwritesExistingScaffoldedFile()
+    {
+        var repo = CreateRepo();
+        var conductorPath = PathFor(repo, ".build/conductor.toml");
+        Directory.CreateDirectory(Path.GetDirectoryName(conductorPath)!);
+        var editedConductor = ValidConductorToml.Replace("ticket_prefix = \"TLB\"", "ticket_prefix = \"CUSTOM\"");
+        File.WriteAllText(conductorPath, editedConductor);
+
+        try
+        {
+            var result = await RunCliInDirectoryAsync(repo, ["sop", "install", "--sop", "run-backlog", "--json"]);
+
+            Assert.Equal(0, result.Exit);
+            Assert.Equal(editedConductor, File.ReadAllText(conductorPath));
+            using var doc = JsonDocument.Parse(result.Stdout);
+            var statuses = ResultStatuses(doc.RootElement.GetProperty("data"));
+            Assert.Contains("preserved_scaffolded", statuses);
+            Assert.DoesNotContain("scaffolded", statuses);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Status_ReportsModifiedCatalogStubAsDrift()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            Assert.Equal(0, (await RunCliInDirectoryAsync(repo, ["sop", "install", "--sop", "run-backlog", "--json"])).Exit);
+            var stub = PathFor(repo, ".agents/skills/run-backlog/SKILL.md");
+            File.WriteAllText(stub, "locally changed\n");
+
+            var status = await RunCliInDirectoryAsync(repo, ["sop", "status", "--sop", "run-backlog", "--json"]);
+
+            Assert.Equal(1, status.Exit);
+            using var doc = JsonDocument.Parse(status.Stdout);
+            var data = doc.RootElement.GetProperty("data");
+            Assert.False(data.GetProperty("passed").GetBoolean());
+            Assert.Contains("modified", ResultStatuses(data));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Status_ReportsHandDeletedCatalogPathAndInstallRestoresIt()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            Assert.Equal(0, (await RunCliInDirectoryAsync(repo, ["sop", "install", "--sop", "run-backlog", "--json"])).Exit);
+            var stub = PathFor(repo, ".claude/commands/run-backlog.md");
+            File.Delete(stub);
+
+            var status = await RunCliInDirectoryAsync(repo, ["sop", "status", "--sop", "run-backlog", "--json"]);
+
+            Assert.Equal(1, status.Exit);
+            using (var doc = JsonDocument.Parse(status.Stdout))
+            {
+                var data = doc.RootElement.GetProperty("data");
+                Assert.False(data.GetProperty("passed").GetBoolean());
+                Assert.Contains("missing", ResultStatuses(data));
+            }
+
+            var restored = await RunCliInDirectoryAsync(repo, ["sop", "install", "--sop", "run-backlog", "--json"]);
+
+            Assert.Equal(0, restored.Exit);
+            Assert.True(File.Exists(stub));
+            using var restoredDoc = JsonDocument.Parse(restored.Stdout);
+            Assert.Contains("created", ResultStatuses(restoredDoc.RootElement.GetProperty("data")));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void Upgrade_RewritesOnlyPreviousCatalogContentAndPreservesLocalEdits()
+    {
+        var repo = CreateRepo();
+        var current = SopResourceLoader.LoadResource(SopBundleCatalog.RunBacklogClaudeCommandResource);
+        var currentHash = SopResourceLoader.ComputeSha256(current);
+        var oldCatalog = "old catalog content\n";
+        var oldHash = SopResourceLoader.ComputeSha256(oldCatalog);
+        var custom = new SopCatalogEntry(
+            "custom",
+            SopBundleCatalog.RunBacklogTicketTransactionResource,
+            [],
+            [
+                new SopOwnedPath(
+                    ".claude/commands/custom.md",
+                    SopBundleCatalog.EmittedPathClass,
+                    currentHash,
+                    SopBundleCatalog.RunBacklogClaudeCommandResource,
+                    [oldHash]),
+            ]);
+
+        try
+        {
+            var target = PathFor(repo, ".claude/commands/custom.md");
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.WriteAllText(target, oldCatalog);
+            WriteManifest(repo, "custom", ".claude/commands/custom.md", oldHash);
+
+            var upgraded = SopInstaller.Run("upgrade", repo, [custom], "0.1.0+test", DateTimeOffset.UtcNow);
+
+            Assert.True(upgraded.Passed);
+            Assert.True(upgraded.Changed);
+            Assert.Contains(upgraded.Results, result => result.Status == "upgraded");
+            Assert.Equal(current, File.ReadAllText(target));
+
+            File.WriteAllText(target, "local edit\n");
+            WriteManifest(
+                repo,
+                "custom",
+                ".claude/commands/custom.md",
+                SopResourceLoader.ComputeSha256("local edit\n"));
+
+            var edited = SopInstaller.Run("upgrade", repo, [custom], "0.1.0+test", DateTimeOffset.UtcNow);
+
+            Assert.False(edited.Passed);
+            Assert.False(edited.Changed);
+            Assert.Contains(edited.Results, result => result.Status == "modified");
+            Assert.Equal("local edit\n", File.ReadAllText(target));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Install_IgnoresTamperedDuplicateManifestRowsWithoutCrashing()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            Assert.Equal(0, (await RunCliInDirectoryAsync(repo, ["sop", "install", "--sop", "run-backlog", "--json"])).Exit);
+            var manifestPath = PathFor(repo, ".build/sop-manifest.json");
+            File.WriteAllText(
+                manifestPath,
+                """
+                {
+                  "schemaVersion": 1,
+                  "installedByBuildVersion": "tampered",
+                  "updatedAtUtc": "2026-08-02T00:00:00Z",
+                  "sops": [
+                    {
+                      "name": "run-backlog",
+                      "installedByBuildVersion": "tampered",
+                      "installedAtUtc": "2026-08-02T00:00:00Z",
+                      "paths": [
+                        {
+                          "path": ".claude/commands/run-backlog.md",
+                          "class": "emitted",
+                          "contentHash": "bad",
+                          "resourceName": "x"
+                        }
+                      ]
+                    },
+                    {
+                      "name": "run-backlog",
+                      "installedByBuildVersion": "tampered",
+                      "installedAtUtc": "2026-08-02T00:00:00Z",
+                      "paths": []
+                    }
+                  ]
+                }
+                """);
+
+            var result = await RunCliInDirectoryAsync(repo, ["sop", "install", "--sop", "run-backlog", "--json"]);
+
+            Assert.Equal(0, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            var data = doc.RootElement.GetProperty("data");
+            Assert.True(doc.RootElement.GetProperty("ok").GetBoolean());
+            Assert.True(data.GetProperty("changed").GetBoolean());
+            Assert.Contains("manifest_ignored", ResultStatuses(data));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Uninstall_RemovesOnlyMatchingEmittedFilesAndPreservesEditedFiles()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            Assert.Equal(0, (await RunCliInDirectoryAsync(repo, ["sop", "install", "--sop", "run-backlog", "--json"])).Exit);
+            var edited = PathFor(repo, ".claude/commands/run-backlog.md");
+            var clean = PathFor(repo, ".agents/skills/run-backlog/SKILL.md");
+            File.WriteAllText(edited, "local edit\n");
+
+            var result = await RunCliInDirectoryAsync(repo, ["sop", "uninstall", "--sop", "run-backlog", "--json"]);
+
+            Assert.Equal(1, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            var statuses = ResultStatuses(doc.RootElement.GetProperty("data"));
+            Assert.Contains("modified", statuses);
+            Assert.Contains("removed", statuses);
+            Assert.True(doc.RootElement.GetProperty("data").GetProperty("changed").GetBoolean());
+            Assert.True(File.Exists(edited));
+            Assert.False(File.Exists(clean));
+
+            var manifestPaths = ManifestPaths(repo, "run-backlog");
+            Assert.Contains(".claude/commands/run-backlog.md", manifestPaths);
+            Assert.Contains(".build/conductor.toml", manifestPaths);
+            Assert.DoesNotContain(".agents/skills/run-backlog/SKILL.md", manifestPaths);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Uninstall_IsIdempotentAfterCleanRemoval()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            Assert.Equal(0, (await RunCliInDirectoryAsync(repo, ["sop", "install", "--sop", "run-backlog", "--json"])).Exit);
+
+            var first = await RunCliInDirectoryAsync(repo, ["sop", "uninstall", "--sop", "run-backlog", "--json"]);
+
+            Assert.Equal(0, first.Exit);
+            using (var firstDoc = JsonDocument.Parse(first.Stdout))
+            {
+                var firstData = firstDoc.RootElement.GetProperty("data");
+                Assert.True(firstData.GetProperty("changed").GetBoolean());
+                Assert.Contains("removed", ResultStatuses(firstData));
+            }
+
+            var second = await RunCliInDirectoryAsync(repo, ["sop", "uninstall", "--sop", "run-backlog", "--json"]);
+
+            Assert.Equal(0, second.Exit);
+            using var secondDoc = JsonDocument.Parse(second.Stdout);
+            var secondData = secondDoc.RootElement.GetProperty("data");
+            Assert.True(secondDoc.RootElement.GetProperty("ok").GetBoolean());
+            Assert.False(secondData.GetProperty("changed").GetBoolean());
+            Assert.Contains("already_absent", ResultStatuses(secondData));
+            Assert.Contains("preserved_scaffolded", ResultStatuses(secondData));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task SopOptionNarrowsInstallScope()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunCliInDirectoryAsync(repo, ["sop", "install", "--sop", "run-backlog", "--json"]);
+
+            Assert.Equal(0, result.Exit);
+            Assert.True(File.Exists(PathFor(repo, ".claude/commands/run-backlog.md")));
+            Assert.True(File.Exists(PathFor(repo, ".agents/skills/run-backlog/SKILL.md")));
+            Assert.False(File.Exists(PathFor(repo, ".claude/commands/cross-impact.md")));
+            Assert.False(File.Exists(PathFor(repo, ".agents/skills/cross-impact/SKILL.md")));
+            using var doc = JsonDocument.Parse(result.Stdout);
+            var scope = doc.RootElement.GetProperty("data").GetProperty("scopeSops").EnumerateArray()
+                .Select(item => item.GetString())
+                .ToList();
+            Assert.Equal(["run-backlog"], scope);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task HostOptionNarrowsEmittedStubsButKeepsSharedScaffold()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunCliInDirectoryAsync(
+                repo,
+                ["sop", "install", "--sop", "run-backlog", "--host", "claude", "--json"]);
+
+            Assert.Equal(0, result.Exit);
+            Assert.True(File.Exists(PathFor(repo, ".claude/commands/run-backlog.md")));
+            Assert.False(File.Exists(PathFor(repo, ".agents/skills/run-backlog/SKILL.md")));
+            Assert.True(File.Exists(PathFor(repo, ".build/conductor.toml")));
+
+            var manifestPaths = ManifestPaths(repo, "run-backlog");
+            Assert.Contains(".claude/commands/run-backlog.md", manifestPaths);
+            Assert.Contains(".build/conductor.toml", manifestPaths);
+            Assert.DoesNotContain(".agents/skills/run-backlog/SKILL.md", manifestPaths);
+
+            var second = await RunCliInDirectoryAsync(
+                repo,
+                ["sop", "install", "--sop", "run-backlog", "--host", "codex", "--json"]);
+
+            Assert.Equal(0, second.Exit);
+            Assert.True(File.Exists(PathFor(repo, ".agents/skills/run-backlog/SKILL.md")));
+            var mergedManifestPaths = ManifestPaths(repo, "run-backlog");
+            Assert.Contains(".claude/commands/run-backlog.md", mergedManifestPaths);
+            Assert.Contains(".agents/skills/run-backlog/SKILL.md", mergedManifestPaths);
+            Assert.Contains(".build/conductor.toml", mergedManifestPaths);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task UnknownHostOptionFailsUsage()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            var result = await RunCliInDirectoryAsync(repo, ["sop", "install", "--host", "vim", "--json"]);
+
+            Assert.Equal(2, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            Assert.False(doc.RootElement.GetProperty("ok").GetBoolean());
+            Assert.Equal("usage", doc.RootElement.GetProperty("error").GetProperty("code").GetString());
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task SymlinkedCatalogPathIsRefusedBeforeAnyWrite()
+    {
+        var repo = CreateRepo();
+        var linkPath = PathFor(repo, ".claude/commands/run-backlog.md");
+        var targetPath = Path.Combine(repo, "outside-target.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(linkPath)!);
+        File.WriteAllText(targetPath, "target\n");
+
+        try
+        {
+            try
+            {
+                File.CreateSymbolicLink(linkPath, targetPath);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return;
+            }
+            catch (IOException)
+            {
+                return;
+            }
+
+            var result = await RunCliInDirectoryAsync(repo, ["sop", "install", "--sop", "run-backlog", "--json"]);
+
+            Assert.Equal(1, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            var data = doc.RootElement.GetProperty("data");
+            Assert.False(data.GetProperty("changed").GetBoolean());
+            Assert.Contains("unsafe_path", ResultStatuses(data));
+            Assert.False(File.Exists(PathFor(repo, ".agents/skills/run-backlog/SKILL.md")));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task StatusRefusesSymlinkedCatalogPathRatherThanFollowingIt()
+    {
+        var repo = CreateRepo();
+
+        try
+        {
+            Assert.Equal(0, (await RunCliInDirectoryAsync(repo, ["sop", "install", "--sop", "run-backlog", "--json"])).Exit);
+            var linkPath = PathFor(repo, ".claude/commands/run-backlog.md");
+            var targetPath = Path.Combine(repo, "outside-target.md");
+            File.Delete(linkPath);
+            File.WriteAllText(targetPath, "target\n");
+
+            try
+            {
+                File.CreateSymbolicLink(linkPath, targetPath);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return;
+            }
+            catch (IOException)
+            {
+                return;
+            }
+
+            var result = await RunCliInDirectoryAsync(repo, ["sop", "status", "--sop", "run-backlog", "--json"]);
+
+            Assert.Equal(1, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            Assert.Contains("unsafe_path", ResultStatuses(doc.RootElement.GetProperty("data")));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public async Task DanglingSymlinkedCatalogPathIsRefusedBeforeAnyWrite()
+    {
+        var repo = CreateRepo();
+        var linkPath = PathFor(repo, ".claude/commands/run-backlog.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(linkPath)!);
+
+        try
+        {
+            try
+            {
+                File.CreateSymbolicLink(linkPath, "missing-target.md");
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return;
+            }
+            catch (IOException)
+            {
+                return;
+            }
+
+            var result = await RunCliInDirectoryAsync(repo, ["sop", "install", "--sop", "run-backlog", "--json"]);
+
+            Assert.Equal(1, result.Exit);
+            using var doc = JsonDocument.Parse(result.Stdout);
+            var data = doc.RootElement.GetProperty("data");
+            Assert.False(data.GetProperty("changed").GetBoolean());
+            Assert.Contains("unsafe_path", ResultStatuses(data));
+            Assert.False(File.Exists(PathFor(repo, ".agents/skills/run-backlog/SKILL.md")));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void OutOfRootCatalogPathIsRefusedBeforeAnyWrite()
+    {
+        var repo = CreateRepo();
+        var current = SopResourceLoader.LoadResource(SopBundleCatalog.RunBacklogClaudeCommandResource);
+        var entry = new SopCatalogEntry(
+            "bad",
+            SopBundleCatalog.RunBacklogTicketTransactionResource,
+            [],
+            [
+                new SopOwnedPath(
+                    "../outside.md",
+                    SopBundleCatalog.EmittedPathClass,
+                    SopResourceLoader.ComputeSha256(current),
+                    SopBundleCatalog.RunBacklogClaudeCommandResource),
+            ]);
+
+        try
+        {
+            var result = SopInstaller.Run("install", repo, [entry], "0.1.0+test", DateTimeOffset.UtcNow);
+
+            Assert.False(result.Passed);
+            Assert.False(result.Changed);
+            Assert.Contains(result.Results, item => item.Status == "unsafe_path");
+            Assert.False(File.Exists(Path.Combine(Path.GetDirectoryName(repo)!, "outside.md")));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    private const string ValidConductorToml = """
+        [conductor]
+        min_build_version = "0.1.0"
+        branch_prefix = "ticket"
+        ticket_prefix = "TLB"
+        source_roots = ["src", "tests", "docs"]
+        architecture_map = "docs/throughline-build-architecture.md"
+        rework_cap = 3
+
+        [[conductor.review.invariants]]
+        id = "aot-json"
+        statement = "CLI JSON output uses source-generated JsonSerializerContext."
+
+        [conductor.review.escalation]
+        model_size = "large"
+        paths = ["src/**"]
+
+        [constellation]
+        platform = "dotnet-cli"
+        contract_authority = "src/ThroughlineBuild.Contracts"
+        """;
+
+    private static string CreateRepo()
+    {
+        var repository = Path.Combine(
+            Path.GetTempPath(),
+            "sop-install-tests",
+            Guid.NewGuid().ToString("N"),
+            "repo");
+        Directory.CreateDirectory(repository);
+        Directory.CreateDirectory(Path.Combine(repository, ".git"));
+        return repository;
+    }
+
+    private static string PathFor(string repository, string relativePath) =>
+        Path.Combine(repository, relativePath.Replace('/', Path.DirectorySeparatorChar));
+
+    private static void WriteManifest(
+        string repository,
+        string sop,
+        string path,
+        string oldHash)
+    {
+        var manifest = new SopManifest(
+            1,
+            "0.0.1+old",
+            DateTimeOffset.UtcNow,
+            [
+                new SopManifestSop(
+                    sop,
+                    "0.0.1+old",
+                    DateTimeOffset.UtcNow,
+                    [
+                        new SopManifestPath(
+                            path,
+                            SopBundleCatalog.EmittedPathClass,
+                            oldHash,
+                            SopBundleCatalog.RunBacklogClaudeCommandResource),
+                    ]),
+            ]);
+        var manifestPath = PathFor(repository, ".build/sop-manifest.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(manifestPath)!);
+        File.WriteAllText(
+            manifestPath,
+            JsonSerializer.Serialize(manifest, CliJsonContext.Default.SopManifest) + Environment.NewLine);
+    }
+
+    private static IReadOnlyList<string> ManifestPaths(string repository, string sop)
+    {
+        var manifest = JsonSerializer.Deserialize(
+            File.ReadAllText(PathFor(repository, ".build/sop-manifest.json")),
+            CliJsonContext.Default.SopManifest)!;
+        return manifest.Sops.Single(row => row.Name == sop).Paths.Select(path => path.Path).ToList();
+    }
+
+    private static string StripCodexFrontmatter(string content)
+    {
+        if (!content.StartsWith("---\n", StringComparison.Ordinal))
+            return content;
+
+        var end = content.IndexOf("\n---\n", 4, StringComparison.Ordinal);
+        Assert.True(end >= 0, "Codex skill frontmatter must have a closing marker");
+        return content[(end + "\n---\n".Length)..].TrimStart('\r', '\n');
+    }
+
+    private static void AssertThinFailClosedStub(string content, string sopName)
+    {
+        Assert.Contains($"build sop brief {sopName} --json", content);
+        Assert.Contains("missing from PATH", content);
+        Assert.Contains("is not executable", content);
+        Assert.Contains("exits nonzero", content);
+        Assert.Contains("unknown SOP", content);
+        Assert.Contains("conductor.min_build_version", content);
+        Assert.Contains("doctor failed", content);
+        Assert.Contains("data.sopText", content);
+        Assert.Contains("Do not use cached prose", content);
+        Assert.DoesNotContain("# The ticket transaction", content);
+        Assert.DoesNotContain("## Conductor", content);
+        Assert.DoesNotContain("[conductor]", content);
+        Assert.DoesNotContain("C:\\", content);
+        Assert.DoesNotContain("/Users/", content);
+    }
+
+    /// <summary>
+    /// Console for in-process CLI runs: writes land in the same buffers as the Console.SetOut /
+    /// Console.SetError capture, and stdin is redirected-but-empty (what automation looks like).
+    /// Injecting this is what keeps these runs off the test host's real stdin - 'build init' reads
+    /// redirected stdin for credentials, and a host whose stdin handle is closed or not inheritable
+    /// (any agent or CI harness) would otherwise fail the read inside the CLI under test.
+    /// </summary>
+    private static async Task<(int Exit, string Stdout, string Stderr)> RunCliInDirectoryAsync(
+        string directory,
+        string[] args)
+    {
+        var originalDirectory = Directory.GetCurrentDirectory();
+        var originalOut = Console.Out;
+        var originalErr = Console.Error;
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        try
+        {
+            Directory.SetCurrentDirectory(directory);
+            Console.SetOut(stdout);
+            Console.SetError(stderr);
+            int exit;
+            if (args.Length >= 2 && args[0] == "sop" && args[1] == "install")
+            {
+                var json = args.Contains("--json", StringComparer.Ordinal);
+                var commandArgs = args.Where(arg => arg != "--json").ToArray();
+                exit = await SopInstallCommand.ExecuteInstallAsync(
+                    commandArgs,
+                    json,
+                    directory,
+                    stdout,
+                    stderr,
+                    configuredProjectIdentifier: "TLB",
+                    configuredProjectId: "project-uuid",
+                    projectDiscovery: null,
+                    trackedFilesProvider: (_, _) =>
+                        Task.FromResult<IReadOnlyList<string>>(["src/placeholder.cs"]),
+                    branchNamesProvider: (_, _) =>
+                        Task.FromResult<IReadOnlyList<string>>([]));
+            }
+            else
+            {
+                exit = await CliApplication.RunAsync(
+                    args,
+                    (_, _) => throw new InvalidOperationException("worker must not be constructed"),
+                    new InProcessCliConsole(TextReader.Null, stdout, stderr));
+            }
+            return (exit, stdout.ToString(), stderr.ToString());
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+            Console.SetError(originalErr);
+            Directory.SetCurrentDirectory(originalDirectory);
+        }
+    }
+
+    private static async Task<(int Exit, string Stdout, string Stderr)> RunDerivedInstallAsync(
+        string repository,
+        string configuredProjectIdentifier,
+        string configuredProjectId,
+        IProjectDiscovery? projectDiscovery,
+        IReadOnlyList<string> trackedFiles,
+        bool json = true,
+        IReadOnlyList<string>? branchNames = null)
+    {
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+        var exit = await SopInstallCommand.ExecuteInstallAsync(
+            ["sop", "install"],
+            json,
+            repository,
+            stdout,
+            stderr,
+            configuredProjectIdentifier,
+            configuredProjectId,
+            projectDiscovery,
+            (_, _) => Task.FromResult(trackedFiles),
+            (_, _) => Task.FromResult(branchNames ?? Array.Empty<string>()));
+        return (exit, stdout.ToString(), stderr.ToString());
+    }
+
+    private static async Task<(int Exit, string Stdout, string Stderr)> RunCliApplicationInDirectoryAsync(
+        string directory,
+        string[] args)
+    {
+        var originalDirectory = Directory.GetCurrentDirectory();
+        var originalOut = Console.Out;
+        var originalErr = Console.Error;
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        try
+        {
+            Directory.SetCurrentDirectory(directory);
+            Console.SetOut(stdout);
+            Console.SetError(stderr);
+            var exit = await CliApplication.RunAsync(
+                args,
+                (_, _) => throw new InvalidOperationException("worker must not be constructed"),
+                new InProcessCliConsole(TextReader.Null, stdout, stderr));
+            return (exit, stdout.ToString(), stderr.ToString());
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+            Console.SetError(originalErr);
+            Directory.SetCurrentDirectory(originalDirectory);
+        }
+    }
+
+    private static async Task RunGitAsync(string workingDirectory, params string[] args)
+    {
+        var startInfo = new System.Diagnostics.ProcessStartInfo("git")
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in args)
+            startInfo.ArgumentList.Add(arg);
+
+        using var process = System.Diagnostics.Process.Start(startInfo)!;
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        Assert.True(
+            process.ExitCode == 0,
+            $"git {string.Join(" ", args)} failed: {await stderr}; stdout: {await stdout}");
+    }
+
+    private static IReadOnlyList<string> ResultStatuses(JsonElement data) =>
+        data.GetProperty("results")
+            .EnumerateArray()
+            .Select(item => item.GetProperty("status").GetString() ?? string.Empty)
+            .ToList();
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                var target = Path.GetFileName(path) == "repo"
+                    ? Directory.GetParent(path)?.FullName ?? path
+                    : path;
+                Directory.Delete(target, recursive: true);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private sealed class FakeProjectDiscovery(IReadOnlyList<ProjectInfo> projects) : IProjectDiscovery
+    {
+        public int ListCalls { get; private set; }
+
+        public Task<IReadOnlyList<ProjectInfo>> ListProjectsAsync(CancellationToken ct)
+        {
+            ListCalls++;
+            return Task.FromResult(projects);
+        }
+
+        public Task<string?> FindProjectByNameAsync(string name, CancellationToken ct) =>
+            throw new InvalidOperationException("not used");
+
+        public Task<string> CreateProjectAsync(string name, string identifier, CancellationToken ct) =>
+            throw new InvalidOperationException("not used");
+    }
+
+    private sealed class ThrowingProjectDiscovery : IProjectDiscovery
+    {
+        public Task<IReadOnlyList<ProjectInfo>> ListProjectsAsync(CancellationToken ct) =>
+            throw new InvalidOperationException("project discovery unavailable");
+
+        public Task<string?> FindProjectByNameAsync(string name, CancellationToken ct) =>
+            throw new InvalidOperationException("not used");
+
+        public Task<string> CreateProjectAsync(string name, string identifier, CancellationToken ct) =>
+            throw new InvalidOperationException("not used");
+    }
+}

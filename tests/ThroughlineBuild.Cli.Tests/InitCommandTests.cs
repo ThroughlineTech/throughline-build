@@ -127,11 +127,12 @@ public class InitCommandTests
     }
 
     // ------------------------------------------------------------------
-    // Execute: clobber guard
+    // Execute: existing config is a no-op (TLB-627 - config.toml is now tracked, so a repeat
+    // 'build init' on an already-configured clone is the NORMAL case, not an error)
     // ------------------------------------------------------------------
 
     [Fact]
-    public async Task Execute_ExistingConfig_NoForce_ReturnsOneAndDoesNotOverwrite()
+    public async Task Execute_ExistingCompleteConfig_NoForce_ReturnsZeroAndDoesNotOverwrite()
     {
         var dir = MakeTempDir();
         try
@@ -139,15 +140,63 @@ public class InitCommandTests
             var buildDir = Path.Combine(dir, ".build");
             Directory.CreateDirectory(buildDir);
             var target = Path.Combine(buildDir, "config.toml");
-            File.WriteAllText(target, "# original");
+            File.WriteAllText(target, "# original, no REQUIRED_ placeholders");
 
             var console = new FakeConsole();
             var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console);
 
-            Assert.Equal(1, result);
-            Assert.Equal("# original", File.ReadAllText(target));
-            Assert.Contains("already exists", console.Stderr);
-            Assert.Contains("--force", console.Stderr);
+            Assert.Equal(0, result);
+            Assert.Equal("# original, no REQUIRED_ placeholders", File.ReadAllText(target));
+            Assert.Contains("already exists", console.Stdout);
+            Assert.Contains("--force", console.Stdout);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Execute_ExistingIncompleteConfig_NoForce_ReturnsZeroButListsPlaceholders()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var buildDir = Path.Combine(dir, ".build");
+            Directory.CreateDirectory(buildDir);
+            var target = Path.Combine(buildDir, "config.toml");
+            File.WriteAllText(target, "plane_base_url = \"REQUIRED_PLANE_BASE_URL\"");
+
+            var console = new FakeConsole();
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console);
+
+            Assert.Equal(0, result);
+            Assert.Equal("plane_base_url = \"REQUIRED_PLANE_BASE_URL\"", File.ReadAllText(target));
+            Assert.Contains("already exists", console.Stdout);
+            Assert.Contains("plane_base_url", console.Stdout);
+            Assert.Contains("--force", console.Stdout);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Execute_RunTwice_SecondRunIsByteIdempotent()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new FakeConsole();
+            await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console);
+            var target = Path.Combine(dir, ".build", "config.toml");
+            var afterFirst = File.ReadAllText(target);
+
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, new FakeConsole());
+
+            Assert.Equal(0, result);
+            Assert.Equal(afterFirst, File.ReadAllText(target));
         }
         finally
         {
@@ -222,10 +271,12 @@ public class InitCommandTests
             Assert.Contains("build setup", console.Stdout);
             // Surfaces the one-shot connected path.
             Assert.Contains("--project-name", console.Stdout);
-            // Names the still-unresolved REQUIRED fields (none supplied here -> all four).
+            // Names the still-unresolved REQUIRED fields (none supplied here -> the three that still
+            // have a REQUIRED_ placeholder; plane_api_token defaults to plane_api_token_env, which
+            // has no placeholder to fill in).
             Assert.Contains("Still REQUIRED", console.Stdout);
             Assert.Contains("plane_project_id", console.Stdout);
-            Assert.Contains("plane_api_token", console.Stdout);
+            Assert.DoesNotContain("plane_api_token", console.Stdout);
         }
         finally
         {
@@ -269,8 +320,10 @@ public class InitCommandTests
             var console = new FakeConsole();
             await InitCommand.ExecuteAsync(dir, force: false, printTemplate: true, console);
 
-            // --print-template is pure template output: none of the offline hints leak in.
-            Assert.DoesNotContain("build setup", console.Stdout);
+            // --print-template is pure template output: none of the offline hints leak in. The
+            // template itself legitimately mentions 'build setup' in a plane_api_token_file
+            // comment (TLB-638), so check for the specific hint sentence, not the bare phrase.
+            Assert.DoesNotContain("Next: run 'build setup'", console.Stdout);
             Assert.DoesNotContain("Still REQUIRED", console.Stdout);
             Assert.DoesNotContain("Next:", console.Stdout);
             Assert.DoesNotContain("user-guide", console.Stdout);
@@ -346,18 +399,21 @@ public class InitCommandTests
     }
 
     [Fact]
-    public async Task Execute_TokenFlag_ReplacesPlaceholder()
+    public async Task Execute_TokenFlag_ReplacesDefaultEnvLineWithLiteral()
     {
         var dir = MakeTempDir();
         try
         {
             var console = new FakeConsole();
-            await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
+            var result = await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
                 token: "my-secret-token");
 
+            Assert.Equal(0, result);
             var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
-            Assert.Contains("my-secret-token", written);
-            Assert.DoesNotContain("REQUIRED_PLANE_API_TOKEN", written);
+            Assert.Contains("plane_api_token = \"my-secret-token\"", written);
+            Assert.DoesNotContain("plane_api_token_env = \"PLANE_API_TOKEN\"", written);
+            Assert.Contains("Warning", console.Stderr);
+            Assert.Contains("--token", console.Stderr);
         }
         finally
         {
@@ -366,19 +422,41 @@ public class InitCommandTests
     }
 
     [Fact]
-    public async Task Execute_TokenEnvFlag_ReplacesLiteralTokenLineWithEnvLine()
+    public async Task Execute_NoTokenFlags_DefaultsToEnvVarFormAndDoesNotWarn()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new FakeConsole();
+            await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console);
+
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+            Assert.Contains("plane_api_token_env = \"PLANE_API_TOKEN\"", written);
+            // The active (uncommented) plane_api_token key is absent; only the commented-out
+            // alternative ("# plane_api_token = ...") is present, which is expected.
+            Assert.DoesNotContain("\nplane_api_token = \"", written);
+            Assert.DoesNotContain("Warning", console.Stderr);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Execute_TokenEnvFlag_ReplacesDefaultEnvLineWithCustomName()
     {
         var dir = MakeTempDir();
         try
         {
             var console = new FakeConsole();
             await InitCommand.ExecuteAsync(dir, force: false, printTemplate: false, console,
-                tokenEnv: "PLANE_API_TOKEN");
+                tokenEnv: "CUSTOM_PLANE_TOKEN");
 
             var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
-            Assert.Contains("plane_api_token_env = \"PLANE_API_TOKEN\"", written);
-            // The literal plane_api_token = "REQUIRED_..." line should be gone.
-            Assert.DoesNotContain("REQUIRED_PLANE_API_TOKEN", written);
+            Assert.Contains("plane_api_token_env = \"CUSTOM_PLANE_TOKEN\"", written);
+            Assert.DoesNotContain("plane_api_token_env = \"PLANE_API_TOKEN\"", written);
+            Assert.DoesNotContain("Warning", console.Stderr);
         }
         finally
         {
@@ -1212,7 +1290,7 @@ public class InitCommandTests
     }
 
     [Fact]
-    public async Task ConnectedMode_ClobberGuardStillApplies()
+    public async Task ConnectedMode_ExistingConfigIsNoOp_ConnectedFlowNeverRuns()
     {
         var dir = MakeTempDir();
         try
@@ -1227,11 +1305,11 @@ public class InitCommandTests
                 workspace: "acme",
                 token: "tok",
                 projectName: "Some Project",
-                // Resolver must NOT be called because the clobber guard fires first.
+                // Resolver must NOT be called because the existing-file no-op fires first.
                 resolverOverride: new ThrowingResolver());
 
-            Assert.Equal(1, result);
-            Assert.Contains("already exists", console.Stderr);
+            Assert.Equal(0, result);
+            Assert.Contains("already exists", console.Stdout);
             // Original file untouched.
             Assert.Equal("# original", File.ReadAllText(Path.Combine(buildDir, "config.toml")));
         }
@@ -1404,9 +1482,10 @@ public class InitCommandTests
                 localRepoOverride: existingRepo);
 
             Assert.Equal(0, result);
-            // No warning and no mention of "Welcome" commit for an already-initialized repo.
+            // No mention of "Welcome" commit for an already-initialized repo. Stderr does carry the
+            // --token literal-value warning (expected - --token was passed above), but nothing else.
             Assert.DoesNotContain("welcome commit", console.Stdout, StringComparison.OrdinalIgnoreCase);
-            Assert.Empty(console.Stderr);
+            Assert.DoesNotContain("welcome commit", console.Stderr, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -1919,7 +1998,8 @@ public class InitCommandTests
             Assert.Equal(0, result);
             var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
             Assert.Contains("REQUIRED_PLANE_PROJECT_ID", written);
-            Assert.Contains("REQUIRED_PLANE_API_TOKEN", written);
+            // Token was never supplied, so the template's default (safe) env-var form is untouched.
+            Assert.Contains("plane_api_token_env = \"PLANE_API_TOKEN\"", written);
             // Offline next-steps hints appear; no create-or-pick prompt was shown.
             Assert.Contains("build setup", console.Stdout);
             Assert.DoesNotContain("Create a new project", console.Stdout);
@@ -2101,6 +2181,174 @@ public class InitCommandTests
             Assert.DoesNotContain("Create a new project", console.Stdout);
             var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
             Assert.Contains("REQUIRED_PLANE_PROJECT_ID", written);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Console whose stdin claims to be redirected but throws on every read - the state a process
+    /// is in when its launcher hands it a stdin handle that is closed or was never made inheritable.
+    /// Windows reports that handle as redirected (GetFileType cannot classify it) and then fails the
+    /// read with ERROR_INVALID_HANDLE, surfaced as IOException("The handle is invalid.").
+    /// </summary>
+    private sealed class UnreadableStdinConsole : IConsole
+    {
+        private readonly System.Text.StringBuilder _stdout = new();
+        private readonly System.Text.StringBuilder _stderr = new();
+
+        public string Stdout => _stdout.ToString();
+        public string Stderr => _stderr.ToString();
+        public int ReadAttempts { get; private set; }
+
+        public bool IsInputRedirected => true;
+        public void WriteLine(string value) => _stdout.AppendLine(value);
+        public void Write(string value) => _stdout.Append(value);
+        public void ErrorWriteLine(string value) => _stderr.AppendLine(value);
+
+        public string? ReadLine()
+        {
+            ReadAttempts++;
+            throw new IOException("The handle is invalid.");
+        }
+
+        public char? ReadKeyChar() => throw new IOException("The handle is invalid.");
+    }
+
+    private sealed class BlockingStdinConsole : IConsole, IDisposable
+    {
+        private readonly ManualResetEventSlim _release = new(initialState: false);
+        private readonly System.Text.StringBuilder _stdout = new();
+        private readonly System.Text.StringBuilder _stderr = new();
+
+        public string Stdout => _stdout.ToString();
+        public string Stderr => _stderr.ToString();
+        public bool IsInputRedirected => true;
+        public void WriteLine(string value) => _stdout.AppendLine(value);
+        public void Write(string value) => _stdout.Append(value);
+        public void ErrorWriteLine(string value) => _stderr.AppendLine(value);
+
+        public string? ReadLine()
+        {
+            _release.Wait();
+            return null;
+        }
+
+        public char? ReadKeyChar() => null;
+        public void Dispose() => _release.Set();
+    }
+
+    private sealed class PartialThenUnreadableStdinConsole : IConsole
+    {
+        private readonly System.Text.StringBuilder _stdout = new();
+        private readonly System.Text.StringBuilder _stderr = new();
+        private int _readCount;
+
+        public string Stdout => _stdout.ToString();
+        public string Stderr => _stderr.ToString();
+        public bool IsInputRedirected => true;
+        public void WriteLine(string value) => _stdout.AppendLine(value);
+        public void Write(string value) => _stdout.Append(value);
+        public void ErrorWriteLine(string value) => _stderr.AppendLine(value);
+        public string? ReadLine() => _readCount++ == 0
+            ? "plane_base_url = \"https://partial.example.test\""
+            : throw new IOException("pipe failed before EOF");
+        public char? ReadKeyChar() => null;
+    }
+
+    [Fact]
+    public async Task UnreadableRedirectedStdin_StillWritesOfflineConfig()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new UnreadableStdinConsole();
+
+            var result = await InitCommand.ExecuteAsync(
+                dir, force: false, printTemplate: false, console, noInteractive: true);
+
+            // Redirected-but-unreadable stdin carries no credentials. That is the same outcome as
+            // an empty pipe, so init must complete offline rather than crash out of the read.
+            Assert.Equal(0, result);
+            Assert.True(console.ReadAttempts > 0, "the stdin creds read should still have been attempted");
+            Assert.True(File.Exists(Path.Combine(dir, ".build", "config.toml")));
+            Assert.Contains("Created", console.Stdout);
+            Assert.Contains("ignoring stdin credentials", console.Stderr);
+            Assert.Contains("REQUIRED_PLANE_PROJECT_ID", File.ReadAllText(Path.Combine(dir, ".build", "config.toml")));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task UnreadableRedirectedStdin_DoesNotDiscardCredentialFlags()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new UnreadableStdinConsole();
+
+            var result = await InitCommand.ExecuteAsync(
+                dir, force: false, printTemplate: false, console,
+                planeUrl: "https://api.plane.so", workspace: "acme", tokenEnv: "PLANE_API_TOKEN",
+                noInteractive: true);
+
+            Assert.Equal(0, result);
+            Assert.Contains("ignoring stdin credentials", console.Stderr);
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+            Assert.Contains("https://api.plane.so", written);
+            Assert.Contains("acme", written);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BlockingRedirectedStdin_PrintTemplateReturnsWithinBound()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            using var console = new BlockingStdinConsole();
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+            var result = await InitCommand.ExecuteAsync(
+                dir, force: false, printTemplate: true, console, noInteractive: true);
+
+            stopwatch.Stop();
+            Assert.Equal(0, result);
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5), $"init took {stopwatch.Elapsed}");
+            Assert.Contains("[ticketing]", console.Stdout);
+            Assert.Contains("did not reach EOF", console.Stderr);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PartiallyReadRedirectedStdin_IsDiscardedWithWarning()
+    {
+        var dir = MakeTempDir();
+        try
+        {
+            var console = new PartialThenUnreadableStdinConsole();
+
+            var result = await InitCommand.ExecuteAsync(
+                dir, force: false, printTemplate: false, console, noInteractive: true);
+
+            Assert.Equal(0, result);
+            Assert.Contains("ignoring stdin credentials", console.Stderr);
+            var written = File.ReadAllText(Path.Combine(dir, ".build", "config.toml"));
+            Assert.Contains("REQUIRED_PLANE_BASE_URL", written);
+            Assert.DoesNotContain("partial.example.test", written);
         }
         finally
         {

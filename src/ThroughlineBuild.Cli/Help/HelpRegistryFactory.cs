@@ -13,7 +13,7 @@ public static class HelpRegistryFactory
     private static readonly ExitCodeEntry s_exit0 = new(0, "Success");
     private static readonly ExitCodeEntry s_exit1 = new(1, "Phase or command failure");
     private static readonly ExitCodeEntry s_exit2 = new(2, "Config error or bad arguments");
-    private static readonly ExitCodeEntry s_exit3 = new(3, "Missing secret (env var not set)");
+    private static readonly ExitCodeEntry s_exit3 = new(3, "Missing secret (token not resolvable from config, env var, or token file)");
     private static readonly ExitCodeEntry s_exit4 = new(4, "Phase infrastructure failure");
     private static readonly ExitCodeEntry s_exit5 = new(5, "Operator aborted (typed 'q' at a prompt)");
 
@@ -36,9 +36,13 @@ public static class HelpRegistryFactory
         r.Register(Decompose());
 
         // Bring your own conductor
+        r.Register(Worker());
         r.Register(Worktree());
         r.Register(Gate());
         r.Register(Waves());
+        r.Register(Candidate());
+        r.Register(Sop());
+        r.Register(Conductor());
 
         // Work items
         r.Register(New());
@@ -46,6 +50,9 @@ public static class HelpRegistryFactory
         r.Register(Get());
         r.Register(Comments());
         r.Register(Comment());
+        r.Register(Attachments());
+        r.Register(Attachment());
+        r.Register(Evidence());
         r.Register(Transition());
         r.Register(Relate());
         r.Register(Amend());
@@ -55,11 +62,13 @@ public static class HelpRegistryFactory
 
         // Configure
         r.Register(Init());
+        r.Register(Install());
         r.Register(SetTarget());
         r.Register(Setup());
         r.Register(UserGuide());
         r.Register(OpDoc());
         r.Register(Scaffold());
+        r.Register(Profile());
 
         return r;
     }
@@ -146,7 +155,7 @@ public static class HelpRegistryFactory
             new(0, "Shipped successfully, or only decruft cleanup failed after merge"),
             new(1, "Ship gate blocked at rebase, conflict scan, or regression checks"),
             new(2, "Config error or bad arguments"),
-            new(3, "Missing secret (env var not set)"),
+            new(3, "Missing secret (token not resolvable from config, env var, or token file)"),
             new(4, "Ship infrastructure failure, including state check, fetch, or fast-forward merge"),
         ],
         Examples:
@@ -240,6 +249,42 @@ public static class HelpRegistryFactory
     // Bring-your-own-conductor commands
     // ------------------------------------------------------------------
 
+    private static CommandHelp Worker() => new(
+        Name: "worker",
+        Group: CommandGroup.Conductor,
+        Summary: "Create an inspectable role-specific worker brief artifact",
+        Usage: "worker brief --ticket <id> --role implement|review|rework --worktree <path> --output <path> [--agent <name>] [--json]",
+        Options:
+        [
+            new("--ticket <id>", "Source ticket whose body, acceptance criteria, and recorded semantic contract are included", false),
+            new("--role <role>", "Worker role: implement, review, or rework", false),
+            new("--worktree <path>", "Existing workspace whose branch, diff, and status are read", false),
+            new("--output <path>", "Markdown artifact path; its parent directory must already exist", false),
+            new("--agent <name>", "Render the brief from this agent's templates instead of the configured agent", false),
+            new("--agent-implement <name>", "Same, but only for the implement and rework roles; wins over --agent", false),
+            new("--agent-review <name>", "Same, but only for the review role; wins over --agent", false),
+            new("--json", "Emit a versioned envelope with source ticket and output metadata", false),
+        ],
+        ExitCodes:
+        [
+            new(0, "Brief artifact written"),
+            new(1, "Ticket, git, worktree, or output failure"),
+            new(2, "Config error or bad arguments"),
+            new(3, "Missing ticketing secret"),
+        ],
+        Examples:
+        [
+            new("worker brief --ticket TLB-602 --role implement --worktree . --output .build/worker-brief.md", "Write an implementation brief without starting a worker"),
+            new("worker brief --ticket TLB-602 --role review --worktree .worktrees/tlb-602 --output review.md --json", "Write a review artifact and emit machine-readable metadata"),
+            new("worker brief --ticket TLB-602 --role implement --worktree . --output codex.md --agent codex", "Render the same brief from another agent's templates"),
+        ],
+        Details:
+        [
+            "The command reads the ticket and supplied worktree, then writes one Markdown artifact. It does not spawn a worker or mutate tickets, git history, branches, worktrees, or deployments. A recorded Ticket execution contract is carried in the ticket body and is binding in every role artifact. Review artifacts include the current diff and status as evidence; rework artifacts preserve the supplied worktree and include prior blocking findings.",
+            "Agent precedence, highest first: --agent-implement or --agent-review for the matching role, then --agent, then the [workers.phases] entry for that phase, then default_agent. The rework role uses the implement phase. Because this verb only renders templates and never starts a worker, a flag value must name a shipped brief template set rather than a configured [workers.<name>] sub-table; an unknown name is a usage error with exit 2, as is --agent-plan, which no brief role uses.",
+        ]
+    );
+
     private static CommandHelp Worktree() => new(
         Name: "worktree",
         Group: CommandGroup.Conductor,
@@ -286,7 +331,7 @@ public static class HelpRegistryFactory
             new("--ticket <id>", "Optional ticket identity included in the result", false),
             new("--role <role>", "Run gating, advisory, or all checks (default: all); setup always runs first", false),
             new("--require-checks", "Fail when the selected check list is empty", false),
-            new("--json", "Emit a versioned JSON envelope with typed per-check results", false),
+            new("--json", "Emit typed per-check results and the persisted canary-proof status", false),
         ],
         ExitCodes:
         [
@@ -298,6 +343,70 @@ public static class HelpRegistryFactory
         [
             new("gate", "Run the complete configured gate in the current tree"),
             new("gate --ticket TLB-583 --role gating --json", "Run setup and gating checks with structured output"),
+        ]
+    );
+
+    private static CommandHelp Profile() => new(
+        Name: "profile",
+        Group: CommandGroup.Configure,
+        Summary: "Prompt for, apply, or verify repository-specific review and ship checks",
+        Usage:
+            "profile apply <file|-> [--force] [--skip-canary] [--json]\n" +
+            "profile prompt [--json]\n" +
+            "profile verify-canaries <file|-> [--json]",
+        Options:
+        [
+            new("--force", "Overwrite existing checks that differ from the supplied profile", false),
+            new("--skip-canary", "Apply without proving gating checks reject their canaries; records the skipped proof", false),
+            new("<file|->", "Read PROJECT_PROFILE JSON from a file or standard input", false),
+            new("--json", "Emit a versioned JSON envelope", false),
+        ],
+        ExitCodes:
+        [
+            new(0, "Profile was written or already matched, a prompt was emitted, or every gating canary was rejected"),
+            new(1, "Apply refusal, canary verification, input, or write failure"),
+            new(2, "Usage or configuration error"),
+        ],
+        Examples:
+        [
+            new("profile prompt | agent > profile.json && build profile apply profile.json", "Let an interactive agent derive JSON without spawning a nested worker"),
+            new("agent > profile.json && build profile apply profile.json --force", "Replace previously customized checks deliberately"),
+            new("profile apply profile.json --skip-canary", "Apply on a constrained machine and record that canary proof was skipped"),
+        ],
+        Details:
+        [
+            "`profile prompt` needs no configuration or ticketing credentials. `profile apply` spawns no worker, but by default it uses a temporary worktree to prove every gating check rejects its canary before writing config.toml. A missing or ineffective canary blocks the write. `--skip-canary` is the explicit constrained-machine opt-out and records the skipped proof. Applying a profile the config already matches is a no-op success, so the command is safe to repeat; applying one that would overwrite existing, differing checks exits nonzero until `--force` is passed. `profile verify-canaries` runs the same proof without changing config.toml."
+        ]
+    );
+
+    private static CommandHelp Conductor() => new(
+        Name: "conductor",
+        Group: CommandGroup.Configure,
+        Summary: "Prompt for and atomically apply repository review invariants",
+        Usage:
+            "conductor prompt [--json]\n" +
+            "conductor apply <path|-> [--json]",
+        Options:
+        [
+            new("<path|->", "Read TOML invariant blocks from a file or standard input", false),
+            new("--json", "Emit a versioned JSON envelope", false),
+        ],
+        ExitCodes:
+        [
+            new(0, "Prompt emitted or validated invariant blocks applied"),
+            new(1, "Input validation or atomic write failure"),
+            new(2, "Usage error or missing conductor configuration"),
+        ],
+        Examples:
+        [
+            new("conductor prompt", "Print the cached worker-free invariant-authoring prompt"),
+            new("conductor prompt | agent > invariants.toml", "Use an interactive agent without spawning a worker"),
+            new("conductor apply invariants.toml --json", "Validate and atomically replace only the invariant block run"),
+            new("agent | build conductor apply -", "Validate invariant TOML from standard input"),
+        ],
+        Details:
+        [
+            "Both subcommands run before config bootstrap and never access ticketing, secrets, workers, or the network. Apply preserves all bytes outside the contiguous [[conductor.review.invariants]] run."
         ]
     );
 
@@ -321,6 +430,147 @@ public static class HelpRegistryFactory
         [
             new("waves --input tickets.json", "Print a human-readable schedule"),
             new("waves --input - --json", "Read JSON from stdin and emit a typed envelope"),
+        ]
+    );
+
+    private static CommandHelp Candidate() => new(
+        Name: "candidate",
+        Group: CommandGroup.Conductor,
+        Summary: "Fingerprint the current candidate worktree",
+        Usage: "candidate status --ticket <id> --base <ref> [--json]",
+        Options:
+        [
+            new("--ticket <id>", "Ticket identity echoed in the result and compared with any lease manifest; bare numbers require conductor.ticket_prefix", false),
+            new("--base <ref>", "Base commit/ref used for tracked and cached/index diff fingerprints", false),
+            new("--json", "Emit a versioned JSON envelope with source-generated candidate status data", false),
+        ],
+        ExitCodes:
+        [
+            new(0, "Candidate status produced"),
+            new(1, "Git failure, missing base ref, invalid worktree state, or unhashable path"),
+            new(2, "Config error or bad arguments"),
+        ],
+        Examples:
+        [
+            new("candidate status --ticket TLB-600 --base main --json", "Emit base/head SHAs, diff hashes, touched paths, dirty state, and lease metadata"),
+        ],
+        Details:
+        [
+            """
+            JSON data fields include:
+              ticket, baseRef, baseSha, headSha, branch, workingDirectory,
+              trackedDiffHash, cachedDiffHash, untrackedHash, touchedPaths,
+              untrackedPaths, lease, and dirtyState.
+
+            The tracked diff hash is the SHA-256 fingerprint of `git diff --binary --full-index --no-ext-diff --no-textconv <base> --`.
+            The cached/index diff hash is the SHA-256 fingerprint of `git diff --cached --binary --full-index --no-ext-diff --no-textconv <base> --`.
+            The untracked hash is computed from sorted untracked repository-relative paths, Git-style regular-file
+            modes, and file-content hashes. Missing base refs, non-git directories, conflicted worktrees, invalid
+            lease manifests, unreadable paths, untracked directories, and untracked symlink/reparse-point paths fail
+            with a JSON error envelope.
+
+            Lease ticket matching compares normalized full ticket IDs. A bare numeric `--ticket` is resolved only with
+            `.build/conductor.toml` `conductor.ticket_prefix`; when that prefix cannot be resolved, `lease.ticketMatches`
+            is false. Prefixes are never inferred from the lease manifest, so a foreign ticket prefix with the same digits
+            does not match.
+            """
+        ]
+    );
+
+    private static CommandHelp Sop() => new(
+        Name: "sop",
+        Group: CommandGroup.Conductor,
+        Summary: "Install, inspect, and emit binary-hosted SOPs",
+        Usage:
+            "sop list [--json]\n" +
+            "sop doctor [--json]\n" +
+            "sop brief <name> [--json]\n" +
+            "sop brief <name> admission <absolute-inspection-root> <inspection-sha> [--json]\n" +
+            "sop install [--sop <name>] [--host claude|codex] [--json]\n" +
+            "sop upgrade [--sop <name>] [--host claude|codex] [--json]\n" +
+            "sop uninstall [--sop <name>] [--host claude|codex] [--json]\n" +
+            "sop status [--sop <name>] [--host claude|codex] [--json]",
+        Options:
+        [
+            new("--json", "Emit a versioned JSON envelope", false),
+            new("--sop <name>", "Limit install, upgrade, uninstall, or status to one embedded SOP", false),
+            new("--host claude|codex", "Limit install, upgrade, uninstall, or status to one host's stubs plus shared scaffolded paths", false),
+        ],
+        ExitCodes:
+        [
+            new(0, "SOP operation passed; status found no drift"),
+            new(1, "Doctor failed, brief refused, status found drift, or a mutating operation reported a safety finding"),
+            new(2, "Bad arguments"),
+            new(SopCommand.UnknownSopExitCode, "Unknown SOP name"),
+        ],
+        Examples:
+        [
+            new("sop list --json", "List available embedded SOPs and their binary versions"),
+            new("sop doctor --json", "Validate .build/conductor.toml and [[review.checks]] without loading ticketing, workers, or events"),
+            new("sop brief run-backlog --json", "Emit the run-backlog procedure plus resolved conductor data"),
+            new("sop brief run-backlog admission /repo 0123456789abcdef0123456789abcdef01234567 --json", "Emit an admission-only brief envelope for a pinned inspection tree"),
+            new("sop install --sop run-backlog --host claude --json", "Install only the run-backlog Claude command and conductor scaffold"),
+            new("sop status --json", "Report catalog drift, including missing installed paths"),
+        ],
+        Details:
+        [
+            """
+            `sop list` reports every SOP embedded in the binary. The SOP version is the running
+            binary version; replacing the binary is the SOP upgrade path.
+
+            `sop doctor` reads .build/conductor.toml independently of .build/config.toml
+            and validates manifest-recorded or present emitted host stubs byte-for-byte against the embedded catalog.
+            It only looks at .build/config.toml for [[review.checks]], so missing ticketing
+            credentials, worker configuration, and event configuration do not block it.
+            Unknown keys in conductor.toml are reported as findings so misspelled contract
+            fields cannot be silently discarded.
+
+            When no manifest is present, doctor asks git which catalog paths are tracked so a
+            deleted stub is still reported as missing. If git cannot answer, doctor fails rather
+            than assuming nothing was installed. A tree that is not a git repository has no index
+            to consult, so there doctor can only see stubs still present on disk.
+
+            Review invariants are structured prose. Doctor validates ids, statements, optional
+            paths, and optional blocks_done shape, and requires each configured review path to match
+            repository content. It does not evaluate whether a statement is true.
+
+            Review checks must contain at least one setup or gating check with a non-empty executable.
+            Advisory-only checks are visible, but they do not make the gate capable of blocking Done.
+
+            `sop brief <name>` always emits a JSON envelope; --json is accepted for consistency
+            with other machine-readable verbs. Standard briefs run doctor first. Admission briefs
+            validate the inspection root and SHA before doctor reads conductor data, then run doctor.
+            If doctor fails, including when conductor.min_build_version is newer than the running
+            binary, the brief exits nonzero and does not include SOP text. There is no override flag.
+            A successful brief envelope includes the SOP text, conductor data, SOP schema version,
+            SOP version, binary version, doctor result, owned catalog paths, and runMode.
+
+            Admission-only inspection is a brief run mode, not a per-verb mutation flag:
+            `sop brief <name> admission <absolute-inspection-root> <inspection-sha>`. The root
+            must be the absolute git worktree root for the invoking repository; subdirectories and
+            unrelated repositories are refused. The SHA must be a full 40-character commit that
+            resolves in that worktree before doctor reads conductor data. The admission runMode carries the resolved
+            inspection root, normalized inspection SHA, inherited BUILD_SOP_* environment values,
+            and an explicit verb policy. While BUILD_SOP_RUN_MODE=admission is active, mutating
+            verbs refuse with JSON error code sop_admission_refused.
+
+            `sop install`, `sop upgrade`, `sop uninstall`, and `sop status` are catalog-driven.
+            The embedded catalog is the authority; .build/sop-manifest.json is a cache of prior
+            writes, not permission to touch arbitrary paths. Emitted files are host stubs and are
+            compared byte-for-byte with the catalog. Scaffolded files, currently .build/conductor.toml,
+            are never overwritten after creation and are validated as structured conductor data.
+            By default install emits every known host stub; --host narrows emitted stubs to Claude
+            or Codex while still including shared scaffolded paths.
+
+            Install is idempotent and restores missing catalog paths from the binary. Upgrade rewrites
+            only emitted files that still match trusted previous catalog hashes embedded in the current
+            binary; local edits are reported and preserved. Uninstall removes only catalog-owned
+            emitted regular files that still match the current catalog. To restore a locally modified
+            emitted stub, delete it and rerun `build sop install`. Status reports missing catalog
+            paths as drift. Every target and the SOP manifest path are resolved below the repository
+            root and refused when a symlink or reparse point is encountered before any write or delete.
+            No sop verb starts a worker agent.
+            """
         ]
     );
 
@@ -463,6 +713,75 @@ public static class HelpRegistryFactory
         ]
     );
 
+    private static CommandHelp Attachments() => new(
+        Name: "attachments",
+        Group: CommandGroup.WorkItems,
+        Summary: "List files attached to a ticket",
+        Usage: "attachments <ticket-id> [--json]",
+        Options:
+        [
+            new("--json", "Emit normalized attachment metadata in a versioned JSON envelope", false),
+        ],
+        ExitCodes: [s_exit0, s_exit1, s_exit2, s_exit3],
+        Examples:
+        [
+            new("attachments TLB-620", "List work-item files and supported inline description images"),
+            new("attachments TLB-620 --json", "Emit attachment ids and metadata for automation"),
+        ]
+    );
+
+    private static CommandHelp Attachment() => new(
+        Name: "attachment",
+        Group: CommandGroup.WorkItems,
+        Summary: "Download one ticket attachment to a file",
+        Usage: "attachment <ticket-id> <asset-id> --output <path> [--json]",
+        Options:
+        [
+            new("--output <path>", "Required destination; the command never overwrites an existing path", false),
+            new("--json", "Emit download metadata in a versioned JSON envelope; binary bytes never use stdout", false),
+        ],
+        ExitCodes: [s_exit0, s_exit1, s_exit2, s_exit3],
+        Examples:
+        [
+            new("attachment TLB-620 11111111-2222-3333-4444-555555555555 --output evidence.png", "Download one attachment without overwriting evidence.png"),
+            new("attachment TLB-620 11111111-2222-3333-4444-555555555555 --output evidence.png --json", "Download bytes to disk and emit only metadata on stdout"),
+        ]
+    );
+
+    private static CommandHelp Evidence() => new(
+        Name: "evidence",
+        Group: CommandGroup.WorkItems,
+        Summary: "Post one structured evidence comment and verify its read-back",
+        Usage: "evidence add --ticket <id> --kind <claim|review|commit|integrate|gate|final> [fields] [--json]",
+        Options:
+        [
+            new("add", "Add exactly one structured evidence comment; it never changes ticket state", false),
+            new("--ticket <id>", "Ticket receiving the evidence comment", false),
+            new("--kind <kind>", "claim, review, commit, integrate, gate, or final", false),
+            new("--claim <text>", "Claim text (required for claim evidence)", false),
+            new("--candidate-sha <sha>", "Candidate commit SHA (required by claim, commit, integrate, and final)", false),
+            new("--run-head-sha <sha>", "Run head SHA (required by review, integrate, gate, and final)", false),
+            new("--verdict <Pass|Rework|Fail>", "Review verdict (required by review evidence)", false),
+            new("--gate-result <pass|fail|inconclusive>", "Gate result (required by gate evidence)", false),
+            new("--fingerprint <value>", "Candidate fingerprint (required by every evidence kind)", false),
+            new("--summary <text>", "Optional one-line summary", false),
+            new("--note <text>", "Optional one-line note", false),
+            new("--json", "Emit a versioned envelope with the created comment and read-back proof", false),
+        ],
+        ExitCodes: [s_exit0, s_exit1, s_exit2],
+        Examples:
+        [
+            new("evidence add --ticket TLB-541 --kind claim --claim \"implemented the fix\" --candidate-sha SHA --fingerprint HASH", "Record a candidate claim"),
+            new("evidence add --ticket TLB-541 --kind review --run-head-sha SHA --verdict Pass --fingerprint HASH --json", "Record a verified review"),
+            new("evidence add --ticket TLB-541 --kind gate --run-head-sha SHA --gate-result pass --fingerprint HASH", "Record a gate result"),
+        ],
+        Details:
+        [
+            "The command posts exactly one comment, then reads that comment back by its returned id. `readBackVerified: true` means only that the returned id is present in the read-back list; it does not compare stored comment content with the submitted body. If posting succeeds but read-back fails, the command reports the id and does not retry; inspect `build comments <ticket>` before trying again.",
+            "Evidence is an audit entry only. It never closes, defers, reopens, or transitions a ticket. Use the explicit lifecycle commands separately; do not use evidence as a cascading close or transition shortcut."
+        ]
+    );
+
     private static CommandHelp Transition() => new(
         Name: "transition",
         Group: CommandGroup.WorkItems,
@@ -578,6 +897,42 @@ public static class HelpRegistryFactory
     // Configure commands
     // ------------------------------------------------------------------
 
+    private static CommandHelp Install() => new(
+        Name: "install",
+        Group: CommandGroup.Configure,
+        Summary: "Install and prove run-backlog readiness through two explicit agent handoffs",
+        Usage: "install [--no-interactive] [--from FILE] [--plane-url URL] [--workspace SLUG] [--project-id UUID] [--project-name NAME] [--token TOKEN | --token-env VAR] [--profile <path|-> [--force] | --invariants <path|->] [--json]",
+        Options:
+        [
+            new("--no-interactive", "Forward to init for first-stage automation; requires complete init configuration", false),
+            new("--from FILE", "Forward init credentials from a key=value file on the first invocation", false),
+            new("--plane-url URL", "Forward the Plane base URL to init on the first invocation", false),
+            new("--workspace SLUG", "Forward the Plane workspace slug to init on the first invocation", false),
+            new("--project-id UUID", "Forward the Plane project UUID to init on the first invocation", false),
+            new("--project-name NAME", "Forward the project name to init on the first invocation", false),
+            new("--token TOKEN", "Forward the Plane API token to init on the first invocation", false),
+            new("--token-env VAR", "Forward the Plane API token environment-variable name to init on the first invocation", false),
+            new("--profile <path|->", "Apply PROJECT_PROFILE JSON, install SOPs, and stop at the invariant prompt", false),
+            new("--force", "With --profile, overwrite existing checks that differ from the profile", false),
+            new("--invariants <path|->", "Apply invariant TOML and finish deterministic readiness preparation", false),
+            new("--json", "Emit one versioned handoff or readiness envelope; progress remains on stderr", false),
+        ],
+        ExitCodes: [s_exit0, s_exit1, s_exit2, s_exit3, s_exit5],
+        Examples:
+        [
+            new("install --no-interactive --plane-url URL --workspace SLUG --project-id UUID --token-env PLANE_API_TOKEN", "Initialize/setup non-interactively, then stop with the canonical profile prompt"),
+            new("install --profile .build/profile.json", "Apply the profile, install SOPs, then stop with the conductor prompt"),
+            new("install --profile .build/profile.json --force", "Replace checks a human wrote with the ones the profile derives"),
+            new("install --invariants .build/invariants.toml --json", "Apply invariants and report READY only after SOP preflight passes"),
+        ],
+        Details:
+        [
+            "The verb never starts a worker or runs target-stack build/test commands. Final readiness requires doctor success, configured checks, resolved conductor data, a clean non-protected branch, no merge/rebase operation, and a queryable worktree lease surface.",
+            "Every stage is re-runnable on an installed repository regardless of its toolchain: a profile that already matches config is a no-op success, and the second run produces no additional commit or branch change.",
+            "Init options apply only to the first invocation. A bare redirected install never writes placeholder configuration; it names the complete non-interactive command required to begin."
+        ]
+    );
+
     private static CommandHelp Init() => new(
         Name: "init",
         Group: CommandGroup.Configure,
@@ -628,16 +983,18 @@ public static class HelpRegistryFactory
         Name: "setup",
         Group: CommandGroup.Configure,
         Summary: "Make a project workflow-ready: git init + .gitignore, and provision the Plane project (states + labels)",
-        Usage: "setup [--check]",
+        Usage: "setup [--check] [--write-token-file <path>]",
         Options:
         [
-            new("--check", "Verify only: report any missing git repo, .gitignore entries, or Plane states/labels and exit 1; mutate nothing", false),
+            new("--check", "Verify only: report backend readiness separately from local hygiene, exit 1 for any gap, and mutate nothing", false),
+            new("--write-token-file <path>", "Write the Plane API token this run already resolved to <path> and set plane_api_token_file in config.toml, so a non-interactive process (an agent, CI, an editor with no login shell) can find it too; never combine with --check", false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2, s_exit3],
         Examples:
         [
             new("setup", "Initialize git, top up .gitignore, and create missing Plane states/labels"),
             new("setup --check", "Report readiness gaps without changing anything (CI gate)"),
+            new("setup --write-token-file secrets/plane-api-token", "Persist the currently-resolved token to a file non-interactive shells can also read"),
         ]
     );
 
@@ -680,14 +1037,12 @@ public static class HelpRegistryFactory
         Name: "scaffold",
         Group: CommandGroup.Configure,
         Summary: "Scaffold an op-doc into Plane",
-        Usage: "scaffold <op-doc-path> [--validate-only] [--dry-run] [--accept-warnings] [--no-profile] [--force-profile] [--debug]",
+        Usage: "scaffold <op-doc-path> [--validate-only] [--dry-run] [--accept-warnings] [--debug]",
         Options:
         [
             new("--validate-only",    "Parse and validate the op-doc without creating any tickets",          false),
             new("--dry-run",          "Show what would be created without making Plane API calls",           false),
             new("--accept-warnings",  "Proceed even when the op-doc has non-fatal warnings",                 false),
-            new("--no-profile",       "Skip deriving review/ship checks from the op-doc into config.toml",   false),
-            new("--force-profile",    "Overwrite review/ship checks even if they look hand-customized",      false),
             new("--debug",            "Stream diagnostic output",                                            false),
         ],
         ExitCodes:

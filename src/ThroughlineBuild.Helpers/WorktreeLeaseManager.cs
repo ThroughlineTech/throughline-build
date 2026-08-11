@@ -161,26 +161,28 @@ public sealed class WorktreeLeaseManager
                 target, branch, _options.MainWorktreePath, ct).ConfigureAwait(false);
             if (!created.Success)
             {
-                await RollBackCreatedLeaseAsync(
-                    target, branch, worktreeCreated, branchCreated, CancellationToken.None)
+                var preserved = await RollBackCreatedLeaseAsync(
+                    target, branch, baseSha, worktreeCreated, branchCreated, CancellationToken.None)
                     .ConfigureAwait(false);
-                return Failed(FailureError, $"worktree creation failed: {created.FailureReason}");
+                return Failed(
+                    FailureError,
+                    Append($"worktree creation failed: {created.FailureReason}", preserved));
             }
             worktreeCreated = true;
         }
         catch (OperationCanceledException)
         {
             await RollBackCreatedLeaseAsync(
-                target, branch, worktreeCreated, branchCreated, CancellationToken.None)
+                target, branch, baseSha, worktreeCreated, branchCreated, CancellationToken.None)
                 .ConfigureAwait(false);
             throw;
         }
         catch (Exception ex)
         {
-            await RollBackCreatedLeaseAsync(
-                target, branch, worktreeCreated, branchCreated, CancellationToken.None)
+            var preserved = await RollBackCreatedLeaseAsync(
+                target, branch, baseSha, worktreeCreated, branchCreated, CancellationToken.None)
                 .ConfigureAwait(false);
-            return Failed(FailureError, $"worktree creation failed: {ex.Message}");
+            return Failed(FailureError, Append($"worktree creation failed: {ex.Message}", preserved));
         }
 
         var seeded = new List<string>();
@@ -230,16 +232,18 @@ public sealed class WorktreeLeaseManager
         catch (OperationCanceledException)
         {
             await RollBackCreatedLeaseAsync(
-                target, branch, worktreeCreated, branchCreated, CancellationToken.None)
+                target, branch, baseSha, worktreeCreated, branchCreated, CancellationToken.None)
                 .ConfigureAwait(false);
             throw;
         }
         catch (Exception ex)
         {
-            await RollBackCreatedLeaseAsync(
-                target, branch, worktreeCreated, branchCreated, CancellationToken.None)
+            var preserved = await RollBackCreatedLeaseAsync(
+                target, branch, baseSha, worktreeCreated, branchCreated, CancellationToken.None)
                 .ConfigureAwait(false);
-            return Failed(FailureError, $"lease setup failed and was rolled back: {ex.Message}");
+            return Failed(
+                FailureError,
+                Append($"lease setup failed and was rolled back: {ex.Message}", preserved));
         }
     }
 
@@ -694,9 +698,16 @@ public sealed class WorktreeLeaseManager
         File.WriteAllText(path, json + Environment.NewLine);
     }
 
-    private async Task RollBackCreatedLeaseAsync(
+    /// <summary>
+    /// Removes artifacts this lease attempt created. The helper branch is deleted only when it
+    /// still points at the base SHA the attempt recorded, so a branch that advanced after
+    /// creation is preserved rather than discarded. Returns a note describing anything the
+    /// rollback deliberately left behind, or null when rollback was complete.
+    /// </summary>
+    private async Task<string?> RollBackCreatedLeaseAsync(
         string target,
         string branch,
+        string baseSha,
         bool worktreeCreated,
         bool branchCreated,
         CancellationToken ct)
@@ -706,10 +717,33 @@ public sealed class WorktreeLeaseManager
             try { await _git.RemoveWorktreeAsync(target, force: true, ct).ConfigureAwait(false); }
             catch { }
         }
-        if (branchCreated)
+        if (!branchCreated)
+            return null;
+
+        string tip;
+        try
         {
-            try { await _git.DeleteBranchAsync(branch, force: true, _options.MainWorktreePath, ct).ConfigureAwait(false); }
-            catch { }
+            tip = await _git.RevParseAsync(branch, _options.MainWorktreePath, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            return $"branch '{branch}' was preserved: its tip could not be resolved ({ex.Message})";
+        }
+
+        if (!string.Equals(tip.Trim(), baseSha, StringComparison.OrdinalIgnoreCase))
+            return $"branch '{branch}' was preserved: it is at {tip.Trim()}, not the recorded base {baseSha}";
+
+        try
+        {
+            var delete = await _git.DeleteBranchAsync(
+                branch, force: false, _options.MainWorktreePath, ct).ConfigureAwait(false);
+            return delete.Success
+                ? null
+                : $"branch '{branch}' was preserved: {delete.FailureReason}";
+        }
+        catch (Exception ex)
+        {
+            return $"branch '{branch}' was preserved: {ex.Message}";
         }
     }
 
@@ -764,6 +798,9 @@ public sealed class WorktreeLeaseManager
 
     private static WorktreeLeaseResult Failed(string code, string message) =>
         new(false, code, message, null);
+
+    private static string Append(string message, string? note) =>
+        string.IsNullOrEmpty(note) ? message : $"{message}; {note}";
 
     private sealed record SeedValidation(
         bool Success,

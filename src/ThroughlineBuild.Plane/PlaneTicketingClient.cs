@@ -5,6 +5,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
+using System.Text.RegularExpressions;
 using Polly;
 using Polly.Retry;
 using ThroughlineBuild.Contracts;
@@ -18,8 +19,11 @@ namespace ThroughlineBuild.Plane;
 public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, ITicketingConnectivity, IProjectDiscovery
 {
     private readonly HttpClient _http;
+    private readonly HttpClient _attachmentRedirectHttp;
+    private readonly HttpClient _storageHttp;
     private readonly PlaneClientOptions _options;
     private readonly ResiliencePipeline _pipeline;
+    private readonly ResiliencePipeline _commentPostRateLimitPipeline;
 
     // Hard rate gate: every HTTP send waits here so we never exceed Plane's 60/min limit.
     private readonly RequestThrottle _throttle;
@@ -75,28 +79,59 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
+    private static readonly HttpClient s_noRedirectHttp = new(
+        new HttpClientHandler { AllowAutoRedirect = false });
+
+    private static readonly Regex s_imageComponentRegex = new(
+        "<image-component\\b[^>]*\\bsrc\\s*=\\s*(?:\"(?<dq>[^\"]*)\"|'(?<sq>[^']*)'|(?<uq>[^\\s>]+))",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    private static readonly Regex s_uuidInPathRegex = new(
+        "(?<![0-9a-fA-F])[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?![0-9a-fA-F])",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
     public PlaneTicketingClient(HttpClient httpClient, PlaneClientOptions options)
+        : this(httpClient, options, s_noRedirectHttp, httpClient)
+    {
+    }
+
+    /// <summary>
+    /// Test seam for attachment redirects and unauthenticated storage. Production uses a
+    /// process-wide no-redirect client for attachment detail and the injected client for storage.
+    /// </summary>
+    public PlaneTicketingClient(
+        HttpClient httpClient,
+        PlaneClientOptions options,
+        HttpClient attachmentRedirectHttp,
+        HttpClient storageHttp)
     {
         _http = httpClient;
+        _attachmentRedirectHttp = attachmentRedirectHttp;
+        _storageHttp = storageHttp;
         _options = options;
 
         _http.BaseAddress = new Uri(options.BaseUrl.TrimEnd('/') + "/");
-        _http.DefaultRequestHeaders.Add("X-API-Key", options.ApiToken);
 
         _throttle = new RequestThrottle(options.RequestsPerMinute, TimeSpan.FromMinutes(1));
 
-        var maxRetryDelay = options.MaxRetryDelay;
-        _pipeline = new ResiliencePipelineBuilder()
+        _pipeline = CreateRetryPipeline(ex => ex.Status == 429 || ex.Status >= 500);
+        _commentPostRateLimitPipeline = CreateRetryPipeline(ex => ex.Status == 429);
+    }
+
+    private ResiliencePipeline CreateRetryPipeline(Func<PlaneApiException, bool> shouldHandle)
+    {
+        var maxRetryDelay = _options.MaxRetryDelay;
+        return new ResiliencePipelineBuilder()
             .AddRetry(new RetryStrategyOptions
             {
                 ShouldHandle = new PredicateBuilder()
-                    .Handle<PlaneApiException>(ex => ex.Status == 429 || ex.Status >= 500),
-                MaxRetryAttempts = options.MaxRetryAttempts,
+                    .Handle<PlaneApiException>(shouldHandle),
+                MaxRetryAttempts = _options.MaxRetryAttempts,
                 BackoffType = DelayBackoffType.Exponential,
                 // Jitter desynchronizes two concurrent build instances that would
                 // otherwise retry in lockstep and keep colliding on the same window.
                 UseJitter = true,
-                Delay = options.RetryBaseDelay,
+                Delay = _options.RetryBaseDelay,
                 // When Plane sends Retry-After (429s from its limiter do), wait exactly
                 // that long instead of our exponential guess - the window is shared with
                 // other processes, so our blind backoff is usually too short. Returning
@@ -332,17 +367,26 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
     /// callers and the Polly pipeline - by the time a status exists, transport succeeded.
     /// </summary>
     private async Task<(HttpResponseMessage Response, string Body)> SendWithTransportRetryAsync(
-        HttpMethod method, string url, string? jsonBody, CancellationToken ct)
+        HttpMethod method,
+        string url,
+        string? jsonBody,
+        CancellationToken ct,
+        HttpClient? client = null)
     {
+        client ??= _http;
         for (var attempt = 0; ; attempt++)
         {
             await _throttle.AcquireAsync(ct).ConfigureAwait(false);
             try
             {
-                using var request = new HttpRequestMessage(method, url);
+                var requestUri = client.BaseAddress is null
+                    ? new Uri(_http.BaseAddress!, url)
+                    : new Uri(url, UriKind.RelativeOrAbsolute);
+                using var request = new HttpRequestMessage(method, requestUri);
+                request.Headers.Add("X-API-Key", _options.ApiToken);
                 if (jsonBody is not null)
                     request.Content = new StringContent(jsonBody, System.Text.Encoding.UTF8, "application/json");
-                var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
+                var response = await client.SendAsync(request, ct).ConfigureAwait(false);
                 var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
                 return (response, body);
             }
@@ -984,21 +1028,29 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
 
     public async Task<string> CreateCommentAsync(string id, string html, CancellationToken ct)
     {
-        return await _pipeline.ExecuteAsync(async token =>
+        var seq = ParseSequenceId(id);
+        // Resolve the issue through the normal read pipeline. The comment POST has its own
+        // rate-limit-only pipeline: a 429 means Plane rejected the request before storing it, so
+        // retrying is safe. A 5xx can arrive after Plane accepted the comment, so it is not retried
+        // and cannot create duplicate evidence. The transport funnel still retries pre-send faults
+        // and refuses to retry response-phase POST faults.
+        var issue = await _pipeline.ExecuteAsync(async token =>
         {
-            var seq = ParseSequenceId(id);
-            var issue = await FindIssueAsync(seq, token).ConfigureAwait(false);
+            return await FindIssueAsync(seq, token).ConfigureAwait(false);
+        }, ct).ConfigureAwait(false);
 
-            var responseBody = await PostJsonAsync(
+        var responseBody = await _commentPostRateLimitPipeline.ExecuteAsync(async token =>
+        {
+            return await PostJsonAsync(
                 $"{IssuesBase}{issue.Id}/comments/",
                 new CreateCommentRequest(html),
                 PlaneJsonContext.Default,
                 token).ConfigureAwait(false);
-
-            var comment = (PlaneComment?)JsonSerializer.Deserialize(
-                responseBody, typeof(PlaneComment), PlaneJsonContext.Default);
-            return comment?.Id ?? string.Empty;
         }, ct).ConfigureAwait(false);
+
+        var comment = (PlaneComment?)JsonSerializer.Deserialize(
+            responseBody, typeof(PlaneComment), PlaneJsonContext.Default);
+        return comment?.Id ?? string.Empty;
     }
 
     public async Task ApplyLabelsAsync(string id, IEnumerable<string> labels, CancellationToken ct)
@@ -1138,13 +1190,13 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
                 var seq = ParseSequenceId(id);
                 var issue = await FindIssueAsync(seq, token).ConfigureAwait(false);
 
-                var list = await GetJsonAsync<PlaneCommentList>(
-                    $"{IssuesBase}{issue.Id}/comments/", PlaneJsonContext.Default, token).ConfigureAwait(false);
+                var comments = await FetchAllCommentsAsync(
+                    $"{IssuesBase}{issue.Id}/comments/?per_page=100", token).ConfigureAwait(false);
 
-                if (list.Results is null || list.Results.Count == 0)
+                if (comments.Count == 0)
                     return (IReadOnlyList<TicketComment>)Array.Empty<TicketComment>();
 
-                return (IReadOnlyList<TicketComment>)list.Results
+                return (IReadOnlyList<TicketComment>)comments
                     .Select(c => new TicketComment(c.Id, c.CommentHtml ?? string.Empty, c.CreatedAt))
                     .ToList();
             }
@@ -1154,6 +1206,276 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
             }
         }, ct).ConfigureAwait(false);
     }
+
+    public async Task<IReadOnlyList<TicketAttachment>> GetAttachmentsAsync(string id, CancellationToken ct)
+    {
+        return await _pipeline.ExecuteAsync(async token =>
+        {
+            var discovered = await DiscoverAttachmentsAsync(id, token).ConfigureAwait(false);
+            return (IReadOnlyList<TicketAttachment>)discovered.Select(item => item.Attachment).ToList();
+        }, ct).ConfigureAwait(false);
+    }
+
+    public async Task<TicketAttachmentDownload> DownloadAttachmentAsync(
+        string id,
+        string attachmentId,
+        CancellationToken ct)
+    {
+        if (!TryNormalizeUuid(attachmentId, out var normalizedId))
+            throw new KeyNotFoundException("Attachment is not present on this ticket.");
+
+        return await _pipeline.ExecuteAsync(async token =>
+        {
+            // Membership is deliberately decided by the exact same discovery used by the list
+            // command. Do not request a work-item attachment detail URL before this succeeds.
+            var discovered = await DiscoverAttachmentsAsync(id, token).ConfigureAwait(false);
+            var selected = discovered.FirstOrDefault(item =>
+                string.Equals(item.Attachment.Id, normalizedId, StringComparison.OrdinalIgnoreCase));
+            if (selected is null)
+                throw new KeyNotFoundException("Attachment is not present on this ticket.");
+
+            Uri storageUri;
+            if (selected.StorageUri is not null)
+            {
+                storageUri = selected.StorageUri;
+            }
+            else
+            {
+                var detailPath = $"{WorkItemAttachmentsBase(selected.IssueUuid)}{selected.Attachment.Id}/";
+                var (response, _) = await SendWithTransportRetryAsync(
+                    HttpMethod.Get,
+                    detailPath,
+                    null,
+                    token,
+                    _attachmentRedirectHttp).ConfigureAwait(false);
+                using (response)
+                {
+                    if (!IsRedirect(response.StatusCode) || response.Headers.Location is null)
+                    {
+                        throw new PlaneApiException(
+                            (int)response.StatusCode,
+                            string.Empty,
+                            $"Plane attachment detail failed with HTTP {(int)response.StatusCode}.");
+                    }
+
+                    storageUri = ResolveLocation(response.RequestMessage?.RequestUri, response.Headers.Location);
+                }
+            }
+
+            var content = await DownloadStorageBytesAsync(storageUri, token).ConfigureAwait(false);
+            return new TicketAttachmentDownload(selected.Attachment, content);
+        }, ct).ConfigureAwait(false);
+    }
+
+    private async Task<IReadOnlyList<DiscoveredAttachment>> DiscoverAttachmentsAsync(
+        string ticketId,
+        CancellationToken ct)
+    {
+        var issue = await FindIssueAsync(ParseSequenceId(ticketId), ct).ConfigureAwait(false);
+        var found = new List<DiscoveredAttachment>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var normalPayload = await GetJsonAsync<JsonElement>(
+            WorkItemAttachmentsBase(issue.Id), PlaneJsonContext.Default, ct).ConfigureAwait(false);
+        foreach (var item in EnumerateAttachmentItems(normalPayload))
+        {
+            var rawId = ReadString(item, "asset_id", "asset", "id");
+            if (!TryNormalizeUuid(rawId, out var assetId) || !seen.Add(assetId))
+                continue;
+
+            var attributes = TryGetObject(item, "attributes");
+            found.Add(new DiscoveredAttachment(
+                new TicketAttachment(
+                    assetId,
+                    "work_item_attachment",
+                    ReadString(item, "asset_name", "name", "file_name")
+                        ?? ReadString(attributes, "name", "file_name"),
+                    ReadString(item, "asset_type", "content_type", "mime_type", "type")
+                        ?? ReadString(attributes, "content_type", "mime_type", "type"),
+                    ReadInt64(item, "size_bytes", "size") ?? ReadInt64(attributes, "size_bytes", "size")),
+                issue.Id,
+                StorageUri: null));
+        }
+
+        foreach (Match match in s_imageComponentRegex.Matches(issue.DescriptionHtml ?? string.Empty))
+        {
+            var src = match.Groups["dq"].Success
+                ? match.Groups["dq"].Value
+                : match.Groups["sq"].Success
+                    ? match.Groups["sq"].Value
+                    : match.Groups["uq"].Value;
+            src = WebUtility.HtmlDecode(src).Trim();
+            if (!TryGetInlineAssetId(src, out var assetId) || !seen.Add(assetId))
+                continue;
+
+            var metadata = await GetJsonAsync<JsonElement>(
+                $"api/v1/workspaces/{_options.WorkspaceSlug}/assets/{assetId}/",
+                PlaneJsonContext.Default,
+                ct).ConfigureAwait(false);
+            var returnedId = ReadString(metadata, "asset_id", "id");
+            var assetUrl = ReadString(metadata, "asset_url");
+            if (!TryNormalizeUuid(returnedId, out var normalizedReturnedId)
+                || !string.Equals(assetId, normalizedReturnedId, StringComparison.OrdinalIgnoreCase)
+                || !Uri.TryCreate(assetUrl, UriKind.Absolute, out var storageUri))
+            {
+                // Plane did not return usable metadata for this editor component. Treat it as an
+                // unsupported source instead of exposing an arbitrary URL downloader.
+                seen.Remove(assetId);
+                continue;
+            }
+
+            found.Add(new DiscoveredAttachment(
+                new TicketAttachment(
+                    assetId,
+                    "description_inline_image",
+                    ReadString(metadata, "asset_name", "name"),
+                    ReadString(metadata, "asset_type", "content_type", "mime_type"),
+                    ReadInt64(metadata, "size_bytes", "size")),
+                issue.Id,
+                storageUri));
+        }
+
+        return found;
+    }
+
+    private string WorkItemAttachmentsBase(string issueUuid) =>
+        $"api/v1/workspaces/{_options.WorkspaceSlug}/projects/{_options.ProjectId}/work-items/{issueUuid}/attachments/";
+
+    private bool TryGetInlineAssetId(string src, out string assetId)
+    {
+        if (Guid.TryParseExact(src, "D", out var bare))
+        {
+            assetId = bare.ToString("D");
+            return true;
+        }
+
+        if (!Uri.TryCreate(src, UriKind.Absolute, out var uri)
+            || !SameOrigin(uri, _http.BaseAddress!)
+            || !uri.AbsolutePath.Contains("asset", StringComparison.OrdinalIgnoreCase))
+        {
+            assetId = string.Empty;
+            return false;
+        }
+
+        var match = s_uuidInPathRegex.Match(uri.AbsolutePath);
+        return TryNormalizeUuid(match.Success ? match.Value : null, out assetId);
+    }
+
+    private static bool SameOrigin(Uri left, Uri right) =>
+        string.Equals(left.Scheme, right.Scheme, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(left.Host, right.Host, StringComparison.OrdinalIgnoreCase)
+        && left.Port == right.Port;
+
+    private static bool TryNormalizeUuid(string? value, out string normalized)
+    {
+        if (Guid.TryParseExact(value, "D", out var parsed))
+        {
+            normalized = parsed.ToString("D");
+            return true;
+        }
+
+        normalized = string.Empty;
+        return false;
+    }
+
+    private static IEnumerable<JsonElement> EnumerateAttachmentItems(JsonElement payload)
+    {
+        if (payload.ValueKind == JsonValueKind.Array)
+            return payload.EnumerateArray().ToArray();
+        if (payload.ValueKind == JsonValueKind.Object
+            && payload.TryGetProperty("results", out var results)
+            && results.ValueKind == JsonValueKind.Array)
+            return results.EnumerateArray().ToArray();
+        return [];
+    }
+
+    private static JsonElement TryGetObject(JsonElement element, string property)
+    {
+        if (element.ValueKind == JsonValueKind.Object
+            && element.TryGetProperty(property, out var value)
+            && value.ValueKind == JsonValueKind.Object)
+            return value;
+        return default;
+    }
+
+    private static string? ReadString(JsonElement element, params string[] names)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+            return null;
+        foreach (var name in names)
+            if (element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String)
+                return value.GetString();
+        return null;
+    }
+
+    private static long? ReadInt64(JsonElement element, params string[] names)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+            return null;
+        foreach (var name in names)
+        {
+            if (!element.TryGetProperty(name, out var value))
+                continue;
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var number))
+                return number;
+            if (value.ValueKind == JsonValueKind.String
+                && long.TryParse(value.GetString(), out number))
+                return number;
+        }
+        return null;
+    }
+
+    private async Task<byte[]> DownloadStorageBytesAsync(Uri initialUri, CancellationToken ct)
+    {
+        var current = initialUri;
+        for (var redirect = 0; redirect <= 10; redirect++)
+        {
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get, current);
+                // Intentionally do not add X-API-Key or any Plane authorization here.
+                using var response = await _storageHttp.SendAsync(request, ct).ConfigureAwait(false);
+                if (IsRedirect(response.StatusCode) && response.Headers.Location is not null)
+                {
+                    current = ResolveLocation(response.RequestMessage?.RequestUri ?? current, response.Headers.Location);
+                    continue;
+                }
+                if (!response.IsSuccessStatusCode)
+                    throw new InvalidOperationException($"Attachment storage returned HTTP {(int)response.StatusCode}.");
+                return await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (InvalidOperationException) { throw; }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException("Attachment storage download failed.", ex);
+            }
+        }
+
+        throw new InvalidOperationException("Attachment storage redirect limit exceeded.");
+    }
+
+    private static bool IsRedirect(HttpStatusCode status) =>
+        status is HttpStatusCode.MultipleChoices
+            or HttpStatusCode.MovedPermanently
+            or HttpStatusCode.Redirect
+            or HttpStatusCode.SeeOther
+            or HttpStatusCode.TemporaryRedirect
+            or HttpStatusCode.PermanentRedirect;
+
+    private static Uri ResolveLocation(Uri? requestUri, Uri location)
+    {
+        if (location.IsAbsoluteUri)
+            return location;
+        if (requestUri is null)
+            throw new InvalidOperationException("Attachment redirect location is invalid.");
+        return new Uri(requestUri, location);
+    }
+
+    private sealed record DiscoveredAttachment(
+        TicketAttachment Attachment,
+        string IssueUuid,
+        Uri? StorageUri);
 
     public async Task<RollupResult> RollupParentAsync(string id, CancellationToken ct)
     {
@@ -1439,6 +1761,37 @@ public sealed class PlaneTicketingClient : ITicketing, ITicketingProvisioner, IT
             $"[plane] WARNING: issue-list pagination hit the {MaxListPages}-page cap ({MaxListPages * 100} issues) " +
             "with more pages available - the project snapshot is TRUNCATED for this run and lookups for issues " +
             "beyond the cap will throw 'not found'. Raise MaxListPages or narrow the project.");
+        return all;
+    }
+
+    /// <summary>
+    /// Walks every cursor page for an issue-comments URL and returns the flattened results.
+    /// Uses the same bounded and defensive terminal-page rules as issue-list reads.
+    /// </summary>
+    private async Task<List<PlaneCommentListItem>> FetchAllCommentsAsync(string baseUrl, CancellationToken ct)
+    {
+        var all = new List<PlaneCommentListItem>();
+        string? cursor = null;
+        for (var page = 0; page < MaxListPages; page++)
+        {
+            var url = string.IsNullOrEmpty(cursor)
+                ? baseUrl
+                : $"{baseUrl}&cursor={Uri.EscapeDataString(cursor)}";
+            var list = await GetJsonAsync<PlaneCommentList>(url, PlaneJsonContext.Default, ct).ConfigureAwait(false);
+            var batch = list.Results ?? [];
+            all.AddRange(batch);
+
+            if (list.NextPageResults == false
+                || batch.Count == 0
+                || string.IsNullOrEmpty(list.NextCursor)
+                || string.Equals(list.NextCursor, cursor, StringComparison.Ordinal))
+                return all;
+            cursor = list.NextCursor;
+        }
+
+        Console.Error.WriteLine(
+            $"[plane] WARNING: comment-list pagination hit the {MaxListPages}-page cap " +
+            "with more pages available - some ticket comments are NOT listed for this run.");
         return all;
     }
 

@@ -1,4 +1,13 @@
-.build/
+# Throughline Build (managed by 'build setup'). .build/config.toml is deliberately NOT here - it is
+# tracked (see TLB-627): it carries repository facts ([[review.checks]], [waves], [worktree], etc.)
+# that must travel with a clone, and it never holds a literal Plane token by default.
+.build/conductor.toml
+.build/sop-manifest.json
+.build/profile.json
+.build/invariants.toml
+.build/*.md
+.build/events/
+.build/sessions/
 .worktrees/
 secrets/
 bin/
@@ -10,10 +19,6 @@ obj/
 .idea/
 .scratch/
 .claude/settings.json
-.build/brief.md
-.build/events/
-.build/sessions/
-.build/config.toml
 .tmp/
 src/tools/artifacts/
 # Machine-specific native-AOT linker overrides (hardcoded MSVC/SDK paths); keep local, do not commit
@@ -21,8 +26,10 @@ src/tools/artifacts/
 /Directory.Build.targets
 .DS_Store
 .gitignored
-
-# Throughline Build (managed by 'build setup')
-.build/*.md
 Thumbs.db
 *.swp
+
+# Lock file for the src/tools file-based apps. Not in throughline-build.sln; NuGet pins it to
+# the local RID and SDK feature band, so a Mac-generated copy is rewritten on Windows (and vice
+# versa) by the analyze-event-log integration test, dirtying a tracked file mid-gate.
+src/tools/packages.lock.json

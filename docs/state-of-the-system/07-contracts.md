@@ -1,6 +1,6 @@
 # 07 - Contracts
 
-Last refreshed: 2026-07-26 (HEAD 00dc074)
+Last refreshed: 2026-08-08 (HEAD 5961f807)
 
 The inter-project type contracts inside this repo, and the artifacts shared with sibling systems (Plane, Claude Code, the older claude-config slash commands).
 
@@ -121,7 +121,7 @@ What `build` writes that other systems read:
 - **Provisioned states and labels (NEW)**: `build setup` creates any state or label missing from `WorkspaceSchema` (diff logic in `SetupCommand.ExecuteAsync`, [SetupCommand.cs:102-106](../../src/ThroughlineBuild.Cli/SetupCommand.cs#L102-L106)) - so the workspace vocabulary is now a *written* artifact, not just an assumed one. The `risk:*` / `size:*` labels hard-fail plan/chain when absent; a missing state downgrades a transition to a warning.
 - Sub-issue parent/child linkage via `CreateChildTicketsAsync` / `SetParentAsync` (native Plane sub-issues).
 
-Transport behavior (NEW, TLB-545): `PlaneTicketingClient` retries transient transport failures (DNS/connect/TLS/timeout) with exponential backoff (`PlaneClientOptions.TransportRetryAttempts`, [PlaneClientOptions.cs:47](../../src/ThroughlineBuild.Plane/PlaneClientOptions.cs#L47)) before throwing `TicketingUnavailableException`; HTTP 429/5xx retries honor `Retry-After` (clamped). `ChainPhase` converts the exception into the resumable `TicketingUnavailable` outcome and skips remaining siblings/roots - the same environmental-classification pattern as TLB-538.
+Transport behavior (TLB-545): `PlaneTicketingClient` retries transient transport failures (DNS/connect/TLS/timeout) with exponential backoff (`PlaneClientOptions.TransportRetryAttempts`, [PlaneClientOptions.cs:47](../../src/ThroughlineBuild.Plane/PlaneClientOptions.cs#L47)) before throwing `TicketingUnavailableException`; HTTP 429/5xx retries honor `Retry-After` (clamped). The decomposed chain runners convert the exception into the resumable `TicketingUnavailable` outcome and skip remaining siblings/roots - the same environmental-classification pattern as TLB-538.
 
 ### Worker CLIs (`ClaudeCodeAgent` / `CodexAgent` / `GeminiAgent` / `CopilotAgent` <-> vendor CLIs)
 
@@ -140,18 +140,25 @@ This remains the most evolving contract. Spawn flags and output shapes per agent
   - Batch implement: the envelope's `tickets[]` entries each carry a `summary_ref` into per-ticket blocks; `WorkerResultParser.TryParseBatch` enforces the per-ticket required fields.
 - **Rework briefs now carry the oracle**: review-cited failing checks are persisted as raw evidence (`checks_failed_details` on the `VerifierVerdict` event, [ReviewPhase.cs:457-476](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L457-L476)), reconstructed by `ReviewFeedbackRetriever.ParseFailedCheckDetails` ([ReviewFeedbackRetriever.cs:186](../../src/ThroughlineBuild.EventLog/ReviewFeedbackRetriever.cs#L186)), and rendered verbatim (command line, exit code, output tails) into the resumed rework brief via `ReviewFeedback.FailedCheckDetails` (7af36fb).
 
-### Op-doc and derived-profile contracts (scaffold <-> op-plan <-> workers) - NEW at pointer level
+### Op-doc and repository-profile contracts
 
 Two scaffold-side formats hardened into published contracts since the last refresh:
 
 - **The op-doc authoring format** is single-sourced as an embedded spec and printed by `build op-doc spec` (TLB-456); `build op-doc new` emits a skeleton guaranteed to parse. `OpDocParser` ([OpDocParser.cs](../../src/ThroughlineBuild.Scaffold/OpDocParser.cs)) grew: a positive-only `Preload:` brief label (61828bb) parsed into `Brief.PreloadFiles` ([OpDocTypes.cs:43](../../src/ThroughlineBuild.Scaffold/OpDocTypes.cs#L43)) and rendered as an `<h3>Preload</h3>` block in scaffolded brief tickets; check roles (0680cdf) so lint/format never hard-gate; setup steps (371de26) that run before gate checks; and convention bundles (0d86f76). The external `/op-plan` skill authors against this spec - the spec text, not the parser, is the operator-facing contract.
-- **The derived `ProjectProfile`** ([ProjectProfile.cs:16](../../src/ThroughlineBuild.Scaffold/ProjectProfile.cs#L16)): during `scaffold`, a worker derives the project's toolchain (language/framework/package-manager/commands), role-tagged `review_checks`/`regression_checks` with optional per-check canaries, and a `convention_files` bundle from the op-doc prose; `ConfigProfileWriter` persists it into `.build/config.toml`, where gate/review/ship and `PreloadedContextBuilder` consume it. This is the mechanism that keeps stack knowledge in derived data rather than engine code - the JSON field names in the `ProjectProfileDto`s are the schema contract with the deriving worker.
+- **The `ProjectProfile`** ([ProjectProfile.cs:16](../../src/ThroughlineBuild.Scaffold/ProjectProfile.cs#L16)) remains the JSON contract for toolchain, role-tagged checks, canaries, required paths, convention files, architecture map, branch prefix, and contract authority. Derivation is no longer an internal scaffold worker: `profile prompt` emits the repository/rules contract, an external agent returns JSON, and `profile apply` proves gating canaries before `ConfigProfileWriter` persists it. This keeps stack knowledge in derived data without nesting an agent session.
+
+### Conductor, SOP, lease, candidate, and evidence contracts
+
+- `ConductorConfig` and its review/constellation records are the parsed `.build/conductor.toml` shape; `SopDoctorCommand` validates unknown keys, placeholders, minimum build version, path existence, review invariant shape, escalation, and check capability before a SOP brief can be emitted ([SopDoctorCommand.cs:9](../../src/ThroughlineBuild.Cli/SopDoctorCommand.cs#L9)).
+- `SopCatalog` is the public embedded procedure catalog contract; host/scaffold targets and trusted content hashes are catalog authority, while `.build/sop-manifest.json` is only a cache ([SopCatalog.cs:3](../../src/ThroughlineBuild.Contracts/Models/SopCatalog.cs#L3), [SopInstallCommand.cs:495](../../src/ThroughlineBuild.Cli/SopInstallCommand.cs#L495)).
+- `.build-worktree-lease.json` schema version 1 binds ticket, helper branch/base, repository/main/current roots, seeded files, leased resources, and install status. Candidate status consumes and cross-checks the same manifest instead of inventing a parallel identity format ([WorktreeLease.cs:7](../../src/ThroughlineBuild.Helpers/WorktreeLease.cs#L7), [CandidateStatusCommand.cs:286](../../src/ThroughlineBuild.Cli/CandidateStatusCommand.cs#L286)).
+- Evidence comments are append-only audit records with kind-specific required fields. `evidence add` verifies only returned-id read-back; the lifecycle commands remain separate, so evidence is not an implicit transition protocol ([EvidenceCommand.cs:49](../../src/ThroughlineBuild.Cli/EvidenceCommand.cs#L49)).
 
 ### Older claude-config workflow
 
 The in-repository half of the old flow has been removed.
 
-- No `.claude/commands/`, `.claude/plane-config.md`, or `.claude/ticket-config.md` files are tracked at HEAD. Any global claude-config installation is external to this repository and is not part of the Throughline Build contract.
+- No `.claude/plane-config.md` or `.claude/ticket-config.md` is tracked at HEAD. The tracked [.claude/commands/run-backlog.md](../../.claude/commands/run-backlog.md) host stub and [.agents/skills/run-backlog/SKILL.md](../../.agents/skills/run-backlog/SKILL.md) source are SOP/operator contracts, not `BuildConfig` or Plane credential inputs.
 - The mirror infrastructure is also gone: there is no `bin/sync-*`, `copilot-prompts/`, or `plugins/latticeflow/` tree. The `bin/` directory is reserved for locally published binaries.
 - `build` owns the current ticket workflow. `.build/config.toml` is the local backend configuration, `WorkspaceSchema` is the canonical state and label vocabulary, and `build setup` provisions it. `build new --print-template` emits the recognized ticket body shape from [new-ticket-body.md](../../src/ThroughlineBuild.Commands/Templates/new-ticket-body.md).
 
@@ -166,9 +173,12 @@ The in-repository half of the old flow has been removed.
 | `.build/events/*.jsonl` | `build` only | `analyze-event-log` (this repo; now aggregates all chains and prefers pricing-table costs, TLB-547) |
 | `.build/sessions/<id>/` incl. `transcript.jsonl` | `build --debug` | operator + cross-run analysis (keyed by `DebugTranscriptContext`) |
 | `.worktrees/ticket-*`, `chain-*` | `build` | `build sweep` (recovery), operator |
+| `.worktrees/conductor/*/.build-worktree-lease.json` | `build worktree lease` | `worktree list`/`teardown`, `candidate status`, install readiness |
+| tracked `.build/config.toml` | init/profile/setup/settarget/models | all configured phases plus standalone worktree/gate/waves slices |
+| ignored `.build/conductor.toml` + `.build/sop-manifest.json` | SOP install/profile identity/conductor apply | SOP doctor/brief/lifecycle and install readiness |
 | `WORKER_RESULT` envelope + fenced blocks + `COMPLETION_CLAIM` | worker CLI (per brief template) | all four `IWorkerAgent`s via shared parser; `GatePhase` |
 | op-doc spec (embedded; `build op-doc spec`) | this repo (single source) | `/op-plan` skill, operators, `OpDocParser` validation |
-| derived profile JSON -> `.build/config.toml` | scaffold profile worker | gate/review/ship checks, brief pre-load |
+| derived profile JSON -> `.build/config.toml` | external agent plus deterministic `profile apply` / staged install | gate/review/ship checks, worktree install, wave policy, brief pre-load |
 
 ---
 
@@ -180,7 +190,7 @@ The in-repository half of the old flow has been removed.
 - **Two check-result runners**: `AutomatedChecksRunner` (executes) and `PreComputedChecksRunner` (replays gate results into review, TLB-502) both satisfy the verifier's checks input; the latter exists precisely so gate and review cannot disagree about what ran.
 - **Two verdict producers**: `IVerifier` (review) and `IObsoleteRatifier` (chain auto-resolve) both return `Verdict`. Unchanged.
 - **Usage text vs exit-code mapper**: `CliUsage.UsageText` documents chain exit codes only through 9; `ChainExitCodeMapper` emits 10 and 11. Code wins.
-- **Workspace / project IDs** live in the gitignored `.build/config.toml`; external legacy installations may maintain independent copies.
+- **Workspace / project IDs** live in tracked `.build/config.toml`; the token should remain indirect. Ignored conductor state may still be machine-specific.
 - **`/ticket-ship` vs `build ship`** - both can transition a ticket to Done. `build` is the current direction; the slash-command flow survives only via the global claude-config install.
 
 ---

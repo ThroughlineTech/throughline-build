@@ -417,6 +417,182 @@ log_directory = ".build/events"
         }
     }
 
+    // TLB-638: plane_api_token_file lets the token resolve without depending on which shell (or
+    // whether it was interactive) launched the process. These tests use env var names no other
+    // test touches, and unset them defensively, since the wider file already shares "PLANE_TOKEN"
+    // across tests without a parallelization guard.
+    private static string EmbedPath(string path) => path.Replace('\\', '/');
+
+    [Fact]
+    public void ResolveSecrets_TokenFile_ReturnsTrimmedContents()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tmpDir);
+        var tokenFile = Path.Combine(tmpDir, "plane-token");
+        File.WriteAllText(tokenFile, "  file-token-value  \n");
+        var toml = ValidToml.Replace(
+            "plane_api_token_env = \"PLANE_TOKEN\"",
+            $"plane_api_token_env = \"TLB638_UNSET_A\"\nplane_api_token_file = \"{EmbedPath(tokenFile)}\"");
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Equal(EmbedPath(tokenFile), config.Ticketing.PlaneApiTokenFile);
+            Environment.SetEnvironmentVariable("TLB638_UNSET_A", null);
+            var secrets = BuildConfigLoader.ResolveSecrets(config);
+            Assert.Equal("file-token-value", secrets.PlaneApiToken);
+        }
+        finally
+        {
+            File.Delete(path);
+            Directory.Delete(tmpDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ResolveSecrets_EnvVarTakesPriorityOverTokenFile()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tmpDir);
+        var tokenFile = Path.Combine(tmpDir, "plane-token");
+        File.WriteAllText(tokenFile, "file-token-value");
+        var toml = ValidToml.Replace(
+            "plane_api_token_env = \"PLANE_TOKEN\"",
+            $"plane_api_token_env = \"PLANE_TOKEN\"\nplane_api_token_file = \"{EmbedPath(tokenFile)}\"");
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Environment.SetEnvironmentVariable("PLANE_TOKEN", "env-token-value");
+            try
+            {
+                var secrets = BuildConfigLoader.ResolveSecrets(config);
+                Assert.Equal("env-token-value", secrets.PlaneApiToken);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("PLANE_TOKEN", null);
+            }
+        }
+        finally
+        {
+            File.Delete(path);
+            Directory.Delete(tmpDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ResolveSecrets_AllSourcesMissing_MessageNamesConfigKeyEnvVarAndFilePath()
+    {
+        var toml = ValidToml.Replace(
+            "plane_api_token_env = \"PLANE_TOKEN\"",
+            "plane_api_token_env = \"TLB638_NEVER_SET\"\nplane_api_token_file = \"secrets/plane-api-token\"");
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Environment.SetEnvironmentVariable("TLB638_NEVER_SET", null);
+            var ex = Assert.Throws<ConfigException>(() => BuildConfigLoader.ResolveSecrets(config, path));
+            Assert.Contains("plane_api_token", ex.Message);
+            Assert.Contains("TLB638_NEVER_SET", ex.Message);
+            Assert.Contains("plane_api_token_file", ex.Message);
+            Assert.Contains("secrets/plane-api-token", ex.Message);
+            Assert.Contains("non-interactive", ex.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ResolveSecrets_RelativeTokenFile_ResolvesAgainstProjectRootNotDotBuildDir()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(Path.Combine(root, ".build"));
+        var configPath = Path.Combine(root, ".build", "config.toml");
+        var toml = ValidToml.Replace(
+            "plane_api_token_env = \"PLANE_TOKEN\"",
+            "plane_api_token_env = \"TLB638_UNSET_B\"\nplane_api_token_file = \"secrets/plane-api-token\"");
+        File.WriteAllText(configPath, toml);
+        Directory.CreateDirectory(Path.Combine(root, "secrets"));
+        File.WriteAllText(Path.Combine(root, "secrets", "plane-api-token"), "root-relative-token");
+        try
+        {
+            var config = BuildConfigLoader.Load(configPath);
+            Environment.SetEnvironmentVariable("TLB638_UNSET_B", null);
+            var secrets = BuildConfigLoader.ResolveSecrets(config, configPath);
+            Assert.Equal("root-relative-token", secrets.PlaneApiToken);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ResolveSecrets_TokenFileGroupReadable_WarnsButStillResolves()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var tmpDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tmpDir);
+        var tokenFile = Path.Combine(tmpDir, "plane-token");
+        File.WriteAllText(tokenFile, "loose-token");
+        File.SetUnixFileMode(tokenFile,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+        var toml = ValidToml.Replace(
+            "plane_api_token_env = \"PLANE_TOKEN\"",
+            $"plane_api_token_env = \"TLB638_UNSET_C\"\nplane_api_token_file = \"{EmbedPath(tokenFile)}\"");
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Environment.SetEnvironmentVariable("TLB638_UNSET_C", null);
+            var warnings = new List<string>();
+            var secrets = BuildConfigLoader.ResolveSecrets(config, path, warnings.Add);
+            Assert.Equal("loose-token", secrets.PlaneApiToken);
+            var warning = Assert.Single(warnings);
+            Assert.Contains(tokenFile, warning);
+            Assert.Contains("644", warning);
+        }
+        finally
+        {
+            File.Delete(path);
+            Directory.Delete(tmpDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ResolveSecrets_TokenFileOwnerOnly_NoWarning()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var tmpDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tmpDir);
+        var tokenFile = Path.Combine(tmpDir, "plane-token");
+        File.WriteAllText(tokenFile, "owner-only-token");
+        File.SetUnixFileMode(tokenFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        var toml = ValidToml.Replace(
+            "plane_api_token_env = \"PLANE_TOKEN\"",
+            $"plane_api_token_env = \"TLB638_UNSET_D\"\nplane_api_token_file = \"{EmbedPath(tokenFile)}\"");
+        var path = WriteToml(toml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Environment.SetEnvironmentVariable("TLB638_UNSET_D", null);
+            var warnings = new List<string>();
+            var secrets = BuildConfigLoader.ResolveSecrets(config, path, warnings.Add);
+            Assert.Equal("owner-only-token", secrets.PlaneApiToken);
+            Assert.Empty(warnings);
+        }
+        finally
+        {
+            File.Delete(path);
+            Directory.Delete(tmpDir, recursive: true);
+        }
+    }
+
     [Fact]
     public void Load_ProjectSectionMissing_DefaultsWorkflowToolToBuild()
     {
@@ -1929,6 +2105,45 @@ verify_gate_vacuity = false
             var captured = new List<string>();
             BuildConfigLoader.Load(path, w => captured.Add(w));
             Assert.DoesNotContain(captured, w => w.Contains("verify_gate_vacuity"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Load_CanariesVerified_ParsesAndDoesNotWarnAsUnknownKey(bool expected)
+    {
+        var toml = ValidToml + $"""
+
+[review]
+canaries_verified = {expected.ToString().ToLowerInvariant()}
+""";
+        var path = WriteToml(toml);
+        try
+        {
+            var captured = new List<string>();
+            var config = BuildConfigLoader.Load(path, w => captured.Add(w));
+            Assert.Equal(expected, config.Review.CanariesVerified);
+            Assert.DoesNotContain(captured, w => w.Contains("canaries_verified"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_CanariesVerified_IsUnknownWhenOmitted()
+    {
+        var path = WriteToml(ValidToml);
+        try
+        {
+            var config = BuildConfigLoader.Load(path);
+            Assert.Null(config.Review.CanariesVerified);
         }
         finally
         {

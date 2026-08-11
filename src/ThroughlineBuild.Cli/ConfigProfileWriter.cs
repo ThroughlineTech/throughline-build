@@ -1,24 +1,44 @@
 using System.Text;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Scaffold;
-using Tomlyn;
-using Tomlyn.Model;
 
 namespace ThroughlineBuild.Cli;
 
 /// <summary>
-/// Writes an op-doc-derived <see cref="ProjectProfile"/> into the three toolchain-bearing sections of
+/// Writes a validated <see cref="ProjectProfile"/> into the three toolchain-bearing sections of
 /// .build/config.toml - <c>[project]</c>, <c>[[review.checks]]</c>, and <c>[[ship.regression_checks]]</c> -
-/// while preserving every other section and its comments verbatim. This is what stops a Node repo from
-/// inheriting the .NET template's <c>dotnet build</c>/<c>dotnet test</c> checks.
+/// while preserving every other section and its comments verbatim. This is what keeps a repository's
+/// checks derived from its own profile rather than inherited from whatever the template shipped.
 ///
 /// Pure string transform (see <see cref="Apply"/>) so it is unit-testable without disk I/O; the
 /// line-edit approach is the same one <see cref="SetTargetCommand"/> uses to keep comments intact.
-/// Tomlyn is used only to read the existing checks for the clobber-safety gate.
 /// </summary>
 public static class ConfigProfileWriter
 {
-    public sealed record WriteOutcome(bool Changed, string? NewText, string? SkipReason, string? Summary);
+    /// <summary>
+    /// The result of applying a profile. Exactly one of three states holds:
+    /// <list type="bullet">
+    /// <item><c>Changed</c> with <c>NewText</c> - the config was rewritten.</item>
+    /// <item><c>AlreadyMatched</c> - the config already said what the profile says; applying it again
+    /// is a no-op success (this is what makes a re-run of the installer idempotent).</item>
+    /// <item><c>SkipReason</c> - the clobber gate refused to overwrite checks it did not write.</item>
+    /// </list>
+    /// </summary>
+    public sealed record WriteOutcome(
+        bool Changed, string? NewText, string? SkipReason, string? Summary, bool AlreadyMatched = false);
+
+    /// <summary>How an array-table run in the config compared to the run the profile renders.</summary>
+    private enum ArrayTableEdit
+    {
+        /// <summary>The rendered run is already present byte-for-byte.</summary>
+        Unchanged,
+
+        /// <summary>No run of this kind existed; the rendered one was added.</summary>
+        Inserted,
+
+        /// <summary>A run existed with different content and was replaced. This is the clobber case.</summary>
+        Replaced,
+    }
 
     private static readonly string[] ProjectKeysOwnedByProfile =
     {
@@ -27,29 +47,49 @@ public static class ConfigProfileWriter
     };
 
     /// <summary>
-    /// Apply the profile to the config text. Returns the rewritten text, or a skip reason when the
-    /// existing checks look hand-customized (any review check whose executable is not "dotnet") and
-    /// <paramref name="force"/> is false. The pristine .NET template - or no checks at all - is
-    /// always safe to overwrite.
+    /// Apply the profile to the config text.
+    ///
+    /// The transform is computed FIRST, and the clobber gate is consulted only from its result. That
+    /// ordering is what makes the write idempotent on every stack: a config that already says what the
+    /// profile says is reported as <see cref="WriteOutcome.AlreadyMatched"/> without the gate ever
+    /// running. When the transform would replace an EXISTING run of check entries with different
+    /// content, those checks were not written by this profile, so they are treated as hand-written and
+    /// preserved unless <paramref name="force"/> is set (the TLB-491 protection). Adding checks where
+    /// the config had none is never a clobber.
+    ///
+    /// The decision is made purely by comparing rendered content against existing content, so it
+    /// carries no knowledge of any toolchain, executable, or stack. See TLB-639.
     /// </summary>
-    public static WriteOutcome Apply(string configText, ProjectProfile profile, bool force)
+    public static WriteOutcome Apply(
+        string configText,
+        ProjectProfile profile,
+        bool force,
+        bool? canariesVerified = null)
     {
-        var skip = AlreadyConfiguredSkipReason(configText, force);
-        if (skip is not null)
-            return new WriteOutcome(false, null, skip, null);
-
         var (lines, sep) = SplitLines(configText);
         var list = lines.ToList();
 
         bool projectChanged = ApplyProjectKeys(list, profile);
-        bool reviewChanged = ApplyArrayTables(
+        var reviewEdit = ApplyArrayTables(
             list, "[[review.checks]]", "review", profile.ReviewChecks);
-        bool shipChanged = ApplyArrayTables(
+        bool canaryStatusChanged = canariesVerified is not null
+            && ApplySectionScalar(list, "review", "canaries_verified", canariesVerified.Value ? "true" : "false");
+        var shipEdit = ApplyArrayTables(
             list, "[[ship.regression_checks]]", "ship", profile.RegressionChecks);
 
-        bool changed = projectChanged || reviewChanged || shipChanged;
+        bool changed = projectChanged
+            || canaryStatusChanged
+            || reviewEdit != ArrayTableEdit.Unchanged
+            || shipEdit != ArrayTableEdit.Unchanged;
         if (!changed)
-            return new WriteOutcome(false, null, "config already matched the derived profile", null);
+        {
+            return new WriteOutcome(
+                false, null, null, AlreadyMatchedSummary, AlreadyMatched: true);
+        }
+
+        var skip = force ? null : ClobberSkipReason(reviewEdit, shipEdit);
+        if (skip is not null)
+            return new WriteOutcome(false, null, skip, null);
 
         var summary =
             $"[project] {(profile.Framework.Length > 0 ? profile.Framework : profile.Language)}; " +
@@ -57,64 +97,28 @@ public static class ConfigProfileWriter
         return new WriteOutcome(true, string.Join(sep, list), null, summary);
     }
 
+    public const string AlreadyMatchedSummary = "config already matched the supplied profile";
+
     // ------------------------------------------------------------------
     // Clobber-safety gate
     // ------------------------------------------------------------------
 
     /// <summary>
-    /// Returns a human-readable reason when op-doc profile derivation should be skipped because the
-    /// config's review checks already look configured for this project (any review check whose
-    /// executable is not the dotnet template default) and <paramref name="force"/> is false - i.e.
-    /// exactly when <see cref="Apply"/> would refuse to overwrite them. Callers can check this BEFORE
-    /// running the token-costing, rate-limit-prone worker, instead of deriving a profile only to
-    /// discard it. Returns null when derivation should proceed: no checks, the pristine dotnet
-    /// template, or force. See TLB-491.
+    /// Returns a human-readable refusal when applying the profile would overwrite check entries that
+    /// are already in the config and say something else - the proxy for "a human wrote these". Returns
+    /// null when nothing existing is being overwritten (checks added where there were none, or check
+    /// content already identical). The named override, <c>--force</c>, is accepted by every command
+    /// that can print this message. See TLB-491 for the protection and TLB-639 for the proxy.
     /// </summary>
-    public static string? AlreadyConfiguredSkipReason(string configText, bool force)
+    private static string? ClobberSkipReason(ArrayTableEdit reviewEdit, ArrayTableEdit shipEdit)
     {
-        if (force) return null;
-        var (customized, why) = LooksCustomized(configText);
-        return customized ? why : null;
-    }
+        var replaced = new List<string>();
+        if (reviewEdit == ArrayTableEdit.Replaced) replaced.Add("[[review.checks]]");
+        if (shipEdit == ArrayTableEdit.Replaced) replaced.Add("[[ship.regression_checks]]");
+        if (replaced.Count == 0) return null;
 
-    private static (bool Customized, string? Why) LooksCustomized(string configText)
-    {
-        TomlTable root;
-        try
-        {
-            root = TomlSerializer.Deserialize(
-                configText,
-                BuildTomlSerializerContext.Default.TomlTable)
-                ?? throw new InvalidOperationException("TOML document produced no root table");
-        }
-        catch (Exception ex)
-        {
-            return (true, $"could not parse existing config to check for customization ({ex.Message}); leaving it untouched");
-        }
-
-        var execs = ReadCheckExecutables(root, "review", "checks");
-        // No checks yet, or every check is the pristine dotnet template default -> safe to overwrite.
-        var nonDefault = execs.Where(e => !string.Equals(e, "dotnet", StringComparison.OrdinalIgnoreCase)).ToList();
-        if (nonDefault.Count > 0)
-        {
-            return (true, $"existing [[review.checks]] look customized (executable(s): {string.Join(", ", nonDefault.Distinct())}); re-run with --force-profile to overwrite");
-        }
-        return (false, null);
-    }
-
-    private static IReadOnlyList<string> ReadCheckExecutables(TomlTable root, string section, string arrayKey)
-    {
-        var result = new List<string>();
-        if (root.TryGetValue(section, out var secObj) && secObj is TomlTable sec
-            && sec.TryGetValue(arrayKey, out var arrObj) && arrObj is TomlTableArray arr)
-        {
-            foreach (var entry in arr)
-            {
-                if (entry.TryGetValue("executable", out var exeObj) && exeObj is string exe)
-                    result.Add(exe);
-            }
-        }
-        return result;
+        return $"existing {string.Join(" and ", replaced)} look customized "
+            + "(they differ from the supplied profile); re-run with --force to overwrite";
     }
 
     // ------------------------------------------------------------------
@@ -184,11 +188,45 @@ public static class ConfigProfileWriter
         return changed;
     }
 
+    private static bool ApplySectionScalar(
+        List<string> lines,
+        string section,
+        string key,
+        string value)
+    {
+        var header = $"[{section}]";
+        int start = IndexOfTrimmed(lines, header, 0);
+        if (start < 0)
+        {
+            EnsureTrailingBlank(lines);
+            lines.Add(header);
+            lines.Add($"{key} = {value}");
+            return true;
+        }
+
+        int end = start + 1;
+        while (end < lines.Count && !IsHeader(lines[end]))
+            end++;
+
+        int keyLine = FindKeyLine(lines, start + 1, end, key);
+        var newLine = $"{key} = {value}";
+        if (keyLine >= 0)
+        {
+            if (lines[keyLine] == newLine)
+                return false;
+            lines[keyLine] = newLine;
+            return true;
+        }
+
+        lines.Insert(start + 1, newLine);
+        return true;
+    }
+
     // ------------------------------------------------------------------
     // [[array.table]] replacement (remove existing run, insert rendered)
     // ------------------------------------------------------------------
 
-    private static bool ApplyArrayTables(
+    private static ArrayTableEdit ApplyArrayTables(
         List<string> lines, string header, string parentSection, IReadOnlyList<ProfileCheck> checks)
     {
         var rendered = RenderChecks(header, checks);
@@ -196,8 +234,11 @@ public static class ConfigProfileWriter
         int firstHeader = IndexOfTrimmed(lines, header, 0);
         if (firstHeader < 0)
         {
-            // No existing array-tables of this kind: insert under the parent section.
-            return InsertUnderSection(lines, parentSection, rendered);
+            // No existing array-tables of this kind: insert under the parent section. Nothing a human
+            // wrote is being displaced, so this is never a clobber.
+            return InsertUnderSection(lines, parentSection, rendered)
+                ? ArrayTableEdit.Inserted
+                : ArrayTableEdit.Unchanged;
         }
 
         // Find the end of the consecutive run of `header` blocks, then back up over the
@@ -219,11 +260,11 @@ public static class ConfigProfileWriter
 
         var existing = lines.GetRange(firstHeader, removeEnd - firstHeader);
         if (existing.SequenceEqual(rendered))
-            return false;
+            return ArrayTableEdit.Unchanged;
 
         lines.RemoveRange(firstHeader, removeEnd - firstHeader);
         lines.InsertRange(firstHeader, rendered);
-        return true;
+        return ArrayTableEdit.Replaced;
     }
 
     private static bool InsertUnderSection(List<string> lines, string section, List<string> rendered)

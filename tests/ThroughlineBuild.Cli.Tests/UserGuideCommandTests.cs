@@ -41,6 +41,19 @@ public class UserGuideCommandTests
         return dir;
     }
 
+    private static string FindRepositoryRoot()
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory);
+             directory is not null;
+             directory = directory.Parent)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "throughline-build.sln")))
+                return directory.FullName;
+        }
+
+        throw new InvalidOperationException("Could not locate the repository root.");
+    }
+
     // ------------------------------------------------------------------
     // Template loader
     // ------------------------------------------------------------------
@@ -51,6 +64,26 @@ public class UserGuideCommandTests
         var guide = UserGuideLoader.Load();
         Assert.NotNull(guide);
         Assert.NotEmpty(guide);
+    }
+
+    [Fact]
+    public void UserGuideLoader_Load_MatchesTrackedUserGuide()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var trackedGuide = File.ReadAllText(
+            Path.Combine(repositoryRoot, "docs", "throughline_build_userguide.md"));
+
+        Assert.Equal(trackedGuide, UserGuideLoader.Load());
+    }
+
+    [Fact]
+    public void UserGuideLoader_Load_DocumentsBindingSemanticContracts()
+    {
+        var guide = UserGuideLoader.Load();
+
+        Assert.Contains("For a semantic-risk ticket, record a `Ticket execution contract`", guide);
+        Assert.Contains("Every worker brief carries that", guide);
+        Assert.Contains("treats the recorded contract as binding.", guide);
     }
 
     // ------------------------------------------------------------------

@@ -18,6 +18,8 @@ namespace ThroughlineBuild.Cli;
 /// </summary>
 public static class InitCommand
 {
+    private static readonly TimeSpan RedirectedInputReadTimeout = TimeSpan.FromSeconds(1);
+
     /// <summary>
     /// Execute the init command asynchronously.
     /// </summary>
@@ -86,6 +88,25 @@ public static class InitCommand
         Func<HttpClient>? httpClientFactory = null,
         CancellationToken ct = default)
     {
+        var target = Path.Combine(cwd, ".build", "config.toml");
+
+        // An existing config.toml is now the NORMAL state of every clone (config.toml is tracked -
+        // see TLB-627), so a repeat 'build init' without --force is a no-op, not an error. Checked
+        // first, before any creds-file/stdin loading or interactive prompting, so re-running init on
+        // an already-configured repo does zero I/O beyond this existence check and never prompts for
+        // values that are about to be discarded. --print-template is exempt: it never touches the
+        // target file regardless of whether one exists.
+        if (!printTemplate && File.Exists(target) && !force)
+        {
+            var existingContent = File.ReadAllText(target);
+            var stillRequired = FindStillRequiredPlaceholders(existingContent);
+            if (stillRequired.Count == 0)
+                console.WriteLine($"{target} already exists and is fully configured; nothing to do. Use --force to overwrite.");
+            else
+                console.WriteLine($"{target} already exists but still has REQUIRED placeholder(s): {string.Join(", ", stillRequired)}. Fill these in, or use --force to regenerate from the template.");
+            return 0;
+        }
+
         var template = ConfigTemplateLoader.Load();
         // Each PlaneTicketingClient owns its own HttpClient: the client's constructor sets
         // BaseAddress and a default header, which throw once an HttpClient has sent a request,
@@ -106,9 +127,11 @@ public static class InitCommand
         }
         else if (console.IsInputRedirected)
         {
-            var stdinContent = ReadAllLines(console);
-            if (stdinContent.Length > 0)
-                ApplyCredsToParams(CredsFileParser.Parse(stdinContent), ref planeUrl, ref workspace, ref projectId, ref projectName, ref token);
+            var stdinRead = await ReadAllLinesAsync(console, ct).ConfigureAwait(false);
+            if (stdinRead.Warning is not null)
+                console.ErrorWriteLine(stdinRead.Warning);
+            else if (stdinRead.Content.Length > 0)
+                ApplyCredsToParams(CredsFileParser.Parse(stdinRead.Content), ref planeUrl, ref workspace, ref projectId, ref projectName, ref token);
         }
 
         // Interactive guided onboarding is available only at a real TTY, with no creds file and
@@ -121,20 +144,22 @@ public static class InitCommand
 
         var content = ApplyFlags(template, planeUrl, workspace, projectId, token, tokenEnv);
 
+        // --token (without --token-env, which takes precedence) writes a literal token into
+        // config.toml. Warn regardless of --print-template - the operator may pipe that output
+        // straight into a tracked file.
+        if (!string.IsNullOrEmpty(token) && string.IsNullOrEmpty(tokenEnv))
+        {
+            console.ErrorWriteLine(
+                "Warning: --token writes a literal Plane API token into config.toml. Do not commit this "
+                + "file with a literal token set; prefer --token-env, or run 'build setup --write-token-file' "
+                + "to persist the token to a file instead.");
+        }
+
         // --print-template NEVER probes: it stays offline-safe even when a probe is injected.
         if (printTemplate)
         {
             console.Write(content);
             return 0;
-        }
-
-        var target = Path.Combine(cwd, ".build", "config.toml");
-
-        // Clobber guard runs BEFORE probing so the no-op path never spawns codex.
-        if (File.Exists(target) && !force)
-        {
-            console.ErrorWriteLine($"Error: {target} already exists. Use --force to overwrite.");
-            return 1;
         }
 
         // The effective token is the literal token flag value; if only --token-env is given,
@@ -202,11 +227,7 @@ public static class InitCommand
         // unresolved (so the operator does not have to diff the template), point at
         // 'build setup' as the required provisioning step, and surface connected mode as
         // the one-shot path that avoids pasting a project UUID.
-        var stillRequired = new List<string>();
-        if (content.Contains("REQUIRED_PLANE_BASE_URL")) stillRequired.Add("plane_base_url");
-        if (content.Contains("REQUIRED_PLANE_WORKSPACE_SLUG")) stillRequired.Add("plane_workspace_slug");
-        if (content.Contains("REQUIRED_PLANE_PROJECT_ID")) stillRequired.Add("plane_project_id");
-        if (content.Contains("REQUIRED_PLANE_API_TOKEN")) stillRequired.Add("plane_api_token");
+        var stillRequired = FindStillRequiredPlaceholders(content);
 
         if (stillRequired.Count > 0)
             console.WriteLine($"Still REQUIRED in {Path.GetFileName(target)}: {string.Join(", ", stillRequired)} - fill these in before running other build commands.");
@@ -217,6 +238,23 @@ public static class InitCommand
         console.WriteLine("One-shot: re-run 'build init --project-name <name> --plane-url <url> --workspace <slug> --token <token>' (or interactive mode) to resolve or create the project and provision in one step - no UUID to paste.");
         console.WriteLine("Run 'build user-guide' to write the operator setup guide to docs/.");
         return 0;
+    }
+
+    /// <summary>
+    /// Names the config fields whose REQUIRED_ scaffold placeholder is still present in
+    /// <paramref name="content"/>. Shared by the offline-write "still REQUIRED" guidance and the
+    /// top-of-function no-op path for an already-existing config.toml. plane_api_token is checked
+    /// for backward compatibility with a config.toml written before the template's default moved to
+    /// plane_api_token_env - the current template never emits that placeholder.
+    /// </summary>
+    private static List<string> FindStillRequiredPlaceholders(string content)
+    {
+        var stillRequired = new List<string>();
+        if (content.Contains("REQUIRED_PLANE_BASE_URL")) stillRequired.Add("plane_base_url");
+        if (content.Contains("REQUIRED_PLANE_WORKSPACE_SLUG")) stillRequired.Add("plane_workspace_slug");
+        if (content.Contains("REQUIRED_PLANE_PROJECT_ID")) stillRequired.Add("plane_project_id");
+        if (content.Contains("REQUIRED_PLANE_API_TOKEN")) stillRequired.Add("plane_api_token");
+        return stillRequired;
     }
 
     /// <summary>
@@ -678,22 +716,14 @@ public static class InitCommand
     /// - 'q' / 'quit' (any case): throws InitAbortedException -> "Aborted." (exit 5). Blank and every
     ///   other value pass through unchanged, so each prompt keeps its own meaning for empty input.
     ///
-    /// Redirected stdin (automation) reads synchronously: it never blocks indefinitely and returns
-    /// null at EOF, so the background-task race is skipped there.
+    /// This helper is only reached for an interactive console. Redirected stdin is consumed by the
+    /// separately bounded credentials reader before interactive prompting is considered.
     /// </summary>
     private static string? ReadPrompt(IConsole console, CancellationToken ct)
     {
-        string? line;
-        if (console.IsInputRedirected)
-        {
-            line = console.ReadLine();
-        }
-        else
-        {
-            var task = Task.Run(console.ReadLine);
-            task.Wait(ct); // throws OperationCanceledException when Ctrl-C fires ct while we block on input
-            line = task.GetAwaiter().GetResult();
-        }
+        var task = Task.Run(console.ReadLine);
+        task.Wait(ct); // throws OperationCanceledException when Ctrl-C fires ct while we block on input
+        var line = task.GetAwaiter().GetResult();
 
         var trimmed = line?.Trim();
         if (string.Equals(trimmed, "q", StringComparison.OrdinalIgnoreCase)
@@ -723,16 +753,64 @@ public static class InitCommand
     }
 
     /// <summary>
-    /// Reads all remaining lines from <paramref name="console"/> until EOF (ReadLine returns null)
-    /// and returns the joined result. Used to consume redirected stdin as a creds file.
+    /// Reads all remaining lines from <paramref name="console"/> until EOF (ReadLine returns null).
+    /// Used to consume redirected stdin as a credentials file.
     /// </summary>
-    private static string ReadAllLines(IConsole console)
+    /// <remarks>
+    /// "stdin is redirected" means neither readable nor bounded: an invalid handle can throw, while
+    /// an open pipe whose writer never closes can block forever. Each line read therefore has a hard
+    /// inactivity bound. A failed or timed-out read discards the complete input, including any lines
+    /// already read, and returns a warning so truncated credentials are never applied silently.
+    /// </remarks>
+    private static async Task<RedirectedInputRead> ReadAllLinesAsync(
+        IConsole console,
+        CancellationToken ct)
     {
         var sb = new System.Text.StringBuilder();
-        string? line;
-        while ((line = console.ReadLine()) is not null)
+        while (true)
+        {
+            var readTask = Task.Run(console.ReadLine);
+            var timeoutTask = Task.Delay(RedirectedInputReadTimeout, ct);
+            var completed = await Task.WhenAny(readTask, timeoutTask).ConfigureAwait(false);
+
+            if (completed != readTask)
+            {
+                ct.ThrowIfCancellationRequested();
+                _ = readTask.ContinueWith(
+                    static task => _ = task.Exception,
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+                return RedirectedInputRead.Failed(
+                    $"redirected stdin did not reach EOF within {RedirectedInputReadTimeout.TotalSeconds:0} second");
+            }
+
+            string? line;
+            try
+            {
+                line = await readTask.ConfigureAwait(false);
+            }
+            catch (IOException ex)
+            {
+                return RedirectedInputRead.Failed(ex.Message);
+            }
+            catch (ObjectDisposedException ex)
+            {
+                return RedirectedInputRead.Failed(ex.Message);
+            }
+
+            if (line is null)
+                return new RedirectedInputRead(sb.ToString(), null);
+
             sb.AppendLine(line);
-        return sb.ToString();
+        }
+    }
+
+    private sealed record RedirectedInputRead(string Content, string? Warning)
+    {
+        public static RedirectedInputRead Failed(string reason) => new(
+            string.Empty,
+            $"Warning: could not read complete credentials from redirected stdin ({reason}); ignoring stdin credentials.");
     }
 
     /// <summary>
@@ -757,21 +835,27 @@ public static class InitCommand
         if (!string.IsNullOrEmpty(projectId))
             content = content.Replace("REQUIRED_PLANE_PROJECT_ID", projectId);
 
-        // --token-env: replace the plane_api_token = "..." line with plane_api_token_env = "VALUE"
-        // --token: replace just the placeholder value inside the existing line
+        // Both flags rewrite whichever active token key is currently in the template - normally
+        // plane_api_token_env (the default), but a legacy plane_api_token line works the same way.
+        // The match requires "=" immediately after the key name (allowing whitespace), so it never
+        // matches plane_api_token_file, and it is anchored at the start of a line so a commented-out
+        // alternative (# plane_api_token = "...") is never touched.
         // The two flags are mutually exclusive: --token-env takes precedence if both are given.
         if (!string.IsNullOrEmpty(tokenEnv))
         {
-            // Replace the literal token line with an env-var line.
-            // Match the line that starts with plane_api_token = (not plane_api_token_env).
             content = System.Text.RegularExpressions.Regex.Replace(
                 content,
-                @"plane_api_token\s*=\s*""[^""]*""([^\n]*)",
-                $"plane_api_token_env = \"{tokenEnv}\"");
+                @"^plane_api_token(_env)?\s*=\s*""[^""]*""",
+                _ => $"plane_api_token_env = \"{tokenEnv}\"",
+                System.Text.RegularExpressions.RegexOptions.Multiline);
         }
         else if (!string.IsNullOrEmpty(token))
         {
-            content = content.Replace("REQUIRED_PLANE_API_TOKEN", token);
+            content = System.Text.RegularExpressions.Regex.Replace(
+                content,
+                @"^plane_api_token(_env)?\s*=\s*""[^""]*""",
+                _ => $"plane_api_token = \"{token}\"",
+                System.Text.RegularExpressions.RegexOptions.Multiline);
         }
 
         return content;

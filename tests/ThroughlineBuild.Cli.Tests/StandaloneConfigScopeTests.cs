@@ -83,6 +83,21 @@ public sealed class StandaloneConfigScopeTests
     }
 
     [Fact]
+    public async Task CandidateStatusUsesScopedConfigWithoutTicketingWorkersEvents()
+    {
+        var (exit, stdout, stderr) = await RunInRepoAsync(
+            "# no ticketing, workers, or events sections\n",
+            ["candidate", "status", "--ticket", "TLB-600", "--base", "HEAD", "--json"],
+            createInitialCommit: true);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(string.Empty, stderr);
+        using var json = JsonDocument.Parse(stdout);
+        Assert.True(json.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Equal("TLB-600", json.RootElement.GetProperty("data").GetProperty("ticket").GetString());
+    }
+
+    [Fact]
     public async Task TicketingCommandStillRejectsIncompleteConfig()
     {
         var (exit, stdout, _) = await RunInRepoAsync(
@@ -124,7 +139,8 @@ public sealed class StandaloneConfigScopeTests
         string config,
         string[] args,
         IReadOnlyDictionary<string, string>? files = null,
-        string? stdin = null)
+        string? stdin = null,
+        bool createInitialCommit = false)
     {
         var repository = Path.Combine(
             Path.GetTempPath(),
@@ -141,6 +157,12 @@ public sealed class StandaloneConfigScopeTests
         {
             Directory.CreateDirectory(Path.Combine(repository, ".build"));
             await RunGitAsync(repository, "init");
+            if (createInitialCommit)
+            {
+                await RunGitAsync(repository, "config", "user.email", "test@test.com");
+                await RunGitAsync(repository, "config", "user.name", "Test");
+                await RunGitAsync(repository, "commit", "--allow-empty", "-m", "initial");
+            }
             File.WriteAllText(Path.Combine(repository, ".build", "config.toml"), config);
             if (files is not null)
             {
@@ -156,7 +178,11 @@ public sealed class StandaloneConfigScopeTests
 
             var exit = await CliApplication.RunAsync(
                 args,
-                (_, _) => throw new InvalidOperationException("worker must not be constructed"));
+                (_, _) => throw new InvalidOperationException("worker must not be constructed"),
+                new InProcessCliConsole(
+                    stdin is null ? TextReader.Null : new StringReader(stdin),
+                    stdout,
+                    stderr));
             return (exit, stdout.ToString(), stderr.ToString());
         }
         finally
@@ -165,8 +191,28 @@ public sealed class StandaloneConfigScopeTests
             Console.SetOut(originalOut);
             Console.SetError(originalErr);
             Directory.SetCurrentDirectory(originalDirectory);
-            if (Directory.Exists(repository))
-                Directory.Delete(repository, recursive: true);
+            TryDeleteDirectory(repository);
+        }
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        for (var attempt = 0; attempt < 6; attempt++)
+        {
+            try
+            {
+                if (Directory.Exists(path))
+                    Directory.Delete(path, recursive: true);
+                return;
+            }
+            catch when (attempt < 5)
+            {
+                Thread.Sleep(50);
+            }
+            catch
+            {
+                return;
+            }
         }
     }
 
@@ -187,8 +233,10 @@ public sealed class StandaloneConfigScopeTests
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync();
+        var stdoutText = await stdout;
+        var stderrText = await stderr;
         Assert.True(
             process.ExitCode == 0,
-            $"git {string.Join(" ", args)} failed: {await stderr}; stdout: {await stdout}");
+            $"git {string.Join(" ", args)} failed: {stderrText}; stdout: {stdoutText}");
     }
 }

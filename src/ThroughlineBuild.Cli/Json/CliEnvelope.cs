@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using ThroughlineBuild.Cli;
 using ThroughlineBuild.Contracts.Models;
 using ThroughlineBuild.Helpers;
 
@@ -22,6 +23,12 @@ public static class CliErrorCodes
     public const string NotFound = "not_found";
     public const string Failure = "failure";
     public const string DependencyCycle = "dependency_cycle";
+    public const string MissingBase = "missing_base";
+    public const string NotGitRepository = "not_git_repository";
+    public const string InvalidWorktreeState = "invalid_worktree_state";
+    public const string UnhashablePath = "unhashable_path";
+    public const string UnknownSop = "unknown_sop";
+    public const string SopAdmissionRefused = "sop_admission_refused";
 }
 
 /// <summary>A machine-readable error: a stable <paramref name="Code"/> plus a human message.</summary>
@@ -129,6 +136,44 @@ public sealed record CommentCreatedView(string Id);
 /// <summary>Success envelope for <c>build comment --json</c>.</summary>
 public sealed record CommentCreatedEnvelope(int SchemaVersion, bool Ok, CommentCreatedView Data);
 
+// ---- build attachments / attachment --json ----------------------------------------
+
+public sealed record AttachmentView(
+    string Id,
+    string Source,
+    string? Name,
+    string? ContentType,
+    long? SizeBytes);
+
+public sealed record AttachmentsEnvelope(
+    int SchemaVersion,
+    bool Ok,
+    IReadOnlyList<AttachmentView> Data);
+
+public sealed record AttachmentDownloadView(
+    string Id,
+    string Source,
+    string? Name,
+    string Path,
+    long BytesWritten);
+
+public sealed record AttachmentDownloadEnvelope(
+    int SchemaVersion,
+    bool Ok,
+    AttachmentDownloadView Data);
+
+/// <summary>Read-back evidence for a structured comment mutation.</summary>
+public sealed record EvidenceView(
+    string Ticket,
+    string Kind,
+    string CommentId,
+    string Body,
+    DateTimeOffset CreatedAt,
+    bool ReadBackVerified);
+
+/// <summary>Success envelope for <c>build evidence add --json</c>.</summary>
+public sealed record EvidenceEnvelope(int SchemaVersion, bool Ok, EvidenceView Data);
+
 // ---- build transition --json -------------------------------------------------------
 
 /// <summary>Data payload after a state transition.</summary>
@@ -175,6 +220,39 @@ public sealed record WorktreeListEnvelope(int SchemaVersion, bool Ok, WorktreeLi
 public sealed record WorktreeTeardownView(string Path, string Branch);
 public sealed record WorktreeTeardownEnvelope(int SchemaVersion, bool Ok, WorktreeTeardownView Data);
 
+// ---- build candidate ---------------------------------------------------------------
+
+public sealed record CandidateDirtyStateView(
+    bool IsDirty,
+    bool HasTrackedChanges,
+    bool HasStagedChanges,
+    bool HasUnstagedChanges,
+    bool HasUntrackedFiles,
+    bool HasConflicts);
+
+public sealed record CandidateLeaseView(
+    bool Present,
+    string Path,
+    bool? TicketMatches,
+    WorktreeLeaseManifest? Manifest);
+
+public sealed record CandidateStatusView(
+    string Ticket,
+    string BaseRef,
+    string BaseSha,
+    string HeadSha,
+    string? Branch,
+    string WorkingDirectory,
+    string TrackedDiffHash,
+    string CachedDiffHash,
+    string UntrackedHash,
+    IReadOnlyList<string> TouchedPaths,
+    IReadOnlyList<string> UntrackedPaths,
+    CandidateLeaseView Lease,
+    CandidateDirtyStateView DirtyState);
+
+public sealed record CandidateStatusEnvelope(int SchemaVersion, bool Ok, CandidateStatusView Data);
+
 // ---- build gate -------------------------------------------------------------------
 
 public sealed record GateCheckView(
@@ -192,11 +270,24 @@ public sealed record GateView(
     string Role,
     string WorkingDirectory,
     bool ChecksConfigured,
+    bool? CanariesVerified,
     bool Passed,
     string Message,
     IReadOnlyList<GateCheckView> Checks);
 
 public sealed record GateEnvelope(int SchemaVersion, bool Ok, GateView Data);
+
+public sealed record ProfilePromptView(string Prompt);
+public sealed record ProfilePromptEnvelope(int SchemaVersion, bool Ok, ProfilePromptView Data);
+
+public sealed record ProfileOperationView(
+    string Operation,
+    string ConfigPath,
+    bool Changed,
+    string Message,
+    bool? CanaryVerified);
+
+public sealed record ProfileOperationEnvelope(int SchemaVersion, bool Ok, ProfileOperationView Data);
 
 // ---- build waves ------------------------------------------------------------------
 
@@ -215,6 +306,128 @@ public sealed record WavesInput(
 
 public sealed record WavesEnvelope(int SchemaVersion, bool Ok, WavePlan Data);
 
+// ---- build sop doctor -------------------------------------------------------------
+
+public sealed record SopDoctorEnvelope(int SchemaVersion, bool Ok, SopDoctorView Data);
+
+// ---- build sop list / brief / install / status ------------------------------------
+
+public sealed record SopListItemView(
+    string Name,
+    string Version,
+    IReadOnlyList<SopOwnedPath> OwnedPaths);
+
+public sealed record SopListEnvelope(int SchemaVersion, bool Ok, IReadOnlyList<SopListItemView> Data);
+
+public sealed record SopBriefView(
+    string Name,
+    int SopSchemaVersion,
+    string SopVersion,
+    string BinaryVersion,
+    bool Ready,
+    string? SopText,
+    ConductorConfig? Conductor,
+    SopDoctorView Doctor,
+    IReadOnlyList<SopOwnedPath> OwnedPaths,
+    SopRunModeView RunMode);
+
+public sealed record SopEnvironmentVariableView(string Name, string Value);
+
+public sealed record SopVerbPolicyView(
+    bool ReadOnlyVerbsAllowed,
+    bool WorktreeLeaseAllowed,
+    bool WorktreeTeardownAllowed,
+    bool TicketTransitionAllowed,
+    bool TicketCommentAllowed,
+    bool CommitAllowed,
+    bool BranchAllowed,
+    bool PushAllowed,
+    bool ParentOrEpicExpansionAllowed,
+    IReadOnlyList<string> AllowedBuildVerbs,
+    IReadOnlyList<string> RefusedBuildVerbs);
+
+public sealed record SopRunModeView(
+    string Mode,
+    string? InspectionSha,
+    string? InspectionRoot,
+    IReadOnlyList<SopEnvironmentVariableView> Environment,
+    SopVerbPolicyView VerbPolicy);
+
+public sealed record SopBriefEnvelope(int SchemaVersion, bool Ok, SopBriefView Data);
+
+public sealed record SopPathResultView(
+    IReadOnlyList<string> Sops,
+    string Path,
+    string Class,
+    string Status,
+    string Message);
+
+public sealed record SopOperationView(
+    string Operation,
+    string RepositoryRoot,
+    string ManifestPath,
+    int SopSchemaVersion,
+    string BinaryVersion,
+    IReadOnlyList<string> ScopeSops,
+    bool Changed,
+    bool Passed,
+    IReadOnlyList<SopPathResultView> Results,
+    string? TicketPrefix = null,
+    IReadOnlyList<string>? SourceRoots = null,
+    string? BranchPrefix = null,
+    string? ArchitectureMap = null);
+
+public sealed record SopOperationEnvelope(int SchemaVersion, bool Ok, SopOperationView Data);
+
+// ---- build conductor prompt / apply ----------------------------------------------
+
+public sealed record ConductorPromptView(string Prompt);
+
+public sealed record ConductorPromptEnvelope(int SchemaVersion, bool Ok, ConductorPromptView Data);
+
+public sealed record ConductorApplyView(
+    string ConductorPath,
+    int InvariantCount,
+    bool Changed);
+
+public sealed record ConductorApplyEnvelope(int SchemaVersion, bool Ok, ConductorApplyView Data);
+
+public sealed record SopManifest(
+    int SchemaVersion,
+    string InstalledByBuildVersion,
+    DateTimeOffset UpdatedAtUtc,
+    IReadOnlyList<SopManifestSop> Sops);
+
+public sealed record SopManifestSop(
+    string Name,
+    string InstalledByBuildVersion,
+    DateTimeOffset InstalledAtUtc,
+    IReadOnlyList<SopManifestPath> Paths);
+
+public sealed record SopManifestPath(
+    string Path,
+    string Class,
+    string? ContentHash,
+    string? ResourceName);
+
+// ---- build worker brief ----------------------------------------------------------
+
+public sealed record WorkerBriefView(
+    string SourceTicketId,
+    string Role,
+    string OutputPath,
+    string WorktreePath,
+    string Branch,
+    string BaseRef,
+    string BaseSha,
+    string HeadSha,
+    string GateCommand,
+    IReadOnlyList<string> ChangedPaths,
+    IReadOnlyList<string> TrackedStatus,
+    IReadOnlyList<string> UntrackedPaths);
+
+public sealed record WorkerBriefEnvelope(int SchemaVersion, bool Ok, WorkerBriefView Data);
+
 // Source-generated context keeps the --json path statically analyzable under PublishAot=true
 // (reflection-based serialization trips IL2026/IL3050). UseStringEnumConverter renders
 // State/Size/Risk as their names rather than integers. Mirrors PhaseSummaryJsonContext.
@@ -232,15 +445,40 @@ public sealed record WavesEnvelope(int SchemaVersion, bool Ok, WavePlan Data);
 [JsonSerializable(typeof(ListEnvelope))]
 [JsonSerializable(typeof(CommentsEnvelope))]
 [JsonSerializable(typeof(CommentCreatedEnvelope))]
+[JsonSerializable(typeof(AttachmentsEnvelope))]
+[JsonSerializable(typeof(AttachmentDownloadEnvelope))]
+[JsonSerializable(typeof(EvidenceEnvelope))]
 [JsonSerializable(typeof(TransitionEnvelope))]
 [JsonSerializable(typeof(RelationsEnvelope))]
 [JsonSerializable(typeof(RelateEnvelope))]
 [JsonSerializable(typeof(AckEnvelope))]
 [JsonSerializable(typeof(WorktreeLeaseEnvelope))]
+[JsonSerializable(typeof(WorktreeLeaseManifest))]
 [JsonSerializable(typeof(WorktreeListEnvelope))]
 [JsonSerializable(typeof(WorktreeTeardownEnvelope))]
+[JsonSerializable(typeof(CandidateStatusEnvelope))]
 [JsonSerializable(typeof(GateEnvelope))]
+[JsonSerializable(typeof(ProfilePromptEnvelope))]
+[JsonSerializable(typeof(ProfileOperationEnvelope))]
 [JsonSerializable(typeof(WavesInput))]
 [JsonSerializable(typeof(WaveTicketInput[]))]
 [JsonSerializable(typeof(WavesEnvelope))]
+[JsonSerializable(typeof(ConductorConfig))]
+[JsonSerializable(typeof(SopDoctorEnvelope))]
+[JsonSerializable(typeof(SopOwnedPath))]
+[JsonSerializable(typeof(SopListItemView))]
+[JsonSerializable(typeof(SopListEnvelope))]
+[JsonSerializable(typeof(SopBriefEnvelope))]
+[JsonSerializable(typeof(SopRunModeView))]
+[JsonSerializable(typeof(SopVerbPolicyView))]
+[JsonSerializable(typeof(SopEnvironmentVariableView))]
+[JsonSerializable(typeof(SopPathResultView))]
+[JsonSerializable(typeof(SopOperationEnvelope))]
+[JsonSerializable(typeof(SopManifest))]
+[JsonSerializable(typeof(ConductorPromptEnvelope))]
+[JsonSerializable(typeof(ConductorApplyEnvelope))]
+[JsonSerializable(typeof(InstallEnvelope))]
+
+[JsonSerializable(typeof(WorkerBriefView))]
+[JsonSerializable(typeof(WorkerBriefEnvelope))]
 internal partial class CliJsonContext : JsonSerializerContext { }

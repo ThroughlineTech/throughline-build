@@ -9,8 +9,8 @@ public sealed class CliVerbRegistryFactoryTests
     {
         string[] expected =
         [
-            "init", "settarget", "user-guide", "op-doc", "models",
-            "sweep", "worktree", "gate", "waves", "list", "get", "comments", "comment", "transition",
+            "init", "install", "settarget", "user-guide", "op-doc", "models",
+            "sop", "conductor", "profile", "sweep", "candidate", "worker", "worktree", "gate", "waves", "list", "get", "comments", "comment", "attachments", "attachment", "evidence", "transition",
             "relate", "setup", "amend", "close", "defer", "reopen", "new",
             "scaffold", "rework", "decompose", "plan", "implement", "review",
             "ship", "chain",
@@ -23,10 +23,14 @@ public sealed class CliVerbRegistryFactoryTests
 
     [Theory]
     [InlineData("init")]
+    [InlineData("install")]
     [InlineData("settarget")]
     [InlineData("user-guide")]
     [InlineData("op-doc")]
     [InlineData("models")]
+    [InlineData("sop")]
+    [InlineData("conductor")]
+    [InlineData("profile")]
     public void BuildMarksConfigRepairVerbsForPreConfigDispatch(string name)
     {
         var registry = CliVerbRegistryFactory.Build();
@@ -38,9 +42,12 @@ public sealed class CliVerbRegistryFactoryTests
 
     [Theory]
     [InlineData("list")]
+    [InlineData("attachments")]
+    [InlineData("attachment")]
     [InlineData("worktree")]
     [InlineData("gate")]
     [InlineData("waves")]
+    [InlineData("candidate")]
     [InlineData("setup")]
     [InlineData("chain")]
     public void BuildMarksConfiguredVerbsForPostConfigDispatch(string name)

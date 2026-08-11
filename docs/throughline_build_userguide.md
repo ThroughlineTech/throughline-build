@@ -10,6 +10,52 @@ running your first ticket end-to-end.
 
 ## Prerequisites
 
+### Install run-backlog into a repository
+
+After putting `build` and Git on PATH and making the Plane token available,
+run the same three-stage sequence in every repository:
+
+```sh
+build install
+build install --profile .build/profile.json
+build install --invariants .build/invariants.toml
+```
+
+On a fresh repository, the first command forwards init configuration for a
+fully non-interactive run. For example:
+
+```sh
+build install --no-interactive --plane-url URL --workspace SLUG --project-id UUID --token-env PLANE_API_TOKEN
+```
+
+With no existing config, a bare redirected `build install` stops before writing
+placeholders and prints this required command instead.
+
+Each of the first two commands emits a canonical prompt and stops. Give that
+prompt to an agent that can read the repository, save only the requested JSON
+or TOML, and pass the file to the next invocation. The command never starts a
+worker itself. The final invocation prepares a non-protected run branch,
+commits only exact installer-owned readiness paths (a deterministic Setup-owned
+`.gitignore` when created or changed, plus catalog-emitted host stubs), and
+prints READY only after the run-backlog structural preflight passes. It
+intentionally does not install target-stack dependencies or require a green
+target build during installation.
+
+The sequence is re-runnable on an already-installed repository whatever its
+toolchain: a profile that already matches config is a no-op success, and a
+second pass adds no commit or branch change. Stage 2 refuses only when the
+profile would overwrite `[[review.checks]]` or `[[ship.regression_checks]]`
+that are already in config and say something else - checks a human wrote. Pass
+`build install --profile .build/profile.json --force` to replace them
+deliberately.
+
+If stage 2 cannot install a binary-hosted SOP because an emitted stub differs
+from the catalog, it rolls back the profile-config and generated-conductor
+changes from that stage. Build preserves the local stub. Resolve that stub
+according to your intent, then rerun the command named in the failure message,
+normally `build install --profile .build/profile.json`; no hand-editing of
+`.build/config.toml` or `.build/conductor.toml` is required.
+
 ### Install
 
 **git** - Any recent version. Confirm it is on your PATH with `git --version`. The `build ship`
@@ -39,9 +85,23 @@ for a self-hosted instance use your server root. Written to `plane_base_url` in 
 Plane under Project Settings > General. Written to `plane_project_id` in config.
 
 **Plane API token** - A personal API token from your Plane profile (Settings > API Tokens).
-Prefer keeping the value in an environment variable and writing only its name to config with
-`build init --token-env PLANE_API_TOKEN`. A literal `plane_api_token` is supported but must never
-be committed.
+
+For a human developer, the default path is a file: point `plane_api_token_file` at it (the
+conventional path is `secrets/plane-api-token`, already reserved in the generated `.gitignore`).
+Unlike an environment variable, a file's contents do not depend on which shell launched `build` -
+bash only sources `~/.bashrc` for interactive shells, `zsh -c` does not read `~/.zshrc`, and an
+editor or agent harness launched without a login shell inherits neither - so a token exported only
+from an rc file is invisible to a non-interactive process even though it works in your own
+terminal. Once any other source already resolves the token, write it out with
+`build setup --write-token-file secrets/plane-api-token`; that command never prints the token to
+stdout, stderr, or any log.
+
+For CI, prefer an environment variable and write only its name to config with
+`build init --token-env PLANE_API_TOKEN`; CI sets it directly as part of the pipeline, not via an
+interactive shell, so this path is unaffected by the above. A literal `plane_api_token` is
+supported but must never be committed. Resolution order: `plane_api_token`, then
+`plane_api_token_env`, then `plane_api_token_file`, then failure - and the failure message names
+every source it tried.
 
 **Default agent name** - The agent key used for plan, implement, review, and rework phases
 (e.g. `claude-code`). Must match a `[workers.<name>]` block in config. Written to `default_agent`
@@ -111,6 +171,54 @@ Ticket reads expose the same stable IDs that operators type. `build get --json` 
 ticket IDs such as `TLB-42` rather than Plane UUIDs. `build list --parent` accepts stable ticket IDs
 and legacy Plane UUIDs.
 
+## Ticket attachments
+
+List a ticket's normal files and supported inline description images with:
+
+```
+build attachments TLB-620
+build attachments TLB-620 --json
+```
+
+Normal work-item attachments appear first in Plane response order, followed by inline images in
+description order. Duplicate asset UUIDs appear once. The JSON form reports `id`, `source`, `name`,
+`contentType`, and `sizeBytes`; an empty attachment list is a successful empty `data` array.
+
+Download one discovered attachment to an explicit path:
+
+```
+build attachment TLB-620 11111111-2222-3333-4444-555555555555 --output evidence.png
+build attachment TLB-620 11111111-2222-3333-4444-555555555555 --output evidence.png --json
+```
+
+`--output` is required. The command never writes binary data to stdout, never overwrites an
+existing path, and does not leave the requested output partially written when a download fails.
+The JSON form reports the attachment metadata, the output path exactly as requested, and the byte
+count.
+
+## Structured evidence comments
+
+Use `build evidence add` to record one structured audit entry without changing
+ticket lifecycle state:
+
+```
+build evidence add --ticket TLB-541 --kind claim --claim "implemented the fix" --candidate-sha SHA --fingerprint HASH --json
+build evidence add --ticket TLB-541 --kind review --run-head-sha SHA --verdict Pass --fingerprint HASH --json
+```
+
+Supported kinds are `claim`, `review`, `commit`, `integrate`, `gate`, and
+`final`. Kind-specific fields are validated before any backend write. A
+successful invocation posts exactly one comment, reads it back by id, and
+reports the read-back evidence. `readBackVerified: true` means only that the
+returned id is present in the read-back list; it does not compare stored comment
+content with the submitted body. If the post succeeds but read-back fails, the
+command reports the comment id and does not retry; inspect `build comments`
+before trying again.
+
+This command is an audit entry only. It never closes, defers, reopens, or
+transitions a ticket. Use explicit lifecycle commands separately, and never use
+evidence as a cascading close or transition shortcut.
+
 ## First Ticket Walkthrough
 
 This sequence takes a repository from zero configuration to a shipped ticket. Replace the uppercase
@@ -156,13 +264,29 @@ build setup
 
 Setup initializes local repository support, adds the managed ignore rules, provisions the required
 Plane states and labels, checks connectivity, and preflights configured Claude transports. It is
-safe to run again. Keep `.build/config.toml` ignored even when it contains only an environment
-variable name.
+safe to run again. `.build/config.toml` is tracked, not ignored - it carries repository facts like
+`[[review.checks]]` that must travel with a clone - but it should never hold a literal token even
+though it is safe to commit when it only names an environment variable. `sop doctor` and `setup
+--check` both flag a literal `plane_api_token` before you commit it.
 
 If Plane returns 401 or 403, `build` reports the repository-local config path, repository root,
 workspace, and project that were used for the request. The message also reminds you that sibling
 repositories may select different `.build/config.toml` files and recommends rerunning connected
 `build init` for this repository. Token values and Plane response bodies are not echoed.
+
+If tickets will also run from a non-interactive shell later - an agent harness, a scheduled job, an
+editor launched without a login shell - persist the token now, in this same terminal where it
+already resolves:
+
+```
+build setup --write-token-file secrets/plane-api-token
+```
+
+This writes the token this run already resolved (from step 1's environment variable, here) to that
+file and sets `plane_api_token_file` in config, without ever printing the token itself. A
+non-interactive process reads the file the same way regardless of its own shell, so it no longer
+matters whether that later process's shell ever sourced the rc file where you originally exported
+`PLANE_API_TOKEN`.
 
 ### 4. Create a ticket
 
@@ -268,20 +392,94 @@ the ticket CRUD verbs together with deterministic worktree leases:
 build worktree lease --ticket TLB-1 --slug readme-fix
 build waves --input tickets.json
 build gate --ticket TLB-1
+build worker brief --ticket TLB-1 --role review --worktree <path> --output .build/review.md
+build candidate status --ticket TLB-1 --base main --json
 build worktree list
 build worktree teardown --ticket TLB-1
 ```
 
-`worktree`, `gate`, and `waves` load only the configuration sections they use
-without requiring `[ticketing]`, `[workers]`, or `[events]`, resolving ticketing
-secrets, or constructing a Plane client. Other commands still require the full
-ticketing, worker, and event configuration.
+`worktree`, `gate`, `waves`, and `candidate status` load only the configuration
+sections they use without requiring `[ticketing]`, `[workers]`, or `[events]`,
+resolving ticketing secrets, or constructing a Plane client. Other commands
+still require the full ticketing, worker, and event configuration.
+
+Repositories that use binary-hosted SOPs keep `.build/conductor.toml` ignored
+and machine-local. Recreate it in each clone through `build install` or
+`build sop install`.
+Run `build sop list [--json]` to report embedded SOPs and their binary versions.
+Run `build sop install [--sop <name>] [--host claude|codex] [--json]` to emit
+host stubs, scaffold a missing `.build/conductor.toml`, and write
+`.build/sop-manifest.json`. By default install emits every known host stub;
+`--host` narrows emitted stubs to Claude or Codex while still including shared
+scaffolded paths. Run `build sop status [--json]` to report catalog drift,
+including missing installed paths. Run
+`build sop upgrade [--sop <name>] [--host claude|codex] [--json]` after
+replacing the binary; it rewrites only emitted files that still match trusted
+previous catalog hashes embedded in the current binary. Run
+`build sop uninstall [--sop <name>] [--host claude|codex] [--json]` to remove
+only emitted regular files that still match the current catalog.
+
+The embedded catalog is the authority. `.build/sop-manifest.json` is a cache of
+prior writes, not permission to touch arbitrary paths. Emitted files are stubs
+and are validated byte-for-byte against the catalog. Scaffolded files are owned
+as paths, not content: install never overwrites an existing scaffolded file, and
+status validates `.build/conductor.toml` as structured conductor data instead of
+comparing it with a template. A locally modified emitted stub is intentionally
+preserved by install, upgrade, and uninstall; delete the local stub and rerun
+`build sop install` to restore catalog content. Before any write or delete,
+every target path and the manifest path must resolve strictly below the
+repository root and must not cross a symlink or reparse point.
+
+Run `build sop doctor [--json]` to validate that conductor data,
+manifest-recorded or present emitted host stubs, and the local review-check
+contract are present. Run
+`build sop brief <name>` to emit the
+embedded SOP text plus resolved conductor data, the SOP schema version, SOP
+version, binary version, doctor result, owned catalog paths, and run mode. The
+brief always emits a JSON envelope; `--json` is accepted for consistency.
+Standard briefs run doctor first; if doctor fails, including when
+`min_build_version` is newer than the running binary, the command exits 1 and
+omits SOP text. Admission briefs validate inspection inputs before doctor reads
+conductor data, then run doctor. Unknown SOP names exit 9.
+
+Admission-only inspection enters through the brief mode syntax:
+`build sop brief <name> admission <absolute-inspection-root> <inspection-sha>`.
+The root must be the absolute git worktree root for the invoking repository;
+subdirectories and unrelated repositories are refused. The SHA must be a full
+40-character commit SHA that resolves in that worktree; relative roots, short
+SHAs, and unresolvable SHAs are refused before conductor data is read. The
+emitted `runMode` carries the resolved inspection root, normalized inspection
+SHA, inherited `BUILD_SOP_*` environment values, and an explicit verb policy.
+With `BUILD_SOP_RUN_MODE=admission` active, mutating verbs refuse with JSON error
+code `sop_admission_refused`; read-only inspection verbs remain available.
+Admission forbids worktree lease and teardown, ticket comments and transitions,
+commits, branches, pushes, and parent or epic expansion.
+
+The sop commands read `.build/conductor.toml` without loading ticketing, worker,
+or event configuration; if `.build/config.toml` is absent, doctor reports the
+missing `[[review.checks]]` as a validation finding instead of a bootstrap
+error. Doctor also validates manifest-recorded or present emitted stubs
+byte-for-byte against the catalog and reports missing, modified, non-regular, or
+unsafe stub paths as drift. Review invariants in conductor.toml are structured prose: doctor checks
+ids, non-empty statements, optional paths, and optional `blocks_done` shape only.
+It does not judge whether the statements are true. Unknown conductor keys are
+findings, so misspelled fields cannot silently drop contract data. The local
+`[[review.checks]]` list must include at least one setup or gating check with a
+non-empty executable; advisory-only checks do not make the gate capable of
+blocking Done. No `sop` verb starts a worker agent. Exit 0 means the requested
+SOP operation passed and status found no drift, exit 1 means validation findings,
+brief refusal, admission mutation refusal, drift, or a safety finding, exit 2
+means bad arguments, and exit 9 means an unknown SOP name.
 
 Lease prints the absolute worktree path for use as an agent working directory,
-runs `[project].install_command`, and writes a safety manifest. Configure the
-root and the only untracked local files Build may copy with `[worktree] root`
-and `[worktree] seed_files`. Use `--require-seed <path>` when a listed file must
-exist before lease creation. Concurrent attempts for one ticket are serialized,
+runs `[project].install_command` exactly once in the new worktree, and writes a
+safety manifest. It never runs `build install`. Dependencies in the primary
+working tree remain human-managed; creating or switching an ordinary branch in
+that tree runs no install command. Configure the root and the only untracked
+local files Build may copy with `[worktree] root` and `[worktree] seed_files`.
+Seed files are copied before the project install command runs. Use
+`--require-seed <path>` when a listed file must exist before lease creation.
+Concurrent attempts for one ticket are serialized,
 and rollback removes only branch and worktree artifacts owned by the failing
 attempt. Teardown is safe by default: it refuses tracked work and unexpected
 untracked files before removing the worktree. Add
@@ -291,12 +489,51 @@ unless `--force` is present. `--force` skips the worktree cleanliness proof and
 may permanently discard work. All three forms support `--json`.
 
 Run `build gate` from the leased worktree to execute its configured
-`[[review.checks]]`. Setup checks run first. Gating and setup failures exit 1;
+`[[review.checks]]`. Setup checks run first on every gate invocation. They are
+for repeatable prerequisites such as code generation, not dependency
+installation. A setup check matching `[project].install_command` is refused,
+and any check that changes tracked files fails the gate. Gating and setup failures exit 1;
 advisory failures remain visible but do not change the exit code. Use
 `--role gating|advisory|all` to select a role, and `--json` for typed per-check
-exit codes, durations, captured output, and inconclusive missing-path results.
+exit codes, durations, captured output, inconclusive missing-path results, and
+the persisted canary-proof status (`true`, `false`, or unknown).
 By default an empty selected check list exits 0 for compatibility; add
 `--require-checks` to make that condition exit 1.
+
+Use `build worker brief --ticket <id> --role implement|review|rework
+--worktree <path> --output <path>` to write a compact, inspectable Markdown
+brief for a caller-owned worker. The artifact includes ticket context, role
+boundaries, the exact gate command, and worktree evidence. Review uses actual
+diff/status inputs and an independent-verdict instruction; rework includes
+prior blocking findings and keeps the supplied worktree and branch. The
+command does not spawn a worker or mutate tickets, git history, branches,
+worktrees, deployments, or other files. Add `--json` for source ticket and
+output metadata. Add `--agent <name>`, or the per-phase `--agent-implement` /
+`--agent-review`, to render the brief from another agent's templates; the
+per-phase flag wins over `--agent`, which wins over `[workers.phases]`, which
+wins over `default_agent`. The value must name a shipped template set, since
+this command renders templates without starting a worker.
+
+For a semantic-risk ticket, record a `Ticket execution contract` in the ticket
+body before dispatching a worker. It identifies parent intent, authority,
+forbidden shortcuts, required shared surfaces, focused negative tests,
+out-of-scope behavior, and the rework fence. Every worker brief carries that
+ticket body and treats the recorded contract as binding. Missing or conflicting
+contract information stops implementation before code edits; reviewers return it
+as a plan or contract defect for the conductor rather than inventing a
+replacement contract.
+
+Run `build candidate status --ticket <id> --base <ref> --json` from the
+candidate worktree after implementation and review checkpoints. The JSON
+envelope reports the resolved base SHA, HEAD SHA, tracked diff hash,
+cached/index diff hash, untracked-file hash, touched paths, dirty state, and
+lease manifest metadata when present. The untracked hash includes sorted
+repository-relative paths, Git-style regular-file modes, and file content
+hashes. Missing base refs, non-git directories, conflicted worktrees, invalid
+lease manifests, unreadable paths, untracked directories, and untracked
+symlink/reparse-point paths fail with a nonzero JSON error envelope. The command
+reads git state only; it does not mutate tickets, branches, commits, pushes,
+workers, or worktree lifecycle state.
 
 Use `build waves --input <path|->` before leasing worktrees to level declared
 dependencies and pack file-disjoint ready tickets up to `[waves].cap` (default

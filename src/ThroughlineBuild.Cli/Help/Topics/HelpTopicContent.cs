@@ -9,7 +9,7 @@ Global exit codes:
   0  Success.
   1  Phase or command failure.
   2  Config error, bad arguments, unknown verb, or unknown help topic.
-  3  Missing secret. A required environment variable such as the Plane API token is not set.
+  3  Missing secret. The Plane API token did not resolve from config, its env var, or its token file.
   4  Phase infrastructure failure. Examples include verifier crash, ship worktree missing, or git unavailable.
 
 Command-specific overrides:
@@ -51,7 +51,7 @@ This is not the full TOML schema; use build <command> --help for command contrac
 
 Section scoping:
   [ticketing], [workers], and [events] are required for ticketing and worker-backed commands.
-  build worktree, build gate, and build waves are standalone deterministic commands. They load only the sections they consume and do not require [ticketing], [workers], or [events].
+  build worktree, build gate, build waves, and build candidate status are standalone deterministic commands. They load only the sections they consume and do not require [ticketing], [workers], or [events].
   This is config validation scoping only; it is not a credential or security boundary.
 
 [plan] schema:

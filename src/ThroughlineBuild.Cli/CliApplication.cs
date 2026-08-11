@@ -25,10 +25,20 @@ public static class CliApplication
     public static Task<int> RunAsync(string[] args) =>
         RunAsync(args, WorkerAgentBuilder.Create);
 
+    /// <param name="consoleOverride">
+    /// Test seam for the verbs that prompt or read stdin. Production passes null and gets
+    /// <see cref="SystemConsole.Instance"/>. Without this, an in-process test of a stdin-reading
+    /// verb (notably 'init') reads the test host's real stdin, which makes the test's outcome a
+    /// function of whichever harness launched the run rather than of the code under test.
+    /// </param>
     internal static async Task<int> RunAsync(
         string[] args,
-        Func<string, AgentConfig, IWorkerAgent> workerAgentBuilder)
+        Func<string, AgentConfig, IWorkerAgent> workerAgentBuilder,
+        IConsole? consoleOverride = null,
+        ProfileGateVerifier? profileGateVerifier = null)
     {
+        var console = consoleOverride ?? SystemConsole.Instance;
+
         if (ClaudeStopHookCommand.IsMatch(args))
             return await ClaudeStopHookCommand.RunAsync(args);
 
@@ -92,6 +102,14 @@ public static class CliApplication
         var cliVerbRegistry = CliVerbRegistryFactory.Build();
         cliVerbRegistry.TryGet(verb, out var registeredVerb);
         var verbKind = registeredVerb?.Kind;
+
+        if (SopAdmission.TryGetRefusal(args, registeredVerb, out var admissionRefusal))
+            return SopAdmission.WriteRefusal(
+                admissionRefusal,
+                jsonOutput,
+                Console.Out,
+                Console.Error);
+
         IReadOnlyList<string>? batchImplementTicketIds = null;
         bool batchImplementAllChildren = false;
         if (verbKind == CliVerbKind.Chain)
@@ -191,7 +209,7 @@ public static class CliApplication
             if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]) || args[1].StartsWith("--"))
             {
                 Console.Error.WriteLine("Error: op-doc-path is required");
-                Console.Error.WriteLine("Usage: build scaffold <op-doc-path> [--validate-only] [--dry-run] [--accept-warnings] [--no-profile] [--force-profile] [--debug]");
+                Console.Error.WriteLine("Usage: build scaffold <op-doc-path> [--validate-only] [--dry-run] [--accept-warnings] [--debug]");
                 return 2;
             }
         }
@@ -218,6 +236,36 @@ public static class CliApplication
 
         if (registeredVerb?.RunsBeforeConfig == true)
         {
+            if (verbKind == CliVerbKind.Install)
+            {
+                if (!InstallCommand.TryParse(args, out var installInvocation, out var installError))
+                {
+                    if (jsonOutput) CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, installError);
+                    else
+                    {
+                        Console.Error.WriteLine($"Error: {installError}");
+                        Console.Error.WriteLine("Usage: build install [--no-interactive] [--from FILE] [--plane-url URL] [--workspace SLUG] [--project-id UUID] [--project-name NAME] [--token TOKEN | --token-env VAR] [--profile <path|-> [--force] | --invariants <path|->] [--json]");
+                    }
+                    return 2;
+                }
+                using var installCts = new CancellationTokenSource();
+                Console.CancelKeyPress += (_, e) => { e.Cancel = true; installCts.Cancel(); };
+                return await InstallCommand.ExecuteAsync(
+                    installInvocation!, jsonOutput, rawCwd, Console.In, Console.Out, Console.Error, installCts.Token,
+                    inputRedirected: console.IsInputRedirected);
+            }
+
+            if (verbKind == CliVerbKind.Conductor)
+            {
+                return ConductorCommand.Execute(
+                    args,
+                    jsonOutput,
+                    rawCwd,
+                    Console.In,
+                    Console.Out,
+                    Console.Error);
+            }
+
             // 'build init' must run before config load - it bootstraps the config file.
             if (verbKind == CliVerbKind.Init)
             {
@@ -254,7 +302,7 @@ public static class CliApplication
                 Console.CancelKeyPress += (_, e) => { e.Cancel = true; initCts.Cancel(); };
                 try
                 {
-                    return await InitCommand.ExecuteAsync(rawCwd, force, printTemplate, SystemConsole.Instance,
+                    return await InitCommand.ExecuteAsync(rawCwd, force, printTemplate, console,
                         planeUrl: initPlaneUrl,
                         workspace: initWorkspace,
                         projectId: initProjectId,
@@ -296,7 +344,7 @@ public static class CliApplication
                 string? stBranch = (filteredArgs.Count > 1 && !filteredArgs[1].StartsWith("--"))
                     ? filteredArgs[1]
                     : null;
-                return SetTargetCommand.Execute(rawCwd, stBranch, unset, SystemConsole.Instance);
+                return SetTargetCommand.Execute(rawCwd, stBranch, unset, console);
             }
 
             // 'build user-guide' writes the embedded operator guide; runs without config.
@@ -304,7 +352,7 @@ public static class CliApplication
             {
                 var force = filteredArgs.Contains("--force");
                 var printTemplate = filteredArgs.Contains("--print-template");
-                return UserGuideCommand.Execute(rawCwd, force, printTemplate, SystemConsole.Instance);
+                return UserGuideCommand.Execute(rawCwd, force, printTemplate, console);
             }
 
             // 'build op-doc <spec|new>' runs without config: 'spec' prints or writes the embedded
@@ -335,7 +383,7 @@ public static class CliApplication
 
                     var write = filteredArgs.Contains("--write");
                     var force = filteredArgs.Contains("--force");
-                    return OpDocSpecCommand.Execute(rawCwd, write, force, SystemConsole.Instance);
+                    return OpDocSpecCommand.Execute(rawCwd, write, force, console);
                 }
 
                 if (opDocSub == "new")
@@ -414,17 +462,84 @@ public static class CliApplication
                     Console.Error.WriteLine("Usage: build models refresh");
                     return 2;
                 }
-                return ModelsRefreshCommand.Execute(rawCwd, SystemConsole.Instance,
+                return ModelsRefreshCommand.Execute(rawCwd, console,
                     () => new CodexModelProbe().ProbeAsync().GetAwaiter().GetResult());
+            }
+
+            if (verbKind == CliVerbKind.Sop)
+            {
+                if (args.Length >= 2 && string.Equals(args[1], "install", StringComparison.Ordinal))
+                {
+                    return await SopCommand.ExecuteInstallAsync(
+                        args,
+                        jsonOutput,
+                        rawCwd,
+                        Console.Out,
+                        Console.Error);
+                }
+
+                return SopCommand.Execute(
+                    args,
+                    jsonOutput,
+                    rawCwd,
+                    Console.Out,
+                    Console.Error);
+            }
+
+            if (verbKind == CliVerbKind.Profile)
+            {
+                if (!ProfileCommand.TryParse(args, out var profileInvocation, out var profileParseError))
+                    return ProfileCommand.WriteUsage(jsonOutput, Console.Out, Console.Error, profileParseError!);
+
+                if (profileInvocation!.Action == ProfileAction.Prompt)
+                    return ProfileCommand.ExecutePrompt(jsonOutput, Console.Out);
+
+                if (profileInvocation.Action == ProfileAction.VerifyCanaries)
+                {
+                    return await ProfileCommand.ExecuteVerifyCanariesAsync(
+                        profileInvocation,
+                        jsonOutput,
+                        rawCwd,
+                        profileGateVerifier ?? new ProfileGateVerifier(),
+                        Console.Out,
+                        Console.Error,
+                        CancellationToken.None);
+                }
+
+                var profileBootstrap = await CliBootstrap.CreateAsync(
+                    rawCwd,
+                    CancellationToken.None,
+                    requireTicketing: false,
+                    configLoadMode: BuildConfigLoadMode.ProfileApply);
+                if (profileBootstrap.Failure is { } profileFailure)
+                {
+                    if (jsonOutput)
+                        CliEnvelopeWriter.WriteError(Console.Out, profileFailure.JsonErrorCode, profileFailure.Message);
+                    else
+                        Console.Error.WriteLine($"{profileFailure.HumanPrefix}: {profileFailure.Message}");
+                    return profileFailure.ExitCode;
+                }
+
+                using var profileContext = profileBootstrap.Context!;
+                return await ProfileCommand.ExecuteApplyAsync(
+                    profileInvocation,
+                    jsonOutput,
+                    profileContext.ConfigPath,
+                    rawCwd,
+                    profileGateVerifier ?? new ProfileGateVerifier(),
+                    Console.Out,
+                    Console.Error,
+                    CancellationToken.None);
             }
 
             throw new InvalidOperationException($"Pre-config verb '{registeredVerb.Name}' has no handler.");
         }
 
         var requiresTicketing = verbKind is not (
-            CliVerbKind.Worktree or CliVerbKind.Gate or CliVerbKind.Waves);
+            CliVerbKind.Candidate or CliVerbKind.Worktree or CliVerbKind.Gate or CliVerbKind.Waves);
         var configLoadMode = verbKind switch
         {
+            CliVerbKind.Candidate => BuildConfigLoadMode.CandidateStandalone,
             CliVerbKind.Worktree => BuildConfigLoadMode.WorktreeStandalone,
             CliVerbKind.Gate => BuildConfigLoadMode.GateStandalone,
             CliVerbKind.Waves => BuildConfigLoadMode.WavesStandalone,
@@ -460,6 +575,28 @@ public static class CliApplication
         var config = cliContext.Config;
         string ResolveLogDir(string raw) => cliContext.ResolveLogDirectory(raw);
         var sessionContext = cliContext.SessionContext;
+
+        // Standalone candidate fingerprinting for caller-owned conductor loops.
+        // This path reads only git state, an optional lease manifest, and an optional conductor
+        // ticket prefix in the invocation worktree; it never constructs a worker agent or touches ticketing.
+        if (verbKind == CliVerbKind.Candidate)
+        {
+            using var candidateCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; candidateCts.Cancel(); };
+            try
+            {
+                return await CandidateStatusCommand.ExecuteAsync(
+                    args, jsonOutput, rawCwd, Console.Out, Console.Error, candidateCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                if (jsonOutput)
+                    CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, "cancelled");
+                else
+                    Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
+        }
 
         // Standalone deterministic worktree lifecycle for caller-owned conductor loops.
         // This path composes only git, filesystem, and the configured install command; it
@@ -512,7 +649,56 @@ public static class CliApplication
                     new AutomatedChecksRunner(),
                     Console.Out,
                     Console.Error,
-                    gateCts.Token);
+                    gateCts.Token,
+                    config.Review.CanariesVerified,
+                    config.Project.InstallCommand,
+                    new ProcessGitClient(rawCwd));
+            }
+            catch (OperationCanceledException)
+            {
+                if (jsonOutput)
+                    CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Failure, "cancelled");
+                else
+                    Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
+        }
+
+        // Standalone worker-brief artifact generation. This deterministic path reads one ticket,
+        // optional rework comments, and git evidence, then writes only the requested brief file.
+        // It never constructs a worker agent and never mutates tickets or git state.
+        if (verbKind == CliVerbKind.Worker)
+        {
+            using var workerBriefCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; workerBriefCts.Cancel(); };
+            try
+            {
+                // The command resolves the brief agent itself: --agent-<phase>, then --agent, then
+                // the [workers.phases] entry for the role's phase, then this default_agent floor.
+                // Passing the implement-phase agent here would leak it into review-role briefs.
+                var briefAgent = config.Workers.DefaultAgent;
+                return await WorkerBriefCommand.ExecuteAsync(
+                    args,
+                    jsonOutput,
+                    cliContext.Ticketing,
+                    new ProcessGitClient(rawCwd),
+                    config.Project,
+                    config.Review.Checks,
+                    config.ResolveTargetBranch(),
+                    briefAgent,
+                    Console.Out,
+                    Console.Error,
+                    workerBriefCts.Token,
+                    config.Workers.Phases,
+                    new WorkerBriefAgentOverrides(
+                        agentAll,
+                        agentPlanFlag,
+                        agentImplementFlag,
+                        agentReviewFlag));
+            }
+            catch (PlaneApiException ex)
+            {
+                return PlaneCliError.Report("worker brief", ex, jsonOutput, cliContext);
             }
             catch (OperationCanceledException)
             {
@@ -798,6 +984,158 @@ public static class CliApplication
             }
         }
 
+        // List all ticket-owned attachments. Discovery includes work-item attachments first,
+        // followed by supported inline description images in document order.
+        if (verbKind == CliVerbKind.Attachments)
+        {
+            if (args.Length != 2 || string.IsNullOrWhiteSpace(args[1]) || args[1].StartsWith("--"))
+            {
+                if (jsonOutput)
+                    CliEnvelopeWriter.WriteError(Console.Out, CliErrorCodes.Usage, "ticket-id is required");
+                else
+                {
+                    Console.Error.WriteLine("Error: ticket-id is required");
+                    Console.Error.WriteLine("Usage: build attachments <ticket-id> [--json]");
+                }
+                return 2;
+            }
+
+            try
+            {
+                using var verbCts = new CancellationTokenSource();
+                Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+                var attachments = await cliContext.Ticketing.GetAttachmentsAsync(args[1], verbCts.Token);
+                if (jsonOutput)
+                {
+                    CliEnvelopeWriter.WriteAttachments(Console.Out, attachments);
+                }
+                else if (attachments.Count == 0)
+                {
+                    Console.WriteLine("no attachments");
+                }
+                else
+                {
+                    foreach (var attachment in attachments)
+                    {
+                        var size = attachment.SizeBytes?.ToString(
+                            System.Globalization.CultureInfo.InvariantCulture) ?? "-";
+                        Console.WriteLine(
+                            $"{attachment.Id}  {attachment.Source}  {attachment.Name ?? "-"}  " +
+                            $"{attachment.ContentType ?? "-"}  {size}");
+                    }
+                }
+                return 0;
+            }
+            catch (ArgumentException ex)
+            {
+                return WriteAttachmentError(jsonOutput, CliErrorCodes.Usage, ex.Message, 2, "attachments");
+            }
+            catch (KeyNotFoundException)
+            {
+                return WriteAttachmentError(jsonOutput, CliErrorCodes.NotFound, "Ticket not found.", 1, "attachments");
+            }
+            catch (PlaneApiException ex)
+            {
+                return WriteAttachmentError(
+                    jsonOutput, CliErrorCodes.Failure,
+                    $"Plane attachment request failed with HTTP {ex.Status}.", 1, "attachments");
+            }
+            catch (OperationCanceledException)
+            {
+                return WriteAttachmentError(jsonOutput, CliErrorCodes.Failure, "cancelled", 1, "attachments");
+            }
+            catch (Exception)
+            {
+                return WriteAttachmentError(
+                    jsonOutput, CliErrorCodes.Failure, "Attachment listing failed.", 1, "attachments");
+            }
+        }
+
+        // Download bytes to an explicit local path. The bytes never pass through stdout and the
+        // final name appears only after a complete same-directory atomic write.
+        if (verbKind == CliVerbKind.Attachment)
+        {
+            if (!TryParseAttachmentDownloadArgs(args, out var ticketId, out var assetId, out var outputPath, out var parseError))
+                return WriteAttachmentError(jsonOutput, CliErrorCodes.Usage, parseError!, 2, "attachment");
+
+            string fullOutputPath;
+            try
+            {
+                fullOutputPath = Path.GetFullPath(outputPath!);
+            }
+            catch
+            {
+                return WriteAttachmentError(
+                    jsonOutput, CliErrorCodes.Failure, "Output path is invalid.", 1, "attachment");
+            }
+
+            if (File.Exists(fullOutputPath) || Directory.Exists(fullOutputPath))
+            {
+                return WriteAttachmentError(
+                    jsonOutput, CliErrorCodes.Failure, "Output path already exists.", 1, "attachment");
+            }
+
+            try
+            {
+                using var verbCts = new CancellationTokenSource();
+                Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+                var downloaded = await cliContext.Ticketing.DownloadAttachmentAsync(
+                    ticketId!, assetId!, verbCts.Token);
+                await WriteAttachmentAtomicallyAsync(fullOutputPath, downloaded.Content, verbCts.Token);
+
+                if (jsonOutput)
+                {
+                    CliEnvelopeWriter.WriteAttachmentDownload(
+                        Console.Out,
+                        downloaded.Attachment,
+                        outputPath!,
+                        downloaded.Content.LongLength);
+                }
+                else
+                {
+                    Console.WriteLine(
+                        $"Downloaded {downloaded.Attachment.Id} to {outputPath} " +
+                        $"({downloaded.Content.LongLength} bytes)");
+                }
+                return 0;
+            }
+            catch (ArgumentException ex)
+            {
+                return WriteAttachmentError(jsonOutput, CliErrorCodes.Usage, ex.Message, 2, "attachment");
+            }
+            catch (KeyNotFoundException)
+            {
+                return WriteAttachmentError(
+                    jsonOutput, CliErrorCodes.NotFound,
+                    "Attachment is not present on this ticket.", 1, "attachment");
+            }
+            catch (PlaneApiException ex)
+            {
+                return WriteAttachmentError(
+                    jsonOutput, CliErrorCodes.Failure,
+                    $"Plane attachment request failed with HTTP {ex.Status}.", 1, "attachment");
+            }
+            catch (OperationCanceledException)
+            {
+                return WriteAttachmentError(jsonOutput, CliErrorCodes.Failure, "cancelled", 1, "attachment");
+            }
+            catch (IOException)
+            {
+                return WriteAttachmentError(
+                    jsonOutput, CliErrorCodes.Failure, "Attachment output write failed.", 1, "attachment");
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return WriteAttachmentError(
+                    jsonOutput, CliErrorCodes.Failure, "Attachment output write failed.", 1, "attachment");
+            }
+            catch (Exception)
+            {
+                return WriteAttachmentError(
+                    jsonOutput, CliErrorCodes.Failure, "Attachment download failed.", 1, "attachment");
+            }
+        }
+
         // 'build comment <ticket-id> <body|-> [--json]' posts a comment (write). The body is markdown
         // (or "-" to read from stdin) and is rendered to Plane HTML. This is the agent's write-back path.
         if (verbKind == CliVerbKind.Comment)
@@ -852,6 +1190,31 @@ public static class CliApplication
             catch (PlaneApiException ex)
             {
                 return PlaneCliError.Report("comment", ex, jsonOutput, cliContext);
+            }
+            catch (OperationCanceledException)
+            {
+                Console.Error.WriteLine("Cancelled.");
+                return 1;
+            }
+        }
+
+        // 'build evidence add' posts one structured evidence comment and then reads that
+        // comment back. It never transitions a ticket; lifecycle remains an explicit command.
+        if (verbKind == CliVerbKind.Evidence)
+        {
+            var sharedTicketing = cliContext.Ticketing;
+            try
+            {
+                using var verbCts = new CancellationTokenSource();
+                Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
+                return await EvidenceCommand.ExecuteAsync(
+                    args,
+                    jsonOutput,
+                    sharedTicketing,
+                    Console.Out,
+                    Console.Error,
+                    verbCts.Token,
+                    ex => PlaneCliError.MessageFor(ex, cliContext));
             }
             catch (OperationCanceledException)
             {
@@ -949,13 +1312,39 @@ public static class CliApplication
         if (verbKind == CliVerbKind.Setup)
         {
             var checkOnly = filteredArgs.Contains("--check");
+            // --write-token-file persists the token this process already resolved (inline config,
+            // an env var, or an existing file) into a dedicated file, so a future non-interactive
+            // process can find it without depending on that process's shell. It never handles a new
+            // token value, so it needs no separate interactive/non-interactive prompt path. See TLB-638.
+            var writeTokenFilePath = CliArgParser.GetFlagValue(filteredArgs, "--write-token-file");
+            if (filteredArgs.Contains("--write-token-file") && string.IsNullOrWhiteSpace(writeTokenFilePath))
+            {
+                Console.Error.WriteLine("Error: --write-token-file requires a path");
+                return 2;
+            }
+            if (writeTokenFilePath is not null && checkOnly)
+            {
+                Console.Error.WriteLine("Error: --write-token-file cannot be combined with --check");
+                return 2;
+            }
             var sharedTicketing = cliContext.Ticketing;
-            var setupCmd = new SetupCommand(sharedTicketing, new FileSystemLocalRepoOps(configuredCwd));
+            var setupCmd = new SetupCommand(sharedTicketing, new FileSystemLocalRepoOps(configuredCwd), cliContext.ConfigPath);
             try
             {
                 using var verbCts = new CancellationTokenSource();
                 Console.CancelKeyPress += (_, e) => { e.Cancel = true; verbCts.Cancel(); };
-                var setupExit = await setupCmd.ExecuteAsync(checkOnly, SystemConsole.Instance, verbCts.Token);
+                var setupExit = await setupCmd.ExecuteAsync(checkOnly, console, verbCts.Token);
+                if (setupExit == 0 && writeTokenFilePath is not null)
+                {
+                    var writeResult = TokenFileInstaller.Write(
+                        configuredCwd, cliContext.ConfigPath, writeTokenFilePath, cliContext.Secrets.PlaneApiToken);
+                    if (!writeResult.Success)
+                    {
+                        Console.Error.WriteLine($"Error: {writeResult.Message}");
+                        return 1;
+                    }
+                    Console.WriteLine(writeResult.Message);
+                }
                 // Diagnose the configured Claude transport (executable, version, platform) so an operator
                 // learns about an unsupported interactive-hook setup here, before running a phase.
                 var transportExit = await ClaudeTransportPreflight.ReportAsync(
@@ -1456,7 +1845,7 @@ public static class CliApplication
             if (review)
             {
                 var loop = new ReviewLoop(
-                    SystemConsole.Instance,
+                    console,
                     (text, cancellationToken) => draftPhase.RunAsync(new DraftPhaseOptions(text, debugMode), configuredCwd, cancellationToken),
                     ReviewLoop.DefaultEditorResolver());
                 var loopResult = await loop.RunAsync(draftResult.BodyMarkdown!, draftText, verbCts.Token);
@@ -1542,18 +1931,12 @@ public static class CliApplication
             // Parse scaffold-local flags.
             var scaffoldArgs = new Dictionary<string, string>(StringComparer.Ordinal);
             scaffoldArgs["op_doc_path"] = args[1];
-            bool noProfile = false;
-            bool forceProfile = false;
-            bool validateOnlyFlag = false;
-            bool dryRunFlag = false;
             for (int i = 2; i < args.Length; i++)
             {
                 var a = args[i];
-                if (a == "--validate-only") { scaffoldArgs["validate_only"] = "true"; validateOnlyFlag = true; }
-                else if (a == "--dry-run") { scaffoldArgs["dry_run"] = "true"; dryRunFlag = true; }
+                if (a == "--validate-only") scaffoldArgs["validate_only"] = "true";
+                else if (a == "--dry-run") scaffoldArgs["dry_run"] = "true";
                 else if (a == "--accept-warnings") scaffoldArgs["accept_warnings"] = "true";
-                else if (a == "--no-profile") noProfile = true;
-                else if (a == "--force-profile") forceProfile = true;
                 // --debug and --error-location already stripped by pre-pass; other unknown flags are silently ignored
             }
             if (errorLocation) scaffoldArgs["show_location"] = "true";
@@ -1588,41 +1971,6 @@ public static class CliApplication
                     ScaffoldExitCategory.BackendUnavailable => 4,
                     _ => scaffoldResult.Success ? 0 : 1
                 };
-
-                // Derive the project's review/ship checks from the op-doc and write them into
-                // .build/config.toml. Runs only on a real creation run; derivation never changes the
-                // scaffold exit code (the ticket tree is this command's contract, not the config).
-                bool ticketsCreated = tag == ScaffoldExitCategory.Clean || tag == ScaffoldExitCategory.PartialCreation;
-                if (ticketsCreated && !validateOnlyFlag && !dryRunFlag && !noProfile)
-                {
-                    // Under --debug, capture the derivation worker's raw stdin/stdout/stderr and
-                    // structured transcript like any phase worker. Without it, a derivation failure
-                    // (e.g. a missing PROJECT_PROFILE block) leaves no diagnosable artifact.
-                    string? scaffoldDebugDir = debugMode
-                        ? Path.GetFullPath(Path.Combine(resolvedCwd, ".build", "sessions",
-                            $"scaffold-profile-{DateTimeOffset.Now:yyyy-MM-dd-HHmmss}"))
-                        : null;
-                    // Gate the profile-derivation worker (the default agent) before it launches. Derivation
-                    // is best-effort and never changes the scaffold exit code, so on an unsupported host we
-                    // skip it with a clear note rather than fail the scaffold whose ticket tree already exists.
-                    var scaffoldGateExit = await ClaudeTransportPreflight.GateAsync(
-                        config.Workers, [config.Workers.DefaultAgent], Console.Error, scaffoldCts.Token);
-                    if (scaffoldGateExit != 0)
-                    {
-                        Console.Error.WriteLine(
-                            "[build] Skipping profile derivation: the configured Claude transport is unsupported on this " +
-                            "host (see above). The ticket tree was created; derive checks later or set transport = \"print\".");
-                    }
-                    else
-                    {
-                        await ScaffoldProfileRunner.RunAsync(
-                            args[1], resolvedCwd, config.Workers, forceProfile, scaffoldDebugDir, scaffoldCts.Token);
-                    }
-                }
-                else if (noProfile)
-                {
-                    Console.WriteLine("[scaffold] --no-profile: skipped review-check derivation");
-                }
 
                 return scaffoldExit;
             }
@@ -2783,6 +3131,95 @@ public static class CliApplication
         var trace = ex.StackTrace;
         if (string.IsNullOrEmpty(trace)) return "(no stack trace)";
         return trace.TrimStart().Split('\n')[0].Trim();
+    }
+
+    private static bool TryParseAttachmentDownloadArgs(
+        string[] args,
+        out string? ticketId,
+        out string? assetId,
+        out string? outputPath,
+        out string? error)
+    {
+        ticketId = args.Length > 1 ? args[1] : null;
+        assetId = args.Length > 2 ? args[2] : null;
+        outputPath = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(ticketId) || ticketId.StartsWith("--"))
+            error = "ticket-id is required";
+        else if (string.IsNullOrWhiteSpace(assetId) || assetId.StartsWith("--"))
+            error = "asset-id is required";
+        else
+        {
+            for (var i = 3; i < args.Length; i++)
+            {
+                if (args[i] != "--output")
+                {
+                    error = $"unknown argument: {args[i]}";
+                    break;
+                }
+                if (outputPath is not null || i + 1 >= args.Length || args[i + 1].StartsWith("--"))
+                {
+                    error = "--output requires one path";
+                    break;
+                }
+                outputPath = args[++i];
+            }
+            if (error is null && string.IsNullOrWhiteSpace(outputPath))
+                error = "--output is required";
+        }
+
+        return error is null;
+    }
+
+    private static async Task WriteAttachmentAtomicallyAsync(
+        string outputPath,
+        byte[] content,
+        CancellationToken ct)
+    {
+        var directory = Path.GetDirectoryName(outputPath)
+            ?? throw new IOException("Output directory is invalid.");
+        var tempPath = Path.Combine(
+            directory,
+            $".{Path.GetFileName(outputPath)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            await using (var stream = new FileStream(
+                tempPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                81920,
+                FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                await stream.WriteAsync(content, ct);
+                await stream.FlushAsync(ct);
+                stream.Flush(flushToDisk: true);
+            }
+            File.Move(tempPath, outputPath, overwrite: false);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); }
+                catch { /* The requested output path was never made partial. */ }
+            }
+        }
+    }
+
+    private static int WriteAttachmentError(
+        bool jsonOutput,
+        string code,
+        string message,
+        int exitCode,
+        string verb)
+    {
+        if (jsonOutput)
+            CliEnvelopeWriter.WriteError(Console.Out, code, message);
+        else
+            Console.Error.WriteLine($"Command '{verb}' failed: {message}");
+        return exitCode;
     }
 
     static string? WireUpConditionalCommands(

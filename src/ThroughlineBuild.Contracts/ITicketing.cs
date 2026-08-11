@@ -108,6 +108,19 @@ public interface ITicketing
     /// </summary>
     Task<IReadOnlyList<TicketComment>> GetCommentsAsync(string id, CancellationToken ct);
 
+    /// <summary>List files attached to a ticket, including supported inline description images.</summary>
+    Task<IReadOnlyList<TicketAttachment>> GetAttachmentsAsync(string id, CancellationToken ct) =>
+        throw new NotSupportedException("This ticketing backend does not support attachments.");
+
+    /// <summary>
+    /// Download one attachment after verifying that it belongs to the ticket's current attachment list.
+    /// </summary>
+    Task<TicketAttachmentDownload> DownloadAttachmentAsync(
+        string id,
+        string attachmentId,
+        CancellationToken ct) =>
+        throw new NotSupportedException("This ticketing backend does not support attachment downloads.");
+
     /// <summary>
     /// Create a new ticket in the project and return its identifier and UUID.
     /// <para>

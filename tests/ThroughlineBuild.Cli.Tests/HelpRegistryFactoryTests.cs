@@ -12,7 +12,7 @@ public class HelpRegistryFactoryTests
     private static readonly HelpRegistry Registry = HelpRegistryFactory.Build();
 
     // ------------------------------------------------------------------
-    // All 18 known commands must be registered.
+    // All known commands must be registered.
     // ------------------------------------------------------------------
 
     [Theory]
@@ -23,21 +23,29 @@ public class HelpRegistryFactoryTests
     [InlineData("chain")]
     [InlineData("rework")]
     [InlineData("decompose")]
+    [InlineData("candidate")]
+    [InlineData("worker")]
     [InlineData("worktree")]
     [InlineData("gate")]
     [InlineData("waves")]
+    [InlineData("sop")]
+    [InlineData("conductor")]
     [InlineData("new")]
     [InlineData("list")]
+    [InlineData("attachments")]
+    [InlineData("attachment")]
     [InlineData("amend")]
     [InlineData("close")]
     [InlineData("defer")]
     [InlineData("reopen")]
     [InlineData("init")]
+    [InlineData("install")]
     [InlineData("settarget")]
     [InlineData("setup")]
     [InlineData("user-guide")]
     [InlineData("op-doc")]
     [InlineData("scaffold")]
+    [InlineData("profile")]
     public void TryGet_ReturnsEntryForAllKnownCommands(string verb)
     {
         var help = Registry.TryGet(verb);
@@ -69,8 +77,12 @@ public class HelpRegistryFactoryTests
     }
 
     [Theory]
+    [InlineData("candidate")]
+    [InlineData("worker")]
     [InlineData("worktree")]
     [InlineData("gate")]
+    [InlineData("waves")]
+    [InlineData("sop")]
     public void DeterministicCommands_AreGroupedForCallerOwnedConductors(string verb)
     {
         Assert.Equal(CommandGroup.Conductor, Registry.TryGet(verb)!.Group);
@@ -90,11 +102,14 @@ public class HelpRegistryFactoryTests
 
     [Theory]
     [InlineData("init")]
+    [InlineData("install")]
     [InlineData("settarget")]
     [InlineData("setup")]
     [InlineData("user-guide")]
     [InlineData("op-doc")]
     [InlineData("scaffold")]
+    [InlineData("profile")]
+    [InlineData("conductor")]
     public void ConfigureCommands_HaveCorrectGroup(string verb)
     {
         Assert.Equal(CommandGroup.Configure, Registry.TryGet(verb)!.Group);
@@ -112,8 +127,12 @@ public class HelpRegistryFactoryTests
     [InlineData("chain")]
     [InlineData("rework")]
     [InlineData("decompose")]
+    [InlineData("candidate")]
+    [InlineData("worker")]
     [InlineData("worktree")]
     [InlineData("gate")]
+    [InlineData("waves")]
+    [InlineData("sop")]
     [InlineData("new")]
     [InlineData("list")]
     [InlineData("amend")]
@@ -121,11 +140,14 @@ public class HelpRegistryFactoryTests
     [InlineData("defer")]
     [InlineData("reopen")]
     [InlineData("init")]
+    [InlineData("install")]
     [InlineData("settarget")]
     [InlineData("setup")]
     [InlineData("user-guide")]
     [InlineData("op-doc")]
     [InlineData("scaffold")]
+    [InlineData("profile")]
+    [InlineData("conductor")]
     public void AllCommands_HaveNonEmptySummaryAndUsage(string verb)
     {
         var help = Registry.TryGet(verb)!;
@@ -172,12 +194,81 @@ public class HelpRegistryFactoryTests
     }
 
     [Fact]
+    public void ProfileHelp_AdvertisesDeterministicFlowAndExplicitCanaryProofOnly()
+    {
+        var help = Registry.TryGet("profile")!;
+
+        Assert.DoesNotContain("derive", help.Usage, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(help.Examples, example =>
+            example.Command.Contains("profile derive", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("profile prompt", help.Usage);
+        Assert.Contains("profile apply", help.Usage);
+        Assert.Contains("profile verify-canaries", help.Usage);
+    }
+
+    [Fact]
     public void Gate_HasRequireChecksOption()
     {
         var help = Registry.TryGet("gate")!;
 
         Assert.Contains("--require-checks", help.Usage);
         Assert.Contains(help.Options, o => o.Flag == "--require-checks" && !o.IsGlobal);
+    }
+
+    [Fact]
+    public void Candidate_HelpDocumentsStatusFingerprintFields()
+    {
+        var output = Tier1Renderer.Render(Registry.TryGet("candidate")!);
+
+        Assert.Contains("candidate status --ticket <id> --base <ref>", output);
+        Assert.Contains("trackedDiffHash", output);
+        Assert.Contains("cachedDiffHash", output);
+        Assert.Contains("untrackedHash", output);
+        Assert.Contains("lease", output);
+        Assert.Contains("dirtyState", output);
+        Assert.Contains("conductor.ticket_prefix", output);
+        Assert.Contains("foreign ticket prefix", output);
+    }
+
+    [Fact]
+    public void Sop_HelpDocumentsDoctorShapeOnlyInvariantValidation()
+    {
+        var output = Tier1Renderer.Render(Registry.TryGet("sop")!);
+
+        Assert.Contains("sop list", output);
+        Assert.Contains("sop doctor", output);
+        Assert.Contains("sop brief <name>", output);
+        Assert.Contains("sop install", output);
+        Assert.Contains("sop upgrade", output);
+        Assert.Contains("sop uninstall", output);
+        Assert.Contains("sop status", output);
+        Assert.Contains("Unknown SOP name", output);
+        Assert.Contains("The embedded catalog is the authority", output);
+        Assert.Contains("Status reports missing catalog", output);
+        Assert.Contains("paths as drift", output);
+        Assert.Contains("Review invariants are structured prose", output);
+        Assert.Contains("does not evaluate whether a statement is true", output);
+    }
+
+    [Fact]
+    public void Conductor_HelpDocumentsWorkerFreePromptAndAtomicApply()
+    {
+        var output = Tier1Renderer.Render(Registry.TryGet("conductor")!);
+
+        Assert.Contains("conductor prompt", output);
+        Assert.Contains("conductor apply <path|->", output);
+        Assert.Contains("never access ticketing, secrets, workers, or the network", output);
+        Assert.Contains("preserves all bytes outside", output);
+        Assert.Contains("Input validation or atomic write failure", output);
+    }
+
+    [Fact]
+    public void Worker_HelpDocumentsBindingSemanticContracts()
+    {
+        var output = Tier1Renderer.Render(Registry.TryGet("worker")!);
+
+        Assert.Contains("recorded semantic contract", output);
+        Assert.Contains("Ticket execution contract is carried in the ticket body and is binding", output);
     }
 
     [Fact]
@@ -388,6 +479,10 @@ public class HelpRegistryFactoryTests
     [InlineData("chain")]
     [InlineData("rework")]
     [InlineData("decompose")]
+    [InlineData("candidate")]
+    [InlineData("worktree")]
+    [InlineData("gate")]
+    [InlineData("waves")]
     [InlineData("new")]
     [InlineData("list")]
     [InlineData("amend")]

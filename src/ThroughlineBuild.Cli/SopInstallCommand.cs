@@ -1,0 +1,1810 @@
+using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using ThroughlineBuild.Cli.Json;
+using ThroughlineBuild.Contracts;
+using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Git;
+
+namespace ThroughlineBuild.Cli;
+
+internal static class SopInstallCommand
+{
+    internal delegate Task<IReadOnlyList<string>> TrackedFilesProvider(
+        string repositoryRoot,
+        CancellationToken cancellationToken);
+
+    internal delegate Task<IReadOnlyList<string>> BranchNamesProvider(
+        string repositoryRoot,
+        CancellationToken cancellationToken);
+
+    /// <summary>Build's own branch-naming convention, used when no branch reveals one. Not a
+    /// guess about the repository - the same role "." plays as the source_roots fallback.</summary>
+    internal const string DefaultBranchPrefix = "ticket";
+
+    /// <summary>
+    /// Top-level directories Build itself owns in an installed repository, excluded from
+    /// source_roots. Derived from the SOP catalog's own owned paths plus Build's data directory, so
+    /// adding a host stub keeps this correct without a second list to maintain. TLB-627 made these
+    /// directories tracked, which otherwise pulled them into every second machine's source_roots
+    /// and widened the review surface onto the tool's own generated files. See TLB-624.
+    /// </summary>
+    internal static readonly IReadOnlySet<string> BuildManagedRoots =
+        SopBundleCatalog.All
+            .SelectMany(entry => entry.OwnedPaths)
+            .Select(owned => owned.Path.Replace('\\', '/'))
+            .Where(path => path.IndexOf('/') is > 0)
+            .Select(path => path[..path.IndexOf('/')])
+            .Append(BuildDataDirectoryName)
+            .ToHashSet(StringComparer.Ordinal);
+
+    /// <summary>Build's own data directory. Mirrors <c>SopInstaller.BuildDataDirectory</c>, which is
+    /// private to that type.</summary>
+    private const string BuildDataDirectoryName = ".build";
+
+    /// <summary>Candidate tracked-file paths for architecture_map, in priority order, matched
+    /// case-insensitively. First match wins; the written value keeps the tracked file's real casing.</summary>
+    private static readonly string[] ArchitectureMapCandidates =
+    {
+        "docs/architecture.md",
+        "architecture.md",
+        "docs/contributing.md",
+        "contributing.md",
+        "agents.md",
+        "readme.md",
+    };
+
+    public static int Execute(
+        IReadOnlyList<string> args,
+        bool json,
+        string startDirectory,
+        TextWriter output,
+        TextWriter error)
+    {
+        var operation = args[1];
+        if (!TryParseScope(args, json, output, error, out var entries, out var host, out var exitCode))
+            return exitCode;
+
+        var result = SopInstaller.Run(
+            operation,
+            startDirectory,
+            entries,
+            BuildVersion.Current,
+            DateTimeOffset.UtcNow,
+            host);
+
+        if (json)
+            CliEnvelopeWriter.WriteSopOperation(output, result);
+        else
+            WriteHuman(output, result);
+
+        return result.Passed ? 0 : 1;
+    }
+
+    public static async Task<int> ExecuteInstallAsync(
+        IReadOnlyList<string> args,
+        bool json,
+        string startDirectory,
+        TextWriter output,
+        TextWriter error,
+        string configuredProjectIdentifier,
+        string configuredProjectId,
+        IProjectDiscovery? projectDiscovery,
+        TrackedFilesProvider? trackedFilesProvider = null,
+        BranchNamesProvider? branchNamesProvider = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryParseScope(args, json, output, error, out var entries, out var host, out var exitCode))
+            return exitCode;
+
+        SopConductorIdentity? identity = null;
+        if (entries.SelectMany(entry => entry.OwnedPaths)
+            .Any(path => string.Equals(path.Class, SopBundleCatalog.ScaffoldedPathClass, StringComparison.Ordinal)))
+        {
+            try
+            {
+                identity = await DeriveIdentityAsync(
+                    SopInstaller.ResolveRepositoryRoot(startDirectory),
+                    configuredProjectIdentifier,
+                    configuredProjectId,
+                    projectDiscovery,
+                    trackedFilesProvider ?? ListTrackedFilesAsync,
+                    branchNamesProvider ?? ListBranchNamesAsync,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (SopIdentityDerivationException ex)
+            {
+                if (json)
+                    CliEnvelopeWriter.WriteError(output, CliErrorCodes.Failure, ex.Message);
+                else
+                    error.WriteLine($"Error: {ex.Message}");
+                return 1;
+            }
+        }
+
+        var result = SopInstaller.Run(
+            "install",
+            startDirectory,
+            entries,
+            BuildVersion.Current,
+            DateTimeOffset.UtcNow,
+            host,
+            identity);
+
+        if (json)
+            CliEnvelopeWriter.WriteSopOperation(output, result);
+        else
+            WriteHuman(output, result);
+
+        return result.Passed ? 0 : 1;
+    }
+
+    internal static bool ValidateInvocation(
+        IReadOnlyList<string> args,
+        bool json,
+        TextWriter output,
+        TextWriter error,
+        out int exitCode) =>
+        TryParseScope(args, json, output, error, out _, out _, out exitCode);
+
+    private static async Task<SopConductorIdentity> DeriveIdentityAsync(
+        string repositoryRoot,
+        string configuredProjectIdentifier,
+        string configuredProjectId,
+        IProjectDiscovery? projectDiscovery,
+        TrackedFilesProvider trackedFilesProvider,
+        BranchNamesProvider branchNamesProvider,
+        CancellationToken cancellationToken)
+    {
+        var ticketPrefix = configuredProjectIdentifier.Trim();
+        if (ticketPrefix.Length == 0)
+        {
+            if (projectDiscovery is null)
+            {
+                throw new SopIdentityDerivationException(
+                    "plane_project_identifier is not configured and Plane project discovery is unavailable");
+            }
+
+            IReadOnlyList<ProjectInfo> projects;
+            try
+            {
+                projects = await projectDiscovery.ListProjectsAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new SopIdentityDerivationException(
+                    $"could not resolve plane_project_identifier from configured plane_project_id " +
+                    $"'{configuredProjectId}': {ex.Message}");
+            }
+
+            var matches = projects
+                .Where(project => string.Equals(project.Id, configuredProjectId, StringComparison.Ordinal))
+                .ToList();
+            if (matches.Count != 1 || string.IsNullOrWhiteSpace(matches[0].Identifier))
+            {
+                throw new SopIdentityDerivationException(
+                    $"configured plane_project_id '{configuredProjectId}' did not resolve to exactly one " +
+                    "Plane project with an identifier; set plane_project_identifier in .build/config.toml " +
+                    "or fix the configured project UUID");
+            }
+
+            ticketPrefix = matches[0].Identifier.Trim();
+        }
+
+        IReadOnlyList<string> trackedFiles;
+        try
+        {
+            trackedFiles = await trackedFilesProvider(repositoryRoot, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new SopIdentityDerivationException(
+                $"could not derive conductor source_roots from git ls-files: {ex.Message}");
+        }
+
+        var roots = trackedFiles
+            .Select(path => path.Replace('\\', '/'))
+            .Where(path => path.IndexOf('/') is > 0)
+            .Select(path => path[..path.IndexOf('/')])
+            .Where(root => !BuildManagedRoots.Contains(root))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+        if (roots.Count == 0)
+            roots.Add(".");
+
+        var architectureMap = DeriveArchitectureMap(trackedFiles);
+
+        IReadOnlyList<string> branchNames;
+        try
+        {
+            branchNames = await branchNamesProvider(repositoryRoot, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new SopIdentityDerivationException(
+                $"could not derive conductor branch_prefix from git for-each-ref: {ex.Message}");
+        }
+
+        var branchPrefix = DeriveBranchPrefix(branchNames);
+
+        return new SopConductorIdentity(ticketPrefix, roots.AsReadOnly(), branchPrefix, architectureMap);
+    }
+
+    /// <summary>
+    /// First tracked file matching <see cref="ArchitectureMapCandidates"/>, case-insensitively, in
+    /// priority order, keeping the tracked file's real casing. When nothing matches, returns a
+    /// sentinel the doctor's architecture_map existence check will always flag - the "genuinely
+    /// can't derive it, so don't write anything that looks like an answer" case. See TLB-628.
+    /// </summary>
+    private static string DeriveArchitectureMap(IReadOnlyList<string> trackedFiles)
+    {
+        var normalized = trackedFiles.Select(path => path.Replace('\\', '/')).ToList();
+        foreach (var candidate in ArchitectureMapCandidates)
+        {
+            var match = normalized.FirstOrDefault(
+                path => string.Equals(path, candidate, StringComparison.OrdinalIgnoreCase));
+            if (match is not null)
+                return match;
+        }
+
+        return SopInstaller.ScaffoldArchitectureMapPlaceholder;
+    }
+
+    /// <summary>
+    /// Most frequent segment before the first "/" among branch names that contain one (ties broken
+    /// by ordinal order for determinism). Names are deduplicated first, so a branch that exists both
+    /// locally and on a remote votes once and a fresh clone derives what its origin repository did.
+    /// Falls back to <see cref="DefaultBranchPrefix"/> when no branch reveals a convention - Build's
+    /// own default, not a guess about the repository, mirroring the "." fallback source_roots uses
+    /// when nothing is tracked.
+    /// </summary>
+    private static string DeriveBranchPrefix(IReadOnlyList<string> branchNames)
+    {
+        var best = branchNames
+            .Distinct(StringComparer.Ordinal)
+            .Where(name => name.IndexOf('/') > 0)
+            .Select(name => name[..name.IndexOf('/')])
+            .GroupBy(prefix => prefix, StringComparer.Ordinal)
+            .OrderByDescending(group => group.Count())
+            .ThenBy(group => group.Key, StringComparer.Ordinal)
+            .Select(group => group.Key)
+            .FirstOrDefault();
+
+        return best ?? DefaultBranchPrefix;
+    }
+
+    private static async Task<IReadOnlyList<string>> ListTrackedFilesAsync(
+        string repositoryRoot,
+        CancellationToken cancellationToken)
+    {
+        var startInfo = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = repositoryRoot,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
+        startInfo.ArgumentList.Add("ls-files");
+        startInfo.ArgumentList.Add("-z");
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("git could not be started");
+        try { process.StandardInput.Close(); } catch { /* best effort */ }
+        var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
+        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        var output = await stdout.ConfigureAwait(false);
+        var diagnostic = await stderr.ConfigureAwait(false);
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"git ls-files exited {process.ExitCode}: {diagnostic.Trim()}");
+        }
+
+        return output.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+    }
+
+    /// <summary>
+    /// Branch names from both refs/heads and refs/remotes, with the remote name stripped so a
+    /// remote-tracking branch reads like a local one. A fresh clone has exactly one local branch, so
+    /// consulting refs/heads alone made branch_prefix fall back to Build's default on every second
+    /// machine no matter what convention the repository actually uses. See TLB-624.
+    /// </summary>
+    private static async Task<IReadOnlyList<string>> ListBranchNamesAsync(
+        string repositoryRoot,
+        CancellationToken cancellationToken)
+    {
+        // lstrip drops the ref namespace: 2 turns refs/heads/feature/x into feature/x, 3 turns
+        // refs/remotes/origin/feature/x into the same. refs/remotes/origin/HEAD reduces to "HEAD",
+        // which carries no "/" and is ignored by the prefix derivation.
+        var local = await ListRefsAsync(repositoryRoot, "refs/heads", 2, cancellationToken)
+            .ConfigureAwait(false);
+        var remote = await ListRefsAsync(repositoryRoot, "refs/remotes", 3, cancellationToken)
+            .ConfigureAwait(false);
+        return [.. local, .. remote];
+    }
+
+    private static async Task<IReadOnlyList<string>> ListRefsAsync(
+        string repositoryRoot,
+        string refspace,
+        int lstrip,
+        CancellationToken cancellationToken)
+    {
+        var startInfo = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = repositoryRoot,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
+        startInfo.ArgumentList.Add("for-each-ref");
+        startInfo.ArgumentList.Add($"--format=%(refname:lstrip={lstrip})");
+        startInfo.ArgumentList.Add(refspace);
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("git could not be started");
+        try { process.StandardInput.Close(); } catch { /* best effort */ }
+        var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
+        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        var output = await stdout.ConfigureAwait(false);
+        var diagnostic = await stderr.ConfigureAwait(false);
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"git for-each-ref exited {process.ExitCode}: {diagnostic.Trim()}");
+        }
+
+        return output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
+    private static bool TryParseScope(
+        IReadOnlyList<string> args,
+        bool json,
+        TextWriter output,
+        TextWriter error,
+        out IReadOnlyList<SopCatalogEntry> entries,
+        out string? host,
+        out int exitCode)
+    {
+        entries = SopBundleCatalog.All;
+        host = null;
+        exitCode = 0;
+        string? sopName = null;
+
+        for (var i = 2; i < args.Count; i++)
+        {
+            if (string.Equals(args[i], "--sop", StringComparison.Ordinal))
+            {
+                if (sopName is not null)
+                {
+                    exitCode = Usage(json, output, error, "--sop may be supplied only once");
+                    return false;
+                }
+
+                if (i + 1 >= args.Count)
+                {
+                    exitCode = Usage(json, output, error, "--sop requires a SOP name");
+                    return false;
+                }
+
+                sopName = args[++i];
+                continue;
+            }
+
+            if (string.Equals(args[i], "--host", StringComparison.Ordinal))
+            {
+                if (host is not null)
+                {
+                    exitCode = Usage(json, output, error, "--host may be supplied only once");
+                    return false;
+                }
+
+                if (i + 1 >= args.Count)
+                {
+                    exitCode = Usage(json, output, error, "--host requires a host name");
+                    return false;
+                }
+
+                host = args[++i];
+                if (!SopInstaller.IsKnownHost(host))
+                {
+                    exitCode = Usage(json, output, error, $"unknown SOP host: {host}");
+                    return false;
+                }
+
+                continue;
+            }
+
+            exitCode = Usage(json, output, error, $"unknown argument for sop {args[1]}: {args[i]}");
+            return false;
+        }
+
+        if (sopName is null)
+            return true;
+
+        var entry = SopBundleCatalog.Find(sopName);
+        if (entry is null)
+        {
+            if (json)
+                CliEnvelopeWriter.WriteError(output, CliErrorCodes.UnknownSop, $"unknown SOP: {sopName}");
+            else
+                error.WriteLine($"Error: unknown SOP: {sopName}");
+            exitCode = SopCommand.UnknownSopExitCode;
+            return false;
+        }
+
+        entries = [entry];
+        return true;
+    }
+
+    private static int Usage(bool json, TextWriter output, TextWriter error, string message)
+    {
+        if (json)
+        {
+            CliEnvelopeWriter.WriteError(output, CliErrorCodes.Usage, message);
+        }
+        else
+        {
+            error.WriteLine($"Error: {message}");
+            error.WriteLine("Usage: build sop install|upgrade|uninstall|status [--sop <name>] [--host claude|codex] [--json]");
+        }
+
+        return 2;
+    }
+
+    private static void WriteHuman(TextWriter output, SopOperationView result)
+    {
+        output.WriteLine(result.Passed
+            ? $"sop {result.Operation} passed"
+            : $"sop {result.Operation} reported drift");
+        output.WriteLine($"changed: {result.Changed.ToString().ToLowerInvariant()}");
+        output.WriteLine($"manifest: {result.ManifestPath}");
+        if (result.TicketPrefix is not null)
+            output.WriteLine($"ticket prefix: {result.TicketPrefix}");
+        if (result.SourceRoots is not null)
+            output.WriteLine($"source roots: {string.Join(", ", result.SourceRoots)}");
+        if (result.BranchPrefix is not null)
+            output.WriteLine($"branch prefix: {result.BranchPrefix}");
+        if (result.ArchitectureMap is not null)
+            output.WriteLine($"architecture map: {result.ArchitectureMap}");
+        foreach (var item in result.Results)
+            output.WriteLine($"{item.Status}\t{item.Path}\t{item.Message}");
+    }
+
+    private sealed class SopIdentityDerivationException(string message) : Exception(message);
+}
+
+internal sealed record SopConductorIdentity(
+    string TicketPrefix,
+    IReadOnlyList<string> SourceRoots,
+    string BranchPrefix,
+    string ArchitectureMap);
+
+internal static class SopInstaller
+{
+    private const int ManifestSchemaVersion = 1;
+    private const string BuildDataDirectory = ".build";
+    private const string ManifestRelativePath = ".build/sop-manifest.json";
+    private const string ClaudeHost = "claude";
+    private const string CodexHost = "codex";
+
+    /// <summary>
+    /// Written when no candidate architecture/contributor doc is tracked. Doctor's architecture_map
+    /// existence check (SopDoctorCommand) always flags this - it is not a plausible-looking guess,
+    /// it is a value doctor rejects until an operator supplies a real one. See TLB-628.
+    /// </summary>
+    internal const string ScaffoldArchitectureMapPlaceholder = "UNRESOLVED_ARCHITECTURE_MAP";
+
+    /// <summary>
+    /// Written in place of the old generic "src" guess. contract_authority needs real judgment
+    /// (which directory, if any, is the repository's shared-contract authority) that nothing can
+    /// derive at scaffold time; doctor flags this sentinel until an operator or the profile pass
+    /// (InstallCommand.ResolveContractAuthority) replaces it. See TLB-628.
+    /// </summary>
+    internal const string ScaffoldContractAuthorityPlaceholder = "UNRESOLVED_CONTRACT_AUTHORITY";
+
+    /// <summary>Default id the scaffold gives its single starter invariant. Doctor flags an
+    /// invariants list whose every entry still carries this id, even if the statement text was
+    /// edited - editing only the sentence is not enough to prove the invariant is repository-specific.</summary>
+    internal const string ScaffoldInvariantId = "repository-contract";
+    private static readonly UTF8Encoding Utf8NoBom = new(false);
+
+    public static bool IsKnownHost(string host) =>
+        string.Equals(host, ClaudeHost, StringComparison.Ordinal) ||
+        string.Equals(host, CodexHost, StringComparison.Ordinal);
+
+    public static SopOperationView Run(
+        string operation,
+        string startDirectory,
+        IReadOnlyList<SopCatalogEntry> scopeEntries,
+        string buildVersion,
+        DateTimeOffset now,
+        string? host = null,
+        SopConductorIdentity? conductorIdentity = null)
+    {
+        if (host is not null && !IsKnownHost(host))
+            throw new ArgumentException($"unknown SOP host: {host}", nameof(host));
+
+        var layout = RepositoryLayout.Resolve(startDirectory);
+        var repositoryRoot = layout.WorktreeRoot;
+        var dataRoot = layout.DataRoot;
+        string RootFor(string catalogPath) => IsBuildDataPath(catalogPath) ? dataRoot : repositoryRoot;
+
+        var manifestPath = Path.Combine(dataRoot, BuildDataDirectory, "sop-manifest.json");
+        var targets = BuildTargets(scopeEntries, host);
+        var results = new List<SopPathResultView>();
+
+        if (!TryResolvePath(dataRoot, ManifestRelativePath, out var manifestResolution, out var manifestError))
+        {
+            results.Add(Result(
+                Array.Empty<string>(),
+                ManifestRelativePath,
+                "manifest",
+                "unsafe_path",
+                manifestError));
+            return View(
+                operation,
+                repositoryRoot,
+                manifestPath,
+                buildVersion,
+                scopeEntries,
+                changed: false,
+                results,
+                conductorIdentity);
+        }
+
+        var resolutions = new Dictionary<string, ResolvedCatalogPath>(PathComparer);
+        foreach (var target in targets)
+        {
+            if (TryResolvePath(RootFor(target.Path), target.Path, out var resolution, out var error))
+            {
+                resolutions[target.Path] = resolution;
+                continue;
+            }
+
+            results.Add(Result(
+                target.Sops,
+                target.Path,
+                target.Class,
+                "unsafe_path",
+                error));
+        }
+
+        if (results.Count > 0)
+            return View(
+                operation,
+                repositoryRoot,
+                manifestResolution.AbsolutePath,
+                buildVersion,
+                scopeEntries,
+                changed: false,
+                results,
+                conductorIdentity);
+
+        if (string.Equals(operation, "install", StringComparison.Ordinal) &&
+            conductorIdentity is null)
+        {
+            var unresolvedScaffold = targets.FirstOrDefault(target =>
+                target.IsScaffolded &&
+                !File.Exists(resolutions[target.Path].AbsolutePath) &&
+                !Directory.Exists(resolutions[target.Path].AbsolutePath));
+            if (unresolvedScaffold is not null)
+            {
+                results.Add(Result(
+                    unresolvedScaffold,
+                    "identity_unavailable",
+                    "conductor identity must be derived before scaffolding; no files were written"));
+                return View(
+                    operation,
+                    repositoryRoot,
+                    manifestResolution.AbsolutePath,
+                    buildVersion,
+                    scopeEntries,
+                    changed: false,
+                    results,
+                    conductorIdentity);
+            }
+        }
+
+        var manifest = ReadManifestOrNull(manifestResolution.AbsolutePath, results);
+        var changed = operation switch
+        {
+            "install" => RunInstall(
+                targets,
+                resolutions,
+                manifestResolution.AbsolutePath,
+                manifest,
+                scopeEntries,
+                buildVersion,
+                now,
+                results,
+                conductorIdentity),
+            "upgrade" => RunUpgrade(
+                targets,
+                resolutions,
+                manifestResolution.AbsolutePath,
+                manifest,
+                scopeEntries,
+                buildVersion,
+                now,
+                results),
+            "uninstall" => RunUninstall(
+                targets,
+                resolutions,
+                manifestResolution.AbsolutePath,
+                manifest,
+                scopeEntries,
+                buildVersion,
+                now,
+                results),
+            "status" => RunStatus(targets, resolutions, buildVersion, results),
+            _ => throw new InvalidOperationException($"unknown sop operation: {operation}"),
+        };
+
+        return View(
+            operation,
+            repositoryRoot,
+            manifestResolution.AbsolutePath,
+            buildVersion,
+            scopeEntries,
+            changed,
+            results,
+            conductorIdentity);
+    }
+
+    internal static IReadOnlyList<SopPathResultView> InspectInstalledOrPresentEmittedStubs(
+        string startDirectory,
+        IReadOnlyList<SopCatalogEntry> scopeEntries,
+        string? host = null,
+        Func<string, IReadOnlyList<string>, GitTrackedPathProbe>? trackedPathProbe = null)
+    {
+        if (host is not null && !IsKnownHost(host))
+            throw new ArgumentException($"unknown SOP host: {host}", nameof(host));
+
+        var layout = RepositoryLayout.Resolve(startDirectory);
+        var repositoryRoot = layout.WorktreeRoot;
+        var targets = BuildTargets(scopeEntries, host)
+            .Where(target => target.IsEmitted)
+            .ToList();
+        var manifestPath = Path.Combine(layout.DataRoot, BuildDataDirectory, "sop-manifest.json");
+        var manifest = ReadManifestCacheSilently(manifestPath);
+        var results = new List<SopPathResultView>();
+        var resolutions = new Dictionary<string, ResolvedCatalogPath>(PathComparer);
+        foreach (var target in targets)
+        {
+            if (!TryResolvePath(repositoryRoot, target.Path, out var resolution, out var error))
+            {
+                results.Add(Result(
+                    target.Sops,
+                    target.Path,
+                    target.Class,
+                    "unsafe_path",
+                    error));
+                continue;
+            }
+
+            resolutions.Add(target.Path, resolution);
+        }
+
+        // The manifest, when usable, already records what was installed, so the index is only
+        // consulted when it is the last remaining witness.
+        var probe = manifest is null
+            ? ProbeTrackedCatalogPaths(
+                repositoryRoot,
+                targets.Where(target => resolutions.ContainsKey(target.Path)).Select(target => target.Path).ToList(),
+                trackedPathProbe)
+            : GitTrackedPathProbe.Tracked(Array.Empty<string>());
+        var trackedTargets = probe.Paths.ToHashSet(PathComparer);
+        foreach (var target in targets)
+        {
+            if (!resolutions.TryGetValue(target.Path, out var resolution))
+                continue;
+
+            if (ManifestRecordsTarget(manifest, target) ||
+                CatalogLeafExistsOrIsLink(repositoryRoot, target.Path) ||
+                trackedTargets.Contains(target.Path))
+            {
+                StatusEmitted(target, resolution, results);
+                continue;
+            }
+
+            // Absent from disk and unrecorded by the manifest. Only the index can still say
+            // whether this path was ever installed, so a probe that could not run leaves the
+            // question open. Skipping here would narrow scope to nothing and report clean,
+            // which is the fail-open this scoping exists to prevent.
+            if (probe.Scope == GitTrackedPathScope.Unavailable)
+            {
+                results.Add(Result(
+                    target,
+                    "scope_unavailable",
+                    "catalog path is absent and the index could not be consulted to decide " +
+                    $"whether it was ever installed: {probe.Failure}"));
+            }
+        }
+
+        return results;
+    }
+
+    private static GitTrackedPathProbe ProbeTrackedCatalogPaths(
+        string repositoryRoot,
+        IReadOnlyList<string> catalogPaths,
+        Func<string, IReadOnlyList<string>, GitTrackedPathProbe>? trackedPathProbe)
+    {
+        if (trackedPathProbe is not null)
+            return trackedPathProbe(repositoryRoot, catalogPaths);
+
+        try
+        {
+            return new ProcessGitClient(repositoryRoot)
+                .ProbeTrackedPathsAsync(catalogPaths, repositoryRoot, CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+        }
+        catch (Exception ex)
+        {
+            return GitTrackedPathProbe.Unavailable($"git probe failed: {ex.Message}");
+        }
+    }
+
+    private static SopManifest? ReadManifestCacheSilently(string manifestPath)
+    {
+        if (!File.Exists(manifestPath))
+            return null;
+
+        try
+        {
+            var manifest = JsonSerializer.Deserialize(
+                File.ReadAllText(manifestPath),
+                CliJsonContext.Default.SopManifest);
+            if (manifest is null)
+                return null;
+
+            return IsManifestCacheUsable(manifest, out _) ? manifest : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static bool ManifestRecordsTarget(SopManifest? manifest, SopInstallTarget target)
+    {
+        if (manifest?.Sops is null)
+            return false;
+
+        foreach (var sop in manifest.Sops)
+        {
+            if (sop is null || !target.Sops.Contains(sop.Name, StringComparer.Ordinal))
+                continue;
+
+            if (sop.Paths.Any(path =>
+                    path is not null &&
+                    string.Equals(path.Class, SopBundleCatalog.EmittedPathClass, StringComparison.Ordinal) &&
+                    PathsEqual(path.Path, target.Path)))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool CatalogLeafExistsOrIsLink(string repositoryRoot, string catalogPath)
+    {
+        if (!TryNormalizeCatalogPath(catalogPath, out var normalized, out _))
+            return false;
+
+        var absolutePath = Path.GetFullPath(Path.Combine(
+            repositoryRoot,
+            normalized.Replace('/', Path.DirectorySeparatorChar)));
+        if (!IsStrictlyBelow(absolutePath, repositoryRoot))
+            return false;
+
+        if (File.Exists(absolutePath) || Directory.Exists(absolutePath))
+            return true;
+
+        try
+        {
+            var fileInfo = new FileInfo(absolutePath);
+            if (fileInfo.LinkTarget is not null)
+                return true;
+
+            var directoryInfo = new DirectoryInfo(absolutePath);
+            if (directoryInfo.LinkTarget is not null)
+                return true;
+
+            var attributes = File.GetAttributes(absolutePath);
+            return (attributes & FileAttributes.ReparsePoint) != 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FileNotFoundException or DirectoryNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    private static bool RunInstall(
+        IReadOnlyList<SopInstallTarget> targets,
+        IReadOnlyDictionary<string, ResolvedCatalogPath> resolutions,
+        string manifestPath,
+        SopManifest? manifest,
+        IReadOnlyList<SopCatalogEntry> scopeEntries,
+        string buildVersion,
+        DateTimeOffset now,
+        List<SopPathResultView> results,
+        SopConductorIdentity? conductorIdentity)
+    {
+        var changed = false;
+        foreach (var target in targets)
+        {
+            var resolved = resolutions[target.Path];
+            if (target.IsEmitted)
+            {
+                changed |= InstallEmitted(target, resolved, results);
+                continue;
+            }
+
+            if (target.IsScaffolded)
+            {
+                changed |= InstallScaffolded(target, resolved, buildVersion, conductorIdentity, results);
+                continue;
+            }
+
+            results.Add(Result(target, "invalid_class", $"unknown catalog path class '{target.Class}'"));
+        }
+
+        if (HasBlockingFindings(results))
+            return changed;
+
+        if (changed || !ManifestCovers(manifest, scopeEntries, targets))
+        {
+            WriteManifest(manifestPath, BuildUpdatedManifest(manifest, scopeEntries, targets, buildVersion, now));
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    private static bool RunUpgrade(
+        IReadOnlyList<SopInstallTarget> targets,
+        IReadOnlyDictionary<string, ResolvedCatalogPath> resolutions,
+        string manifestPath,
+        SopManifest? manifest,
+        IReadOnlyList<SopCatalogEntry> scopeEntries,
+        string buildVersion,
+        DateTimeOffset now,
+        List<SopPathResultView> results)
+    {
+        var changed = false;
+        foreach (var target in targets)
+        {
+            var resolved = resolutions[target.Path];
+            if (target.IsEmitted)
+            {
+                changed |= UpgradeEmitted(target, resolved, results);
+                continue;
+            }
+
+            if (target.IsScaffolded)
+            {
+                StatusScaffolded(target, resolved, buildVersion, results);
+                continue;
+            }
+
+            results.Add(Result(target, "invalid_class", $"unknown catalog path class '{target.Class}'"));
+        }
+
+        if (HasBlockingFindings(results))
+            return changed;
+
+        if (changed)
+            WriteManifest(manifestPath, BuildUpdatedManifest(manifest, scopeEntries, targets, buildVersion, now));
+
+        return changed;
+    }
+
+    private static bool RunUninstall(
+        IReadOnlyList<SopInstallTarget> targets,
+        IReadOnlyDictionary<string, ResolvedCatalogPath> resolutions,
+        string manifestPath,
+        SopManifest? manifest,
+        IReadOnlyList<SopCatalogEntry> scopeEntries,
+        string buildVersion,
+        DateTimeOffset now,
+        List<SopPathResultView> results)
+    {
+        var changed = false;
+        foreach (var target in targets)
+        {
+            var resolved = resolutions[target.Path];
+            if (target.IsEmitted)
+            {
+                changed |= UninstallEmitted(target, resolved, results);
+                continue;
+            }
+
+            if (target.IsScaffolded)
+            {
+                results.Add(Result(
+                    target,
+                    File.Exists(resolved.AbsolutePath) ? "preserved_scaffolded" : "missing_scaffolded",
+                    "scaffolded files are repository data and are not deleted by uninstall"));
+                continue;
+            }
+
+            results.Add(Result(target, "invalid_class", $"unknown catalog path class '{target.Class}'"));
+        }
+
+        if (manifest is not null)
+        {
+            var (updated, manifestChanged) = BuildManifestAfterUninstall(manifest, scopeEntries, buildVersion, now, results);
+            if (manifestChanged && updated is null)
+            {
+                if (File.Exists(manifestPath))
+                {
+                    File.Delete(manifestPath);
+                    changed = true;
+                }
+            }
+            else if (manifestChanged && updated is not null)
+            {
+                WriteManifest(manifestPath, updated);
+                changed = true;
+            }
+        }
+
+        return changed;
+    }
+
+    private static bool RunStatus(
+        IReadOnlyList<SopInstallTarget> targets,
+        IReadOnlyDictionary<string, ResolvedCatalogPath> resolutions,
+        string buildVersion,
+        List<SopPathResultView> results)
+    {
+        foreach (var target in targets)
+        {
+            var resolved = resolutions[target.Path];
+            if (target.IsEmitted)
+            {
+                StatusEmitted(target, resolved, results);
+                continue;
+            }
+
+            if (target.IsScaffolded)
+            {
+                StatusScaffolded(target, resolved, buildVersion, results);
+                continue;
+            }
+
+            results.Add(Result(target, "invalid_class", $"unknown catalog path class '{target.Class}'"));
+        }
+
+        return false;
+    }
+
+    private static bool InstallEmitted(
+        SopInstallTarget target,
+        ResolvedCatalogPath resolved,
+        List<SopPathResultView> results)
+    {
+        if (!TryLoadEmittedContent(target, results, out var content, out _))
+            return false;
+
+        if (!File.Exists(resolved.AbsolutePath) && !Directory.Exists(resolved.AbsolutePath))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(resolved.AbsolutePath)!);
+            File.WriteAllText(resolved.AbsolutePath, content, Utf8NoBom);
+            results.Add(Result(target, "created", "emitted catalog file was written"));
+            return true;
+        }
+
+        if (!File.Exists(resolved.AbsolutePath))
+        {
+            results.Add(Result(target, "not_regular", "catalog path exists but is not a regular file"));
+            return false;
+        }
+
+        var actualHash = ComputeFileSha256(resolved.AbsolutePath);
+        if (string.Equals(actualHash, target.ExpectedContentHash, StringComparison.Ordinal))
+        {
+            results.Add(Result(target, "unchanged", "emitted file already matches the catalog"));
+            return false;
+        }
+
+        results.Add(Result(target, "modified", "emitted file differs from the catalog; install will not overwrite it"));
+        return false;
+    }
+
+    private static bool InstallScaffolded(
+        SopInstallTarget target,
+        ResolvedCatalogPath resolved,
+        string buildVersion,
+        SopConductorIdentity? conductorIdentity,
+        List<SopPathResultView> results)
+    {
+        if (!File.Exists(resolved.AbsolutePath) && !Directory.Exists(resolved.AbsolutePath))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(resolved.AbsolutePath)!);
+            File.WriteAllText(
+                resolved.AbsolutePath,
+                BuildConductorScaffold(
+                    buildVersion,
+                    conductorIdentity ?? throw new InvalidOperationException(
+                        "conductor identity was not derived before scaffolding")),
+                Utf8NoBom);
+            results.Add(Result(target, "scaffolded", "scaffolded file was written"));
+            return true;
+        }
+
+        if (!File.Exists(resolved.AbsolutePath))
+        {
+            results.Add(Result(target, "not_regular", "scaffolded path exists but is not a regular file"));
+            return false;
+        }
+
+        results.Add(Result(target, "preserved_scaffolded", "existing scaffolded file was preserved"));
+        return false;
+    }
+
+    private static bool UpgradeEmitted(
+        SopInstallTarget target,
+        ResolvedCatalogPath resolved,
+        List<SopPathResultView> results)
+    {
+        if (!TryLoadEmittedContent(target, results, out var content, out var newHash))
+            return false;
+
+        if (!File.Exists(resolved.AbsolutePath) && !Directory.Exists(resolved.AbsolutePath))
+        {
+            results.Add(Result(target, "missing", "emitted catalog path is missing; run build sop install to restore it"));
+            return false;
+        }
+
+        if (!File.Exists(resolved.AbsolutePath))
+        {
+            results.Add(Result(target, "not_regular", "catalog path exists but is not a regular file"));
+            return false;
+        }
+
+        var actualHash = ComputeFileSha256(resolved.AbsolutePath);
+        if (string.Equals(actualHash, newHash, StringComparison.Ordinal))
+        {
+            results.Add(Result(target, "unchanged", "emitted file already matches the current catalog"));
+            return false;
+        }
+
+        if (target.TrustedPreviousContentHashes.Contains(actualHash, StringComparer.Ordinal))
+        {
+            File.WriteAllText(resolved.AbsolutePath, content, Utf8NoBom);
+            results.Add(Result(target, "upgraded", "emitted file was rewritten from trusted previous catalog content"));
+            return true;
+        }
+
+        var message = target.TrustedPreviousContentHashes.Count == 0
+            ? "emitted file differs from the current catalog and no trusted previous catalog hash is embedded"
+            : "emitted file matches neither the current catalog nor trusted previous catalog content";
+        results.Add(Result(target, "modified", message));
+        return false;
+    }
+
+    private static bool UninstallEmitted(
+        SopInstallTarget target,
+        ResolvedCatalogPath resolved,
+        List<SopPathResultView> results)
+    {
+        if (!File.Exists(resolved.AbsolutePath) && !Directory.Exists(resolved.AbsolutePath))
+        {
+            results.Add(Result(target, "already_absent", "emitted catalog path is already absent"));
+            return false;
+        }
+
+        if (!File.Exists(resolved.AbsolutePath))
+        {
+            results.Add(Result(target, "not_regular", "catalog path exists but is not a regular file"));
+            return false;
+        }
+
+        var actualHash = ComputeFileSha256(resolved.AbsolutePath);
+        if (!string.Equals(actualHash, target.ExpectedContentHash, StringComparison.Ordinal))
+        {
+            results.Add(Result(target, "modified", "emitted file differs from the catalog and was preserved"));
+            return false;
+        }
+
+        File.Delete(resolved.AbsolutePath);
+        results.Add(Result(target, "removed", "emitted catalog file was removed"));
+        return true;
+    }
+
+    private static void StatusEmitted(
+        SopInstallTarget target,
+        ResolvedCatalogPath resolved,
+        List<SopPathResultView> results)
+    {
+        if (!File.Exists(resolved.AbsolutePath) && !Directory.Exists(resolved.AbsolutePath))
+        {
+            results.Add(Result(target, "missing", "emitted catalog path is missing"));
+            return;
+        }
+
+        if (!File.Exists(resolved.AbsolutePath))
+        {
+            results.Add(Result(target, "not_regular", "catalog path exists but is not a regular file"));
+            return;
+        }
+
+        var actualHash = ComputeFileSha256(resolved.AbsolutePath);
+        results.Add(string.Equals(actualHash, target.ExpectedContentHash, StringComparison.Ordinal)
+            ? Result(target, "clean", "emitted file matches the catalog")
+            : Result(target, "modified", "emitted file differs from the catalog"));
+    }
+
+    private static void StatusScaffolded(
+        SopInstallTarget target,
+        ResolvedCatalogPath resolved,
+        string buildVersion,
+        List<SopPathResultView> results)
+    {
+        if (!File.Exists(resolved.AbsolutePath) && !Directory.Exists(resolved.AbsolutePath))
+        {
+            results.Add(Result(target, "missing", "scaffolded catalog path is missing"));
+            return;
+        }
+
+        if (!File.Exists(resolved.AbsolutePath))
+        {
+            results.Add(Result(target, "not_regular", "scaffolded path exists but is not a regular file"));
+            return;
+        }
+
+        var doctor = SopDoctorCommand.RunConductorOnlyDoctor(Path.GetDirectoryName(resolved.AbsolutePath)!, buildVersion);
+        if (doctor.Findings.Count == 0)
+        {
+            results.Add(Result(target, "clean_scaffolded", "scaffolded file passed schema validation"));
+            return;
+        }
+
+        var message = string.Join("; ", doctor.Findings.Select(finding => $"{finding.Path}: {finding.Message}"));
+        results.Add(Result(target, "invalid_scaffolded", message));
+    }
+
+    private static bool TryLoadEmittedContent(
+        SopInstallTarget target,
+        List<SopPathResultView> results,
+        out string content,
+        out string expectedHash)
+    {
+        content = string.Empty;
+        expectedHash = target.ExpectedContentHash ?? string.Empty;
+        if (!target.IsEmitted ||
+            string.IsNullOrWhiteSpace(target.ResourceName) ||
+            string.IsNullOrWhiteSpace(target.ExpectedContentHash))
+        {
+            results.Add(Result(target, "invalid_catalog", "emitted catalog path is missing resource or hash metadata"));
+            return false;
+        }
+
+        try
+        {
+            content = SopResourceLoader.LoadResource(target.ResourceName);
+            expectedHash = SopResourceLoader.ComputeSha256(content);
+            if (!string.Equals(expectedHash, target.ExpectedContentHash, StringComparison.Ordinal))
+            {
+                results.Add(Result(target, "invalid_catalog", "embedded resource hash does not match the catalog"));
+                return false;
+            }
+
+            return true;
+        }
+        catch (InvalidOperationException ex)
+        {
+            results.Add(Result(target, "invalid_catalog", ex.Message));
+            return false;
+        }
+    }
+
+    private static SopManifest? ReadManifestOrNull(string manifestPath, List<SopPathResultView> results)
+    {
+        if (!File.Exists(manifestPath))
+            return null;
+
+        try
+        {
+            var manifest = JsonSerializer.Deserialize(
+                File.ReadAllText(manifestPath),
+                CliJsonContext.Default.SopManifest);
+            if (manifest is null)
+            {
+                results.Add(Result(
+                    Array.Empty<string>(),
+                    ManifestRelativePath,
+                    "manifest",
+                    "manifest_ignored",
+                    "manifest cache was empty and was ignored"));
+                return null;
+            }
+
+            if (!IsManifestCacheUsable(manifest, out var reason))
+            {
+                results.Add(Result(
+                    Array.Empty<string>(),
+                    ManifestRelativePath,
+                    "manifest",
+                    "manifest_ignored",
+                    reason));
+                return null;
+            }
+
+            return manifest;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            results.Add(Result(
+                Array.Empty<string>(),
+                ManifestRelativePath,
+                "manifest",
+                "manifest_ignored",
+                $"manifest cache could not be read and was ignored: {ex.Message}"));
+            return null;
+        }
+    }
+
+    private static SopManifest BuildUpdatedManifest(
+        SopManifest? existing,
+        IReadOnlyList<SopCatalogEntry> scopeEntries,
+        IReadOnlyList<SopInstallTarget> targets,
+        string buildVersion,
+        DateTimeOffset now)
+    {
+        var selected = new HashSet<string>(scopeEntries.Select(entry => entry.Name), StringComparer.Ordinal);
+        var rows = existing?.Sops
+            .Where(row => row is not null && !selected.Contains(row.Name))
+            .ToList() ?? [];
+        foreach (var entry in scopeEntries)
+        {
+            var existingRow = existing?.Sops.SingleOrDefault(
+                row => row is not null && string.Equals(row.Name, entry.Name, StringComparison.Ordinal));
+            rows.Add(BuildManifestSop(entry, existingRow, targets, buildVersion, now));
+        }
+
+        return new SopManifest(ManifestSchemaVersion, buildVersion, now, rows);
+    }
+
+    private static (SopManifest? Manifest, bool Changed) BuildManifestAfterUninstall(
+        SopManifest existing,
+        IReadOnlyList<SopCatalogEntry> scopeEntries,
+        string buildVersion,
+        DateTimeOffset now,
+        IReadOnlyList<SopPathResultView> results)
+    {
+        var selected = new HashSet<string>(scopeEntries.Select(entry => entry.Name), StringComparer.Ordinal);
+        var changed = false;
+        var rows = new List<SopManifestSop>();
+        foreach (var row in existing.Sops)
+        {
+            if (row is null)
+            {
+                changed = true;
+                continue;
+            }
+
+            if (!selected.Contains(row.Name))
+            {
+                rows.Add(row);
+                continue;
+            }
+
+            var keptPaths = row.Paths
+                .Where(path => path is not null && KeepManifestPathAfterUninstall(row.Name, path.Path, results))
+                .ToList();
+            var rowChanged = keptPaths.Count != row.Paths.Count;
+            if (rowChanged || keptPaths.Count == 0)
+                changed = true;
+            if (keptPaths.Count > 0)
+            {
+                rows.Add(rowChanged
+                    ? row with
+                    {
+                        InstalledByBuildVersion = buildVersion,
+                        InstalledAtUtc = now,
+                        Paths = keptPaths,
+                    }
+                    : row);
+            }
+        }
+
+        if (!changed)
+            return (existing, false);
+
+        return (
+            rows.Count == 0
+                ? null
+                : new SopManifest(ManifestSchemaVersion, buildVersion, now, rows),
+            true);
+    }
+
+    private static bool KeepManifestPathAfterUninstall(
+        string sopName,
+        string path,
+        IReadOnlyList<SopPathResultView> results)
+    {
+        var normalizedPath = path.Replace('\\', '/');
+        var result = results.FirstOrDefault(item =>
+            item.Sops.Contains(sopName, StringComparer.Ordinal) &&
+            PathsEqual(item.Path, normalizedPath));
+        return result is null ||
+               result.Status is "modified" or "not_regular" or "preserved_scaffolded";
+    }
+
+    private static SopManifestSop BuildManifestSop(
+        SopCatalogEntry entry,
+        SopManifestSop? existingRow,
+        IReadOnlyList<SopInstallTarget> targets,
+        string buildVersion,
+        DateTimeOffset now)
+    {
+        var paths = new List<SopManifestPath>();
+        foreach (var owned in entry.OwnedPaths)
+        {
+            var selectedTarget = targets.FirstOrDefault(target =>
+                target.Sops.Contains(entry.Name, StringComparer.Ordinal) &&
+                PathsEqual(target.Path, owned.Path));
+            if (selectedTarget is not null)
+            {
+                paths.Add(BuildManifestPath(selectedTarget));
+                continue;
+            }
+
+            var existingPath = existingRow?.Paths.FirstOrDefault(path =>
+                path is not null &&
+                PathsEqual(path.Path, owned.Path) &&
+                string.Equals(path.Class, owned.Class, StringComparison.Ordinal) &&
+                string.Equals(path.ResourceName, owned.ResourceName, StringComparison.Ordinal) &&
+                string.Equals(path.ContentHash, owned.ExpectedContentHash, StringComparison.Ordinal));
+            if (existingPath is not null)
+                paths.Add(existingPath);
+        }
+
+        return new SopManifestSop(entry.Name, buildVersion, now, paths);
+    }
+
+    private static SopManifestPath BuildManifestPath(SopInstallTarget target) => new(
+        target.Path,
+        target.Class,
+        target.IsEmitted ? target.ExpectedContentHash : null,
+        target.ResourceName);
+
+    private static bool ManifestCovers(
+        SopManifest? manifest,
+        IReadOnlyList<SopCatalogEntry> scopeEntries,
+        IReadOnlyList<SopInstallTarget> targets)
+    {
+        if (manifest is null || manifest.SchemaVersion != ManifestSchemaVersion)
+            return false;
+
+        foreach (var entry in scopeEntries)
+        {
+            var matchingSops = manifest.Sops
+                .Where(sop => sop is not null && string.Equals(sop.Name, entry.Name, StringComparison.Ordinal))
+                .ToList();
+            if (matchingSops.Count != 1)
+                return false;
+            var row = matchingSops[0];
+
+            foreach (var target in targets.Where(target => target.Sops.Contains(entry.Name, StringComparer.Ordinal)))
+            {
+                var matchingPaths = row.Paths
+                    .Where(item => item is not null && PathsEqual(item.Path, target.Path))
+                    .ToList();
+                if (matchingPaths.Count != 1)
+                    return false;
+                var path = matchingPaths[0];
+                if (path is null ||
+                    !string.Equals(path.Class, target.Class, StringComparison.Ordinal) ||
+                    !string.Equals(path.ResourceName, target.ResourceName, StringComparison.Ordinal) ||
+                    !string.Equals(path.ContentHash, target.ExpectedContentHash, StringComparison.Ordinal))
+                    return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsManifestCacheUsable(SopManifest manifest, out string reason)
+    {
+        reason = string.Empty;
+        if (manifest.SchemaVersion != ManifestSchemaVersion)
+        {
+            reason = "manifest cache has an unsupported schema and was ignored";
+            return false;
+        }
+
+        if (manifest.Sops is null)
+        {
+            reason = "manifest cache is missing sops and was ignored";
+            return false;
+        }
+
+        var sopNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var sop in manifest.Sops)
+        {
+            if (sop is null || string.IsNullOrWhiteSpace(sop.Name) || sop.Paths is null)
+            {
+                reason = "manifest cache contains an invalid SOP row and was ignored";
+                return false;
+            }
+
+            if (!sopNames.Add(sop.Name))
+            {
+                reason = "manifest cache contains duplicate SOP rows and was ignored";
+                return false;
+            }
+
+            var paths = new HashSet<string>(PathComparer);
+            foreach (var path in sop.Paths)
+            {
+                if (path is null ||
+                    string.IsNullOrWhiteSpace(path.Path) ||
+                    string.IsNullOrWhiteSpace(path.Class))
+                {
+                    reason = "manifest cache contains an invalid path row and was ignored";
+                    return false;
+                }
+
+                if (!paths.Add(path.Path.Replace('\\', '/')))
+                {
+                    reason = "manifest cache contains duplicate path rows and was ignored";
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private static void WriteManifest(string manifestPath, SopManifest manifest)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(manifestPath)!);
+        var json = JsonSerializer.Serialize(manifest, CliJsonContext.Default.SopManifest);
+        File.WriteAllText(manifestPath, json + Environment.NewLine, Utf8NoBom);
+    }
+
+    private static bool TryResolvePath(
+        string repositoryRoot,
+        string catalogPath,
+        out ResolvedCatalogPath resolution,
+        out string error)
+    {
+        resolution = default;
+        error = string.Empty;
+
+        if (!TryNormalizeCatalogPath(catalogPath, out var normalized, out error))
+            return false;
+
+        var absolutePath = Path.GetFullPath(Path.Combine(
+            repositoryRoot,
+            normalized.Replace('/', Path.DirectorySeparatorChar)));
+        if (!IsStrictlyBelow(absolutePath, repositoryRoot))
+        {
+            error = "catalog path does not resolve strictly below the repository root";
+            return false;
+        }
+
+        if (!ValidateNoLinkSegments(repositoryRoot, normalized, out error))
+            return false;
+
+        resolution = new ResolvedCatalogPath(normalized, absolutePath);
+        return true;
+    }
+
+    private static bool TryNormalizeCatalogPath(string catalogPath, out string normalized, out string error)
+    {
+        normalized = string.Empty;
+        error = string.Empty;
+        if (string.IsNullOrWhiteSpace(catalogPath))
+        {
+            error = "catalog path is blank";
+            return false;
+        }
+
+        if (Path.IsPathRooted(catalogPath) || Path.IsPathFullyQualified(catalogPath))
+        {
+            error = "catalog path must be relative";
+            return false;
+        }
+
+        var candidate = catalogPath.Replace('\\', '/');
+        if (candidate.Contains(':', StringComparison.Ordinal))
+        {
+            error = "catalog path must not contain a drive or URI separator";
+            return false;
+        }
+
+        var segments = candidate.Split('/');
+        if (segments.Any(segment =>
+            segment.Length == 0 ||
+            segment == "." ||
+            segment == ".."))
+        {
+            error = "catalog path must not contain empty, dot, or dot-dot segments";
+            return false;
+        }
+
+        normalized = string.Join('/', segments);
+        return true;
+    }
+
+    private static bool ValidateNoLinkSegments(string repositoryRoot, string normalizedPath, out string error)
+    {
+        error = string.Empty;
+        var current = repositoryRoot;
+        foreach (var segment in normalizedPath.Split('/'))
+        {
+            current = Path.Combine(current, segment);
+            try
+            {
+                var fileInfo = new FileInfo(current);
+                var directoryInfo = new DirectoryInfo(current);
+                if (fileInfo.LinkTarget is not null || directoryInfo.LinkTarget is not null)
+                {
+                    error = $"catalog path crosses a symlink or reparse point: {current}";
+                    return false;
+                }
+
+                if (!fileInfo.Exists && !directoryInfo.Exists)
+                    return true;
+
+                var attributes = File.GetAttributes(current);
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    error = $"catalog path crosses a symlink or reparse point: {current}";
+                    return false;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                error = $"catalog path could not be inspected safely: {ex.Message}";
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsStrictlyBelow(string path, string root)
+    {
+        var relative = Path.GetRelativePath(Path.GetFullPath(root), Path.GetFullPath(path));
+        return relative.Length > 0 &&
+               relative != "." &&
+               !Path.IsPathRooted(relative) &&
+               relative != ".." &&
+               !relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
+               !relative.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal);
+    }
+
+    // Tracked catalog paths live in the tree the verb runs in; machine-local .build data lives
+    // in the main worktree of the clone. Both answers come from the shared resolver.
+    internal static string ResolveRepositoryRoot(string startDirectory) =>
+        RepositoryLayout.Resolve(startDirectory).WorktreeRoot;
+
+    private static bool IsBuildDataPath(string catalogPath) =>
+        catalogPath.Replace('\\', '/').StartsWith($"{BuildDataDirectory}/", StringComparison.Ordinal);
+
+    private static IReadOnlyList<SopInstallTarget> BuildTargets(
+        IReadOnlyList<SopCatalogEntry> entries,
+        string? host = null)
+    {
+        var rows = new List<SopInstallTarget>();
+        foreach (var entry in entries)
+        {
+            foreach (var owned in entry.OwnedPaths)
+            {
+                if (!PathMatchesHost(owned.Path, host))
+                    continue;
+
+                var existing = rows.FirstOrDefault(row => PathsEqual(row.Path, owned.Path));
+                if (existing is null)
+                {
+                    rows.Add(new SopInstallTarget(
+                        [entry.Name],
+                        owned.Path,
+                        owned.Class,
+                        owned.ExpectedContentHash,
+                        owned.ResourceName,
+                        owned.PreviousContentHashes ?? Array.Empty<string>()));
+                    continue;
+                }
+
+                existing.Sops.Add(entry.Name);
+                foreach (var hash in owned.PreviousContentHashes ?? Array.Empty<string>())
+                {
+                    if (!existing.TrustedPreviousContentHashes.Contains(hash, StringComparer.Ordinal))
+                        existing.TrustedPreviousContentHashes.Add(hash);
+                }
+            }
+        }
+
+        return rows;
+    }
+
+    private static bool PathMatchesHost(string catalogPath, string? host)
+    {
+        if (host is null)
+            return true;
+
+        var pathHost = HostForCatalogPath(catalogPath);
+        return pathHost is null || string.Equals(pathHost, host, StringComparison.Ordinal);
+    }
+
+    private static string? HostForCatalogPath(string catalogPath)
+    {
+        var normalized = catalogPath.Replace('\\', '/');
+        if (normalized.StartsWith(".claude/commands/", StringComparison.Ordinal))
+            return ClaudeHost;
+        if (normalized.StartsWith(".agents/skills/", StringComparison.Ordinal))
+            return CodexHost;
+        return null;
+    }
+
+    private static SopOperationView View(
+        string operation,
+        string repositoryRoot,
+        string manifestPath,
+        string buildVersion,
+        IReadOnlyList<SopCatalogEntry> scopeEntries,
+        bool changed,
+        IReadOnlyList<SopPathResultView> results,
+        SopConductorIdentity? conductorIdentity)
+    {
+        var passed = !HasBlockingFindings(results);
+        return new SopOperationView(
+            Operation: operation,
+            RepositoryRoot: repositoryRoot,
+            ManifestPath: manifestPath,
+            SopSchemaVersion: SopBundleCatalog.SchemaVersion,
+            BinaryVersion: buildVersion,
+            ScopeSops: scopeEntries.Select(entry => entry.Name).ToList(),
+            Changed: changed,
+            Passed: passed,
+            Results: results,
+            TicketPrefix: conductorIdentity?.TicketPrefix,
+            SourceRoots: conductorIdentity?.SourceRoots,
+            BranchPrefix: conductorIdentity?.BranchPrefix,
+            ArchitectureMap: conductorIdentity?.ArchitectureMap);
+    }
+
+    private static bool HasBlockingFindings(IReadOnlyList<SopPathResultView> results) =>
+        results.Any(result => result.Status is
+            "unsafe_path" or
+            "invalid_class" or
+            "invalid_catalog" or
+            "missing" or
+            "modified" or
+            "not_regular" or
+            "missing_manifest_history" or
+            "invalid_scaffolded" or
+            "identity_unavailable" or
+            "scope_unavailable");
+
+    private static SopPathResultView Result(SopInstallTarget target, string status, string message) =>
+        Result(target.Sops, target.Path, target.Class, status, message);
+
+    private static SopPathResultView Result(
+        IReadOnlyList<string> sops,
+        string path,
+        string @class,
+        string status,
+        string message) => new(sops, path, @class, status, message);
+
+    private static string BuildConductorScaffold(
+        string buildVersion,
+        SopConductorIdentity conductorIdentity)
+    {
+        var minVersion = TrimVersionCore(buildVersion);
+        var ticketPrefix = QuoteTomlBasicString(conductorIdentity.TicketPrefix);
+        var branchPrefix = QuoteTomlBasicString(conductorIdentity.BranchPrefix);
+        var sourceRoots = string.Join(", ", conductorIdentity.SourceRoots.Select(QuoteTomlBasicString));
+        var architectureMap = QuoteTomlBasicString(conductorIdentity.ArchitectureMap);
+        var reviewPaths = string.Join(", ", conductorIdentity.SourceRoots
+            .Select(root => root == "." ? "**" : $"{root}/**")
+            .Select(QuoteTomlBasicString));
+        return $$"""
+            [conductor]
+            min_build_version = "{{minVersion}}"
+            branch_prefix = {{branchPrefix}}
+            ticket_prefix = {{ticketPrefix}}
+            source_roots = [{{sourceRoots}}]
+            architecture_map = {{architectureMap}}
+            rework_cap = 3
+
+            [[conductor.review.invariants]]
+            id = "{{ScaffoldInvariantId}}"
+            statement = "Replace this sentence with a true review invariant for this repository."
+            paths = [{{reviewPaths}}]
+            blocks_done = true
+
+            [conductor.review.escalation]
+            model_size = "large"
+            paths = [{{reviewPaths}}]
+
+            [constellation]
+            platform = "unknown"
+            contract_authority = "{{ScaffoldContractAuthorityPlaceholder}}"
+            """;
+    }
+
+    private static string QuoteTomlBasicString(string value)
+    {
+        var result = new StringBuilder(value.Length + 2);
+        result.Append('"');
+        foreach (var character in value)
+        {
+            switch (character)
+            {
+                case '\b': result.Append("\\b"); break;
+                case '\t': result.Append("\\t"); break;
+                case '\n': result.Append("\\n"); break;
+                case '\f': result.Append("\\f"); break;
+                case '\r': result.Append("\\r"); break;
+                case '"': result.Append("\\\""); break;
+                case '\\': result.Append("\\\\"); break;
+                default:
+                    if (character < ' ')
+                        result.Append($"\\u{(int)character:X4}");
+                    else
+                        result.Append(character);
+                    break;
+            }
+        }
+        result.Append('"');
+        return result.ToString();
+    }
+
+    private static string TrimVersionCore(string buildVersion)
+    {
+        var suffix = buildVersion.IndexOfAny(['-', '+']);
+        return suffix >= 0 ? buildVersion[..suffix] : buildVersion;
+    }
+
+    private static string ComputeFileSha256(string path)
+    {
+        var hash = SHA256.HashData(File.ReadAllBytes(path));
+        return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    private static StringComparer PathComparer =>
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    private static bool PathsEqual(string left, string right) =>
+        string.Equals(
+            left.Replace('\\', '/'),
+            right.Replace('\\', '/'),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
+    private sealed class SopInstallTarget(
+        IReadOnlyList<string> sops,
+        string path,
+        string @class,
+        string? expectedContentHash,
+        string? resourceName,
+        IReadOnlyList<string> trustedPreviousContentHashes)
+    {
+        public List<string> Sops { get; } = sops.ToList();
+        public string Path { get; } = path;
+        public string Class { get; } = @class;
+        public string? ExpectedContentHash { get; } = expectedContentHash;
+        public string? ResourceName { get; } = resourceName;
+        public List<string> TrustedPreviousContentHashes { get; } = trustedPreviousContentHashes.ToList();
+        public bool IsEmitted => string.Equals(Class, SopBundleCatalog.EmittedPathClass, StringComparison.Ordinal);
+        public bool IsScaffolded => string.Equals(Class, SopBundleCatalog.ScaffoldedPathClass, StringComparison.Ordinal);
+    }
+
+    private readonly record struct ResolvedCatalogPath(string NormalizedPath, string AbsolutePath);
+}

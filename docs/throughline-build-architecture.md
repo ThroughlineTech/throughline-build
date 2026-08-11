@@ -42,7 +42,12 @@ lives under `.build/`.
 - There is no daemon or server. Each invocation loads state, performs work, and
   exits.
 - `.build/config.toml` is local configuration and may contain credentials; it
-  must remain ignored.
+  must remain ignored. `.build/conductor.toml` is machine-local conductor data
+  for binary-hosted SOPs; it is also ignored, is recreated per clone by
+  `build install` or `build sop install`, and must contain no secrets.
+- `.build/` is per clone, not per worktree. A linked worktree holds no copy of
+  it, so a verb run inside one resolves config and conductor data from the
+  clone's main worktree, and Build does not seed `.build/` into leased trees.
 
 ### Non-Goals
 
@@ -91,11 +96,17 @@ build (ThroughlineBuild.Cli)
 
 ### Invocation flow
 
-1. Pre-configuration verbs such as `--help`, `init`, and `user-guide` are
-   dispatched before config loading.
-2. Other verbs find `.build/config.toml` by walking upward from the working
-   directory, load it, and compose the configured Plane, git, worker, event,
-   and verification services.
+1. Pre-configuration verbs such as `--help`, `init`, `user-guide`, and
+   `sop` are dispatched before config loading.
+2. Most configured verbs find `.build/config.toml` through the shared repository
+   resolver, load it, and compose the configured Plane, git, worker, event, and
+   verification services. One resolver answers for config, conductor, and SOP
+   catalog paths: git names the tree the verb runs in and the clone's main
+   worktree, `.build` data resolves from the main worktree when the verb runs in
+   a linked worktree, and the search never climbs past the repository, so a tree
+   whose repository has no `.build/config.toml` fails closed instead of adopting
+   an ancestor's. Without git, resolution falls back to a walk bounded by the
+   first `.git` or `.build` it finds.
 3. A ticket phase fetches the current ticket and runs its state and repository
    preconditions.
 4. LLM-bearing phases build a provider-specific brief and execute the selected
@@ -194,9 +205,41 @@ a caller-owned conductor: it validates collisions, seed policy, manifest
 identity, and teardown containment without constructing a worker agent. A
 per-ticket filesystem lock closes concurrent lease races, and creation rollback
 tracks branch and worktree ownership separately. The standalone `worktree`,
-`gate`, and `waves` paths load only their consumed config sections without
-requiring `[ticketing]`, `[workers]`, or `[events]`, resolving ticketing
-secrets, or constructing a Plane client.
+`gate`, `waves`, and `candidate status` paths load only their consumed config
+sections without requiring `[ticketing]`, `[workers]`, or `[events]`, resolving
+ticketing secrets, or constructing a Plane client. `build sop` runs in the same
+no-worker/no-ticketing band. `sop doctor` reads `.build/conductor.toml`,
+validates manifest-recorded or present emitted stubs byte-for-byte against the
+catalog, and only consults local `.build/config.toml` for `[[review.checks]]`;
+both files come from the same resolved `.build` directory, so a report that
+names a repository root and a config path never pairs them with a conductor from
+another tree, and emitted stubs are graded in the tree the verb runs in because
+they are tracked content rather than machine-local data;
+standard `sop brief` runs doctor first, then emits embedded SOP text and the
+resolved conductor data, owned catalog paths, and run mode. Admission-only
+inspection is a brief run mode with a validated absolute inspection root, a full
+40-character inspection SHA, inherited `BUILD_SOP_*` environment values, and an
+explicit verb policy; admission input validation happens before doctor reads
+conductor data. The inspection root must be a git worktree root in the invoking
+repository, so Build does not pair one repository's tree with another
+repository's conductor rules. With admission active, mutating verbs refuse before
+config bootstrap with the JSON error code `sop_admission_refused`. Doctor can
+therefore report an absent local config file as a finding instead of failing
+before conductor data is loaded. Unknown keys in conductor TOML are findings,
+and the local check list must include at least one setup or gating check so an
+advisory-only list cannot satisfy the gate contract. Review invariants remain
+structured prose: doctor validates their shape and surfacing data, not the truth
+of their statements.
+`sop install`, `upgrade`, `uninstall`, and `status` use the embedded catalog as
+the authority and treat `.build/sop-manifest.json` as a cache only. Install emits
+stubs for every known host by default; `--host` narrows emitted stubs to Claude
+or Codex while preserving shared scaffolded paths. Emitted stub files are
+content-compared against the current catalog and, for upgrade, against trusted
+previous hashes embedded in the current catalog. Scaffolded conductor data is
+validated by shape and is never overwritten after creation. Every
+catalog target and the manifest path are resolved strictly below the repository
+root and are refused if any existing segment is a symlink or reparse point
+before a write or delete is attempted.
 
 `ThroughlineBuild.Verification` runs configured `CheckSpec` commands and
 returns typed `CheckResult` values. Check roles distinguish setup, gating, and
@@ -226,6 +269,13 @@ for a typed verdict.
 Gating check failures stop before an agent verdict. Advisory failures are
 reported to the reviewer but cannot independently force rework. After review,
 git-state guards detect and clean up prohibited verifier mutations.
+
+Every configured check runs with its own stdout and stderr captured and its
+stdin redirected and closed. A check never inherits the stdin of whatever
+invoked `build`, so it reads EOF identically under an interactive terminal, an
+agent session, and CI, and a check that prompts fails fast instead of blocking
+until its timeout. A gate verdict is a fact about the worktree, never about the
+caller.
 
 ### 5.9 Ship
 

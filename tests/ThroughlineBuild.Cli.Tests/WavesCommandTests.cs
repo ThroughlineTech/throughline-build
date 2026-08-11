@@ -206,7 +206,8 @@ public sealed class WavesCommandTests
                 {
                     constructionCount++;
                     throw new InvalidOperationException("worker must not be constructed");
-                });
+                },
+                new InProcessCliConsole(TextReader.Null, Console.Out, Console.Error));
 
             Assert.Equal(0, exit);
             Assert.Equal(0, constructionCount);

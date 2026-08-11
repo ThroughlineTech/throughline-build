@@ -67,6 +67,41 @@ public static class CliEnvelopeWriter
         output.WriteLine(JsonSerializer.Serialize(envelope, CliJsonContext.Default.CommentCreatedEnvelope));
     }
 
+    public static void WriteAttachments(TextWriter output, IReadOnlyList<TicketAttachment> attachments)
+    {
+        var rows = attachments.Select(a => new AttachmentView(
+            a.Id, a.Source, a.Name, a.ContentType, a.SizeBytes)).ToList();
+        var envelope = new AttachmentsEnvelope(SchemaVersion, Ok: true, rows);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.AttachmentsEnvelope));
+    }
+
+    public static void WriteAttachmentDownload(
+        TextWriter output,
+        TicketAttachment attachment,
+        string path,
+        long bytesWritten)
+    {
+        var envelope = new AttachmentDownloadEnvelope(
+            SchemaVersion,
+            Ok: true,
+            new AttachmentDownloadView(
+                attachment.Id,
+                attachment.Source,
+                attachment.Name,
+                path,
+                bytesWritten));
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.AttachmentDownloadEnvelope));
+    }
+
+    /// <summary>Write the created structured evidence comment and its read-back proof.</summary>
+    public static void WriteEvidence(TextWriter output, EvidenceView evidence)
+    {
+        var envelope = new EvidenceEnvelope(SchemaVersion, Ok: true, evidence);
+        output.WriteLine(JsonSerializer.Serialize(envelope, CliJsonContext.Default.EvidenceEnvelope));
+    }
+
     /// <summary>Write a success envelope describing a state transition.</summary>
     public static void WriteTransition(TextWriter output, string ticketId, TicketState state)
     {
@@ -125,6 +160,13 @@ public static class CliEnvelopeWriter
             envelope, CliJsonContext.Default.WorktreeTeardownEnvelope));
     }
 
+    public static void WriteCandidateStatus(TextWriter output, CandidateStatusView result)
+    {
+        var envelope = new CandidateStatusEnvelope(SchemaVersion, Ok: true, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.CandidateStatusEnvelope));
+    }
+
     public static void WriteGate(TextWriter output, GateView result)
     {
         var envelope = new GateEnvelope(SchemaVersion, Ok: true, result);
@@ -132,11 +174,81 @@ public static class CliEnvelopeWriter
             envelope, CliJsonContext.Default.GateEnvelope));
     }
 
+    public static void WriteProfilePrompt(TextWriter output, ProfilePromptView result)
+    {
+        var envelope = new ProfilePromptEnvelope(SchemaVersion, Ok: true, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.ProfilePromptEnvelope));
+    }
+
+    public static void WriteProfileOperation(TextWriter output, ProfileOperationView result)
+    {
+        var envelope = new ProfileOperationEnvelope(SchemaVersion, Ok: true, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.ProfileOperationEnvelope));
+    }
+
+    public static void WriteInstall(TextWriter output, InstallView result)
+    {
+        var envelope = new InstallEnvelope(SchemaVersion, Ok: true, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.InstallEnvelope));
+    }
+
     public static void WriteWaves(TextWriter output, WavePlan result)
     {
         var envelope = new WavesEnvelope(SchemaVersion, Ok: true, result);
         output.WriteLine(JsonSerializer.Serialize(
             envelope, CliJsonContext.Default.WavesEnvelope));
+    }
+
+    public static void WriteSopDoctor(TextWriter output, SopDoctorView result)
+    {
+        var envelope = new SopDoctorEnvelope(SchemaVersion, Ok: true, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.SopDoctorEnvelope));
+    }
+
+    public static void WriteSopList(TextWriter output, IReadOnlyList<SopListItemView> result)
+    {
+        var envelope = new SopListEnvelope(SchemaVersion, Ok: true, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.SopListEnvelope));
+    }
+
+    public static void WriteSopBrief(TextWriter output, SopBriefView result)
+    {
+        var envelope = new SopBriefEnvelope(SchemaVersion, Ok: result.Ready, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.SopBriefEnvelope));
+    }
+
+    public static void WriteSopOperation(TextWriter output, SopOperationView result)
+    {
+        var envelope = new SopOperationEnvelope(SchemaVersion, Ok: result.Passed, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.SopOperationEnvelope));
+    }
+
+    public static void WriteConductorPrompt(TextWriter output, ConductorPromptView result)
+    {
+        var envelope = new ConductorPromptEnvelope(SchemaVersion, Ok: true, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.ConductorPromptEnvelope));
+    }
+
+    public static void WriteConductorApply(TextWriter output, ConductorApplyView result)
+    {
+        var envelope = new ConductorApplyEnvelope(SchemaVersion, Ok: true, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.ConductorApplyEnvelope));
+    }
+
+    public static void WriteWorkerBrief(TextWriter output, WorkerBriefView result)
+    {
+        var envelope = new WorkerBriefEnvelope(SchemaVersion, Ok: true, result);
+        output.WriteLine(JsonSerializer.Serialize(
+            envelope, CliJsonContext.Default.WorkerBriefEnvelope));
     }
 
     /// <summary>Project a domain <see cref="Ticket"/> onto its wire shape.</summary>

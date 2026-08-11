@@ -31,6 +31,15 @@ public sealed record ProjectProfile(
     /// stack, the engine only carries the paths and reads whatever they are.
     /// </summary>
     public IReadOnlyList<string> ConventionFiles { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Repository-relative directory the agent identified as the authoritative source for shared,
+    /// cross-consumer contracts (types/schemas/DTOs other packages or services depend on), or empty
+    /// when the repository has none. Optional - many repositories genuinely have no such directory.
+    /// Feeds InstallCommand.ResolveContractAuthority, the same single-pass mechanism that already
+    /// resolves constellation.platform from this profile. See TLB-628.
+    /// </summary>
+    public string ContractAuthority { get; init; } = "";
 }
 
 public sealed record ProfileCheck(
@@ -61,6 +70,7 @@ internal sealed class ProjectProfileDto
     [JsonPropertyName("review_checks")] public List<ProfileCheckDto>? ReviewChecks { get; set; }
     [JsonPropertyName("regression_checks")] public List<ProfileCheckDto>? RegressionChecks { get; set; }
     [JsonPropertyName("convention_files")] public List<string>? ConventionFiles { get; set; }
+    [JsonPropertyName("contract_authority")] public string? ContractAuthority { get; set; }
 }
 
 internal sealed class ProfileCheckDto
@@ -131,6 +141,16 @@ public static class ProjectProfileParser
             error = "profile is missing test_command";
             return false;
         }
+        if (!IsCanonicalIdentifier(dto.Language))
+        {
+            error = "profile language must be empty or a lowercase kebab-case identifier";
+            return false;
+        }
+        if (!IsCanonicalIdentifier(dto.Framework))
+        {
+            error = "profile framework must be empty or a lowercase kebab-case identifier";
+            return false;
+        }
 
         if (!TryMapChecks(dto.ReviewChecks, "review_checks", out var reviewChecks, out error))
             return false;
@@ -171,8 +191,37 @@ public static class ProjectProfileParser
             ReviewChecks: reviewChecks,
             RegressionChecks: regressionChecks)
         {
-            ConventionFiles = conventionFiles
+            ConventionFiles = conventionFiles,
+            ContractAuthority = dto.ContractAuthority?.Trim() ?? "",
         };
+        return true;
+    }
+
+    private static bool IsCanonicalIdentifier(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return true;
+
+        var identifier = value.Trim();
+        if (identifier[0] is < 'a' or > 'z' || identifier[^1] == '-')
+            return false;
+
+        var previousWasHyphen = false;
+        foreach (var character in identifier)
+        {
+            if (character == '-')
+            {
+                if (previousWasHyphen)
+                    return false;
+                previousWasHyphen = true;
+                continue;
+            }
+
+            if (character is not (>= 'a' and <= 'z') and not (>= '0' and <= '9'))
+                return false;
+            previousWasHyphen = false;
+        }
+
         return true;
     }
 

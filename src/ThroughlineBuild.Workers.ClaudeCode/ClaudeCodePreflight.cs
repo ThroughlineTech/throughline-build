@@ -185,6 +185,7 @@ public static class ClaudeCodePreflight
     {
         var psi = new ProcessStartInfo(executable)
         {
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -194,6 +195,7 @@ public static class ClaudeCodePreflight
 
         using var process = new Process { StartInfo = psi };
         process.Start(); // throws Win32Exception when the executable cannot be found.
+        try { process.StandardInput.Close(); } catch { /* best effort */ }
 
         var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
         var stderrTask = process.StandardError.ReadToEndAsync(ct);

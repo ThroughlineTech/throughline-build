@@ -1,6 +1,6 @@
 # 10 - Lifecycle and Orchestration
 
-Last refreshed: 2026-07-27 (TLB-579)
+Last refreshed: 2026-08-08 (HEAD 5961f807)
 
 The Agile phase state machine implemented by `build` - what each phase does, how the chain orchestrator transitions between them, the gate, the integration-branch tree dispatch, and the rework loop bounded by `MaxReworkRounds`.
 
@@ -131,7 +131,7 @@ Step sequence (all in `ImplementPhase.RunAsync`):
 
 ### `GatePhase` ([src/ThroughlineBuild.Phases/GatePhase.cs](../../src/ThroughlineBuild.Phases/GatePhase.cs))
 
-Status: **Functional**. New since the last refresh (TLB-500/503/505/506/507/509/538 + the gate-vacuity work). A deterministic check gate that runs on the warm worktree after each successful implement round, before the verifier. It is chain-only: `ChainPhase` invokes it via an optional `_gateFactory` and there is no standalone `build gate` verb; when the factory is not wired the chain skips the gate entirely.
+Status: **Functional**. `GatePhase` is the chain-composed deterministic check gate that runs on the warm worktree after each successful implement round, before the verifier. The separate standalone `build gate` surface is implemented by `GateCommand.ExecuteAsync` ([src/ThroughlineBuild.Cli/GateCommand.cs:10](../../src/ThroughlineBuild.Cli/GateCommand.cs#L10)); it runs configured checks and persisted canary policy without the chain's completion-claim, smoke-signal, rework-loop, or lifecycle-transition context.
 
 `GatePhase.RunAsync` ([GatePhase.cs:74](../../src/ThroughlineBuild.Phases/GatePhase.cs#L74)) sequence:
 1. **Claim schema validation:** if the implement round produced a `CompletionClaim` ([src/ThroughlineBuild.Contracts/Models/CompletionClaim.cs:18](../../src/ThroughlineBuild.Contracts/Models/CompletionClaim.cs#L18) - `Provides`, `Consumes`, `AcBindings`, `TestsAdded`, plus deferred unenforced hook fields), validate all four arrays are present; an invalid claim is a hard-fail (`GateFailure` kind `claim_schema_invalid`) that bounces `InReview -> InProgress` into rework.
@@ -232,7 +232,7 @@ Status: **Functional**. Unchanged in shape: `NewPhase` is the deterministic crea
 
 ### `ScaffoldPhase` ([src/ThroughlineBuild.Scaffold/ScaffoldPhase.cs](../../src/ThroughlineBuild.Scaffold/ScaffoldPhase.cs))
 
-Status: **Functional**. Multi-write batch, now followed by a profile-derivation worker pass.
+Status: **Functional**. Multi-write batch only; profile derivation was removed from this phase and now uses the separate worker-free `profile prompt` / external-agent / `profile apply` protocol.
 
 1. Parse op-doc via `OpDocParser` (which now also parses a positive-only `Preload` brief label, rendered as an `<h3>Preload</h3>` block in ticket HTML by `BriefHtmlRenderer` - the source of the implement-phase preload paths).
 2. Validate via `OpDocValidator`.
@@ -241,7 +241,7 @@ Status: **Functional**. Multi-write batch, now followed by a profile-derivation 
 5. Plane connectivity test.
 6. Create a single operation ticket, then per plan: plan-ticket + `SetParentAsync`, then per brief: brief-ticket + `SetParentAsync`. Failures collected in `ScaffoldFailure[]`; processing continues.
 
-**Profile derivation.** After ticket creation, `ScaffoldProfileRunner` ([src/ThroughlineBuild.Cli/ScaffoldProfileRunner.cs](../../src/ThroughlineBuild.Cli/ScaffoldProfileRunner.cs)) runs `ScaffoldProfileDeriver.DeriveAsync` ([src/ThroughlineBuild.Scaffold/ScaffoldProfileDeriver.cs:23](../../src/ThroughlineBuild.Scaffold/ScaffoldProfileDeriver.cs#L23)) - a read-only worker (tools Read/Grep/Glob, size Small, debug-captured under `--debug`) that emits a `PROJECT_PROFILE` fenced block parsed into `ProjectProfile` ([src/ThroughlineBuild.Scaffold/ProjectProfile.cs](../../src/ThroughlineBuild.Scaffold/ProjectProfile.cs)). The deriver prompt (embedded `derive-profile-prompt.md` via `ProfilePromptLoader`) has accumulated several hardening rules: every check carries a role (lint/format default to `Advisory` by name fallback so they never hard-gate), `Setup`-role prerequisite steps run before gate checks, every gating check declares a per-check canary (the vacuity-prover input), the test command must be hermetic (works in a fresh worktree, user-global caches disabled), and a `convention_files` bundle names the stable convention/harness files to preload into every implement brief. `ConfigProfileWriter.Apply` writes the result back into `.build/config.toml` as `[[review.checks]]` / `[[ship.regression_checks]]` / `[project]` entries; an already-configured repo is skipped unless `--force-profile`.
+**Profile derivation is now an outer orchestration protocol.** `build scaffold` stops after validating/creating the ticket hierarchy. `build profile prompt` emits the repository-inspection prompt; an external agent returns `PROJECT_PROFILE` JSON; `build profile apply` parses it, creates a temporary proof worktree, runs the install/setup/gating commands, proves every gating canary is rejected, then writes the profile-managed config blocks ([ProfileCommand.cs:155](../../src/ThroughlineBuild.Cli/ProfileCommand.cs#L155), [ProfileGateVerifier.cs:27](../../src/ThroughlineBuild.Cli/ProfileGateVerifier.cs#L27)). No model worker is spawned inside `build`, avoiding nested-agent sessions and making the artifact inspectable before apply.
 
 ### Loose ends
 
@@ -511,10 +511,30 @@ The `ChainOutcome` enum has 20 values ([src/ThroughlineBuild.Contracts/Models/Ch
 
 ---
 
+## Repository readiness and external conductor orchestration
+
+The repository now exposes the deterministic pieces needed by an outer conductor without asking `build` to spawn a nested agent:
+
+1. `build install` stage 1 ensures init/setup and returns the profile prompt plus canonical next command.
+2. The outer agent inspects the repository and returns `PROJECT_PROFILE`; `install --profile` or `profile apply` validates it and proves gating canaries in a temporary worktree before config changes.
+3. Install adds embedded SOP stubs, derives deterministic conductor identity, and returns the invariant-authoring prompt.
+4. The outer agent returns invariant TOML; `install --invariants` or `conductor apply` atomically replaces the invariant block.
+5. Final install readiness runs doctor, checks, secret, branch/operation, cleanliness, and worktree-lease probes before reporting READY ([InstallCommand.ExecuteAsync:175](../../src/ThroughlineBuild.Cli/InstallCommand.cs#L175), [InstallReadiness.PrepareAndAssertAsync:603](../../src/ThroughlineBuild.Cli/InstallCommand.cs#L603)).
+6. During backlog execution the outer conductor can call `sop brief` for the versioned procedure, `waves` for scheduling, `worktree lease` for isolation, `worker brief` for inspectable role input, `candidate status` for fingerprints, `gate` for checks, and `evidence add` for append-only audit records. Each command is a single deterministic boundary; ticket lifecycle transitions remain explicit separate verbs ([HelpRegistryFactory.cs:247](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs#L247)).
+
+The SOP admission mode pins an absolute inspection worktree plus full commit SHA and causes mutating verbs to refuse with `sop_admission_refused`; it is an inspection boundary, not a mutation flag ([HelpRegistryFactory.cs:541](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs#L541)).
+
+### Loose ends
+
+- A successful install handoff is not readiness: callers must inspect `Data.Ready`/stage and stop for the requested external artifact.
+- The conductor command family does not itself choose when to transition or close tickets; that policy belongs to the SOP and outer agent.
+
+---
+
 ## Loose ends (cross-cutting)
 
 - **`MaxReworkRounds = 2` is hardcoded; all dispatch is serial since op-29.** Both the parent chain level loop and `ParallelDispatcher` (width pinned to 1) run one ticket at a time; no concurrency knob remains.
-- **The gate is chain-only.** Standalone phase verbs (`build implement`, `build review`) bypass `GatePhase`, completion claims, the consumes-provides preflight, and vacuity proving.
+- **`GatePhase` remains chain-only, but a standalone deterministic gate now exists.** `build gate` runs configured checks and persisted canary-proof policy; standalone `implement`/`review` still do not automatically insert the full chain GatePhase completion-claim/consumes-provides flow.
 - **No cross-phase live channel.** ReviewPhase reconstructs the implementer brief deterministically; the chain holds in-process orchestration state (accumulated provides, gate cost accumulators) only for the duration of a run.
 - **Chain `WorkflowEvent.Data`** schema lives in code, not exhaustively in [docs/build-event-log-format.md](../build-event-log-format.md).
 - **No replay verb** (`build replay <session-id>`). Architecture Appendix item 4 notes this as a future.

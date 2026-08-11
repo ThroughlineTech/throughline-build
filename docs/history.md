@@ -76,6 +76,7 @@ Approximate; reconstructed from doc headers and ticket numbers.
 | 2026-06-04 | The dirty-main-checkout chain failure that produced the preflight gate. |
 | 2026-06-16 | The claude-config predecessor formally retired (TLB-541). |
 | July 2026 | Claude Code interactive-hook transport cutover. Ticket relations and metadata work. |
+| August 2026 | Invocation inverted (PR 610). SOPs embedded in the binary, `build install`, canary-proven gates, nine no-worker verbs. |
 
 ## 4. Decisions worth remembering
 
@@ -192,6 +193,44 @@ in-code default maps behind it that silently absorbed a missing block instead of
 fix was structural rather than a string edit: stable tier aliases where the vendor offers them,
 a discovery probe where it does not, and no silent fallback. A config key that looks like it
 controls something and does not is worse than one that is missing.
+
+**Invocation inverted: Build became the tool an agent calls.** The original model was that
+Build is in charge - it spawns an agent CLI per phase and consumes the result. Two things in
+August 2026 undermined that. Anthropic and OpenAI shipped frontier models, Fable 5 (v2) and
+Sol, that took more liberties implementing tickets than their predecessors and needed more
+guardrails to stay productive. Separately, Anthropic announced - then suspended - that
+`claude -p` would bill at API rates. The spawn-a-worker-per-phase design is a standing bet
+that non-interactive agent invocation stays cheap, and that bet stopped looking safe. The
+response was not to fight the pricing but to make every judgment-bearing step available as a
+verb that spawns nothing: `<verb> prompt` emits a fixed instruction and exits, an agent that
+is already running answers it, and `<verb> apply` validates that answer against a schema and
+either commits it or refuses. The judgment happens in a model, the state change happens in
+code that can say no. This is also the only shape that works from inside an agent session at
+all, since worker-spawning verbs refuse to nest. The no-worker band went from three verbs to
+ten, and `build install` exists because bringing up a repository had to become something an
+agent could drive end to end. A workaround for the pricing change was found and deliberately
+not pursued; the general form is that an architecture resting on a vendor's billing posture
+should grow a path that does not.
+
+**A gate nobody proved is not a gate.** Config could declare review checks and nothing ever
+verified they could fail, so a configuration with zero gating checks passed every ticket
+green. The fix was to make proof a precondition of writing: `profile apply` materializes each
+gating check's declared canary in a throwaway worktree, re-runs only that check, and refuses
+the write unless the check flips red. The canary is data on the check rather than engine
+logic, which is what keeps it stack-agnostic - the engine never encodes what "broken" means
+for any language. A related discovery from the same period: gate checks were inheriting the
+caller's stdin, so the same suite passed in a terminal and failed under an agent harness
+purely because of the handle it got. A verdict has to be a fact about the worktree, never
+about who invoked it.
+
+**Hardcoding one stack cost more than it saved.** The clobber gate protecting hand-written
+checks decided a check was customized by comparing its executable against the literal string
+`"dotnet"`. It worked here and nowhere else: on any other stack the second install run read
+its own output as customized and exited, so installation could not be repeated at all. The
+lesson is the founding stack-agnostic principle failing in the small - the shortcut was
+invisible while the only test subject was this repository. The gate is now computed from
+content, and the suite exercises dotnet, go, npm, make, and swift so the shortcut cannot come
+back.
 
 **The agents were sequenced easy to hard on purpose.** Codex first, because it is closest in
 shape to Claude Code and would prove the foundation cheaply; then Gemini, the cleanest

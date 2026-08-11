@@ -1,8 +1,8 @@
 # 11 - LLM Architecture
 
-Last refreshed: 2026-07-26 (HEAD 00dc074)
+Last refreshed: 2026-08-08 (HEAD 5961f807)
 
-How `build` talks to LLMs today, the interfaces it uses, where vendor-specific code lives, and what it takes to add a new provider. The framing is unchanged since the last refresh: the **worker layer is genuinely multi-vendor and wired** (four agents selected at runtime), while the **model-client layer carries a richer abstraction that is built and tested but still not wired**. What changed inside the worker layer is substantial: tiered model selection (`ModelTier`), fail-fast model validation, full-transcript output parsing (driven by Fable's multi-message output), per-turn usage telemetry, provider-error classification, and a structured transcript side channel.
+How `build` talks to LLMs today, the interfaces it uses, where vendor-specific code lives, and what it takes to add a new provider. The **worker layer is genuinely multi-vendor and wired** (four agents selected at runtime), while the **model-client layer carries a richer abstraction that is built and tested but still not wired**. Repository profile and conductor invariant generation are now explicit outer-agent handoffs: `build` emits prompts and deterministically applies artifacts rather than starting a nested worker.
 
 For dependency detail on the current providers see [03-external-dependencies.md](03-external-dependencies.md). For the inter-project type contracts see [07-contracts.md](07-contracts.md).
 
@@ -20,7 +20,7 @@ The architecture (Section 3) defines three tiers of LLM contact: deterministic (
 
 The crucial split, re-verified at HEAD:
 
-- **Worker layer is real multi-vendor.** Four `IWorkerAgent` implementations are constructed by one seam (`WorkerAgentBuilder.Create`) and chosen per phase from config and CLI flags. This is the production code path for `plan` / `implement` / `review` / `chain` / `decompose` / draft / batch sessions / scaffold profile derivation. Standalone `plan` is worker-backed unless `--from-brief` is explicit; `[plan].mode` controls only planning inside `chain` - see [10-lifecycle-orchestration.md](10-lifecycle-orchestration.md).
+- **Worker layer is real multi-vendor.** Four `IWorkerAgent` implementations are constructed by one seam (`WorkerAgentBuilder.Create`) and chosen per phase from config and CLI flags. This is the production code path for `plan` / `implement` / `review` / `chain` / `decompose` / draft / batch sessions. Standalone `plan` is worker-backed unless `--from-brief` is explicit; `[plan].mode` controls only planning inside `chain` - see [10-lifecycle-orchestration.md](10-lifecycle-orchestration.md).
 - **Model-client layer is single-vendor and optional.** The only judgment-slot consumer (`ReasonTranslator`, used by `close` / `defer` / `reopen`) is handed an `ILlmClient` built by `LlmClientFactory`, which constructs `AnthropicClient` directly and rejects any non-`anthropic:` prefix ([src/ThroughlineBuild.Cli/LlmClientFactory.cs:28](../../src/ThroughlineBuild.Cli/LlmClientFactory.cs#L28)). When no client can be built, the verbs degrade to `EchoLlmClient` and record the reason verbatim. Nothing on the production path constructs `AnthropicModelClient`, `ModelClientLlmAdapter`, or any `IModelClient` - the only constructions remain in `ThroughlineBuild.Anthropic.Tests`. `AnthropicClient.InvokeStreamAsync` still throws `NotImplementedException` ([src/ThroughlineBuild.Anthropic/AnthropicClient.cs:99](../../src/ThroughlineBuild.Anthropic/AnthropicClient.cs#L99)), as does `ModelClientLlmAdapter.InvokeStreamAsync` ([src/ThroughlineBuild.Anthropic/ModelClientLlmAdapter.cs:71](../../src/ThroughlineBuild.Anthropic/ModelClientLlmAdapter.cs#L71)).
 
 The interfaces serve different shapes of work and do not share a dispatcher: `IWorkerAgent` is a long-lived subprocess spawn against a vendor CLI running an entire tool loop until it emits a terminal `WORKER_RESULT` envelope; `ILlmClient`/`IModelClient` are short-lived request-response API calls.
@@ -82,6 +82,8 @@ Status: **Functional**. The claude-code worker accumulated the most change this 
 
 ### Codex specifics
 
+Current boundary correction: Claude transport preflight covers only paths that still spawn Claude workers. The former scaffold-profile worker path named in the historical transport narrative above was deleted; profile and conductor prompt/apply are worker-free.
+
 Status: **Functional**. `CodexAgent` now runs `codex exec --json` with the brief on stdin via the trailing `-` ([CodexAgent.cs:24](../../src/ThroughlineBuild.Workers.Codex/CodexAgent.cs#L24)), parsing the JSON event stream rather than scanning plain stdout; env strip unchanged ([CodexAgent.cs:338-339](../../src/ThroughlineBuild.Workers.Codex/CodexAgent.cs#L338-L339)). Model selection rides `ModelTier.Effort` as `-c model_reasoning_effort=<effort>`.
 
 Two new Codex-only discovery pieces feed config, not runtime dispatch:
@@ -105,20 +107,20 @@ The cost analyzer changed posture (TLB-547): `analyze-event-log` ([src/tools/ana
 
 ### Brief templates per agent
 
-Brief builders load per-agent templates via `TemplateLoader.Load(agentName, templateName)` from [src/ThroughlineBuild.Briefs/Templates/](../../src/ThroughlineBuild.Briefs/Templates/): one subdirectory per agent (`claude-code/`, `codex/`, `gemini/`, `copilot/`), each now holding seven templates - `plan.md`, `implement.md`, `review.md`, `decompose.md`, `draft.md`, plus the new `batch-implement.md` and `batch-review.md`. A `shared/` subdirectory (10 files) holds cross-agent blocks: the obsolete-detection blocks (`plan-obsolete-initial.md`, `implement-obsolete-initial.md`/`-rework.md`, extracted from the per-agent templates and sanitized to angle-bracket placeholders), the batch worker-result envelope shapes, and the patch-fetch directives. The implement templates carry the `preloaded_context_section` placeholder (see [10-lifecycle-orchestration.md](10-lifecycle-orchestration.md)). The scaffold profile-derivation prompt is NOT here - it is an embedded resource loaded by `ProfilePromptLoader` in `ThroughlineBuild.Scaffold`.
+Brief builders load per-agent templates via `TemplateLoader.Load(agentName, templateName)` from [src/ThroughlineBuild.Briefs/Templates/](../../src/ThroughlineBuild.Briefs/Templates/). Repository profile rules live separately in Scaffold because they define an external-agent artifact contract, not an `IWorkerAgent` session; `ProfilePromptLoader.LoadRepository` combines the repository prompt with stable output rules ([ProfilePromptLoader.cs:7](../../src/ThroughlineBuild.Scaffold/ProfilePromptLoader.cs#L7)).
 
 ### Worker selection (the wiring)
 
-Construction is now centralized: `WorkerAgentBuilder.Create(name, AgentConfig)` ([src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs](../../src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs)) is a single switch mapping agent name to a constructed agent with its `ExecutablePath` / `MaxOutputTokens` / `Sizes` / `BypassPermissions` (except Copilot), plus the Claude-only transport selection. The phase-verb factory wiring and scaffold profile-derivation path therefore build Claude agents with the same transport. `Program.cs` populates a name-keyed registry of closures over it, with a fail-fast `ConfigException` when a referenced agent has no `[workers.<name>]` sub-table, and wraps it in `WorkerAgentFactory`.
+Construction is centralized: `WorkerAgentBuilder.Create(name, AgentConfig)` ([src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs](../../src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs)) maps agent names to implementations with executable/model/permission and Claude transport settings. `CliApplication` populates a name-keyed registry with fail-fast config validation and wraps it in `WorkerAgentFactory`. Profile, conductor, SOP, worktree, gate, waves, candidate, evidence, and install commands do not use this factory.
 
-Selection precedence is `EffectiveAgentFor` ([Program.cs:1149-1153](../../src/ThroughlineBuild.Cli/Program.cs#L1149-L1153)): per-phase CLI flag (`--agent-plan`/`--agent-implement`/`--agent-review`) beats `--agent`, which beats the `[workers.phases]` config entry, which falls back to `default_agent`. Per-phase agent picking is implemented; the chain's batch worker is created from the implement-phase agent inside `ChainPhaseComposition`.
+Selection precedence is `EffectiveAgentFor` ([CliApplication.cs:1149-1153](../../src/ThroughlineBuild.Cli/CliApplication.cs#L1149-L1153)): per-phase CLI flag (`--agent-plan`/`--agent-implement`/`--agent-review`) beats `--agent`, which beats the `[workers.phases]` config entry, which falls back to `default_agent`. Per-phase agent picking is implemented; the chain's batch worker is created from the implement-phase agent inside `ChainPhaseComposition`.
 
 Two adjacent honesty/safety checks:
 
 - `VerifierToolEnforcement.UnenforcedWarning` ([src/ThroughlineBuild.Cli/VerifierToolEnforcement.cs](../../src/ThroughlineBuild.Cli/VerifierToolEnforcement.cs), TLB-478) emits a one-line startup warning when `verifier_allowed_tools` is configured but the resolved review agent is not in the enforcing set (`claude-code`, `copilot`) - codex/gemini ignore the allowlist and run the verifier unsandboxed.
-- The scaffold profile deriver is a second production worker consumer: `ScaffoldProfileRunner` builds its read-only worker through the same `WorkerAgentBuilder` seam, and the derivation run is debug-captured under `--debug`.
+- The removed scaffold profile deriver is no longer a production worker consumer. Its replacement deliberately leaves model choice and execution to the outer operator/agent; `build` validates only the returned artifact and canaries.
 
-The product default is Claude Code: the embedded `build init` template ships `default_agent = "claude-code"` with tier-alias sizes (`small`/`medium`/`large` = `haiku`/`sonnet`/`opus`), while the `[workers.codex.sizes]` block remains configured as an alternate. The generated live `.build/config.toml` is gitignored, so the repository does not assert an operator's current default.
+The product default is Claude Code: the embedded `build init` template ships `default_agent = "claude-code"` with tier-alias sizes, while Codex remains configured as an alternate. The generated `.build/config.toml` is intended to be committed, so a repository can assert and share a different default without sharing a token value.
 
 ### Reusable Claude Code facade - Functional runtime, Partial distribution
 
@@ -129,7 +131,7 @@ The project is AOT-compatible and tested. Its project file has NuGet identity an
 ### Loose ends (worker layer)
 
 - The name-to-type mapping in `WorkerAgentBuilder.Create` is still a hardcoded switch over four names; adding a fifth agent edits that switch (but no longer `Program.cs`).
-- The `build new` draft-mode path still constructs `ClaudeCodeAgent` unconditionally ([Program.cs:890](../../src/ThroughlineBuild.Cli/Program.cs#L890)) after resolving the agent name only for config validation - draft generation is effectively Claude-Code-only regardless of `default_agent`.
+- The `build new` draft-mode path still constructs `ClaudeCodeAgent` unconditionally ([CliApplication.cs:890](../../src/ThroughlineBuild.Cli/CliApplication.cs#L890)) after resolving the agent name only for config validation - draft generation is effectively Claude-Code-only regardless of `default_agent`.
 - `WorkerOptions.AllowedTools` remains Claude-Code-shaped; Copilot maps it, codex/gemini ignore it - now at least surfaced by `VerifierToolEnforcement` for the review phase.
 - Token/cost capture is still asymmetric (full splits from claude-code only); the analyzer compensates by pricing from its own table.
 - Per-turn telemetry (`ClaudeCodeTurnParser`, `WorkerTranscriptWriter`) is claude-code-only; the other agents have no equivalent, so context-attribution experiments only measure one vendor.
@@ -149,7 +151,7 @@ The project is AOT-compatible and tested. Its project file has NuGet identity an
 
 `LlmClientFactory.Create` ([src/ThroughlineBuild.Cli/LlmClientFactory.cs](../../src/ThroughlineBuild.Cli/LlmClientFactory.cs)) inspects the `[llm] default_model` prefix and only accepts `anthropic:` - any other prefix throws `ConfigException` ([LlmClientFactory.cs:28](../../src/ThroughlineBuild.Cli/LlmClientFactory.cs#L28)). `default_model` is deprecated for worker selection (worker models come from `[workers.<agent>.sizes]`) and is commented out in the live config, surviving only as this factory's input.
 
-`ReasonTranslator` ([src/ThroughlineBuild.JudgmentSlots/ReasonTranslator.cs:15](../../src/ThroughlineBuild.JudgmentSlots/ReasonTranslator.cs#L15), model pinned to the `ModelId` const `claude-haiku-4-5-20251001`) remains the only LLM consumer in the deterministic CLI, translating operator reason text for `close` / `defer` / `reopen`. The wiring in `WireUpConditionalCommands` ([Program.cs:2235](../../src/ThroughlineBuild.Cli/Program.cs#L2235)) degrades gracefully (TLB-371): when `LlmClientFactory.Create` throws ([Program.cs:2255](../../src/ThroughlineBuild.Cli/Program.cs#L2255)), it logs a `WARNING: LLM unavailable` line and substitutes `EchoLlmClient` ([Program.cs:2261](../../src/ThroughlineBuild.Cli/Program.cs#L2261), [src/ThroughlineBuild.Cli/EchoLlmClient.cs](../../src/ThroughlineBuild.Cli/EchoLlmClient.cs)), which returns the operator's reason verbatim - the state transition always runs.
+`ReasonTranslator` ([src/ThroughlineBuild.JudgmentSlots/ReasonTranslator.cs:15](../../src/ThroughlineBuild.JudgmentSlots/ReasonTranslator.cs#L15), model pinned to the `ModelId` const `claude-haiku-4-5-20251001`) remains the only LLM consumer in the deterministic CLI, translating operator reason text for `close` / `defer` / `reopen`. The wiring in `WireUpConditionalCommands` ([CliApplication.cs:2235](../../src/ThroughlineBuild.Cli/CliApplication.cs#L2235)) degrades gracefully (TLB-371): when `LlmClientFactory.Create` throws ([CliApplication.cs:2255](../../src/ThroughlineBuild.Cli/CliApplication.cs#L2255)), it logs a `WARNING: LLM unavailable` line and substitutes `EchoLlmClient` ([CliApplication.cs:2261](../../src/ThroughlineBuild.Cli/CliApplication.cs#L2261), [src/ThroughlineBuild.Cli/EchoLlmClient.cs](../../src/ThroughlineBuild.Cli/EchoLlmClient.cs)), which returns the operator's reason verbatim - the state transition always runs.
 
 ### `IModelClient` (newer, unwired)
 
@@ -238,7 +240,7 @@ Unchanged, and untouched this cycle. Either implement `XClient : ILlmClient` nex
 - **Worker layer is wired; model-client layer is not.** The gap is now starker: the worker layer gained tiering, validation, telemetry, and error classification this cycle while the `IModelClient` wiring task did not move. With reason translation degrading to `EchoLlmClient`, there is no operational pressure forcing the wiring.
 - **Streaming stubs persist** in `AnthropicClient.InvokeStreamAsync` and `ModelClientLlmAdapter.InvokeStreamAsync`; real streaming lives only in the unwired `AnthropicModelClient.StreamAsync`.
 - **Construction is centralized but still name-switched** (`WorkerAgentBuilder.Create`); a data-driven registry remains hypothetical.
-- **Draft generation is Claude-Code-only** regardless of `default_agent` ([Program.cs:890](../../src/ThroughlineBuild.Cli/Program.cs#L890)).
+- **Draft generation is Claude-Code-only** regardless of `default_agent` ([CliApplication.cs:890](../../src/ThroughlineBuild.Cli/CliApplication.cs#L890)).
 - **Telemetry depth is one-vendor:** per-turn usage, tool-class attribution, and the structured transcript exist only for claude-code, which biases any cross-vendor experiment the cost ledger is meant to support.
 - **`ReasonTranslator.ModelId` is a pinned `const`** naming a dated Haiku snapshot; no `[judgment_slots]` config exists.
 - **No MCP server adapter.** Architecture Appendix item 3 contemplates `build` as an MCP server; an MCP-server-as-worker would be a separate animal from one-shot `IWorkerAgent`.

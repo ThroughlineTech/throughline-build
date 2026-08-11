@@ -37,8 +37,9 @@ public class AutomatedChecksRunner
         CancellationToken ct,
         RequiredPathHandling requiredPathHandling)
     {
-        // Setup-role specs are prerequisites (a codegen/install step the real checks depend on); run
-        // them FIRST so the gating/advisory checks they enable see a prepared worktree. Stable, and a
+        // Setup-role specs are repeatable prerequisites (for example, codegen) the real checks depend
+        // on; run them FIRST on every invocation so the gating/advisory checks they enable see a
+        // prepared worktree. Dependency installation belongs to lease creation, never setup. Stable, and a
         // no-op when no setup spec is present, so single-role check lists keep their original order.
         specs = OrderSetupFirst(specs);
 
@@ -206,6 +207,14 @@ public class AutomatedChecksRunner
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            // A check must never inherit the caller's stdin. Left un-redirected, the child gets
+            // whatever handle the process that ran 'build' happened to hold: a terminal gives a
+            // readable console, an agent/CI harness can pass a handle that is closed or not
+            // inheritable, and reads against that fail with ERROR_INVALID_HANDLE. That made the
+            // gate verdict a function of who invoked it. Redirect stdin and close it immediately
+            // (below) so every check sees the same thing everywhere: immediate EOF. A check that
+            // prompts then fails fast instead of blocking until its timeout.
+            RedirectStandardInput = true,
             WorkingDirectory = workingDirectory
         };
 
@@ -240,6 +249,22 @@ public class AutomatedChecksRunner
         {
             sw.Stop();
             return new CheckResult(spec.Name, false, -1, "", "[runner] failed to start process", sw.Elapsed, spec.Role, CommandLine: commandLine);
+        }
+
+        // Close the child's stdin right away: the check gets EOF on its first read rather than
+        // blocking on a pipe nobody writes to. Best-effort - a process that exited already makes
+        // this throw, which is not a check failure.
+        try
+        {
+            proc.StandardInput.Close();
+        }
+        catch (IOException)
+        {
+            // child already gone; nothing to close
+        }
+        catch (ObjectDisposedException)
+        {
+            // child already gone; nothing to close
         }
 
         // Read stdout and stderr concurrently to avoid deadlock

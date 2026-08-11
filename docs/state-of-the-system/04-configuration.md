@@ -1,6 +1,6 @@
 # 04 - Configuration and Environment
 
-Last refreshed: 2026-07-26 (HEAD 00dc074)
+Last refreshed: 2026-08-08 (HEAD 5961f807)
 
 Every config file the binary reads, every environment variable it consults, every secret it requires, and whether each is required or optional.
 
@@ -10,17 +10,17 @@ For installation-time concerns (including the `build init` / `build setup` boots
 
 ## `.build/config.toml`
 
-The single source of operator-controlled configuration. Discovered by `BuildConfigLoader.FindConfigFile` walking up from cwd looking for `.build/config.toml` ([src/ThroughlineBuild.Cli/Config.cs:106-117](../../src/ThroughlineBuild.Cli/Config.cs#L106-L117)). Missing file: exit 2 with `Config error: config file not found: searched from <cwd> upwards for .build/config.toml` ([src/ThroughlineBuild.Cli/Program.cs:427-438](../../src/ThroughlineBuild.Cli/Program.cs#L427-L438)).
+The main repository configuration is deliberately tracked: `.gitignore` excludes other `.build` state but not `.build/config.toml`, because checks, wave/worktree policy, and project facts must travel between clones and the generated default contains token indirection rather than a literal token ([.gitignore:1](../../.gitignore#L1)). `BuildConfigLoader.FindConfigFile` delegates to the repository-bounded, worktree-aware `RepositoryLayout` so a linked worktree resolves the clone's configured `.build` without climbing into an unrelated ancestor ([Config.cs:144](../../src/ThroughlineBuild.Cli/Config.cs#L144), [RepositoryLayout.cs:59](../../src/ThroughlineBuild.Cli/RepositoryLayout.cs#L59)). Missing file is a config error, exit 2.
 
-Parsed by `Tomlyn` into the typed records `TicketingConfig`, `LlmConfig`, `WorkersConfig` (containing `AgentConfig` per agent), `EventsConfig`, `ReviewConfig`, `ShipConfig`, `WorkConfig`, `ProjectContext`, `PlanConfig`, and the new `BatchConfig`, aggregated into `BuildConfig` ([src/ThroughlineBuild.Cli/Config.cs:10-95](../../src/ThroughlineBuild.Cli/Config.cs#L10-L95)). The ten section readers run in `BuildConfigLoader.Load` ([src/ThroughlineBuild.Cli/Config.cs:144-153](../../src/ThroughlineBuild.Cli/Config.cs#L144-L153)).
+Parsed by `Tomlyn` into the typed records declared at the top of `Config.cs`: ticketing, LLM, workers/agents, events, review, ship, work, worktree, waves, project, plan, and batch, aggregated into `BuildConfig` ([Config.cs:12](../../src/ThroughlineBuild.Cli/Config.cs#L12), [Config.cs:105](../../src/ThroughlineBuild.Cli/Config.cs#L105)). `BuildConfigLoadMode` supports full loading plus candidate/worktree/gate/waves/profile standalone slices so deterministic conductor verbs do not demand irrelevant Plane, worker, or event settings ([Config.cs:134](../../src/ThroughlineBuild.Cli/Config.cs#L134)).
 
-**There is now exactly one tracked template.** The old hand-edit reference `.build/config.toml.example` has been deleted; the embedded `build init` template [src/ThroughlineBuild.Commands/Templates/config.toml.template](../../src/ThroughlineBuild.Commands/Templates/config.toml.template) is the single documented shape, using `REQUIRED_*` placeholders for the four Plane fields. It sets `default_agent = "claude-code"` with an active `[workers.codex]` block as the alternate. The generated live `.build/config.toml` is gitignored and may differ. The template now ships **empty review/ship checks and a blank `[project]` toolchain on purpose** (commit 187d1ca "make build toolchain no-op by default"): checks and toolchain fields are derived from the op-doc at `build scaffold` time, so a project with no build/test step passes the gate instead of hard-failing on a phantom `dotnet build`; commented per-stack examples remain for hand configuration.
+**There is one embedded template.** The old `.build/config.toml.example` is gone; [config.toml.template](../../src/ThroughlineBuild.Commands/Templates/config.toml.template) is the bootstrap shape. The generated live file is intended to be reviewed and committed. It ships empty checks and blank project toolchain fields until `profile prompt` -> external agent -> `profile apply` (or staged `build install --profile`) derives them; `build scaffold` no longer owns profile generation.
 
-Three things edit the config file programmatically, all comment-preserving line edits rather than re-serialization: `build settarget` (the `[work].target_branch` key, `SetTargetCommand`), `build models refresh` (only the `[workers.codex.sizes]` block, `CodexSizesBlockEditor`), and scaffold profile derivation (`ConfigProfileWriter` writes derived `[[review.checks]]` / `[[ship.regression_checks]]` and the `[project]` toolchain + `convention_files`; it refuses to overwrite checks that look hand-customized unless `--force-profile`, `ConfigProfileWriter.AlreadyConfiguredSkipReason` at [src/ThroughlineBuild.Cli/ConfigProfileWriter.cs:73](../../src/ThroughlineBuild.Cli/ConfigProfileWriter.cs#L73)).
+Programmatic editors preserve unrelated text: `settarget` edits `[work].target_branch`; `models refresh` replaces only `[workers.codex.sizes]`; `profile apply`/`install --profile` use `ConfigProfileWriter` for project and check blocks; `setup --write-token-file` inserts or replaces only `ticketing.plane_api_token_file` ([TokenFileInstaller.cs:65](../../src/ThroughlineBuild.Cli/TokenFileInstaller.cs#L65)).
 
 ### Unknown-key warnings (TLB-405)
 
-After the typed sections load, `BuildConfigLoader.Load` runs a non-fatal validation pass that emits one `warning: unknown config key <path> - ignored` per unrecognized key to `stderr` (or a supplied `warnSink`) - the run still proceeds. Driver: [src/ThroughlineBuild.Cli/Config.cs:155-169](../../src/ThroughlineBuild.Cli/Config.cs#L155-L169); implementation `CollectUnknownKeyWarnings` ([src/ThroughlineBuild.Cli/Config.cs:279-450](../../src/ThroughlineBuild.Cli/Config.cs#L279-L450)). The allowlists are static `HashSet<string>` fields per scope - `KnownTopLevelSections` (now ten sections including `batch`) through `KnownBatchKeys` ([src/ThroughlineBuild.Cli/Config.cs:198-277](../../src/ThroughlineBuild.Cli/Config.cs#L198-L277)). The pass now also descends into the per-size tier tables (`KnownTierKeys`: `model`, `effort`) and validates `[[review.checks]]` / `[[ship.regression_checks]]` entries against `KnownCheckEntryKeys` (`name`, `executable`, `arguments`, `timeout_minutes`, `role`, `canary`). `[workers.phases]` is skipped by this pass because it already hard-errors on unknown keys (see below).
+After typed loading, `CollectUnknownKeyWarnings` emits one non-fatal warning per unrecognized key. `KnownTopLevelSections` now covers 12 sections including `worktree`, `waves`, and `batch`; the check-entry allowlist includes `required_paths` in addition to name/executable/arguments/timeout/role/canary ([Config.cs:393](../../src/ThroughlineBuild.Cli/Config.cs#L393), [Config.cs:444](../../src/ThroughlineBuild.Cli/Config.cs#L444)). The pass descends into wave serialization rules and size tiers; `[workers.phases]` hard-validates separately.
 
 ### Required-field handling (TLB-369)
 
@@ -40,6 +40,7 @@ Read by `ReadTicketingSection` into `TicketingConfig` ([src/ThroughlineBuild.Cli
 | `plane_project_identifier` | no | `""` | e.g. `"TLB"`. Filename component and Plane client option. |
 | `plane_project_name` | no | `""` | e.g. `"throughline-build"`. Filename component / `SessionContext.ProjectName`. |
 | `plane_api_token` | no | `null` | Inline token; takes precedence over env. |
+| `plane_api_token_file` | no | `""` | File whose trimmed contents are the token. Resolved after inline and environment sources; relative paths anchor at the repository root. |
 | `plane_requests_per_minute` | no | `40` | Per-process cap on Plane API calls/min, enforced client-side by `RequestThrottle`. The default is sized for Plane Cloud's 60/min, leaving headroom for a second concurrent `build`. Raise it for a self-hosted Plane with a higher limit (or none). Non-positive values are rejected at load (TLB-565). |
 
 A missing or empty required key throws `ConfigException`; CLI exits 2 with `Config error: ...`.
@@ -104,9 +105,9 @@ The tier is selected from the ticket's size: `S -> Small`, `L -> Large`, anythin
 
 Maps phase names to agent names (TLB-189/190/191). Allowed keys: `plan`, `implement`, `review`, `decompose`; any other key throws `unknown phase key '<k>' in [workers.phases]` and an empty value throws `value for '<k>' in [workers.phases] must be a non-empty string` ([src/ThroughlineBuild.Cli/Config.cs:589-604](../../src/ThroughlineBuild.Cli/Config.cs#L589-L604)). Every mapped agent name is validated against the defined sub-tables at load (TLB-512, see `[workers]` above). This sub-table is skipped by the unknown-key warning pass because it already hard-errors on its own.
 
-Resolution per phase: the local function `AgentFor(phase)` returns the `[workers.phases]` mapping if present, else `default_agent`; `EffectiveAgentFor(phase)` layers CLI flags on top - a per-phase flag (`--agent-plan` / `--agent-implement` / `--agent-review`) wins over `--agent` (all phases), which wins over config ([src/ThroughlineBuild.Cli/Program.cs:1143-1153](../../src/ThroughlineBuild.Cli/Program.cs#L1143-L1153)). The agent flags are extracted before dispatch by `CliArgParser.ExtractAgentFlags` ([src/ThroughlineBuild.Cli/Program.cs:102-105](../../src/ThroughlineBuild.Cli/Program.cs#L102-L105)).
+Resolution per phase: the local function `AgentFor(phase)` returns the `[workers.phases]` mapping if present, else `default_agent`; `EffectiveAgentFor(phase)` layers CLI flags on top - a per-phase flag (`--agent-plan` / `--agent-implement` / `--agent-review`) wins over `--agent` (all phases), which wins over config ([src/ThroughlineBuild.Cli/CliApplication.cs:1143-1153](../../src/ThroughlineBuild.Cli/CliApplication.cs#L1143-L1153)). The agent flags are extracted before dispatch by `CliArgParser.ExtractAgentFlags` ([src/ThroughlineBuild.Cli/CliApplication.cs:102-105](../../src/ThroughlineBuild.Cli/CliApplication.cs#L102-L105)).
 
-The orchestrator constructs one agent per name referenced by `default_agent`, any phase mapping, or a CLI flag, building each through `WorkerAgentBuilder.Create` (name switch: `gemini`, `codex`, `copilot`, else `ClaudeCodeAgent` fallback) ([src/ThroughlineBuild.Cli/Program.cs:1117-1141](../../src/ThroughlineBuild.Cli/Program.cs#L1117-L1141)). See [02-install-build-run.md](02-install-build-run.md) "Worker CLIs" for the per-agent table.
+The orchestrator constructs one agent per name referenced by `default_agent`, any phase mapping, or a CLI flag, building each through `WorkerAgentBuilder.Create` (name switch: `gemini`, `codex`, `copilot`, else `ClaudeCodeAgent` fallback) ([src/ThroughlineBuild.Cli/CliApplication.cs:1117-1141](../../src/ThroughlineBuild.Cli/CliApplication.cs#L1117-L1141)). See [02-install-build-run.md](02-install-build-run.md) "Worker CLIs" for the per-agent table.
 
 ### `[work]` (optional section) - Functional
 
@@ -118,7 +119,15 @@ Read by `ReadWorkSection` into `WorkConfig(string? TargetBranch)` ([src/Throughl
 
 A hand-edited `target_branch` bypasses the `build settarget` branch check, so `Load` runs a non-fatal existence validation when a `branchExists` validator is supplied: if the configured branch does not resolve to a local ref, it emits `warning: [work].target_branch '<b>' does not resolve to a local branch - ship will block until it exists or you run 'build settarget'` through the same warning channel as the unknown-key pass ([src/ThroughlineBuild.Cli/Config.cs:159-165](../../src/ThroughlineBuild.Cli/Config.cs#L159-L165)). The check is skipped when no validator is passed (unit tests, or commands that do not touch git).
 
-`BuildConfig.ResolveTargetBranch()` returns `Work.TargetBranch ?? Ship.BaseBranch` ([src/ThroughlineBuild.Cli/Config.cs:89](../../src/ThroughlineBuild.Cli/Config.cs#L89)); `TargetBranchOverridden` is true when `Work.TargetBranch is not null` ([src/ThroughlineBuild.Cli/Config.cs:94](../../src/ThroughlineBuild.Cli/Config.cs#L94)). Both flow into `ShipOptions` ([src/ThroughlineBuild.Cli/Program.cs:1622-1632](../../src/ThroughlineBuild.Cli/Program.cs#L1622-L1632)) and `BuildOptions.TargetBranch`, consumed by `ShipPhase` and the target-aware `BaseRefResolver`. The intended editing path is the `build settarget` verb, which validates the branch exists locally before writing the key and preserves config comments via line-edit; hand-editing the TOML works too. When `target_branch != base_branch`, ship enforces that the main worktree is checked out on the target branch before merging - and chain refuses a wrong main-worktree branch at preflight, not at ship (b9366cd).
+`BuildConfig.ResolveTargetBranch()` returns `Work.TargetBranch ?? Ship.BaseBranch` ([src/ThroughlineBuild.Cli/Config.cs:89](../../src/ThroughlineBuild.Cli/Config.cs#L89)); `TargetBranchOverridden` is true when `Work.TargetBranch is not null` ([src/ThroughlineBuild.Cli/Config.cs:94](../../src/ThroughlineBuild.Cli/Config.cs#L94)). Both flow into `ShipOptions` ([src/ThroughlineBuild.Cli/CliApplication.cs:1622-1632](../../src/ThroughlineBuild.Cli/CliApplication.cs#L1622-L1632)) and `BuildOptions.TargetBranch`, consumed by `ShipPhase` and the target-aware `BaseRefResolver`. The intended editing path is the `build settarget` verb, which validates the branch exists locally before writing the key and preserves config comments via line-edit; hand-editing the TOML works too. When `target_branch != base_branch`, ship enforces that the main worktree is checked out on the target branch before merging - and chain refuses a wrong main-worktree branch at preflight, not at ship (b9366cd).
+
+### `[worktree]` (optional section) - Functional
+
+Standalone conductor worktree commands load only this section plus `[project].install_command`. `root` defaults to `.worktrees/conductor` and names the contained lease root; `seed_files` defaults to `[]` and is the exact allowlist for `worktree lease --require-seed` ([WorktreeConfig:65](../../src/ThroughlineBuild.Cli/Config.cs#L65), [ReadWorktreeSection:1155](../../src/ThroughlineBuild.Cli/Config.cs#L1155)). Blank roots fail config loading. Lease paths and manifests are still independently containment-checked by `WorktreeLeaseManager`; this config is policy, not authority.
+
+### `[waves]` and `[[waves.serialize]]` (optional) - Functional
+
+`cap` defaults to `WavePlanner.DefaultCap` and must be within the planner's bounded range. Each serialize rule requires `kind = "global" | "cohesive-module" | "pairwise"` plus at least one normalized repository path pattern; invalid kinds, empty paths, absolute/escaping patterns, or wrong TOML shapes fail loading ([ReadWavesSection:1171](../../src/ThroughlineBuild.Cli/Config.cs#L1171)). `build waves` uses this standalone slice to cap parallel wave width and force serialization where touched-path policy says candidates can conflict.
 
 ### `[events]` (required section) - Functional
 
@@ -132,10 +141,11 @@ Read by `ReadReviewSection` into `ReviewConfig`; missing section = all defaults 
 |---|---|---|
 | `verifier_timeout_minutes` | `15` | Verifier worker timeout. |
 | `verifier_allowed_tools` | `["Read", "Grep", "Glob"]` | Tool allowlist for the verifier worker. Only enforced by claude-code/copilot; a startup warning fires when the review agent ignores it (TLB-478, `VerifierToolEnforcement.UnenforcedWarning`, [src/ThroughlineBuild.Cli/VerifierToolEnforcement.cs:20-30](../../src/ThroughlineBuild.Cli/VerifierToolEnforcement.cs#L20-L30)). |
-| `verify_gate_vacuity` | `true` | NEW. Enables the gate non-vacuity prover: on a gating check's first green, a per-check canary proves the check can actually fail; a vacuous check hard-fails (da544ff/b736f14). Read at [src/ThroughlineBuild.Cli/Config.cs:738](../../src/ThroughlineBuild.Cli/Config.cs#L738); wired as `GateVacuityProver` only when true ([src/ThroughlineBuild.Cli/Program.cs:1813](../../src/ThroughlineBuild.Cli/Program.cs#L1813)). |
+| `verify_gate_vacuity` | `true` | NEW. Enables the gate non-vacuity prover: on a gating check's first green, a per-check canary proves the check can actually fail; a vacuous check hard-fails (da544ff/b736f14). Read at [src/ThroughlineBuild.Cli/Config.cs:738](../../src/ThroughlineBuild.Cli/Config.cs#L738); wired as `GateVacuityProver` only when true ([src/ThroughlineBuild.Cli/CliApplication.cs:1813](../../src/ThroughlineBuild.Cli/CliApplication.cs#L1813)). |
+| `canaries_verified` | unset | Persisted proof bit written by profile apply. Standalone `build gate` fails closed when gating checks exist but this proof is not true, unless the profile flow explicitly recorded a skipped proof. |
 | `[[review.checks]]` (array-of-tables) | empty list | Automated checks; see below. |
 
-Each `[[review.checks]]` entry maps to a `CheckSpec(Name, Executable, Arguments, Timeout, Role, Canary)`. `name` and `executable` are required; `arguments` defaults to empty, `timeout_minutes` defaults to `5`. Entry keys are validated against `KnownCheckEntryKeys` (now including `canary`) by the unknown-key warning pass.
+Each `[[review.checks]]` entry maps to a `CheckSpec(Name, Executable, Arguments, Timeout, Role, Canary, RequiredPaths)`. `name` and `executable` are required; `arguments` and `required_paths` default empty, `timeout_minutes` defaults to `5`. `required_paths` lets doctor/gate fail closed when a check's harness files are absent. Entry keys are validated against `KnownCheckEntryKeys` ([Config.cs:444](../../src/ThroughlineBuild.Cli/Config.cs#L444)).
 
 **`role` field** - parsed by `ParseCheckRole`, which now accepts three values; an unrecognized string throws `key 'role' in [<context>] must be "gating", "advisory", or "setup", got "<v>"` ([src/ThroughlineBuild.Cli/Config.cs:459-470](../../src/ThroughlineBuild.Cli/Config.cs#L459-L470)):
 
@@ -157,7 +167,7 @@ Each `[[review.checks]]` entry maps to a `CheckSpec(Name, Executable, Arguments,
 | `lint` | advisory | Style/lint failures are recorded and surfaced to the verifier but never hard-fail the gate. |
 | `format` | advisory | Formatting violations are recorded as advisory; the verifier sees them as a smoke signal. |
 
-A check absent from config is not-configured and treated as not-run, never as a failure. The gate skips checks not present in the configured list; it never synthesizes a failure for a missing check name. **The template ships this list empty on purpose** - checks are derived from the op-doc at `build scaffold` time (the deriver emits roles, canaries, hermetic test commands, and cache-disabled linter invocations; see [03-external-dependencies.md](03-external-dependencies.md) "Worker subprocesses outside the phases").
+A check absent from config is not-configured and treated as not-run unless `build gate --require-checks` or SOP doctor is proving readiness. **The template ships this list empty on purpose** - checks are derived through `build profile prompt` and applied only after canary verification.
 
 ```toml
 [[review.checks]]
@@ -187,7 +197,7 @@ Read by `ReadShipSection` into `ShipConfig`; missing section = all defaults ([sr
 | `push` | `true` |
 | `[[ship.regression_checks]]` | empty list |
 
-`push` (TLB-410) gates whether ship touches the remote after the local fast-forward merge. The effective no-push decision is `NoPush = noPush || !config.Ship.Push`, so either the `--no-push` CLI flag or `push = false` in config disables the remote push ([src/ThroughlineBuild.Cli/Program.cs:1629](../../src/ThroughlineBuild.Cli/Program.cs#L1629)); ship then rebases onto the local target and emits a `fetch_skipped` reason. When `push = true` and the target branch does not yet exist on the remote, ship rebases onto the local target and lets the push create it (TLB-409). Within a recursive chain, integration-branch ships are always `NoPush: true` (the accumulated work is pushed once when the root chain lands, [src/ThroughlineBuild.Cli/Program.cs:1907-1929](../../src/ThroughlineBuild.Cli/Program.cs#L1907-L1929)).
+`push` (TLB-410) gates whether ship touches the remote after the local fast-forward merge. The effective no-push decision is `NoPush = noPush || !config.Ship.Push`, so either the `--no-push` CLI flag or `push = false` in config disables the remote push ([src/ThroughlineBuild.Cli/CliApplication.cs:1629](../../src/ThroughlineBuild.Cli/CliApplication.cs#L1629)); ship then rebases onto the local target and emits a `fetch_skipped` reason. When `push = true` and the target branch does not yet exist on the remote, ship rebases onto the local target and lets the push create it (TLB-409). Within a recursive chain, integration-branch ships are always `NoPush: true` (the accumulated work is pushed once when the root chain lands, [src/ThroughlineBuild.Cli/CliApplication.cs:1907-1929](../../src/ThroughlineBuild.Cli/CliApplication.cs#L1907-L1929)).
 
 `[[ship.regression_checks]]` entries share the `CheckSpec` shape, role values, and canary support with `review.checks`. The two lists are independent so each phase evolves separately. Regression checks are baseline-aware (TLB-401): only newly-failing checks block the ship; pre-existing failures are noted non-blocking. Advisory regression checks never block, and contradictory baselines are re-checked via the shared `GateControlProber` (22a79ab, 3760266).
 
@@ -211,7 +221,7 @@ Caps that gate the chain's batch-implement path (`build chain <id> --batch-imple
 | `max_size_score` | `16` | Maximum aggregate size score (S=1, M=2, L=4). |
 | `max_description_bytes` | `200000` | Maximum total description HTML bytes across batch tickets (worker-context proxy). |
 
-All caps are checked before the batch session starts, using only declared ticket metadata; exceeding any cap falls back to the proven per-ticket chain with a logged reason. The values flow into `BuildOptions.BatchMaxTickets` / `BatchMaxSizeScore` / `BatchMaxDescriptionBytes` ([src/ThroughlineBuild.Cli/Program.cs:1431-1433](../../src/ThroughlineBuild.Cli/Program.cs#L1431-L1433)).
+All caps are checked before the batch session starts, using only declared ticket metadata; exceeding any cap falls back to the proven per-ticket chain with a logged reason. The values flow into `BuildOptions.BatchMaxTickets` / `BatchMaxSizeScore` / `BatchMaxDescriptionBytes` ([src/ThroughlineBuild.Cli/CliApplication.cs:1431-1433](../../src/ThroughlineBuild.Cli/CliApplication.cs#L1431-L1433)).
 
 ### `[project]` (optional section, all keys optional) - Functional
 
@@ -219,14 +229,14 @@ Read by `ReadProjectSection` into `ProjectContext` - context handed to brief bui
 
 | Key | Default | Notes |
 |---|---|---|
-| `language`, `framework`, `package_manager`, `build_command`, `test_command`, `install_command`, `dev_command`, `plane_project_url` | `""` | Flowed into brief context dictionaries. The template ships these blank on purpose - scaffold profile derivation fills them from the op-doc. |
+| `language`, `framework`, `package_manager`, `build_command`, `test_command`, `install_command`, `dev_command`, `plane_project_url` | `""` | Flowed into brief context dictionaries. The template ships these blank on purpose; profile prompt/apply derives them from repository source. |
 | `notes_file` | `""` | Path to a file (relative to the config file dir, or absolute) whose contents are injected into the plan brief. Missing or unreadable emits a stderr warning and proceeds with empty notes. |
 | `workflow_tool` | `"build"` | Must be `"build"` or `"claude-config"`; any other value: `ConfigException`, exit 2. |
-| `convention_files` | `[]` | NEW (exp-2, ecca03c). Array of project-root-relative paths to stable convention files (the test harness/setup file the runner auto-loads, build/test config, one canonical test example) inlined into every implement brief so the worker does not re-read them. Contents are read lazily at brief-build from the live worktree, not at config load; blank entries are dropped ([src/ThroughlineBuild.Cli/Config.cs:905-912](../../src/ThroughlineBuild.Cli/Config.cs#L905-L912)). Normally derived at `build scaffold` and rendered into the config by `ConfigProfileWriter` ([src/ThroughlineBuild.Cli/ConfigProfileWriter.cs:140-167](../../src/ThroughlineBuild.Cli/ConfigProfileWriter.cs#L140-L167)). |
+| `convention_files` | `[]` | Array of project-root-relative paths to stable convention files (the test harness/setup file the runner auto-loads, build/test config, one canonical test example) inlined into every implement brief so the worker does not re-read them. Contents are read lazily at brief-build from the live worktree, not at config load; blank entries are dropped ([src/ThroughlineBuild.Cli/Config.cs:905-912](../../src/ThroughlineBuild.Cli/Config.cs#L905-L912)). Normally derived by the `profile prompt` outer-agent handoff and rendered during deterministic `profile apply` by `ConfigProfileWriter` ([src/ThroughlineBuild.Cli/ConfigProfileWriter.cs:140-167](../../src/ThroughlineBuild.Cli/ConfigProfileWriter.cs#L140-L167)). |
 | `preload_context` | `true` | NEW (exp-2). Pre-loads named-input + convention file contents into the implement brief; set `false` to ablate the lever and restore the pre-preload brief ([src/ThroughlineBuild.Cli/Config.cs:914-915](../../src/ThroughlineBuild.Cli/Config.cs#L914-L915)). Note the default is ON. |
 | `context_hygiene` | `false` | NEW (exp-4, e7ab4da). Opt-in effort-gated planning hygiene for S-effort implement briefs only: a lightweight-planning prompt line plus a restricted tool set (`--disallowedTools TodoWrite,Task` on claude-code); M and L briefs are untouched ([src/ThroughlineBuild.Cli/Config.cs:917-918](../../src/ThroughlineBuild.Cli/Config.cs#L917-L918)). |
 
-`plane_project_url` is consumed only as brief context - it is injected into the plan/implement/review/decompose brief dictionaries as `project_plane_project_url` ([src/ThroughlineBuild.Briefs/PlanBriefBuilder.cs](../../src/ThroughlineBuild.Briefs/PlanBriefBuilder.cs) and the peer builders). It is NOT used to build the per-ticket browse URL in CLI summaries; that URL is built from `plane_base_url` + `plane_workspace_slug` via the `BuildPlaneUrl` helper ([src/ThroughlineBuild.Cli/Program.cs:2166-2173](../../src/ThroughlineBuild.Cli/Program.cs#L2166-L2173)).
+`plane_project_url` is consumed only as brief context - it is injected into the plan/implement/review/decompose brief dictionaries as `project_plane_project_url` ([src/ThroughlineBuild.Briefs/PlanBriefBuilder.cs](../../src/ThroughlineBuild.Briefs/PlanBriefBuilder.cs) and the peer builders). It is NOT used to build the per-ticket browse URL in CLI summaries; that URL is built from `plane_base_url` + `plane_workspace_slug` via the `BuildPlaneUrl` helper ([src/ThroughlineBuild.Cli/CliApplication.cs:2166-2173](../../src/ThroughlineBuild.Cli/CliApplication.cs#L2166-L2173)).
 
 ### Loose ends
 
@@ -236,7 +246,7 @@ Read by `ReadProjectSection` into `ProjectContext` - context handed to brief bui
 - **`workflow_tool` enum** is validated but unused at runtime - the value is stored on `ProjectContext` and flowed into brief context for the worker to read; nothing in code branches on it.
 - **`notes_file`** path resolution is anchored at the config file's directory, not the project root - inconsistent with `events.log_directory` which anchors at project root, and with `convention_files` which anchor at the worktree root.
 - **`effort` is accepted on every agent's tiers but consumed only by Codex** - a `[workers.claude-code.sizes] small = { model = "haiku", effort = "low" }` loads silently and the effort is ignored.
-- **Scaffold-derived ownership is heuristic** - `ConfigProfileWriter.AlreadyConfiguredSkipReason` decides "looks customized" from the existing check shape; an operator's hand-written checks that resemble the pristine template can still be overwritten on re-scaffold without `--force-profile`.
+- **Profile-derived ownership is heuristic.** `ConfigProfileWriter` compares existing check/project blocks; replacing differing operator content requires explicit `profile apply --force` or `install --profile ... --force`.
 
 ---
 
@@ -247,8 +257,8 @@ Read by `ReadProjectSection` into `ProjectContext` - context handed to brief bui
 | Variable | Required for | What happens if unset |
 |---|---|---|
 | `PLANE_API_TOKEN` (or whatever `ticketing.plane_api_token_env` names) | every Plane operation | exit 3 `Secret error: plane_api_token not set in config and required environment variable '<name>' is not set` (`BuildConfigLoader.ResolveSecrets`, [src/ThroughlineBuild.Cli/Config.cs:182-196](../../src/ThroughlineBuild.Cli/Config.cs#L182-L196)) |
-| `ANTHROPIC_API_KEY` (or whatever `llm.anthropic_api_key_env` names) | `close` / `defer` / `reopen` (reason translation) | resolved as an optional secret at load; those three verbs do not hard-fail when it is absent - they fall back to `EchoLlmClient` and record the reason verbatim ([src/ThroughlineBuild.Cli/Program.cs:2252-2262](../../src/ThroughlineBuild.Cli/Program.cs#L2252-L2262)) |
-| `BUILD_PROGRESS` | optional - set to `1` to keep the progress digest on even when stderr is redirected | digest auto-suppresses when stderr is redirected and `BUILD_PROGRESS != 1`, to keep CI/script logs clean (checked wherever `enableDigest` is computed, e.g. [src/ThroughlineBuild.Cli/Program.cs:754-757](../../src/ThroughlineBuild.Cli/Program.cs#L754-L757), [:1213-1215](../../src/ThroughlineBuild.Cli/Program.cs#L1213-L1215), [:1414-1416](../../src/ThroughlineBuild.Cli/Program.cs#L1414-L1416)) |
+| `ANTHROPIC_API_KEY` (or whatever `llm.anthropic_api_key_env` names) | `close` / `defer` / `reopen` (reason translation) | resolved as an optional secret at load; those three verbs do not hard-fail when it is absent - they fall back to `EchoLlmClient` and record the reason verbatim ([src/ThroughlineBuild.Cli/CliApplication.cs:2252-2262](../../src/ThroughlineBuild.Cli/CliApplication.cs#L2252-L2262)) |
+| `BUILD_PROGRESS` | optional - set to `1` to keep the progress digest on even when stderr is redirected | digest auto-suppresses when stderr is redirected and `BUILD_PROGRESS != 1`, to keep CI/script logs clean (checked wherever `enableDigest` is computed, e.g. [src/ThroughlineBuild.Cli/CliApplication.cs:754-757](../../src/ThroughlineBuild.Cli/CliApplication.cs#L754-L757), [:1213-1215](../../src/ThroughlineBuild.Cli/CliApplication.cs#L1213-L1215), [:1414-1416](../../src/ThroughlineBuild.Cli/CliApplication.cs#L1414-L1416)) |
 | `EDITOR` (via `ReviewLoop.DefaultEditorResolver`) | the interactive `e` (edit) action in `build new ... --review` | falls back to a platform candidate chain (`vim`, `nano`, `code --wait`; on Windows also `notepad.exe`) ([src/ThroughlineBuild.Cli/ReviewLoop.cs:259-268](../../src/ThroughlineBuild.Cli/ReviewLoop.cs#L259-L268)) |
 | `CLAUDE_CONFIG_DIR` | interactive Claude transport state and transcript lookup | when unset, the transport uses the normal Claude home/profile locations |
 | `HOME` / `USERPROFILE` | default Claude trust file and transcript root; `build.sh` install default | interactive Claude and local install paths cannot be resolved when the applicable home variable is absent |
@@ -283,19 +293,29 @@ The user's global `CLAUDE.md` configures conventions like `bin/notify` for agent
 
 Two secrets, both resolved by `BuildConfigLoader.ResolveSecrets` ([src/ThroughlineBuild.Cli/Config.cs:182-196](../../src/ThroughlineBuild.Cli/Config.cs#L182-L196)):
 
-1. **Plane API token.** Always required (every post-config verb hits Plane). Resolution: inline `plane_api_token`, else the env var named by `plane_api_token_env` (default `PLANE_API_TOKEN`). Missing: exit 3 at load.
+1. **Plane API token.** Required for Plane-backed configured verbs, but not for standalone candidate/worktree/gate/waves/profile/conductor/SOP operations. Resolution: inline `plane_api_token`, then the env var named by `plane_api_token_env`, then `plane_api_token_file`; missing on a Plane path exits 3.
 2. **Anthropic API key.** Used only for `close` / `defer` / `reopen` reason translation. Resolution: inline `anthropic_api_key`, else the env var named by `anthropic_api_key_env`. Resolved as optional (`null` allowed) at load; even the three reason-translation verbs do not hard-fail if it is absent (see below). Worker phases reach their provider via the worker CLI's own auth, independent of `ANTHROPIC_API_KEY`.
 
 #### Reason translation is the only LLM consumer
 
-Reason translation is the only path in the deterministic CLI that constructs the direct Anthropic client, and it is fully optional. `WireUpConditionalCommands` only runs for `close`/`defer`/`reopen` ([src/ThroughlineBuild.Cli/Program.cs:2235-2298](../../src/ThroughlineBuild.Cli/Program.cs#L2235-L2298)); it tries `LlmClientFactory.Create`, and on `ConfigException` (no key, deprecated `default_model` unset, etc.) it logs `WARNING: LLM unavailable (...); recording reason verbatim without translation.` and substitutes an `EchoLlmClient` ([src/ThroughlineBuild.Cli/EchoLlmClient.cs](../../src/ThroughlineBuild.Cli/EchoLlmClient.cs)) that returns the last user message verbatim. The ticket state transition still runs. `ReasonTranslator.ModelId` pins `claude-haiku-4-5-20251001` ([src/ThroughlineBuild.JudgmentSlots/ReasonTranslator.cs:16](../../src/ThroughlineBuild.JudgmentSlots/ReasonTranslator.cs#L16)). The old module-level `ANTHROPIC_API_KEY` hard gate is gone (TLB-227/TLB-371).
+Reason translation is the only path in the deterministic CLI that constructs the direct Anthropic client, and it is fully optional. `WireUpConditionalCommands` only runs for `close`/`defer`/`reopen` ([src/ThroughlineBuild.Cli/CliApplication.cs:2235-2298](../../src/ThroughlineBuild.Cli/CliApplication.cs#L2235-L2298)); it tries `LlmClientFactory.Create`, and on `ConfigException` (no key, deprecated `default_model` unset, etc.) it logs `WARNING: LLM unavailable (...); recording reason verbatim without translation.` and substitutes an `EchoLlmClient` ([src/ThroughlineBuild.Cli/EchoLlmClient.cs](../../src/ThroughlineBuild.Cli/EchoLlmClient.cs)) that returns the last user message verbatim. The ticket state transition still runs. `ReasonTranslator.ModelId` pins `claude-haiku-4-5-20251001` ([src/ThroughlineBuild.JudgmentSlots/ReasonTranslator.cs:16](../../src/ThroughlineBuild.JudgmentSlots/ReasonTranslator.cs#L16)). The old module-level `ANTHROPIC_API_KEY` hard gate is gone (TLB-227/TLB-371).
 
-`.build/config.toml` is gitignored ([.gitignore:14](../../.gitignore#L14)) along with `secrets/` ([.gitignore:2](../../.gitignore#L2)). The `secrets/` directory is reserved and not read by any code path. The `build init` template writes the token inline by default (`REQUIRED_PLANE_API_TOKEN` placeholder) with the env-var line commented; `--token-env` writes the env-var indirection line instead, and `--from <creds-file>` / redirected stdin let automation supply the token without a shell history entry (see [02-install-build-run.md](02-install-build-run.md)).
+`.build/config.toml` is intentionally tracked; `.build/conductor.toml`, `.build/sop-manifest.json`, generated handoff artifacts, events, sessions, and `secrets/` are ignored ([.gitignore:1](../../.gitignore#L1)). The generated config defaults to `plane_api_token_env` rather than a literal token. `plane_api_token_file` is the stable non-interactive alternative when an agent/editor launch does not inherit the operator's shell environment; `setup --write-token-file` writes the already-resolved token and its config indirection.
 
 ### Loose ends
 
-- **Secrets in `.build/config.toml`** are stored plaintext on disk. The template encourages inline by default; env-var indirection is supported but optional.
+- **Inline secrets remain accepted** even though config is tracked. The template uses env indirection and doctor flags a literal Plane token, but the parser does not universally forbid one.
 - **Credentials files for `build init --from`** are plaintext too, and nothing prompts the operator to delete them afterwards.
+
+---
+
+## `.build/conductor.toml` and `.build/sop-manifest.json`
+
+These ignored files are separate from tracked repository config. `conductor.toml` is structured TOML containing conductor identity, repository/constellation facts, review invariants and escalation policy; `SopDoctorCommand` is its schema and semantic validator ([SopDoctorCommand.cs:9](../../src/ThroughlineBuild.Cli/SopDoctorCommand.cs#L9), [SopDoctorCommand.cs:116](../../src/ThroughlineBuild.Cli/SopDoctorCommand.cs#L116)). `conductor prompt/apply` edits only invariant blocks, while SOP install scaffolds the file and install-profile derivation fills deterministic identity fields. `sop-manifest.json` is a schema-versioned cache of catalog writes; the embedded catalog and current/trusted hashes remain authoritative, so a damaged or absent manifest never grants permission to touch arbitrary paths ([SopInstallCommand.cs:495](../../src/ThroughlineBuild.Cli/SopInstallCommand.cs#L495)).
+
+### Loose ends
+
+- `RepositoryLayout` comments still call `.build` wholesale machine-local even though config is tracked; its actual path behavior deliberately serves both tracked config and ignored conductor state.
 
 ---
 
@@ -303,7 +323,7 @@ Reason translation is the only path in the deterministic CLI that constructs the
 
 ### Global claude-config state
 
-No project-local `.claude/plane-config.md`, `.claude/ticket-config.md`, or `.claude/commands/` files are tracked at HEAD. Any older slash-command configuration is installed outside this repository and is not a Throughline Build configuration source.
+No project-local `.claude/plane-config.md` or `.claude/ticket-config.md` is tracked at HEAD. The repository does track the run-backlog host stub at [.claude/commands/run-backlog.md](../../.claude/commands/run-backlog.md), its source skill at [.agents/skills/run-backlog/SKILL.md](../../.agents/skills/run-backlog/SKILL.md), and the safe settings example at [.claude/settings.json.example](../../.claude/settings.json.example). These are operator/SOP surfaces, not ticket-backend credentials or `BuildConfig` inputs.
 
 ### `AGENTS.md`
 
@@ -333,7 +353,8 @@ For secrets:
 
 1. Inline value in `.build/config.toml` (e.g. `plane_api_token = "..."`, `anthropic_api_key = "..."`).
 2. Environment variable named by the matching `*_env` key.
-3. (Plane only) absent -> exit 3; (Anthropic) absent -> `null`, degraded to `EchoLlmClient` if a reason-translation verb runs.
+3. Plane only: trimmed contents of `plane_api_token_file`, resolved relative to the repository root when not absolute.
+4. Plane absent -> exit 3; Anthropic absent -> `null`, degraded to `EchoLlmClient` if a reason-translation verb runs. The exact order is implemented by `BuildConfigLoader.ResolveSecrets` ([Config.cs:285](../../src/ThroughlineBuild.Cli/Config.cs#L285)).
 
 For `build init` inputs: explicit flags > credentials file (`--from` or redirected stdin) > interactive prompts > template placeholders ([src/ThroughlineBuild.Cli/InitCommand.cs:96-122](../../src/ThroughlineBuild.Cli/InitCommand.cs#L96-L122)).
 
@@ -344,11 +365,11 @@ For agent / model selection per phase:
 3. `[workers.phases]` mapping for that phase.
 4. `[workers] default_agent`.
 
-(`EffectiveAgentFor`, [src/ThroughlineBuild.Cli/Program.cs:1149-1153](../../src/ThroughlineBuild.Cli/Program.cs#L1149-L1153)). The model tier within an agent is then chosen by ticket size from that agent's `[workers.<name>.sizes]` map - there is no model-level CLI override.
+(`EffectiveAgentFor`, [src/ThroughlineBuild.Cli/CliApplication.cs:1149-1153](../../src/ThroughlineBuild.Cli/CliApplication.cs#L1149-L1153)). The model tier within an agent is then chosen by ticket size from that agent's `[workers.<name>.sizes]` map - there is no model-level CLI override.
 
 For the `ship` push toggle, `--no-push || !Ship.Push` disables the push. Plan promotion is verb-aware: `--from-brief` explicitly promotes for `plan` or `chain`, while `Plan.IsPromote` applies only to `chain`.
 
-For scaffold-derived config: `build scaffold` derivation defers to existing customized checks unless `--force-profile`; `--no-profile` skips derivation entirely ([src/ThroughlineBuild.Cli/ScaffoldProfileRunner.cs:47-56](../../src/ThroughlineBuild.Cli/ScaffoldProfileRunner.cs#L47-L56)).
+For derived config: `profile apply` refuses to replace differing existing checks unless `--force`; `--skip-canary` bypasses proof but records that it was skipped. `build install --profile` uses the same clobber rule and exposes `--force` only for that stage.
 
 For optional sections (`[llm]`, `[review]`, `[ship]`, `[work]`, `[plan]`, `[project]`, `[batch]`): a missing section is equivalent to an all-defaults section (each `Read*Section` returns its defaults when the table is absent).
 
@@ -361,6 +382,6 @@ For optional sections (`[llm]`, `[review]`, `[ship]`, `[work]`, `[plan]`, `[proj
 - **`workflow_tool`** is validated but never branched on.
 - **`[llm] default_model`** is reason-translation-only and deprecated; it does not configure worker models (those come from `[workers.<name>.sizes]` tier tables).
 - **Sizes schema hard-break is silent for old configs only at the error message level** - a pre-op-33 config with bare-string sizes fails loudly at load with the inline-table message; there is no automatic migration.
-- **Plaintext secrets** in the config file are the documented default.
+- **Literal secrets remain supported but are unsafe in tracked config.** The generated default uses `plane_api_token_env`; `setup --write-token-file` provides file indirection for non-interactive launchers, and SOP doctor reports inline Plane tokens as a finding.
 - **Non-fatal validation only, with growing exceptions.** Beyond TOML parse, required-section/key presence, the hard-break migration errors, the TLB-512 agent validation, and the TLB-544 claude-code model validation, the loader's extra validation is advisory: unknown keys (TLB-405) and a dangling `[work].target_branch` (TLB-410) emit `warning:` lines but do not fail the run. There is still no `build config check` verb; `build setup` covers the Plane-side half (`--check` keeps the Plane provisioning read-only) and now also runs a Claude transport capability preflight (executable, version, platform) that returns non-zero when a configured `interactive-hook` agent cannot run on this host.
 - **No per-environment overlay** (no `config.local.toml`). Operators with multiple Plane workspaces hand-edit the file or use `build init --force` to regenerate.

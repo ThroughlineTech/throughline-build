@@ -248,6 +248,52 @@ public class ProcessGitClientStatusTests : IDisposable
     }
 
     [Fact]
+    public async Task ProbeTrackedPathsAsync_TrackedPathGiven_ReportsTracked()
+    {
+        var repoDir = CreateTempGitRepo();
+        var client = new ProcessGitClient(repoDir);
+
+        var probe = await client.ProbeTrackedPathsAsync(new[] { "file.txt" }, repoDir, CancellationToken.None);
+
+        Assert.Equal(GitTrackedPathScope.Tracked, probe.Scope);
+        Assert.Equal("file.txt", Assert.Single(probe.Paths));
+        Assert.Null(probe.Failure);
+    }
+
+    [Fact]
+    public async Task ProbeTrackedPathsAsync_UntrackedPathGiven_ReportsTrackedAndEmpty()
+    {
+        var repoDir = CreateTempGitRepo();
+        var client = new ProcessGitClient(repoDir);
+
+        var probe = await client.ProbeTrackedPathsAsync(new[] { "no-such-file.txt" }, repoDir, CancellationToken.None);
+
+        // An empty index answer is still an answer, and must not read as "could not ask".
+        Assert.Equal(GitTrackedPathScope.Tracked, probe.Scope);
+        Assert.Empty(probe.Paths);
+    }
+
+    [Fact]
+    public async Task ProbeTrackedPathsAsync_OutsideAnyRepository_ReportsNotARepository()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "git-probe-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var client = new ProcessGitClient(directory);
+
+        try
+        {
+            var probe = await client.ProbeTrackedPathsAsync(new[] { "file.txt" }, directory, CancellationToken.None);
+
+            Assert.Equal(GitTrackedPathScope.NotARepository, probe.Scope);
+            Assert.Empty(probe.Paths);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
     public async Task FilterTrackedPathsAsync_MixedPaths_ReturnsOnlyTracked()
     {
         var repoDir = CreateTempGitRepo();

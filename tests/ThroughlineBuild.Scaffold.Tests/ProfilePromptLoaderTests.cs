@@ -4,45 +4,36 @@ using Xunit;
 namespace ThroughlineBuild.Scaffold.Tests;
 
 /// <summary>
-/// Guards the derive-profile prompt's CONTRACT, not the LLM's output. The deriver's actual file
-/// selection is the worker's and is faked in <see cref="ScaffoldProfileDeriverTests"/>; what we can
-/// pin deterministically is that the prompt still INSTRUCTS the worker to put the test harness/setup
-/// file into convention_files, and does so stack-agnostically (by the runner's setup mechanism, not
-/// by language). This is the regression the fix exists to prevent: experiment 3 derived a bundle that
-/// omitted the auto-loaded setup file, so every implement brief re-read it.
+/// Guards the repository profile prompt contract consumed by an interactive agent.
 /// </summary>
 public class ProfilePromptLoaderTests
 {
     [Fact]
-    public void Load_ReturnsNonEmptyTemplate_WithOpDocPlaceholder()
+    public void RepositoryPrompt_UsesTheSharedRulesButRequestsPlainJson()
     {
-        var prompt = ProfilePromptLoader.Load();
+        var prompt = ProfilePromptLoader.LoadRepository();
 
-        Assert.False(string.IsNullOrWhiteSpace(prompt));
-        Assert.Contains("{{op_doc_markdown}}", prompt);
-        Assert.Contains("convention_files", prompt);
-    }
-
-    [Fact]
-    public void Prompt_MandatesTheHarnessSetupFileInConventionFiles()
-    {
-        var prompt = ProfilePromptLoader.Load();
-
-        // The harness/setup file must be called for explicitly and made non-optional.
-        Assert.Contains("harness/setup file", prompt);
-        Assert.Contains("MANDATORY", prompt);
-    }
-
-    [Fact]
-    public void Prompt_IdentifiesTheSetupFileGenerically_AcrossStacks()
-    {
-        var prompt = ProfilePromptLoader.Load();
-
-        // Stack-agnostic identification: name the runner's own setup mechanism for JS, Python, and
-        // .NET so the instruction is not a single-stack assumption. (See the experiment harness's #1
-        // design constraint: stack specifics live in the derived data/prompt, not engine code.)
-        Assert.Contains("setupFiles", prompt);   // vitest/jest
-        Assert.Contains("conftest.py", prompt);  // pytest
-        Assert.Contains("xUnit", prompt);        // .NET
+        Assert.Contains("Interrogate the repository itself", prompt);
+        Assert.Contains("setupFiles", prompt);
+        Assert.Contains("contract_authority", prompt);
+        Assert.Contains("lowercase kebab-case", prompt);
+        Assert.Contains("toolchain actually compiles or collects", prompt);
+        Assert.Contains("Dependencies in the primary tree are human-managed", prompt);
+        Assert.Contains("runs it exactly once after creating each lease", prompt);
+        Assert.Contains("on EVERY gate invocation", prompt);
+        Assert.Contains("NEVER emit `install_command`", prompt);
+        Assert.Contains("Setup must not write tracked files", prompt);
+        // A mutating install_command dirties a tracked lockfile in every lease worktree it
+        // hydrates, which fails the gate's tracked-state integrity check before any ticket is
+        // claimed. The frozen forms and the CI-over-README tiebreak must stay in the prompt.
+        Assert.Contains("FROZEN INSTALL", prompt);
+        Assert.Contains("npm ci", prompt);
+        Assert.Contains("dotnet restore --locked-mode", prompt);
+        Assert.Contains("never `go mod tidy`", prompt);
+        Assert.DoesNotContain("__tlb_probe", prompt);
+        Assert.Contains("Return ONLY the JSON object", prompt);
+        Assert.Contains("build install --profile .build/profile.json", prompt);
+        Assert.DoesNotContain("build profile apply", prompt);
+        Assert.DoesNotContain("{{op_doc_markdown}}", prompt);
     }
 }

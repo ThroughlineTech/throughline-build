@@ -2,6 +2,7 @@ using System.Text.Json;
 using ThroughlineBuild.Cli;
 using ThroughlineBuild.Contracts;
 using ThroughlineBuild.Contracts.Models;
+using ThroughlineBuild.Git;
 using ThroughlineBuild.Verification;
 using Xunit;
 
@@ -108,6 +109,31 @@ public sealed class GateCommandTests
         Assert.Equal(checkPassed, data.GetProperty("passed").GetBoolean());
         Assert.Equal(checkPassed ? "gate passed" : "gate failed", data.GetProperty("message").GetString());
         Assert.Single(data.GetProperty("checks").EnumerateArray());
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task JsonDistinguishesPersistedCanaryVerificationState(bool canariesVerified)
+    {
+        var output = new StringWriter();
+
+        var exit = await GateCommand.ExecuteAsync(
+            ["gate"],
+            json: true,
+            [Spec("test", CheckRole.Gating)],
+            Directory.GetCurrentDirectory(),
+            new RecordingRunner(),
+            output,
+            TextWriter.Null,
+            CancellationToken.None,
+            canariesVerified);
+
+        Assert.Equal(0, exit);
+        using var json = JsonDocument.Parse(output.ToString());
+        Assert.Equal(
+            canariesVerified,
+            json.RootElement.GetProperty("data").GetProperty("canariesVerified").GetBoolean());
     }
 
     [Fact]
@@ -222,6 +248,89 @@ public sealed class GateCommandTests
     }
 
     [Fact]
+    public async Task DependencyInstallSetup_IsRefusedBeforeItCanRun()
+    {
+        var runner = new RecordingRunner();
+        var output = new StringWriter();
+
+        var exit = await GateCommand.ExecuteAsync(
+            ["gate"],
+            json: false,
+            [new CheckSpec(
+                "install",
+                "npm",
+                ["install"],
+                TimeSpan.FromMinutes(2),
+                CheckRole.Setup)],
+            Directory.GetCurrentDirectory(),
+            runner,
+            output,
+            TextWriter.Null,
+            CancellationToken.None,
+            projectInstallCommand: "npm install");
+
+        Assert.Equal(1, exit);
+        Assert.Equal(0, runner.CallCount);
+        Assert.Contains("duplicates project.install_command", output.ToString());
+        Assert.Contains("not before every gate", output.ToString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SetupThatChangesTrackedFile_FailsInPrimaryAndLeaseWorktrees(bool linkedWorktree)
+    {
+        var root = Path.Combine(
+            Path.GetTempPath(),
+            "gate-tracked-state-tests",
+            Guid.NewGuid().ToString("N"));
+        var primary = Path.Combine(root, "primary");
+        var lease = Path.Combine(root, "lease");
+        Directory.CreateDirectory(primary);
+
+        try
+        {
+            await RunGitAsync(primary, "init");
+            await RunGitAsync(primary, "config", "user.email", "gate-tests@example.invalid");
+            await RunGitAsync(primary, "config", "user.name", "Gate Tests");
+            File.WriteAllText(Path.Combine(primary, "package-lock.json"), "before\n");
+            await RunGitAsync(primary, "add", "package-lock.json");
+            await RunGitAsync(primary, "commit", "-m", "initial");
+
+            var workingDirectory = primary;
+            if (linkedWorktree)
+            {
+                await RunGitAsync(primary, "worktree", "add", "-b", "lease/test", lease);
+                workingDirectory = lease;
+            }
+
+            var output = new StringWriter();
+            var exit = await GateCommand.ExecuteAsync(
+                ["gate"],
+                json: false,
+                [Spec("prepare", CheckRole.Setup), Spec("test", CheckRole.Gating)],
+                workingDirectory,
+                new MutatingRunner("package-lock.json"),
+                output,
+                TextWriter.Null,
+                CancellationToken.None,
+                git: new ProcessGitClient(workingDirectory));
+
+            Assert.Equal(1, exit);
+            Assert.Contains("checks modified tracked files", output.ToString());
+        }
+        finally
+        {
+            if (Directory.Exists(lease) && Directory.Exists(primary))
+            {
+                try { await RunGitAsync(primary, "worktree", "remove", "--force", lease); }
+                catch { }
+            }
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public async Task InconclusiveGatingResult_IsDistinctAndFailsGate()
     {
         var runner = new RecordingRunner(resultFactory: spec =>
@@ -297,6 +406,7 @@ public sealed class GateCommandTests
         Directory.CreateDirectory(leasedWorktree);
         try
         {
+            await RunGitAsync(leasedWorktree, "init");
             var runner = new RecordingRunner();
 
             var exit = await GateCommand.ExecuteAsync(
@@ -314,7 +424,7 @@ public sealed class GateCommandTests
         }
         finally
         {
-            Directory.Delete(leasedWorktree);
+            TryDeleteDirectory(leasedWorktree);
         }
     }
 
@@ -366,7 +476,8 @@ public sealed class GateCommandTests
                 {
                     constructionCount++;
                     return worker;
-                });
+                },
+                new InProcessCliConsole(TextReader.Null, Console.Out, Console.Error));
 
             Assert.Equal(0, exit);
             Assert.Equal(0, constructionCount);
@@ -419,6 +530,20 @@ public sealed class GateCommandTests
         }
     }
 
+    private sealed class MutatingRunner(string relativePath) : AutomatedChecksRunner
+    {
+        public override Task<IReadOnlyList<CheckResult>> RunAsync(
+            IReadOnlyList<CheckSpec> specs,
+            string workingDirectory,
+            CancellationToken ct,
+            RequiredPathHandling requiredPathHandling)
+        {
+            File.WriteAllText(Path.Combine(workingDirectory, relativePath), "after\n");
+            return Task.FromResult<IReadOnlyList<CheckResult>>(
+                specs.Select(spec => Result(spec)).ToList());
+        }
+    }
+
     private sealed class RecordingWorkerAgent : IWorkerAgent
     {
         public string Name => "recording";
@@ -461,5 +586,26 @@ public sealed class GateCommandTests
         Assert.True(
             process.ExitCode == 0,
             $"git {string.Join(" ", args)} failed: {await stderr}; stdout: {await stdout}");
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        for (var attempt = 0; attempt < 6; attempt++)
+        {
+            try
+            {
+                if (Directory.Exists(path))
+                    Directory.Delete(path, recursive: true);
+                return;
+            }
+            catch when (attempt < 5)
+            {
+                Thread.Sleep(50);
+            }
+            catch
+            {
+                return;
+            }
+        }
     }
 }
