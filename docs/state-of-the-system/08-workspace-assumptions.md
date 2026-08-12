@@ -1,6 +1,6 @@
 # 08 - Workspace and Environment Assumptions
 
-Last refreshed: 2026-08-08 (HEAD 5961f807)
+Last refreshed: 2026-08-11 (HEAD 758ad56a)
 
 What `build` assumes about the environment it runs in beyond the obvious - branch conventions, required tooling, OS specifics, CI behavior, places where the code branches on stack or platform.
 
@@ -19,7 +19,7 @@ Status: Functional.
 
 ### Loose ends
 
-- `build list`, `setup`, `sweep` and the ticket verbs all require the config; only the five pre-config verbs above run without it.
+- `build list`, `setup`, `sweep` and the ticket verbs all require the config; the nine registry-marked pre-config verbs are `init`, `install`, `settarget`, `user-guide`, `op-doc`, `models`, `sop`, `conductor`, and `profile` ([CliVerbRegistryFactory.cs:7-47](../../src/ThroughlineBuild.Cli/CliVerbRegistryFactory.cs#L7-L47)).
 
 ---
 
@@ -104,6 +104,7 @@ Status: Functional. `build` is cross-platform - CI builds three RIDs (see CI sec
 - **Worker stream encoding is pinned to UTF-8 (NEW).** `ProcessStreamEncoding.ApplyUtf8` sets `StandardOutputEncoding`/`StandardErrorEncoding` to UTF-8 on every worker spawn ([src/ThroughlineBuild.Workers.Common/ProcessStreamEncoding.cs:19-23](../../src/ThroughlineBuild.Workers.Common/ProcessStreamEncoding.cs#L19-L23); applied at [ClaudeCodeAgent.cs:46](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L46) and in `CodexModelProbe`). Without it, Windows decodes child output with the OEM code page (CP437/CP850), garbling UTF-8 punctuation in the progress digest, debug captures, and event log. This removes the prior "worker output encoding is the console's problem" assumption on Windows.
 - **EDITOR resolver Windows fallback.** `--review` resolves `$EDITOR`, then `vim, nano, code --wait` plus `notepad.exe` on Windows; on-PATH probe uses `where` vs `which` ([src/ThroughlineBuild.Cli/ReviewLoop.cs:265-286](../../src/ThroughlineBuild.Cli/ReviewLoop.cs#L265-L286)).
 - **Windows reparse points** are pre-cleaned by `WorktreeDecrufter` before directory deletion (junctions under `node_modules`; [src/ThroughlineBuild.Helpers/WorktreeDecrufter.cs:111-136](../../src/ThroughlineBuild.Helpers/WorktreeDecrufter.cs#L111-L136)).
+- **The tracked dogfood gate assumes PowerShell on Windows.** Its `no-orphan-testhost` setup check calls `powershell -NoProfile` to reject live `testhost` processes before build/test ([.build/config.toml:109-125](../../.build/config.toml#L109-L125)). This is repository data, not a hardcoded engine dependency, but a host running this config must provide that executable and process-query capability.
 - **Path case folding.** Windows-only lowercase normalization in `MainWorktreeLock` ([src/ThroughlineBuild.Helpers/MainWorktreeLock.cs:13-15](../../src/ThroughlineBuild.Helpers/MainWorktreeLock.cs#L13-L15)) and case-insensitive comparison in ship's exe-in-worktree preflight.
 - **`build.sh` adds `.exe`** for Windows RIDs ([build.sh:15-16](../../build.sh#L15-L16)).
 - **Interactive Claude hosting is platform-specific.** Windows uses ConPTY with a mandatory kill-on-close job object; Linux and macOS use a native PTY plus process-group containment. `InteractiveClaudeProcessLauncherFactory.Create` selects the implementation ([InteractiveClaudeProcessHost.cs:48](../../src/ThroughlineBuild.Workers.ClaudeCode/InteractiveClaudeProcessHost.cs#L48)). The capability preflight requires Claude CLI 2.1.177 or newer for this transport.
@@ -111,7 +112,7 @@ Status: Functional. `build` is cross-platform - CI builds three RIDs (see CI sec
 - **`<InvariantGlobalization>true</InvariantGlobalization>`** ([src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj:11](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L11)) - invariant culture everywhere, no ICU at runtime.
 - **`SlugBuilder` strips non-ASCII** silently - mostly moot for branch names since they carry the ticket id alone.
 
-No subprocess is launched through a shell - every spawn sets `UseShellExecute = false` and passes the executable + args directly. There is no `bash -c` / `cmd /c` wrapping in the binary.
+Worker and git subprocesses are launched directly with `UseShellExecute = false`, but configured worktree hydration is intentionally a shell command: `WorktreeLeaseManager` runs `[project].install_command` through `cmd.exe /d /s /c` on Windows or `/bin/sh -c` on Unix, with stdin closed ([WorktreeLease.cs:64-95](../../src/ThroughlineBuild.Helpers/WorktreeLease.cs#L64-L95)). Check commands also remain host-configured command lines, so the repository is not shell-independent.
 
 ### Loose ends
 
@@ -169,6 +170,7 @@ Status: Functional.
 - **Gate control runs use throwaway worktrees.** `GateControlProber` (TLB-538) creates a temporary worktree at the base SHA to re-run failed gate checks, and `GateVacuityProver` materializes canaries in the ticket worktree with leak-back assertions (see 09); both assume `.worktrees/` has room for short-lived extra checkouts.
 - **Conductor leases are separately namespaced and manifest-backed.** `[worktree].root` defaults to `.worktrees/conductor`; ticket/slug-derived paths must stay below it, helper branches must not collide, and `.build-worktree-lease.json` must agree with the actual repository, main worktree, branch, and lease path before list/teardown/candidate operations trust it ([WorktreeLeaseManager.cs:32](../../src/ThroughlineBuild.Helpers/WorktreeLeaseManager.cs#L32)).
 - **Seed and install behavior is explicit.** `--require-seed` can copy only a path present in `[worktree].seed_files`; after creation, `[project].install_command` runs with stdin closed through `cmd.exe` on Windows or `/bin/sh` on Unix ([WorktreeLease.cs:64](../../src/ThroughlineBuild.Helpers/WorktreeLease.cs#L64)). A failed install is recorded in the manifest/result and the partial lease is not misreported as ready.
+- **Install is required to be frozen and non-mutating.** Profile derivation rejects dependency-resolving forms that can rewrite locks and requires the ecosystem's frozen form ([derive-profile-rules.md:12-21](../../src/ThroughlineBuild.Scaffold/Templates/derive-profile-rules.md#L12-L21)); this repository pins `dotnet restore --locked-mode --nologo -v q` ([.build/config.toml:312](../../.build/config.toml#L312)).
 
 ### Loose ends
 
@@ -225,7 +227,7 @@ The interactive Claude transport additionally reads `CLAUDE_CONFIG_DIR` or the a
 
 - No IDE, no build server or daemon.
 - No runtime besides .NET for the engine itself; checks shell out to whatever the config names.
-- No shell - processes are spawned directly.
+- A host command shell is required for configured worktree hydration (`cmd.exe`/`COMSPEC` on Windows, `/bin/sh` on Unix); worker and git processes themselves are direct spawns.
 - No preview tool - `.preview.pid`/`.preview.meta` cleanup is compatibility-only.
 - No remote: ship and the chain landing both degrade to local-only merges when `origin` is absent (`fetch_skipped` / `chain_landing_push_skipped`).
 - No pre-existing repo or Plane schema: `build setup` provisions both.
@@ -236,6 +238,6 @@ The interactive Claude transport additionally reads `CLAUDE_CONFIG_DIR` or the a
 
 - **`BaseRefResolver` remote prefix** is still the literal `origin/` (see Branch conventions).
 - **Global install is outside repository cleanup.** Removing the clone does not remove the three executables installed by `build.sh`; uninstall them from `INSTALL_DIR` separately.
-- **Case-insensitive Plane name caches** ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:386-429](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L386-L429), `OrdinalIgnoreCase` dictionaries) alias names differing only by case.
+- **Case-insensitive Plane name caches** ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:423-466](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L423-L466), `OrdinalIgnoreCase` dictionaries) alias names differing only by case.
 - **Container / WSL support** untested; no telemetry leaves the operator's box.
 - **`Directory.Build.props` is now machine-local** - the only documentation of its required shape is the gitignore comment and this doc set.

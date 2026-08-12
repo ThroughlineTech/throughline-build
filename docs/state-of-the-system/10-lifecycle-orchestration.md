@@ -1,6 +1,6 @@
 # 10 - Lifecycle and Orchestration
 
-Last refreshed: 2026-08-08 (HEAD 5961f807)
+Last refreshed: 2026-08-11 (HEAD 758ad56a)
 
 The Agile phase state machine implemented by `build` - what each phase does, how the chain orchestrator transitions between them, the gate, the integration-branch tree dispatch, and the rework loop bounded by `MaxReworkRounds`.
 
@@ -520,9 +520,10 @@ The repository now exposes the deterministic pieces needed by an outer conductor
 3. Install adds embedded SOP stubs, derives deterministic conductor identity, and returns the invariant-authoring prompt.
 4. The outer agent returns invariant TOML; `install --invariants` or `conductor apply` atomically replaces the invariant block.
 5. Final install readiness runs doctor, checks, secret, branch/operation, cleanliness, and worktree-lease probes before reporting READY ([InstallCommand.ExecuteAsync:175](../../src/ThroughlineBuild.Cli/InstallCommand.cs#L175), [InstallReadiness.PrepareAndAssertAsync:603](../../src/ThroughlineBuild.Cli/InstallCommand.cs#L603)).
-6. During backlog execution the outer conductor can call `sop brief` for the versioned procedure, `waves` for scheduling, `worktree lease` for isolation, `worker brief` for inspectable role input, `candidate status` for fingerprints, `gate` for checks, and `evidence add` for append-only audit records. Each command is a single deterministic boundary; ticket lifecycle transitions remain explicit separate verbs ([HelpRegistryFactory.cs:247](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs#L247)).
+6. During backlog execution the outer conductor can call `sop brief` for the versioned procedure, `waves` for scheduling, `worktree lease` for isolation, `worker brief` for inspectable role input, `candidate status` for fingerprints, `gate` for checks, and `evidence add` for append-only audit records. Each command is a single deterministic boundary; ticket lifecycle transitions remain explicit separate verbs ([HelpRegistryFactory.cs:249](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs#L249)).
+7. Candidate lease identity is prefix-aware rather than suffix-matched: `TicketMatches` normalizes full prefixed ids case-insensitively; a bare number matches only after `[conductor].ticket_prefix` resolves it to `<prefix>-<number>`, and no configured prefix means no bare-number match ([CandidateStatusCommand.cs:429-475](../../src/ThroughlineBuild.Cli/CandidateStatusCommand.cs#L429-L475)). This prevents one project's numeric ticket from validating another project's lease.
 
-The SOP admission mode pins an absolute inspection worktree plus full commit SHA and causes mutating verbs to refuse with `sop_admission_refused`; it is an inspection boundary, not a mutation flag ([HelpRegistryFactory.cs:541](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs#L541)).
+The SOP admission mode pins an absolute inspection worktree plus full commit SHA and causes mutating verbs to refuse with `sop_admission_refused`; it is an inspection boundary, not a mutation flag ([HelpRegistryFactory.cs:548](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs#L548)).
 
 ### Loose ends
 

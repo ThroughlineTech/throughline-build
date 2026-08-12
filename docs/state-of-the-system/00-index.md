@@ -1,6 +1,6 @@
 # 00 - State of the System: Throughline Build
 
-Last refreshed: 2026-08-08 (HEAD 5961f807)
+Last refreshed: 2026-08-11 (HEAD 758ad56a)
 
 This doc set is a detailed historical snapshot of the Throughline Build repository
 at the HEAD stamped above (refresh history in [PROMPT.md](PROMPT.md)). It is not
@@ -86,8 +86,8 @@ The set has two maintenance modes, both first-class: full refreshes run from the
             +-------+ ModelClient / IModelClient (built + tested, UNWIRED)
 ```
 
-The CLI dispatches 36 action verbs. The authoritative registration site is
-`CliVerbRegistryFactory.Verbs` ([CliVerbRegistryFactory.cs:7](../../src/ThroughlineBuild.Cli/CliVerbRegistryFactory.cs#L7)); the per-verb inventory is [01-inventory.md](01-inventory.md). Nine verbs run before full configuration bootstrap: `init`, `install`, `settarget`, `user-guide`, `op-doc`, `models`, `sop`, `conductor`, and `profile`. Help is served by the 34-entry `HelpRegistryFactory.Build` registry ([HelpRegistryFactory.cs:25](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs#L25)); `models` and `sweep` are the only registered action verbs without tier-1 entries. The global `--json` pre-pass enables versioned machine-readable envelopes for supported verbs through `CliEnvelopeWriter` ([CliEnvelopeWriter.cs:8](../../src/ThroughlineBuild.Cli/Json/CliEnvelopeWriter.cs#L8)). Most configured verbs route to a phase or deterministic command composed against `ITicketing`, `IWorkerAgent`, `IGitClient`, and `IEventSink`; the conductor commands intentionally expose smaller worker-free steps. The binary exits at the end of each verb; there is no daemon or shared in-process state across invocations.
+The CLI dispatches 38 action verbs. The authoritative registration site is
+`CliVerbRegistryFactory.Verbs` ([CliVerbRegistryFactory.cs:7](../../src/ThroughlineBuild.Cli/CliVerbRegistryFactory.cs#L7)); the per-verb inventory is [01-inventory.md](01-inventory.md). Nine verbs run before full configuration bootstrap: `init`, `install`, `settarget`, `user-guide`, `op-doc`, `models`, `sop`, `conductor`, and `profile`. Help is served by the 36-entry `HelpRegistryFactory.Build` registry ([HelpRegistryFactory.cs:25](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs#L25)); `models` and `sweep` are the only registered action verbs without tier-1 entries. The two newest verbs, `attachments` and `attachment`, expose read-only Plane asset discovery and membership-checked download to an explicit non-overwriting file path. The global `--json` pre-pass enables versioned machine-readable envelopes for supported verbs through `CliEnvelopeWriter` ([CliEnvelopeWriter.cs:13](../../src/ThroughlineBuild.Cli/Json/CliEnvelopeWriter.cs#L13)). Most configured verbs route to a phase or deterministic command composed against `ITicketing`, `IWorkerAgent`, `IGitClient`, and `IEventSink`; the conductor commands intentionally expose smaller worker-free steps. The binary exits at the end of each verb; there is no daemon or shared in-process state across invocations.
 
 Coordination between phases happens through three persistent channels:
 
@@ -99,7 +99,7 @@ Coordination between phases happens through three persistent channels:
 LLM contact splits into three tiers (architecture Section 3), but at two different maturity levels - see [11-llm-architecture.md](11-llm-architecture.md):
 - **Deterministic** code paths - state machines, gates, scans (e.g. `Ship`, `GatePhase` with its vacuity and control provers).
 - **Judgment slots** - scoped Anthropic API calls. Today the only live consumer is the `ReasonTranslator` for close/defer/reopen, through `ILlmClient`/`AnthropicClient` (anthropic-only, non-streaming), degrading to `EchoLlmClient` (verbatim reason) when no API key is configured. A newer `IModelClient`/`AnthropicModelClient` with working SSE streaming exists and is tested but is not wired onto any production path.
-- **Agentic work** - a worker CLI dispatched in a worktree for plan / implement / review / draft / decompose. This layer is genuinely multi-vendor and wired: `WorkerAgentFactory` selects one of four `IWorkerAgent` implementations from config or `--agent`. Repository-profile and conductor-invariant generation no longer nest a worker: `profile prompt` and `conductor prompt` emit instructions for an external agent, and deterministic `apply` commands validate the returned artifact ([HelpRegistryFactory.cs:347](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs#L347), [HelpRegistryFactory.cs:380](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs#L380)). `[plan].mode` controls planning inside `build chain`; standalone `build plan` always spawns a worker unless `--from-brief` explicitly requests promotion.
+- **Agentic work** - a worker CLI dispatched in a worktree for plan / implement / review / draft / decompose. This layer is genuinely multi-vendor and wired: `WorkerAgentFactory` selects one of four `IWorkerAgent` implementations from config or `--agent`. Repository-profile and conductor-invariant generation no longer nest a worker: `profile prompt` and `conductor prompt` emit instructions for an external agent, and deterministic `apply` commands validate the returned artifact ([HelpRegistryFactory.cs:349](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs#L349), [HelpRegistryFactory.cs:382](../../src/ThroughlineBuild.Cli/Help/HelpRegistryFactory.cs#L382)). `[plan].mode` controls planning inside `build chain`; standalone `build plan` always spawns a worker unless `--from-brief` explicitly requests promotion.
 
 ---
 
@@ -108,7 +108,7 @@ LLM contact splits into three tiers (architecture Section 3), but at two differe
 | Doc | One-line summary |
 |---|---|
 | [00-index.md](00-index.md) | This file. Architectural map + index + standing notes. |
-| [01-inventory.md](01-inventory.md) | Every CLI verb (36), source project (20), tool, script, and CI workflow - what it does, what it reads/writes, status. |
+| [01-inventory.md](01-inventory.md) | Every CLI verb (38), source project (20), tool, script, and CI workflow - what it does, what it reads/writes, status. |
 | [02-install-build-run.md](02-install-build-run.md) | Toolchain prerequisites, locked restore and native publish paths, runtime host requirements, `init`/`setup`/three-stage `install`, update/uninstall. |
 | [03-external-dependencies.md](03-external-dependencies.md) | Plane REST API (incl. transport retry + provisioning), Anthropic API, the worker CLIs (claude/codex/gemini/copilot), NuGet packages, what failure looks like for each. |
 | [04-configuration.md](04-configuration.md) | Tracked `.build/config.toml`, ignored conductor/SOP files, per-agent worker blocks, worktree/wave policy, environment variables, secrets, precedence. |

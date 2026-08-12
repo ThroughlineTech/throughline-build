@@ -291,11 +291,16 @@ matters whether that later process's shell ever sourced the rc file where you or
 ### 4. Create a ticket
 
 ```
-build new "fix the README typo"
+build new "Rate-limit /search to 60 requests per minute per API key, 429 on overage"
 ```
 
+Free-form text is drafted by the configured worker into a titled body with acceptance criteria, so
+state one shippable behavior change specifically enough that a reviewer can fail it: a specific
+surface, a specific rule, an observable result. Pass `--title "..."` to fix the title yourself, or
+`--review` to inspect, edit, or regenerate the draft before it is filed.
+
 You should see a ticket ID printed to stdout (e.g. `TLB-1`). Open Plane and confirm the ticket
-appears in your project with state Backlog and the title you supplied.
+appears in your project with state Backlog and the drafted title.
 
 For machine-created tickets, `build new - --json` accepts a strict JSON draft. The required field
 is `title`. Optional fields are `description`, `acceptanceCriteria`, `labels`, `parent`,

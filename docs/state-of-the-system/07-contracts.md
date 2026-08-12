@@ -1,6 +1,6 @@
 # 07 - Contracts
 
-Last refreshed: 2026-08-08 (HEAD 5961f807)
+Last refreshed: 2026-08-11 (HEAD 758ad56a)
 
 The inter-project type contracts inside this repo, and the artifacts shared with sibling systems (Plane, Claude Code, the older claude-config slash commands).
 
@@ -48,6 +48,7 @@ Verify by reading `<ProjectReference Include="..." />` lines in each `.csproj`. 
 | File | Type(s) | Notes |
 |---|---|---|
 | [src/ThroughlineBuild.Contracts/Models/Ticket.cs](../../src/ThroughlineBuild.Contracts/Models/Ticket.cs) | `Ticket`, `TicketState` (7), `Size` (3), `Risk` (3) | Unchanged shape. `Size` is read from a `size:` label; `Risk.Low/High` still never constructed in production. |
+| [src/ThroughlineBuild.Contracts/Models/TicketAttachment.cs](../../src/ThroughlineBuild.Contracts/Models/TicketAttachment.cs) | `TicketAttachment`, `TicketAttachmentContent` | Normalized attachment identity/metadata and downloaded bytes; `ITicketing` exposes list and membership-checked download methods ([ITicketing.cs:111-122](../../src/ThroughlineBuild.Contracts/ITicketing.cs#L111-L122)). |
 | [src/ThroughlineBuild.Contracts/Models/Brief.cs](../../src/ThroughlineBuild.Contracts/Models/Brief.cs) | `Brief(TicketId, Phase, Instruction, RelevantFiles, AllowedWrites, Context)` | The unit handed to a worker. Unchanged. |
 | [src/ThroughlineBuild.Contracts/Models/WorkerResult.cs](../../src/ThroughlineBuild.Contracts/Models/WorkerResult.cs) | `WorkerResult(Status, Summary, FilesChanged, FailureReason?, Metadata, Blocks?, Tickets?)`, `Status` (4) | Grew `Tickets` (`IReadOnlyList<BatchTicketResult>?`) for batch implement sessions, alongside the op-27 `Blocks` dictionary. |
 | [src/ThroughlineBuild.Contracts/Models/BatchWorkerResult.cs](../../src/ThroughlineBuild.Contracts/Models/BatchWorkerResult.cs), [BatchTicketResult.cs](../../src/ThroughlineBuild.Contracts/Models/BatchTicketResult.cs) | `BatchWorkerResult`, `BatchTicketResult` | NEW (TLB-447). Per-ticket attribution (`ticket_id`, `commit_sha`, `stack_position`, `files_changed`, `summary_ref`) from a warm batch session; verified against git by `BatchCommitVerifier` (TLB-448). |
@@ -109,19 +110,21 @@ Typed relation vocabulary is centralized in `RelationKinds.Allowed` ([RelationKi
 
 What `build` reads that Plane wrote:
 
-- Ticket records (states, labels, comments, relations, parent links). Field names referenced verbatim in [PlaneApiModels.cs](../../src/ThroughlineBuild.Plane/PlaneApiModels.cs).
-- State names: the runtime reverse map is now **derived from `WorkspaceSchema`** rather than hardcoded inline ([PlaneTicketingClient.cs:438-441](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L438-L441) builds the dictionary from `WorkspaceSchema.States`), so the state map and `build setup` provisioning can no longer drift from each other. A workspace with different state names still reads everything as `Backlog`.
+- Ticket records (states, labels, comments, relations, parent links) plus work-item attachments and inline description assets. Field names referenced verbatim in [PlaneApiModels.cs](../../src/ThroughlineBuild.Plane/PlaneApiModels.cs); attachment normalization and same-origin inline extraction live in `DiscoverAttachmentsAsync` ([PlaneTicketingClient.cs:1270](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L1270)).
+- State names: the runtime reverse map is now **derived from `WorkspaceSchema`** rather than hardcoded inline ([PlaneTicketingClient.cs:475-478](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L475-L478) builds the dictionary from `WorkspaceSchema.States`), so the state map and `build setup` provisioning can no longer drift from each other. A workspace with different state names still reads everything as `Backlog`.
 - The `size:s|m|l` label mapped into `Ticket.Size`; the `parent` UUID -> `Ticket.ParentId` with client-side child filtering (Plane ignores the server-side `parent=` param).
 - **Workspace-level reads (NEW, op-34)**: project list / find-by-name / create via `IProjectDiscovery`, and per-project state + label inventories via `ITicketingProvisioner` - both used before any `.build/config.toml` exists.
 
 What `build` writes that other systems read:
 
 - HTML descriptions and comments; markers embedded in comment HTML (`[planned_at:]`, `[implemented_at:]`, `[decomposed_at:]`, `[shipped_at:]`). Marker lookup is freshest-by-timestamp via `CommentMarkers.LatestValue` ([CommentMarkers.cs:19](../../src/ThroughlineBuild.Phases/CommentMarkers.cs#L19)) (TLB-412), and `ReviewPhase` still cross-checks the freshest `implemented_at` against worktree HEAD, emitting `GateFailure` `kind = implemented_at_superseded` on divergence (TLB-414, emission at [ReviewPhase.cs:185](../../src/ThroughlineBuild.Phases/ReviewPhase.cs#L185)).
-- Lifecycle prefixes posted by `TransitionLifecycleAsync` ([PlaneTicketingClient.cs:1149-1155](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L1149-L1155)): `<strong>wontfix:</strong>` / `<strong>deferred:</strong>` / `<strong>reopened:</strong>`; rollup `[rollup]` comments; advisory `[gate: hard-fail]` comments from `GatePhase` (operator-facing, never parsed back).
+- Lifecycle prefixes posted by `TransitionLifecycleAsync` ([PlaneTicketingClient.cs:1186-1192](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L1186-L1192)): `<strong>wontfix:</strong>` / `<strong>deferred:</strong>` / `<strong>reopened:</strong>`; rollup `[rollup]` comments; advisory `[gate: hard-fail]` comments from `GatePhase` (operator-facing, never parsed back).
 - **Provisioned states and labels (NEW)**: `build setup` creates any state or label missing from `WorkspaceSchema` (diff logic in `SetupCommand.ExecuteAsync`, [SetupCommand.cs:102-106](../../src/ThroughlineBuild.Cli/SetupCommand.cs#L102-L106)) - so the workspace vocabulary is now a *written* artifact, not just an assumed one. The `risk:*` / `size:*` labels hard-fail plan/chain when absent; a missing state downgrades a transition to a warning.
 - Sub-issue parent/child linkage via `CreateChildTicketsAsync` / `SetParentAsync` (native Plane sub-issues).
 
 Transport behavior (TLB-545): `PlaneTicketingClient` retries transient transport failures (DNS/connect/TLS/timeout) with exponential backoff (`PlaneClientOptions.TransportRetryAttempts`, [PlaneClientOptions.cs:47](../../src/ThroughlineBuild.Plane/PlaneClientOptions.cs#L47)) before throwing `TicketingUnavailableException`; HTTP 429/5xx retries honor `Retry-After` (clamped). The decomposed chain runners convert the exception into the resumable `TicketingUnavailable` outcome and skip remaining siblings/roots - the same environmental-classification pattern as TLB-538.
+
+Attachment download has an additional trust boundary: `PlaneTicketingClient` proves the asset belongs to the requested ticket before following its detail/storage route, and storage requests deliberately omit the Plane API key ([PlaneTicketingClient.cs:1219](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L1219), [PlaneTicketingClient.cs:1428-1455](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L1428-L1455)). The CLI owns filesystem atomicity and non-overwrite; the backend owns membership and bytes.
 
 ### Worker CLIs (`ClaudeCodeAgent` / `CodexAgent` / `GeminiAgent` / `CopilotAgent` <-> vendor CLIs)
 
@@ -151,7 +154,7 @@ Two scaffold-side formats hardened into published contracts since the last refre
 
 - `ConductorConfig` and its review/constellation records are the parsed `.build/conductor.toml` shape; `SopDoctorCommand` validates unknown keys, placeholders, minimum build version, path existence, review invariant shape, escalation, and check capability before a SOP brief can be emitted ([SopDoctorCommand.cs:9](../../src/ThroughlineBuild.Cli/SopDoctorCommand.cs#L9)).
 - `SopCatalog` is the public embedded procedure catalog contract; host/scaffold targets and trusted content hashes are catalog authority, while `.build/sop-manifest.json` is only a cache ([SopCatalog.cs:3](../../src/ThroughlineBuild.Contracts/Models/SopCatalog.cs#L3), [SopInstallCommand.cs:495](../../src/ThroughlineBuild.Cli/SopInstallCommand.cs#L495)).
-- `.build-worktree-lease.json` schema version 1 binds ticket, helper branch/base, repository/main/current roots, seeded files, leased resources, and install status. Candidate status consumes and cross-checks the same manifest instead of inventing a parallel identity format ([WorktreeLease.cs:7](../../src/ThroughlineBuild.Helpers/WorktreeLease.cs#L7), [CandidateStatusCommand.cs:286](../../src/ThroughlineBuild.Cli/CandidateStatusCommand.cs#L286)).
+- `.build-worktree-lease.json` schema version 1 binds ticket, helper branch/base, repository/main/current roots, seeded files, leased resources, and install status. Candidate status consumes and cross-checks the same manifest instead of inventing a parallel identity format ([WorktreeLease.cs:7](../../src/ThroughlineBuild.Helpers/WorktreeLease.cs#L7), [CandidateStatusCommand.cs:294](../../src/ThroughlineBuild.Cli/CandidateStatusCommand.cs#L294)).
 - Evidence comments are append-only audit records with kind-specific required fields. `evidence add` verifies only returned-id read-back; the lifecycle commands remain separate, so evidence is not an implicit transition protocol ([EvidenceCommand.cs:49](../../src/ThroughlineBuild.Cli/EvidenceCommand.cs#L49)).
 
 ### Older claude-config workflow
