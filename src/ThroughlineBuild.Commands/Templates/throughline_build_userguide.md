@@ -1,114 +1,289 @@
-# Throughline Build - Getting Started
+# Throughline Build - Operator Guide
 
-Throughline Build (`build`) is a CLI that drives AI coding agents through a plan-implement-review-ship
-cycle, using Plane as the ticketing backend. This guide covers installation, configuration, and
-running your first ticket end-to-end.
+Throughline Build (`build`) is a CLI for Plane-backed, agent-assisted software
+delivery. This is the canonical guide for installing Build into a repository,
+proving that repository is ready for work, and operating tickets.
 
-> **Config reference:** run `build init --print-template` to print a fully-commented config with every
-> supported key to stdout. This repository does not currently publish prebuilt binaries; see
-> [Building from source](build-command-setup.md).
+The `docs/state-of-the-system/` set in the Throughline Build source repository
+is the current architecture authority. The binary's generated help is the
+command-line authority. Run `build help <topic>` when this guide and the
+installed binary disagree.
 
-## Prerequisites
+## What installation means
 
-### Install run-backlog into a repository
+There are two separate readiness layers:
 
-After putting `build` and Git on PATH and making the Plane token available,
-run the same three-stage sequence in every repository:
+1. `build install` prepares Plane configuration, real review checks, conductor
+   data, and the binary-hosted SOP stubs. Its final `READY` means the Build
+   control plane is structurally ready.
+2. The target repository still needs its own dependencies installed on a host
+   it supports, followed by a green `build gate --require-checks --json`.
+
+`build install` deliberately does not install dependencies in the primary
+checkout, run the target build, install browser binaries, install system
+packages, or prove that the repository supports the current operating system.
+Do not tell a developer the repository is ready for work until both layers pass.
+
+## Before you start
+
+Run every command from the target repository root. Have these prerequisites and
+values ready:
+
+- `build` and Git on `PATH`;
+- at least one supported agent CLI on `PATH`: `claude`, `codex`, `gemini`, or
+  `copilot`;
+- a host operating system and target toolchain supported by the repository;
+- the Plane API base URL, workspace slug, personal API token, and either the
+  existing project UUID or the exact project name to find or create; and
+- a clean Git checkout you may place on a non-protected run branch.
+
+Confirm the tools in the same shell that will run the installation:
 
 ```sh
-build install
+build --version
+git --version
+claude --version   # or codex, gemini, or copilot
+```
+
+Read the target repository's README, agent instructions, CI workflow, and
+current architecture documentation before deriving its profile. If those docs
+say Linux or macOS, moving the checkout to a supported host is part of
+installation; Build's structural `READY` does not waive that requirement.
+
+`.build/config.toml` is a tracked repository-fact file. Check for a legacy
+ignore rule before installation:
+
+```sh
+git check-ignore -v .build/config.toml
+```
+
+The command must print nothing. If it prints a rule, remove that specific
+legacy rule from `.gitignore` before continuing. Otherwise Build can report
+local readiness while every new clone still lacks the Plane facts and gate.
+
+## Install Build into a repository
+
+### 1. Make the Plane token available
+
+In a POSIX shell, export the token without putting its value in shell history:
+
+```sh
+read -rsp "Plane API token: " PLANE_API_TOKEN
+export PLANE_API_TOKEN
+printf '\n'
+```
+
+The environment contains the value. The tracked config contains only the
+variable name:
+
+```text
+shell:      PLANE_API_TOKEN=<secret value>
+config:     plane_api_token_env = "PLANE_API_TOKEN"
+```
+
+Never pass `--token-env "$PLANE_API_TOKEN"`; that expands the secret and uses
+the token itself as an environment-variable name.
+
+### 2. Choose one initialization path
+
+Use the interactive path when a person is at the terminal. It prompts for the
+URL and workspace, then lets the operator choose an existing Plane project or
+create one. You do not need to collect a project UUID before using this path:
+
+```sh
+build install --token-env PLANE_API_TOKEN
+```
+
+If the token prompt appears after the variable is already set, leave it blank;
+`--token-env` keeps the secret out of tracked config.
+
+Use the non-interactive path for automation or when all values are already
+known:
+
+```sh
+build install --no-interactive \
+  --plane-url "PLANE_API_URL" \
+  --workspace "WORKSPACE_SLUG" \
+  --project-id "PROJECT_UUID" \
+  --token-env PLANE_API_TOKEN
+```
+
+To resolve or create by name, omit `--project-id` and pass
+`--project-name "EXACT PROJECT NAME"`. Do not gather the same values and then
+send the operator through the interactive questions too; choose one path.
+
+The command initializes configuration, runs Setup, and stops with a
+`profile_handoff`. A bare non-interactive or redirected invocation without the
+required flags refuses to write placeholder configuration and prints the
+complete command it needs.
+
+### 3. Verify Plane and persist the token
+
+Do this before applying the profile so the non-secret token-file path is part
+of the final readiness commit:
+
+```sh
+rg -n "REQUIRED_" .build/config.toml  # must print nothing
+build setup --check
+build list --json
+build setup --write-token-file secrets/plane-api-token
+```
+
+`build list` is the ticketing check that matters. `build sop doctor` never
+loads Plane credentials and cannot prove connectivity.
+
+The token file is machine-local and ignored. The tracked config keeps
+`plane_api_token_env` for CI and adds only
+`plane_api_token_file = "secrets/plane-api-token"`. Resolution order is an
+inline token, the named environment variable, then the token file. Do not put a
+literal token in `.build/config.toml`.
+
+### 4. Apply the project profile
+
+The first install invocation emitted a repository-profile prompt. Give it to an
+agent that can read the repository. Save only the returned JSON:
+
+```sh
+# Save the response as .build/profile.json.
 build install --profile .build/profile.json
+```
+
+The profile records the target stack, frozen worktree install command, actual
+build/test entry points, non-vacuous checks and their failing canaries,
+convention files, and any shared-contract authority. Build installs the SOP
+stubs and stops again with an `invariants_handoff`.
+
+The profile's `install_command` hydrates future leased worktrees. It is not run
+in the primary checkout. Multi-stack repositories still have one
+`language`/`framework`/`package_manager` value; use the primary language and a
+real named framework, then make the exact install and checks cover every stack.
+
+Stage 2 refuses to replace different checks already written by a human. Use
+`--force` only when intentionally replacing them. Matching profile data is an
+idempotent no-op.
+
+### 5. Apply review invariants and finish structural readiness
+
+Give the second prompt to an agent that can inspect the repository and save
+only its TOML blocks:
+
+```sh
+# Save the response as .build/invariants.toml.
 build install --invariants .build/invariants.toml
 ```
 
-On a fresh repository, the first command forwards init configuration for a
-fully non-interactive run. For example:
+The final stage validates the profile, conductor data, token resolution, SOP
+doctor, Git hygiene, and worktree lease surface. It creates a non-protected run
+branch when necessary and commits the tracked readiness files. A successful
+result says `READY: run-backlog preflight passed`.
 
-```sh
-build install --no-interactive --plane-url URL --workspace SLUG --project-id UUID --token-env PLANE_API_TOKEN
+If doctor reports `constellation.contract_authority.placeholder` and the
+repository genuinely has no shared-contract authority, set this explicit
+machine-local value in `.build/conductor.toml`, then rerun the same invariants
+command:
+
+```toml
+[constellation]
+contract_authority = "none"
 ```
 
-With no existing config, a bare redirected `build install` stops before writing
-placeholders and prints this required command instead.
+Do not invent a directory merely to clear the finding.
 
-Each of the first two commands emits a canonical prompt and stops. Give that
-prompt to an agent that can read the repository, save only the requested JSON
-or TOML, and pass the file to the next invocation. The command never starts a
-worker itself. The final invocation prepares a non-protected run branch,
-commits only exact installer-owned readiness paths (a deterministic Setup-owned
-`.gitignore` when created or changed, plus catalog-emitted host stubs), and
-prints READY only after the run-backlog structural preflight passes. It
-intentionally does not install target-stack dependencies or require a green
-target build during installation.
+### 6. Install and prove the target checkout
 
-The sequence is re-runnable on an already-installed repository whatever its
-toolchain: a profile that already matches config is a no-op success, and a
-second pass adds no commit or branch change. Stage 2 refuses only when the
-profile would overwrite `[[review.checks]]` or `[[ship.regression_checks]]`
-that are already in config and say something else - checks a human wrote. Pass
-`build install --profile .build/profile.json --force` to replace them
-deliberately.
+Now run the profile's `[project].install_command` yourself in the primary
+checkout. Also perform any repository-documented one-time host setup, such as
+installing Playwright browsers, Xcode tools, ffmpeg, or a native compiler.
 
-If stage 2 cannot install a binary-hosted SOP because an emitted stub differs
-from the catalog, it rolls back the profile-config and generated-conductor
-changes from that stage. Build preserves the local stub. Resolve that stub
-according to your intent, then rerun the command named in the failure message,
-normally `build install --profile .build/profile.json`; no hand-editing of
-`.build/config.toml` or `.build/conductor.toml` is required.
+Examples only - use the command derived from the repository:
 
-### Install
+```sh
+npm ci
+go mod download && npm --prefix frontend ci
+dotnet restore --locked-mode
+```
 
-**git** - Any recent version. Confirm it is on your PATH with `git --version`. The `build ship`
-command performs a local fast-forward merge using git.
+Then run the actual configured gate:
 
-**Worker agent CLI** - Install exactly one of the following; it must be on your PATH before running
-any ticket phase command:
+```sh
+build gate --require-checks --json
+```
 
-- `claude` (claude-code) - confirm with `claude --version` (the default interactive-hook transport
-  needs Claude Code >= 2.1.177; see "Claude Code transport" below)
-- `codex` - confirm with `codex --version`
-- `gemini` - confirm with `gemini --version`
-- `copilot` - confirm with `copilot --version`
+If a gating check fails, the repository is not ready for work even though
+`build install` reported structural `READY`. Fix the repository or prerequisite;
+do not weaken the gate or substitute an unsupported host.
 
-### Gather
+### 7. Final verification
 
-Have the following values ready before running `build init`. Each one maps to a field that
-`build init` writes into `.build/config.toml`.
+```sh
+build setup --check
+build list --json
+build sop doctor --json
+build sop brief run-backlog --json
+git ls-files --error-unmatch .build/config.toml
+git status --short --branch
+```
 
-**Plane base URL** - The root URL for the Plane API. For Plane Cloud this is `https://api.plane.so`;
-for a self-hosted instance use your server root. Written to `plane_base_url` in config.
+The expected result is Plane connectivity, doctor success, a brief containing
+`sopText`, a tracked config file, and an empty porcelain status on a
+non-protected branch.
 
-**Workspace slug** - The short identifier that appears in your Plane workspace URL
-(e.g. `my-org` in `app.plane.so/my-org/settings`). Written to `plane_workspace_slug` in config.
+## Installing a second clone
 
-**Project ID** - The UUID of the Plane project you want tickets created in. Find it in
-Plane under Project Settings > General. Written to `plane_project_id` in config.
+A completed first installation commits `.build/config.toml` and the Claude and
+Codex host stubs. A clone therefore inherits Plane project facts and the gate,
+but not the token file, dependencies, or machine-local conductor.
 
-**Plane API token** - A personal API token from your Plane profile (Settings > API Tokens).
+On each new machine:
 
-For a human developer, the default path is a file: point `plane_api_token_file` at it (the
-conventional path is `secrets/plane-api-token`, already reserved in the generated `.gitignore`).
-Unlike an environment variable, a file's contents do not depend on which shell launched `build` -
-bash only sources `~/.bashrc` for interactive shells, `zsh -c` does not read `~/.zshrc`, and an
-editor or agent harness launched without a login shell inherits neither - so a token exported only
-from an rc file is invisible to a non-interactive process even though it works in your own
-terminal. Once any other source already resolves the token, write it out with
-`build setup --write-token-file secrets/plane-api-token`; that command never prints the token to
-stdout, stderr, or any log.
+1. verify the target repository supports that host;
+2. export `PLANE_API_TOKEN` and run
+   `build setup --write-token-file secrets/plane-api-token`;
+3. run `build sop install --json` to recreate `.build/conductor.toml`;
+4. reapply the verified conductor invariants;
+5. run the target `[project].install_command` and any one-time host setup; and
+6. run `build setup --check`, `build list --json`, `build sop doctor --json`,
+   and `build gate --require-checks --json`.
 
-For CI, prefer an environment variable and write only its name to config with
-`build init --token-env PLANE_API_TOKEN`; CI sets it directly as part of the pipeline, not via an
-interactive shell, so this path is unaffected by the above. A literal `plane_api_token` is
-supported but must never be committed. Resolution order: `plane_api_token`, then
-`plane_api_token_env`, then `plane_api_token_file`, then failure - and the failure message names
-every source it tried.
+If the clone lacks `.build/config.toml` or the host stubs, the first machine did
+not complete and commit installation. Treat it as a first install; do not use
+`build sop upgrade` to create missing files.
 
-**Default agent name** - The agent key used for plan, implement, review, and rework phases
-(e.g. `claude-code`). Must match a `[workers.<name>]` block in config. Written to `default_agent`
-under `[workers]`.
+## Installation troubleshooting
 
-**Agent executable** - The command name on your PATH for the agent CLI you chose above
-(e.g. `claude` for claude-code, `codex` for codex). Written to `executable` under the agent block.
+### Build says READY, but the target build or tests fail
+
+Structural `READY` does not run the target repository. Confirm the operating
+system is supported, run `[project].install_command` in the primary checkout,
+install documented system dependencies, and run
+`build gate --require-checks --json`. A red target gate is a repository or host
+prerequisite blocker, not a successful installation.
+
+### `.build/config.toml` disappears on every clone
+
+Run `git check-ignore -v .build/config.toml`. Remove the reported legacy ignore
+rule, verify the config contains only secret indirection, and track the file.
+Build can otherwise report local readiness while leaving the repository
+uninstallable for the next user.
+
+### The token works in a terminal but not from an agent
+
+The agent did not inherit the interactive shell environment. From a shell where
+the token resolves, run:
+
+```sh
+build setup --write-token-file secrets/plane-api-token
+```
+
+### `sop doctor` passes but `build list` fails
+
+Doctor validates local conductor and gate structure, not Plane. Use
+`build setup --check` and `build list --json` for ticketing.
+
+### Only one host stub exists
+
+Run `build sop install --sop run-backlog --json` without `--host`, then verify
+with `build sop status --sop run-backlog --json`.
 
 ## Claude Code transport (interactive-hook)
 
@@ -159,7 +334,7 @@ Commands detect a parent by querying its direct children. The current behavior i
 | `implement` | Refuses; implement the children instead. |
 | `review` | Aggregates direct-child states. Any child in InProgress or InReview produces Rework and moves the parent to InProgress; all children Done produces Pass; every other mix produces Fail. |
 | `ship` | Requires every direct child to be Done, then moves the parent to Done. It stops without transitioning the parent if any child is not Done. |
-| `chain` | Recurses through non-terminal children, skipping Done and Cancelled children. Sibling dependencies determine ordering; `--max-depth` limits traversal and `--dry-run` previews the post-order schedule. The source repository includes `docs/build-grandparent-chain.md` for implementation details. |
+| `chain` | Recurses through non-terminal children, skipping Done and Cancelled children. Sibling dependencies determine ordering; `--max-depth` limits traversal and `--dry-run` previews the post-order schedule. The Throughline Build source repository includes `docs/build-grandparent-chain.md` for implementation details. |
 | `decompose` | Has no parent-specific guard and creates additional direct children. Check existing children before running it again. |
 | `close` / `defer` | Attempts the lifecycle transition on each non-terminal direct child, then on the parent. Use `--no-cascade` to affect only the named ticket. |
 | `reopen` | Reopens only the parent and prints a note; children keep their current states. |
@@ -221,74 +396,11 @@ evidence as a cascading close or transition shortcut.
 
 ## First Ticket Walkthrough
 
-This sequence takes a repository from zero configuration to a shipped ticket. Replace the uppercase
-placeholders and use the ticket ID that `build new` prints.
+Complete every installation and verification step above first. In particular,
+do not start ticket work from a structural `READY` result while the target gate
+is still red. Use the ticket ID that `build new` prints in the later commands.
 
-### 1. Set the Plane token
-
-macOS, Linux, or Git Bash:
-
-```bash
-export PLANE_API_TOKEN="your-token"
-```
-
-PowerShell:
-
-```powershell
-$env:PLANE_API_TOKEN = "your-token"
-```
-
-### 2. Initialize configuration
-
-```
-build init --no-interactive \
-  --plane-url PLANE_URL \
-  --workspace WORKSPACE_SLUG \
-  --project-id PROJECT_UUID \
-  --token-env PLANE_API_TOKEN
-```
-
-On PowerShell, enter the command on one line or use PowerShell backticks instead of backslashes.
-This writes `.build/config.toml` without putting the token value in the file. Running `build init`
-without `--no-interactive` at a terminal instead starts the create-or-pick Plane project flow.
-
-### 3. Verify configuration and provision the project
-
-Check that `.build/config.toml` has no `REQUIRED_` placeholders and that `default_agent` under
-`[workers]` and `executable` under the matching `[workers.<agent>]` block match the worker CLI
-you installed. Then run:
-
-```
-build setup
-```
-
-Setup initializes local repository support, adds the managed ignore rules, provisions the required
-Plane states and labels, checks connectivity, and preflights configured Claude transports. It is
-safe to run again. `.build/config.toml` is tracked, not ignored - it carries repository facts like
-`[[review.checks]]` that must travel with a clone - but it should never hold a literal token even
-though it is safe to commit when it only names an environment variable. `sop doctor` and `setup
---check` both flag a literal `plane_api_token` before you commit it.
-
-If Plane returns 401 or 403, `build` reports the repository-local config path, repository root,
-workspace, and project that were used for the request. The message also reminds you that sibling
-repositories may select different `.build/config.toml` files and recommends rerunning connected
-`build init` for this repository. Token values and Plane response bodies are not echoed.
-
-If tickets will also run from a non-interactive shell later - an agent harness, a scheduled job, an
-editor launched without a login shell - persist the token now, in this same terminal where it
-already resolves:
-
-```
-build setup --write-token-file secrets/plane-api-token
-```
-
-This writes the token this run already resolved (from step 1's environment variable, here) to that
-file and sets `plane_api_token_file` in config, without ever printing the token itself. A
-non-interactive process reads the file the same way regardless of its own shell, so it no longer
-matters whether that later process's shell ever sourced the rc file where you originally exported
-`PLANE_API_TOKEN`.
-
-### 4. Create a ticket
+### 1. Create a ticket
 
 ```
 build new "Rate-limit /search to 60 requests per minute per API key, 429 on overage"
@@ -339,7 +451,7 @@ For a new ticket A and target B, use `blocked_by` for "A depends on B", `blockin
 `duplicate` for "A duplicates B", and `relates_to` for a loose relationship. Plane may display
 inverse edges from the target side; the create request is written from A toward B.
 
-### 5. Plan the ticket
+### 2. Plan the ticket
 
 ```
 build plan TLB-1
@@ -352,7 +464,7 @@ For chained runs (`build chain TLB-1`, or multiple ticket IDs), start from a cle
 Tracked changes in the main worktree are refused before planning; commit, stash, or revert them
 first. Untracked files do not block the chain.
 
-### 6. Implement the ticket
+### 3. Implement the ticket
 
 ```
 build implement TLB-1
@@ -361,7 +473,7 @@ build implement TLB-1
 You should see the implement phase complete with a success message. Open Plane and confirm the ticket
 state has moved to InReview.
 
-### 7. Review the ticket
+### 4. Review the ticket
 
 ```
 build review TLB-1
@@ -370,7 +482,7 @@ build review TLB-1
 You should see a `Pass` verdict. If you see `Rework` instead, run `build rework TLB-1` and then
 re-run `build review TLB-1`; repeat until you see `Pass`.
 
-### 8. Ship the ticket
+### 5. Ship the ticket
 
 ```
 build ship TLB-1
@@ -380,7 +492,7 @@ You should see a fast-forward merge on the configured target branch and a succes
 configured remote exists, ship pushes by default; use `--no-push` (or `[ship] push = false`) for a
 local-only ship. Open Plane and confirm the ticket state has moved to Done.
 
-### 9. Confirm the commit
+### 6. Confirm the commit
 
 ```
 git log --oneline -1
@@ -547,7 +659,8 @@ automatically. Repository-specific `global`, `cohesive-module`, and `pairwise`
 path rules belong in `[[waves.serialize]]`; no repository paths are built into
 the command. Output names the rule and path for each serialization decision
 and reports estimated speedup. JSON input and output shapes, glob semantics,
-and exit codes are documented in `docs/bring-your-own-conductor.md`.
+and exit codes are documented in the Throughline Build source repository's
+`docs/bring-your-own-conductor.md`.
 
-See `docs/bring-your-own-conductor.md` for the manifest safety model, exit codes,
-and a complete caller-owned conductor sequence.
+See that source document for the manifest safety model, exit codes, and a
+complete caller-owned conductor sequence.

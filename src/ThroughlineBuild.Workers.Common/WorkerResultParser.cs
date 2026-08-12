@@ -126,8 +126,8 @@ internal static class WorkerResultParser
         //
         // Uses the source-gen overload (WorkersCommonJsonContext) so deserialization
         // works under PublishAot=true where reflection-based JsonSerializer.Deserialize<T>
-        // throws NotSupportedException. See docs/throughline-build-architecture.md,
-        // section "AOT serialization traps".
+        // throws NotSupportedException. See docs/state-of-the-system/07-contracts.md
+        // and docs/state-of-the-system/11-llm-architecture.md.
         var lines = stdout.Split('\n');
 
         // Pre-pass: extract named fenced blocks before WORKER_RESULT

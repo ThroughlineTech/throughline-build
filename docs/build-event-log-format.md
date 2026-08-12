@@ -10,8 +10,8 @@ Related contracts:
   high-detail worker diagnostics.
 - [WORKER_RESULT envelope](build-worker-result-envelope.md) describes the structured
   result returned by a worker before phases emit summary events.
-- [Architecture](throughline-build-architecture.md) explains where the event
-  sink sits in the application.
+- [State and persistence](state-of-the-system/05-state-and-persistence.md)
+  explains where the event sink sits and what survives an invocation.
 
 ## Location and filename
 

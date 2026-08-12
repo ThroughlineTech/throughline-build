@@ -1,6 +1,6 @@
 # 05 - State and Persistence
 
-Last refreshed: 2026-08-11 (HEAD 758ad56a)
+Last refreshed: 2026-08-12 (HEAD 758ad56a)
 
 Everything `build` writes over the lifetime of a session: filesystem state, logs, scratch, Plane records, git refs. Where each lives and whether it is cleaned up.
 
@@ -166,7 +166,7 @@ Status: Functional.
 
 ### Loose ends
 
-- **Architecture doc still says local-merge-only.** [docs/throughline-build-architecture.md](../throughline-build-architecture.md) Section 5.9's "no `git push origin main`" claim remains stale; ship and the chain landing both push.
+- The retired standalone architecture document no longer carries the stale local-merge-only claim; this section is the current push and persistence authority.
 - **`chain/<id>` branches survive chain runs by design.** A successful run removes the integration worktree but retains the branch; `build sweep` is the merged-gated branch-deletion path. Operators who never run it accumulate merged-but-undeleted branches.
 
 ---

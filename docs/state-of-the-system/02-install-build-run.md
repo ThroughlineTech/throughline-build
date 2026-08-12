@@ -1,6 +1,6 @@
 # 02 - Install, Build, Run
 
-Last refreshed: 2026-08-11 (HEAD 758ad56a)
+Last refreshed: 2026-08-12 (HEAD 758ad56a)
 
 How the repository gets onto a machine, what the build produces, what running it requires from the host, and what changes vs. cleans up on disk.
 
@@ -39,7 +39,7 @@ Per [README.md:11](../../README.md#L11). Produces managed assemblies under each 
 dotnet test --nologo -v q --logger "console;verbosity=minimal"
 ```
 
-Per [README.md:1-2](../../README.md#L1-L2). Discovers and runs the xUnit test projects under `tests/`. The tracked `tests/Directory.Build.props` defaults `RunSettingsFilePath` to the repo's `test.runsettings` so `dotnet test` is quiet-on-green by default, and conditionally imports the machine-local root `Directory.Build.props` when it exists ([tests/Directory.Build.props](../../tests/Directory.Build.props)). Tests target `net10.0` without `PublishAot=true`, so they do not exercise AOT-sensitive code paths under their default runner (see [architecture Section 11](../throughline-build-architecture.md); `WorkerResultParserAotRegressionTests` is the reference example for tests that opt in to the AOT switch).
+Per [README.md:1-2](../../README.md#L1-L2). Discovers and runs the xUnit test projects under `tests/`. The tracked `tests/Directory.Build.props` defaults `RunSettingsFilePath` to the repo's `test.runsettings` so `dotnet test` is quiet-on-green by default, and conditionally imports the machine-local root `Directory.Build.props` when it exists ([tests/Directory.Build.props](../../tests/Directory.Build.props)). Tests target `net10.0` without `PublishAot=true`, so they do not exercise AOT-sensitive code paths under their default runner; `WorkerResultParserAotRegressionTests` is the reference example for tests that opt in to the AOT switch.
 
 ### Native AOT publish of `build`
 

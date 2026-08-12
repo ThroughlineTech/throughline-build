@@ -9,10 +9,9 @@ Start with these documents when evaluating or using the current source tree:
 
 | Document | Purpose |
 | --- | --- |
-| [Architecture](throughline-build-architecture.md) | As-built design, trust boundaries, components, and invariants |
-| [Operator user guide](throughline_build_userguide.md) | Installation, configuration, and day-to-day workflows |
+| [State of the system](state-of-the-system/00-index.md) | Current architecture, implementation map, invariants, and known gaps |
+| [Operator user guide](throughline_build_userguide.md) | Canonical installation, repository-readiness, and day-to-day workflow guide |
 | [Building from source](build-command-setup.md) | Contributor prerequisites, build, test, and Native AOT publish commands |
-| [New repository setup](new-repository-plane-run-backlog-setup.md) | Connect Plane, configure real gates, and install run-backlog for Claude and Codex |
 | [Agent adapters](build-agent-tool-name-mapping.md) | Shared worker contract and provider-specific behavior |
 | [Event log](build-event-log-format.md) | Durable JSONL event format |
 | [Debug transcript](build-debug-transcript-format.md) | Worker transcript format and redaction behavior |
@@ -22,13 +21,13 @@ Start with these documents when evaluating or using the current source tree:
 | [Bring your own conductor](bring-your-own-conductor.md) | Deterministic worktree leases, gates, wave plans, and candidate fingerprints for an external agent loop |
 
 The source and `build help <topic>` remain authoritative when a current
-reference and the executable disagree.
+reference and the executable disagree. The retired
+[architecture](throughline-build-architecture.md) and
+[new-repository setup](new-repository-plane-run-backlog-setup.md) paths are
+compatibility pointers, not independent references.
 
 ## Point-in-time material
 
-- [State of the system](state-of-the-system/00-index.md) is a detailed snapshot
-  stamped with the commit it describes. It is useful for historical spelunking,
-  but it is not the current architecture authority.
 - [Analysis](analysis/README.md) contains measured experiments, methods, and
   findings. Each result should be read with its recorded workload and
   limitations.

@@ -7,8 +7,8 @@ using Xunit;
 
 namespace ThroughlineBuild.Workers.Common.Tests;
 
-// Regression lock for the AOT serialization trap documented in
-// docs/throughline-build-architecture.md (section "AOT serialization traps").
+// Regression lock for the source-generated AOT serialization contract described
+// in docs/state-of-the-system/07-contracts.md and 11-llm-architecture.md.
 //
 // WorkerResultParser.TryParse must use the source-gen overload
 // (WorkersCommonJsonContext.Default.WorkerResultDto), not the reflection-based

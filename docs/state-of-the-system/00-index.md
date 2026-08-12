@@ -1,13 +1,13 @@
 # 00 - State of the System: Throughline Build
 
-Last refreshed: 2026-08-11 (HEAD 758ad56a)
+Last refreshed: 2026-08-12 (HEAD 758ad56a)
 
-This doc set is a detailed historical snapshot of the Throughline Build repository
-at the HEAD stamped above (refresh history in [PROMPT.md](PROMPT.md)). It is not
-the authority for the current tree. Start with the current
-[documentation map](../README.md) and
-[architecture](../throughline-build-architecture.md), then use this set for
-point-in-time implementation detail.
+This doc set is the maintained architecture and implementation authority for
+Throughline Build. The HEAD stamp records the source revision most recently
+verified by a full refresh; targeted changes update affected sections between
+full refreshes. Start here for system shape and use the
+[documentation map](../README.md) for operator, analysis, and historical
+material.
 
 At that commit, the repository was **Throughline Build** - a `.NET 10`
 native-AOT CLI named `build` that orchestrated an Agile ticket workflow against
@@ -25,7 +25,11 @@ Voice: technical, `file:line` references throughout, status-tagged. The reader i
 
 ## Trusting this set
 
-Every claim in this set is point-in-time at the HEAD in each doc's `Last refreshed` header. Before relying on a claim about code that may have moved since that stamp, run `git log <docHEAD>..HEAD --oneline -- <cited paths>` and treat claims about changed files as unverified until re-checked against source. Status tags age the same way: a path tagged Aspirational at the stamp may have landed (or a Functional path been removed) since - a stale status tag may have inverted, and the set will not warn you.
+Every claim was verified against the HEAD in its `Last refreshed` header. The
+set remains the current documentation authority through update-as-you-go edits,
+but source and generated help win when a cited path changed after that stamp.
+Before relying on such a claim, run
+`git log <docHEAD>..HEAD --oneline -- <cited paths>` and re-check the source.
 
 ## Keeping this set current
 
@@ -148,7 +152,7 @@ As of the refresh stamped in this doc's header:
 1. Start at this index for the orientation.
 2. Jump directly to the doc covering the change you are investigating, checking its `Last refreshed` header against the paths you care about (see "Trusting this set" above).
 3. Each doc ends with a "Loose ends" section - skim those first if you want to find the rough edges quickly.
-4. The current architecture reference is [docs/throughline-build-architecture.md](../throughline-build-architecture.md), but source and generated help remain authoritative when documentation drifts.
+4. This set is the current architecture reference; source and generated help remain authoritative when documentation drifts.
 
 ## Loose ends
 

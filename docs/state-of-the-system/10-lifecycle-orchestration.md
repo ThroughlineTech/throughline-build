@@ -1,6 +1,6 @@
 # 10 - Lifecycle and Orchestration
 
-Last refreshed: 2026-08-11 (HEAD 758ad56a)
+Last refreshed: 2026-08-12 (HEAD 758ad56a)
 
 The Agile phase state machine implemented by `build` - what each phase does, how the chain orchestrator transitions between them, the gate, the integration-branch tree dispatch, and the rework loop bounded by `MaxReworkRounds`.
 
@@ -67,7 +67,7 @@ Plane mirror state names: `Backlog`, `Planning`, `Ready`, `In Progress`, `In Rev
 
 - The diagram does not show the `decompose` fan-out (one ticket -> N children) or the tree-aware parent paths; those are below in "Tree-aware chain".
 - The gate runs only inside the chain loop; standalone `build implement` + `build review` skip it, so the manual path and the chain path enforce different bars.
-- Architecture doc ([docs/throughline-build-architecture.md](../throughline-build-architecture.md)) Section 4 predates the `Decompose`, `Gate`, parent-chain, ratify, and divergence transitions; the code above is authoritative.
+- The retired standalone architecture document no longer defines lifecycle transitions; the code and this section are authoritative.
 
 ---
 

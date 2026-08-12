@@ -47,7 +47,7 @@ min_build_version = "0.1.0"
 branch_prefix = "ticket"
 ticket_prefix = "TLB"
 source_roots = ["src", "tests", "docs"]
-architecture_map = "docs/throughline-build-architecture.md"
+architecture_map = "docs/state-of-the-system/00-index.md"
 rework_cap = 3
 
 [[conductor.review.invariants]]
@@ -82,7 +82,7 @@ that must travel with a clone rather than be re-derived per machine. It never
 holds a literal Plane token by default; `plane_api_token_env` (or
 `plane_api_token_file`) is the template's active key, and `sop doctor`/`setup
 --check` both flag a tracked file that has a literal `plane_api_token` set.
-See `docs/new-repository-plane-run-backlog-setup.md` for the full setup flow.
+See `docs/throughline_build_userguide.md` for the full setup flow.
 
 `.build/` belongs to the clone, not to a worktree. A linked worktree, including
 every worktree the conductor cuts under `.worktrees/`, holds no copy of it, so

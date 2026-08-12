@@ -9,8 +9,8 @@ Related references:
   processing.
 - [Debug transcript](build-debug-transcript-format.md) describes optional diagnostic
   capture of worker sessions.
-- [Architecture](throughline-build-architecture.md) describes the worker
-  boundary and AOT serialization constraints.
+- [LLM architecture](state-of-the-system/11-llm-architecture.md) describes the
+  worker boundary and AOT-safe transport constraints.
 
 Normative parser:
 [`WorkerResultParser`](../src/ThroughlineBuild.Workers.Common/WorkerResultParser.cs).

@@ -17,7 +17,8 @@ public static class WelcomeCommit
     /// On a fresh repo (no commits yet), commit only <c>.gitignore</c> as the initial commit.
     /// Repos that already have a commit are left untouched. Commit failure (e.g. missing
     /// git user.name / user.email) is reported as a non-fatal warning, not a hard error.
-    /// <c>.build/config.toml</c> is gitignored and is never staged.
+    /// <c>.build/config.toml</c> is a tracked repository-fact file, but this minimal
+    /// bootstrap commit stages only <c>.gitignore</c>; install readiness commits config later.
     /// </summary>
     public static void EnsureInitialCommit(ILocalRepoOps localRepo, IConsole console)
     {

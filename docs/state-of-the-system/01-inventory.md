@@ -1,6 +1,6 @@
 # 01 - Inventory
 
-Last refreshed: 2026-08-11 (HEAD 758ad56a)
+Last refreshed: 2026-08-12 (HEAD 758ad56a)
 
 Every command, library project, tool, script, and CI workflow currently in the repository, with a one-paragraph high-level description, inputs, outputs, and the major components it composes with. Status tags follow the convention defined in the index: Functional, Partial, Legacy, Aspirational, Broken.
 
@@ -295,4 +295,4 @@ The repository tracks [.claude/settings.json.example](../../.claude/settings.jso
 - **Multi-vendor LLM is real for workers, aspirational for model clients.** Four worker agents ship and are wired; the `IModelClient` layer is implemented but unreachable from `build`. The only production `ILlmClient` use (reason translation in close/defer/reopen) is now optional via `EchoLlmClient` fallback.
 - **`DeferCommand` v1.1 TODO** (rebuild rollup preview for the parent) is still unimplemented.
 - **Enum counts changed since the sibling docs were written:** `ChainOutcome` has 18 values (added `RefusedDirtyTree`, `RefusedWrongBranch`, `BatchImplemented`, `DryRunPreview`, `GateVacuous`, `ReviewUnavailable`, `GateEnvironmentFailure`, `TicketingUnavailable`), `EventKind` has 14, `Phase` has 11 (added `Gate`), and chain exit codes run 0-11. Sibling docs citing older counts (07-contracts, 10-lifecycle-orchestration) should be checked against these.
-- **Architecture lag to re-check:** the current architecture is maintained as an as-built reference, but source/generated help remain authoritative for the newer conductor, SOP, tracked-config, and staged-install surfaces.
+- **Documentation lag to re-check:** this state-of-the-system set is maintained as the as-built reference, but source/generated help remain authoritative for the newer conductor, SOP, tracked-config, and staged-install surfaces.

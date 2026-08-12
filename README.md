@@ -21,10 +21,10 @@ The repository dogfoods that model on its own development.
 
 ## Start here
 
-- [Architecture](docs/throughline-build-architecture.md) explains the trust
-  boundary, components, and invariants.
+- [State of the system](docs/state-of-the-system/00-index.md) is the current
+  architecture and implementation authority.
 - [Operator user guide](docs/throughline_build_userguide.md) covers
-  configuration and the first end-to-end ticket.
+  installation, repository readiness, and the first end-to-end ticket.
 - [Building from source](docs/build-command-setup.md) has contributor build,
   test, and Native AOT publish commands.
 - [Documentation map](docs/README.md) separates current references from
