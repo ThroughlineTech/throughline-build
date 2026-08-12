@@ -11,6 +11,9 @@ used by `build profile prompt`. `ProjectProfileParser` validates the resulting
 plain JSON deterministically before the CLI writes it. Scaffold itself does not
 derive or apply a profile.
 
+Profile rules require `install_command` to use a frozen, lockfile-preserving
+install; lease creation runs it exactly once before setup/gating checks.
+
 GOTCHA - embedded out-of-tree docs: the csproj embeds
 `docs/op-docs/op-doc-spec.md` from outside this project. The canonical example is
 fenced inside the spec and extracted by `OpDocDocsLoader.LoadExample`; editing

@@ -1,6 +1,6 @@
 # 09 - Failure Modes and Idempotency
 
-Last refreshed: 2026-08-08 (HEAD 5961f807)
+Last refreshed: 2026-08-11 (HEAD 758ad56a)
 
 For each major operation, how it fails and whether re-running is safe. Exit codes summarized in [06-public-surfaces.md](06-public-surfaces.md); chain/dispatch outcomes in [10-lifecycle-orchestration.md](10-lifecycle-orchestration.md).
 
@@ -29,6 +29,8 @@ The existing phase classification remains, while the new conductor/install layer
 | `worktree lease/list/teardown` | git roots, contained path/branch, optional allowlisted seed, manifest identity | collision, failed install, dirty tree, unmerged branch, invalid manifest | partial lease is reported/manifested; no ticket state | yes after fixing cause; force teardown explicitly discards dirty worktree content |
 | `gate` (standalone) / `waves` / `candidate status` | standalone config slice or valid input/base | zero checks with `--require-checks`, unverified canaries, cycle, invalid path/hash input | no remote state | yes; read/execute only |
 | `evidence add` | kind-specific fields and Plane ticket | post succeeds but read-back fails | comment may exist; id is reported | inspect comments before retry; blind retry can duplicate |
+| `attachments` | valid ticket id and authenticated Plane read | project/ticket unavailable; comment-style page cap does not apply; malformed inline asset is skipped | no local or remote mutation | yes; read-only |
+| `attachment` | valid ticket, asset currently belongs to it, absent explicit output path | unknown asset, storage redirect/HTTP failure, output already exists, write/move failure | same-directory temporary file is removed best-effort; final path is either absent or complete | yes after fixing cause; existing final file is never overwritten |
 | `install` | correct stage input and readiness prerequisites | profile/SOP failure rolls local edits back; final readiness finding stops | explicit handoff or rollback; READY only after all probes | yes; stages are designed to be re-run |
 
 ### Loose ends
@@ -144,7 +146,7 @@ When batching is configured and a parent chain has eligible leaf siblings, `Batc
 
 ### `rework` / `new` / `scaffold` / `amend` / `close` / `defer` / `reopen`
 
-Shapes unchanged: `ReworkOutcome` enum (`Implemented` / `NoFeedbackAvailable` / `TicketNotInProgress` / `ImplementFailed`, [src/ThroughlineBuild.Phases/ReworkPhase.cs:8](../../src/ThroughlineBuild.Phases/ReworkPhase.cs#L8)); `new` validation exceptions; scaffold's collected `ScaffoldFailure[]` with duplicate-on-rerun; close/defer cascade soft-failures; reopen never reopens children. A missing Anthropic key degrades `close`/`defer`/`reopen` to verbatim-reason recording via `EchoLlmClient` with a stderr warning ([src/ThroughlineBuild.Cli/CliApplication.cs:2255-2263](../../src/ThroughlineBuild.Cli/CliApplication.cs#L2255-L2263), TLB-371).
+Shapes unchanged: `ReworkOutcome` enum (`Implemented` / `NoFeedbackAvailable` / `TicketNotInProgress` / `ImplementFailed`, [src/ThroughlineBuild.Phases/ReworkPhase.cs:8](../../src/ThroughlineBuild.Phases/ReworkPhase.cs#L8)); `new` validation exceptions; scaffold's collected `ScaffoldFailure[]` with duplicate-on-rerun; close/defer cascade soft-failures; reopen never reopens children. A missing Anthropic key degrades `close`/`defer`/`reopen` to verbatim-reason recording via `EchoLlmClient` with a stderr warning ([src/ThroughlineBuild.Cli/CliApplication.cs:2407-2415](../../src/ThroughlineBuild.Cli/CliApplication.cs#L2407-L2415), TLB-371).
 
 ### Conductor and readiness commands
 
@@ -183,11 +185,11 @@ Three layers, innermost first:
 
 1. **Rate gate:** every call awaits `RequestThrottle.AcquireAsync` - at most `RequestsPerMinute` (default 40) per rolling minute ([src/ThroughlineBuild.Plane/RequestThrottle.cs:49](../../src/ThroughlineBuild.Plane/RequestThrottle.cs#L49), [src/ThroughlineBuild.Plane/PlaneClientOptions.cs:20](../../src/ThroughlineBuild.Plane/PlaneClientOptions.cs#L20)). This is a self-imposed budget, NOT a reading of the server's real limit: at budget the gate hard-waits and prints `[throttle] rate-limit budget full; waiting Ns` even against a self-hosted Plane that would have accepted the call. Tune per deployment via `ticketing.plane_requests_per_minute` (TLB-565).
 2. **HTTP-status retry:** Polly retries up to `MaxRetryAttempts` (default 5) on 429/5xx honoring `Retry-After` ([PlaneClientOptions.cs:26](../../src/ThroughlineBuild.Plane/PlaneClientOptions.cs#L26)); 401/403 throw immediately.
-3. **Transport retry (NEW):** `SendWithTransportRetryAsync` retries DNS/connect/TLS/timeout failures - errors where no HTTP status exists yet - up to `TransportRetryAttempts` (default 3) with exponential backoff (base 2s, cap 10s, +-25% jitter) ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:256-284](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L256-L284); options at [PlaneClientOptions.cs:47-53](../../src/ThroughlineBuild.Plane/PlaneClientOptions.cs#L47-L53)). Mid-flight failures (response ended, protocol error, client timeout) retry only **idempotent verbs** (GET/PATCH); POST never retries mid-flight (:300-326). Exhausted retries throw `TicketingUnavailableException` ([src/ThroughlineBuild.Contracts/TicketingUnavailableException.cs:11-16](../../src/ThroughlineBuild.Contracts/TicketingUnavailableException.cs#L11-L16)).
+3. **Transport retry (NEW):** `SendWithTransportRetryAsync` retries DNS/connect/TLS/timeout failures - errors where no HTTP status exists yet - up to `TransportRetryAttempts` (default 3) with exponential backoff (base 2s, cap 10s, +-25% jitter) ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:284-312](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L284-L312); options at [PlaneClientOptions.cs:47-53](../../src/ThroughlineBuild.Plane/PlaneClientOptions.cs#L47-L53)). Mid-flight failures (response ended, protocol error, client timeout) retry only **idempotent verbs** (GET/PATCH); POST never retries mid-flight (:300-326). Exhausted retries throw `TicketingUnavailableException` ([src/ThroughlineBuild.Contracts/TicketingUnavailableException.cs:11-16](../../src/ThroughlineBuild.Contracts/TicketingUnavailableException.cs#L11-L16)).
 
 `ChainPhase.RunAsync` catches `TicketingUnavailableException` at the per-ticket boundary and classifies it as the environmental outcome `TicketingUnavailable` (exit 11) instead of crashing the process ([src/ThroughlineBuild.Phases/ChainPhase.cs:176](../../src/ThroughlineBuild.Phases/ChainPhase.cs#L176)); the ticket's work is already committed on its branch, the chain is resumable once connectivity returns, and remaining siblings/roots are marked `Skipped`.
 
-Snapshot truncation is unchanged: the per-run snapshot load caps at `MaxListPages = 50` ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:1082](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L1082)) with a loud stderr warning; unknown ticket ids in a multi-ticket chain surface as "Ticket not found", exit 2.
+Snapshot truncation is unchanged: the per-run snapshot load caps at `MaxListPages = 50` ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:1725](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L1725)) with a loud stderr warning; unknown ticket ids in a multi-ticket chain surface as "Ticket not found", exit 2.
 
 ### Anthropic rate-limited / key absent
 

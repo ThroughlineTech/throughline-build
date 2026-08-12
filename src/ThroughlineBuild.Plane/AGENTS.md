@@ -10,6 +10,9 @@ Key behaviors:
 - Per-run issue snapshot cache paginates the project once into `_seqToUuid` and
   `_issueByUuid`; reads answer from memory. Mutations must keep write-through
   `AddOrUpdate` or same-run lookups go stale (TLB-366).
+- Comment reads cursor-paginate independently. Attachment reads merge work-item
+  attachments with same-origin inline assets; downloads prove ticket membership
+  and never forward the Plane token to redirected storage.
 - `RequestThrottle` caps requests/min per process; Polly retries 429/5xx with
   Retry-After.
 - All HTTP uses `SendWithTransportRetryAsync` (TLB-545): fresh request per

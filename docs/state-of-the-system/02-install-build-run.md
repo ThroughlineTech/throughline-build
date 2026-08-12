@@ -1,6 +1,6 @@
 # 02 - Install, Build, Run
 
-Last refreshed: 2026-08-08 (HEAD 5961f807)
+Last refreshed: 2026-08-11 (HEAD 758ad56a)
 
 How the repository gets onto a machine, what the build produces, what running it requires from the host, and what changes vs. cleans up on disk.
 
@@ -23,7 +23,7 @@ The solution file is [throughline-build.sln](../../throughline-build.sln). The `
 
 ## Build
 
-Dependency resolution is reproducible: every source and test project has a tracked `packages.lock.json`; CI runs `dotnet restore --locked-mode` and fails when a project declaration no longer matches its lock ([.github/workflows/build.yml:30](../../.github/workflows/build.yml#L30)). Local `build.sh` publish restores can be RID/SDK-patch-sensitive, so the script snapshots every tracked lockfile and restores its original bytes on exit ([build.sh:6](../../build.sh#L6)).
+Dependency resolution is reproducible: every solution source and test project has a tracked `packages.lock.json`; the project-less `src/tools` directory is the exception, and its generated aggregate lockfile is ignored ([.gitignore:32-35](../../.gitignore#L32-L35)). CI runs `dotnet restore --locked-mode` and fails when a project declaration no longer matches its lock ([.github/workflows/build.yml:30](../../.github/workflows/build.yml#L30)). Local `build.sh` publish restores can be RID/SDK-patch-sensitive, so `snapshot_lock_files` records every tracked lockfile and the exit trap restores its original bytes ([build.sh:12-19](../../build.sh#L12-L19)).
 
 ### Compile-check only (no native binary)
 
@@ -55,7 +55,7 @@ Cross-platform RIDs are noted in the README: `osx-arm64`, `linux-x64`.
 
 **AOT code-gen memory mitigation.** The Cli csproj sets `<IlcOptimizationPreference>Size</IlcOptimizationPreference>` and `<IlcMaxParallelism>1</IlcMaxParallelism>` ([src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj:12-13](../../src/ThroughlineBuild.Cli/ThroughlineBuild.Cli.csproj#L12-L13)) to keep the ILC/LLVM backend from OOM-ing during publish (the crash surfaced as ILC exit `-1073740791`). Single-threaded code-gen trades publish wall-time for a bounded memory footprint. The same fix split the oversized `RunAsync` in `Program.cs` into `RunTicketVerbBodyAsync` / `RunChainVerbAsync` so no single method blew up the code generator (commit `dd7d781`).
 
-**Host-coupling caveat: the root `Directory.Build.props` is machine-local and gitignored.** A local (untracked) root `Directory.Build.props` sets `IlcUseEnvironmentalTools=true` and points `CppLinker`/`CppLibCreator` plus `AdditionalNativeLibraryDirectories` at absolute MSVC/WinSDK paths to skip the `vswhere.exe` discovery that fails in the author's environment. The file is deliberately excluded from the repo - `.gitignore` ignores `/Directory.Build.props` and `/Directory.Build.targets` as "machine-specific native-AOT linker overrides" ([.gitignore:17-19](../../.gitignore#L17-L19)) - so a fresh clone has no root props file and a Windows native publish relies on standard MSVC discovery. The tracked `tests/Directory.Build.props` chains to the root file only `Condition="Exists(...)"`, so CI simply skips it ([tests/Directory.Build.props:10-11](../../tests/Directory.Build.props#L10-L11)).
+**Host-coupling caveat: the root `Directory.Build.props` is machine-local and gitignored.** A local (untracked) root `Directory.Build.props` sets `IlcUseEnvironmentalTools=true` and points `CppLinker`/`CppLibCreator` plus `AdditionalNativeLibraryDirectories` at absolute MSVC/WinSDK paths to skip the `vswhere.exe` discovery that fails in the author's environment. The file is deliberately excluded from the repo - `.gitignore` ignores `/Directory.Build.props` and `/Directory.Build.targets` as "machine-specific native-AOT linker overrides" ([.gitignore:25-26](../../.gitignore#L25-L26)) - so a fresh clone has no root props file and a Windows native publish relies on standard MSVC discovery. The tracked `tests/Directory.Build.props` chains to the root file only `Condition="Exists(...)"`, so CI simply skips it ([tests/Directory.Build.props:10-11](../../tests/Directory.Build.props#L10-L11)).
 
 ### Three-binary bundle via `build.sh` - Functional
 
@@ -66,11 +66,11 @@ RID=osx-arm64 ./build.sh   # cross-target
 
 [build.sh](../../build.sh) selects the RID from `uname -s`/`uname -m` (`linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64`, otherwise `win-x64`), creates `bin/` plus `INSTALL_DIR` (default `$HOME/.local/bin`), and publishes three AOT binaries ([build.sh:41](../../build.sh#L41), [build.sh:68](../../build.sh#L68), [build.sh:73](../../build.sh#L73)):
 
-- `build` from `src/ThroughlineBuild.Cli`, copied from `src/ThroughlineBuild.Cli/bin/Release/net10.0/$RID/publish/` to `bin/build$EXT` ([build.sh:20-22](../../build.sh#L20-L22)).
-- `token-audit` from the single-file source `src/tools/token-audit.cs`, copied from `src/tools/artifacts/token-audit/` to `bin/token-audit$EXT` ([build.sh:24-26](../../build.sh#L24-L26)).
-- `analyze-event-log` from `src/tools/analyze-event-log.cs`, copied from `src/tools/artifacts/analyze-event-log/` to `bin/analyze-event-log$EXT` ([build.sh:28-30](../../build.sh#L28-L30)).
+- `build` from `src/ThroughlineBuild.Cli`, copied from `src/ThroughlineBuild.Cli/bin/Release/net10.0/$RID/publish/` to `bin/build$EXT` ([build.sh:73-75](../../build.sh#L73-L75)).
+- `token-audit` from the single-file source `src/tools/token-audit.cs`, copied from `src/tools/artifacts/token-audit/` to `bin/token-audit$EXT` ([build.sh:77-79](../../build.sh#L77-L79)).
+- `analyze-event-log` from `src/tools/analyze-event-log.cs`, copied from `src/tools/artifacts/analyze-event-log/` to `bin/analyze-event-log$EXT` ([build.sh:81-83](../../build.sh#L81-L83)).
 
-`install_atomic` copies each output to a temporary sibling and renames it into place, avoiding in-place executable replacement problems on macOS ([build.sh:23](../../build.sh#L23)). The three binaries are installed into repository `bin/` and `INSTALL_DIR`; the final PATH check warns if that directory is not searchable ([build.sh:50](../../build.sh#L50)). `EXT` is `.exe` only when `RID` starts with `win-`. The two tools are project-less C# sources that `dotnet publish` compiles individually; their artifacts land under `src/tools/artifacts/`.
+`install_atomic` copies each output to a temporary sibling and renames it into place, avoiding in-place executable replacement problems on macOS ([build.sh:58-64](../../build.sh#L58-L64)). The three binaries are installed into repository `bin/` and `INSTALL_DIR`; the final PATH check warns if that directory is not searchable ([build.sh:92-97](../../build.sh#L92-L97)). `EXT` is `.exe` only when `RID` starts with `win-`. The two tools are project-less C# sources that `dotnet publish` compiles individually; their artifacts land under `src/tools/artifacts/`.
 
 ### CI build matrix
 
@@ -120,7 +120,7 @@ build <verb> -h | --help
 
 ### Worker CLIs
 
-The orchestrator resolves phase-specific agent names through the local `EffectiveAgentFor` function ([CliApplication.RunAsync:1875](../../src/ThroughlineBuild.Cli/CliApplication.cs#L1875)) and creates agents through `WorkerAgentFactory`, whose name-to-implementation mapping is centralized in `WorkerAgentBuilder.Create` ([src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs:16-45](../../src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs#L16-L45)). Profile generation is no longer a worker path; `profile prompt` hands repository inspection to an external agent and `profile apply` validates its returned artifact.
+The orchestrator resolves phase-specific agent names through the local `EffectiveAgentFor` function ([CliApplication.RunAsync:2027](../../src/ThroughlineBuild.Cli/CliApplication.cs#L2027)) and creates agents through `WorkerAgentFactory`, whose name-to-implementation mapping is centralized in `WorkerAgentBuilder.Create` ([src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs:16-45](../../src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs#L16-L45)). Profile generation is no longer a worker path; `profile prompt` hands repository inspection to an external agent and `profile apply` validates its returned artifact.
 
 | Agent name | Implementation | External CLI | Auth posture | Status |
 |---|---|---|---|---|
@@ -138,9 +138,9 @@ Any agent name that is not `gemini`/`codex`/`copilot` falls through to `ClaudeCo
 | `git` on PATH | Every phase that touches the repo runs `git` subprocesses via `ProcessGitClient` ([src/ThroughlineBuild.Git/ProcessGitClient.cs](../../src/ThroughlineBuild.Git/ProcessGitClient.cs)). |
 | The configured worker CLI(s) on PATH (or absolute path in config) | Plan / Implement / Review / Decompose / Draft phases spawn the agent named for that phase. Profile and conductor prompt/apply commands do not spawn workers. |
 | Plane API token | Every Plane operation needs it; a missing token aborts at secret resolution (`BuildConfigLoader.ResolveSecrets`) with exit 3 ([src/ThroughlineBuild.Cli/Config.cs:182-196](../../src/ThroughlineBuild.Cli/Config.cs#L182-L196)). |
-| Network reachability to the configured `plane_base_url` | Every ticket fetch / write hits the Plane REST API; transport-level outages are retried then classified, not crashed on ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:256-285](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L256-L285)). |
+| Network reachability to the configured `plane_base_url` | Every ticket fetch / write hits the Plane REST API; transport-level outages are retried then classified, not crashed on ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:284-313](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L284-L313)). |
 | Network reachability to `api.anthropic.com` | Only for `close`/`defer`/`reopen` (`ReasonTranslator`) - other phases reach their provider via the worker CLI's own auth ([src/ThroughlineBuild.Anthropic/AnthropicOptions.cs](../../src/ThroughlineBuild.Anthropic/AnthropicOptions.cs)). |
-| Anthropic API key | Optional even for `close`/`defer`/`reopen`: when `LlmClientFactory.Create` throws, those verbs fall back to `EchoLlmClient` and record the reason verbatim ([src/ThroughlineBuild.Cli/CliApplication.cs:2252-2262](../../src/ThroughlineBuild.Cli/CliApplication.cs#L2252-L2262)). |
+| Anthropic API key | Optional even for `close`/`defer`/`reopen`: when `LlmClientFactory.Create` throws, those verbs fall back to `EchoLlmClient` and record the reason verbatim ([src/ThroughlineBuild.Cli/CliApplication.cs:2404-2414](../../src/ThroughlineBuild.Cli/CliApplication.cs#L2404-L2414)). |
 | Native exe execution permissions | AOT binary; no JIT. |
 | LF-EOL handling for templates | `.gitattributes` pins brief template files and snapshot test data to LF so substitution is byte-stable across OS ([.gitattributes:1-3](../../.gitattributes#L1-L3)). |
 
@@ -243,7 +243,7 @@ Removing the repo and its binaries:
 |---|---|---|
 | AOT binaries | `bin/` (gitignored, [.gitignore:3](../../.gitignore#L3)) | Delete the directory. |
 | Installed binaries | `$INSTALL_DIR` or `$HOME/.local/bin` | Remove `build`, `token-audit`, and `analyze-event-log` (with `.exe` on Windows). |
-| Tool artifacts | `src/tools/artifacts/` (gitignored, [.gitignore:16](../../.gitignore#L16)) | Delete; regenerated by `build.sh`. |
+| Tool artifacts | `src/tools/artifacts/` plus generated `src/tools/packages.lock.json` (gitignored, [.gitignore:23](../../.gitignore#L23), [.gitignore:32-35](../../.gitignore#L32-L35)) | Delete; regenerated by `build.sh`/`dotnet publish`. |
 | Build output | each project's `bin/` and `obj/` | `dotnet clean` or delete. |
 | Repository config | `.build/config.toml` (deliberately tracked; [.gitignore:1](../../.gitignore#L1)) | Do not delete as an uninstall side effect. It carries repository facts and should contain token indirection, not a literal token. Remove it only as an intentional repository change. |
 | Conductor and SOP cache | `.build/conductor.toml`, `.build/sop-manifest.json` (ignored; [.gitignore:4](../../.gitignore#L4)) | Delete for a local reset. Prefer `build sop uninstall` first so hash-matching catalog stubs are safely removed. |
@@ -254,7 +254,7 @@ Removing the repo and its binaries:
 | Worktrees | `.worktrees/` (gitignored, [.gitignore:1](../../.gitignore#L1)) | `build sweep` removes leftover chain worktrees and merged chain branches (merged-gated against the target so unshipped commits are never discarded; `--force` also removes worktrees with unmerged branches, [src/ThroughlineBuild.Cli/CliApplication.cs:474-517](../../src/ThroughlineBuild.Cli/CliApplication.cs#L474-L517), [src/ThroughlineBuild.Helpers/ChainWorktreeSweeper.cs](../../src/ThroughlineBuild.Helpers/ChainWorktreeSweeper.cs)). Otherwise `git worktree remove` each, or rely on `WorktreeDecrufter` triggered by `ship` / `close` / `defer` ([src/ThroughlineBuild.Helpers/WorktreeDecrufter.cs](../../src/ThroughlineBuild.Helpers/WorktreeDecrufter.cs)). |
 | Scratch | `.scratch/` (gitignored, [.gitignore:10](../../.gitignore#L10)) | Delete. |
 | `secrets/` | gitignored top-level ([.gitignore:2](../../.gitignore#L2)) | Delete. |
-| Machine-local AOT overrides | `Directory.Build.props` / `.targets` at repo root (gitignored, [.gitignore:17-19](../../.gitignore#L17-L19)) | Delete; only affects native publishes on this machine. |
+| Machine-local AOT overrides | `Directory.Build.props` / `.targets` at repo root (gitignored, [.gitignore:25-26](../../.gitignore#L25-L26)) | Delete; only affects native publishes on this machine. |
 
 There is no service or daemon to stop. The interactive Claude transport does use per-user and OS-temporary state: it pre-seeds workspace trust in the Claude configuration selected by `CLAUDE_CONFIG_DIR` or the home/profile directory, reads Claude's persisted project transcripts, and uses temporary lock/run directories. Non-debug run directories are cleaned after use; a crash can leave lock-free directories for the next sweeper pass.
 
@@ -281,7 +281,7 @@ Repeated as a single list for operators:
 ## Loose ends
 
 - **`build install` does not provision worker CLIs or MCP registrations.** It proves repository workflow readiness through explicit external-agent handoffs; host tool installation remains operator-owned.
-- **`build.sh` RID fallback** silently defaults to `win-x64` for any unrecognized `uname` output ([build.sh:12](../../build.sh#L12)); a cross-target build on an exotic platform may publish the wrong RID without warning.
+- **`build.sh` RID fallback** silently defaults to `win-x64` for any unrecognized `uname` output ([build.sh:42-48](../../build.sh#L42-L48)); a cross-target build on an exotic platform may publish the wrong RID without warning.
 - **No release pipeline** in `.github/`; CI artifacts are not promoted, signed, or tagged.
 - **AOT trim warnings** are not gated by CI; the single reference regression test is the only AOT-aware test.
 - **The machine-local root `Directory.Build.props`** required for native publishes on the author's Windows machine is gitignored and undocumented outside a comment in `tests/Directory.Build.props`.

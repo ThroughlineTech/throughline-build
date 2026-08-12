@@ -1,7 +1,8 @@
 # ThroughlineBuild.Workers.ClaudeCode - Claude worker implementation
 
-`ClaudeCodeAgent : IWorkerAgent` selects transport. Product config defaults to
-`interactive-hook`; `print` is the explicit rollback.
+`ClaudeCodeAgent : IWorkerAgent` selects transport. Config omission and the
+generated template default to `interactive-hook`; `print` is the explicit
+rollback, and this repository's tracked config currently selects it.
 
 Interactive runs use ConPTY plus mandatory job object on Windows and PTY plus
 process-group containment on Unix. Completion is synthesized from the persisted

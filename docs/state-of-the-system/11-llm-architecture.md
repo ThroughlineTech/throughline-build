@@ -1,6 +1,6 @@
 # 11 - LLM Architecture
 
-Last refreshed: 2026-08-08 (HEAD 5961f807)
+Last refreshed: 2026-08-11 (HEAD 758ad56a)
 
 How `build` talks to LLMs today, the interfaces it uses, where vendor-specific code lives, and what it takes to add a new provider. The **worker layer is genuinely multi-vendor and wired** (four agents selected at runtime), while the **model-client layer carries a richer abstraction that is built and tested but still not wired**. Repository profile and conductor invariant generation are now explicit outer-agent handoffs: `build` emits prompts and deterministically applies artifacts rather than starting a nested worker.
 
@@ -80,6 +80,8 @@ Status: **Functional**. The claude-code worker accumulated the most change this 
 - **Digest changes.** The old free-standing `WorkerProgressDigest.cs` is deleted; `ClaudeCodeProgressDigester` ([src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeProgressDigester.cs](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeProgressDigester.cs)) is the instance-based survivor. It now filters `type=system` stream events by subtype (only `init` and `thinking_tokens` are digest-worthy) and throttles the `thinking_tokens` ticker to 5000-token boundaries so extended thinking does not flood the digest.
 - **Lean-planning mapping.** `ClaudeCodeAgent.BuildArgs` always disallows nested Agent/Task tools and additionally disallows TodoWrite when `WorkerOptions.LeanPlanning` is set ([ClaudeCodeAgent.cs:392](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L392)). The matching prompt section is gated behind `[project].context_hygiene` and S-size briefs.
 
+The omission/template default above describes product behavior, not this checkout's active choice: tracked `.build/config.toml` explicitly sets `transport = "print"`, so current dogfood worker runs take the print path unless that line is changed ([.build/config.toml:38](../../.build/config.toml#L38)). Status: Functional explicit rollback.
+
 ### Codex specifics
 
 Current boundary correction: Claude transport preflight covers only paths that still spawn Claude workers. The former scaffold-profile worker path named in the historical transport narrative above was deleted; profile and conductor prompt/apply are worker-free.
@@ -113,7 +115,7 @@ Brief builders load per-agent templates via `TemplateLoader.Load(agentName, temp
 
 Construction is centralized: `WorkerAgentBuilder.Create(name, AgentConfig)` ([src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs](../../src/ThroughlineBuild.Cli/WorkerAgentBuilder.cs)) maps agent names to implementations with executable/model/permission and Claude transport settings. `CliApplication` populates a name-keyed registry with fail-fast config validation and wraps it in `WorkerAgentFactory`. Profile, conductor, SOP, worktree, gate, waves, candidate, evidence, and install commands do not use this factory.
 
-Selection precedence is `EffectiveAgentFor` ([CliApplication.cs:1149-1153](../../src/ThroughlineBuild.Cli/CliApplication.cs#L1149-L1153)): per-phase CLI flag (`--agent-plan`/`--agent-implement`/`--agent-review`) beats `--agent`, which beats the `[workers.phases]` config entry, which falls back to `default_agent`. Per-phase agent picking is implemented; the chain's batch worker is created from the implement-phase agent inside `ChainPhaseComposition`.
+Selection precedence is `EffectiveAgentFor` ([CliApplication.cs:1301-1305](../../src/ThroughlineBuild.Cli/CliApplication.cs#L1301-L1305)): per-phase CLI flag (`--agent-plan`/`--agent-implement`/`--agent-review`) beats `--agent`, which beats the `[workers.phases]` config entry, which falls back to `default_agent`. Per-phase agent picking is implemented; the chain's batch worker is created from the implement-phase agent inside `ChainPhaseComposition`.
 
 Two adjacent honesty/safety checks:
 
@@ -151,7 +153,7 @@ The project is AOT-compatible and tested. Its project file has NuGet identity an
 
 `LlmClientFactory.Create` ([src/ThroughlineBuild.Cli/LlmClientFactory.cs](../../src/ThroughlineBuild.Cli/LlmClientFactory.cs)) inspects the `[llm] default_model` prefix and only accepts `anthropic:` - any other prefix throws `ConfigException` ([LlmClientFactory.cs:28](../../src/ThroughlineBuild.Cli/LlmClientFactory.cs#L28)). `default_model` is deprecated for worker selection (worker models come from `[workers.<agent>.sizes]`) and is commented out in the live config, surviving only as this factory's input.
 
-`ReasonTranslator` ([src/ThroughlineBuild.JudgmentSlots/ReasonTranslator.cs:15](../../src/ThroughlineBuild.JudgmentSlots/ReasonTranslator.cs#L15), model pinned to the `ModelId` const `claude-haiku-4-5-20251001`) remains the only LLM consumer in the deterministic CLI, translating operator reason text for `close` / `defer` / `reopen`. The wiring in `WireUpConditionalCommands` ([CliApplication.cs:2235](../../src/ThroughlineBuild.Cli/CliApplication.cs#L2235)) degrades gracefully (TLB-371): when `LlmClientFactory.Create` throws ([CliApplication.cs:2255](../../src/ThroughlineBuild.Cli/CliApplication.cs#L2255)), it logs a `WARNING: LLM unavailable` line and substitutes `EchoLlmClient` ([CliApplication.cs:2261](../../src/ThroughlineBuild.Cli/CliApplication.cs#L2261), [src/ThroughlineBuild.Cli/EchoLlmClient.cs](../../src/ThroughlineBuild.Cli/EchoLlmClient.cs)), which returns the operator's reason verbatim - the state transition always runs.
+`ReasonTranslator` ([src/ThroughlineBuild.JudgmentSlots/ReasonTranslator.cs:15](../../src/ThroughlineBuild.JudgmentSlots/ReasonTranslator.cs#L15), model pinned to the `ModelId` const `claude-haiku-4-5-20251001`) remains the only LLM consumer in the deterministic CLI, translating operator reason text for `close` / `defer` / `reopen`. The wiring in `WireUpConditionalCommands` ([CliApplication.cs:2387](../../src/ThroughlineBuild.Cli/CliApplication.cs#L2387)) degrades gracefully (TLB-371): when `LlmClientFactory.Create` throws ([CliApplication.cs:2407](../../src/ThroughlineBuild.Cli/CliApplication.cs#L2407)), it logs a `WARNING: LLM unavailable` line and substitutes `EchoLlmClient` ([CliApplication.cs:2413](../../src/ThroughlineBuild.Cli/CliApplication.cs#L2413), [src/ThroughlineBuild.Cli/EchoLlmClient.cs](../../src/ThroughlineBuild.Cli/EchoLlmClient.cs)), which returns the operator's reason verbatim - the state transition always runs.
 
 ### `IModelClient` (newer, unwired)
 

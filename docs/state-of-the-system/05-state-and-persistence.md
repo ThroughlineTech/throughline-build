@@ -1,6 +1,6 @@
 # 05 - State and Persistence
 
-Last refreshed: 2026-08-08 (HEAD 5961f807)
+Last refreshed: 2026-08-11 (HEAD 758ad56a)
 
 Everything `build` writes over the lifetime of a session: filesystem state, logs, scratch, Plane records, git refs. Where each lives and whether it is cleaned up.
 
@@ -23,6 +23,7 @@ For configuration file ownership and mutation see [04-configuration.md](04-confi
 | `.build/events/<stem>.jsonl` | `JsonlEventSink` | persistent (one file per session) | never auto-deleted |
 | `.build/sessions/<stem>/` | `--debug` only | persistent | never auto-deleted |
 | `.build/brief.md` | every claude-code worker dispatch (`ClaudeCodeAgent`) | overwritten each dispatch | never auto-deleted (gitignored) |
+| operator-selected attachment path | `build attachment ... --output <path>` | persistent caller-owned file | never auto-deleted; an existing path is refused |
 
 Status: Functional.
 
@@ -33,6 +34,8 @@ Status: Functional.
 **SOP and conductor persistence.** `SopInstaller.Run` resolves every catalog target below the repository root, refuses symlink/reparse traversal, hash-gates upgrades/uninstalls, scaffolds conductor state without clobbering it, and writes the source-generated manifest cache ([SopInstallCommand.cs:525](../../src/ThroughlineBuild.Cli/SopInstallCommand.cs#L525), [SopInstallCommand.cs:1472](../../src/ThroughlineBuild.Cli/SopInstallCommand.cs#L1472)). `ConductorCommand` applies invariant edits through a temp sibling plus atomic move, preserving all bytes outside the invariant block ([ConductorCommand.cs:359](../../src/ThroughlineBuild.Cli/ConductorCommand.cs#L359)).
 
 **`.build/brief.md`.** Each claude-code worker dispatch writes the full brief instruction here before spawning the subprocess ([src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs:24-27](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeAgent.cs#L24-L27)) "for diagnostics". It is overwritten on every dispatch and gitignored; the codex / gemini / copilot agents do not write it.
+
+**Downloaded attachments.** `build attachment` writes only to the explicit operator-selected `--output` path. `WriteAttachmentAtomicallyAsync` creates a same-directory temporary sibling with `CreateNew`, flushes it, then uses a non-overwriting atomic move; the `finally` block removes a leftover temporary file on failure ([src/ThroughlineBuild.Cli/CliApplication.cs:3175-3209](../../src/ThroughlineBuild.Cli/CliApplication.cs#L3175-L3209)). The completed file is caller-owned and has no automatic cleanup.
 
 **Event log file naming.** `SessionFileNameBuilder.Build` ([src/ThroughlineBuild.EventLog/SessionFileNameBuilder.cs:20](../../src/ThroughlineBuild.EventLog/SessionFileNameBuilder.cs#L20)) produces `{project}-{ticket_or_slug}-{verb}-{yyyy-MM-dd-HHmmss}` (no extension); `.jsonl` is appended by `JsonlEventSink.EnsureOpened`, which opens the stream in `FileMode.Append` ([src/ThroughlineBuild.EventLog/JsonlEventSink.cs:28-41](../../src/ThroughlineBuild.EventLog/JsonlEventSink.cs#L28-L41)). When `FileNameStem` is unset the sink falls back to the raw `SessionId` GUID, but every CLI verb sets the stem.
 
@@ -100,7 +103,7 @@ Status: Functional.
 
 ### State outside the repository
 
-`build.sh` installs all three executables into `INSTALL_DIR` (default `$HOME/.local/bin`) through `install_atomic` ([build.sh:23](../../build.sh#L23), [build.sh:33](../../build.sh#L33)). The interactive Claude transport also pre-seeds workspace trust in the Claude user configuration, reads persisted Claude transcripts, and coordinates with per-worktree locks plus run directories under the OS temporary root. `ClaudeCodeInteractiveTransport.ExecuteAsync` owns this lifecycle ([ClaudeCodeInteractiveTransport.cs:97](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeInteractiveTransport.cs#L97)). Status: Functional; cleanup is automatic for normal non-debug runs and best effort after crashes.
+`build.sh` installs all three executables into `INSTALL_DIR` (default `$HOME/.local/bin`) through `install_atomic` ([build.sh:23](../../build.sh#L23), [build.sh:33](../../build.sh#L33)). The interactive Claude transport also pre-seeds workspace trust in the Claude user configuration, reads persisted Claude transcripts, and coordinates with per-worktree locks plus run directories under the OS temporary root. `ClaudeCodeInteractiveTransport.ExecuteAsync` owns this lifecycle ([ClaudeCodeInteractiveTransport.cs:104](../../src/ThroughlineBuild.Workers.ClaudeCode/ClaudeCodeInteractiveTransport.cs#L104)). Status: Functional; cleanup is automatic for normal non-debug runs and best effort after crashes.
 
 ### `build setup` writes (NEW)
 
@@ -136,7 +139,7 @@ Status: Functional. Every phase that writes to Plane does so via [src/Throughlin
 
 `TicketingWritePolicy.BestEffortAsync` ([TicketingWritePolicy.cs:15](../../src/ThroughlineBuild.Phases/TicketingWritePolicy.cs#L15)) distinguishes informational writes from state-bearing writes. Informational labels/comments in plan, gate, review, ship, and chain warn and continue during a Plane outage; lifecycle transitions, resume markers, and shipped markers remain hard requirements. A best-effort failure emits a local `ticketing_write_failed` event when possible.
 
-`AppendDescriptionAsync` ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:753](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L753)) does a read-modify-write append. Plane comments are HTML; `[name: value]` markers are parsed back by `MarkerParser` ([src/ThroughlineBuild.Helpers/MarkerParser.cs:5-42](../../src/ThroughlineBuild.Helpers/MarkerParser.cs#L5-L42)). `CommentMarkers.LatestValue` selects the freshest marker by comment `CreatedAt`, not list order ([src/ThroughlineBuild.Phases/CommentMarkers.cs:19-37](../../src/ThroughlineBuild.Phases/CommentMarkers.cs#L19-L37), TLB-412), so chain re-runs do not read stale prior-run SHAs.
+`AppendDescriptionAsync` ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:790](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L790)) does a read-modify-write append. Plane comments are HTML; `[name: value]` markers are parsed back by `MarkerParser` ([src/ThroughlineBuild.Helpers/MarkerParser.cs:5-42](../../src/ThroughlineBuild.Helpers/MarkerParser.cs#L5-L42)). `CommentMarkers.LatestValue` selects the freshest marker by comment `CreatedAt`, not list order ([src/ThroughlineBuild.Phases/CommentMarkers.cs:19-37](../../src/ThroughlineBuild.Phases/CommentMarkers.cs#L19-L37), TLB-412), so chain re-runs do not read stale prior-run SHAs.
 
 ### Loose ends
 
@@ -172,8 +175,8 @@ Status: Functional.
 
 | Held in | Lifetime | Why |
 |---|---|---|
-| `PlaneTicketingClient._statesByName` / `_labelsByName` / `_issueTypesByName` | one process invocation | name->uuid caches, lazy-loaded under locks ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:28-36](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L28-L36)) |
-| `PlaneTicketingClient._seqToUuid` + `_issueByUuid` (TLB-366) | one process invocation | per-run issue snapshot: the project is paginated once, lookups answer from memory, PATCHes write through ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:48-59](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L48-L59)) |
+| `PlaneTicketingClient._statesByName` / `_labelsByName` / `_issueTypesByName` | one process invocation | name->uuid caches, lazy-loaded under locks ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:31-39](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L31-L39)) |
+| `PlaneTicketingClient._seqToUuid` + `_issueByUuid` (TLB-366) | one process invocation | per-run issue snapshot: the project is paginated once, lookups answer from memory, PATCHes write through ([src/ThroughlineBuild.Plane/PlaneTicketingClient.cs:51-62](../../src/ThroughlineBuild.Plane/PlaneTicketingClient.cs#L51-L62)) |
 | `ShipOptions.BaselineCache` | one process invocation | onto-SHA -> failing-check-set cache so repeated ships in one chain reuse the baseline worktree result; ship also *corrects* a contradicted baseline entry in place ([src/ThroughlineBuild.Phases/ShipPhase.cs:590](../../src/ThroughlineBuild.Phases/ShipPhase.cs#L590)) |
 | `GateVacuityProver` proven-set | one process invocation | per-run per-check-once canary probes (see 09) |
 | `RecordingEventSink._events` | one process invocation | in-memory mirror for the phase summary renderer |
