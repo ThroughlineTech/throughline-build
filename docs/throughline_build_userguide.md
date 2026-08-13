@@ -24,7 +24,190 @@ checkout, run the target build, install browser binaries, install system
 packages, or prove that the repository supports the current operating system.
 Do not tell a developer the repository is ready for work until both layers pass.
 
+## Greenfield discovery before a stack exists
+
+The normal install flow assumes the repository already has enough shape to
+derive a truthful project profile: a language, framework or deliberate lack of
+one, dependency installation command, build and test commands, and at least one
+blocking review check. A directory containing only an assignment, data, or
+research inputs does not have those facts yet.
+
+Use an intermediate state for this case:
+
+1. **Unconfigured directory** - no Git history or Build configuration.
+2. **Plane-connected discovery repository** - Git, tracked non-secret Plane
+   facts, and ticket access are ready, but the project profile and gates are not.
+3. **Build-installed repository** - the normal two readiness layers above have
+   passed.
+
+State 2 is useful and intentional. It is not structural `READY`, and it is not
+ready for `build chain`, worktree leasing, or any workflow that assumes a real
+gate.
+
+### 1. Preserve supplied inputs
+
+If the directory already contains authoritative assignment or data files,
+preserve them in the initial history. Substitute the actual input paths:
+
+```sh
+git init -b main
+git add -- data docs
+git commit -m "bootstrap: preserve supplied project inputs"
+```
+
+An initial commit on `main` is reasonable when the repository is brand new and
+has no shared or protected history. Use the repository's normal feature-branch
+policy after the baseline exists.
+
+This manual Git step is optional. If the directory is empty or a separate
+minimal bootstrap commit is acceptable, let Build initialize Git instead. Its
+welcome commit contains only the generated `.gitignore`; commit supplied inputs
+and `.build/config.toml` afterward.
+
+### 2. Connect the existing Plane project
+
+Use only the first install stage. When the project UUID is known, avoid the
+interactive project-selection questions:
+
+```sh
+build install --no-interactive \
+  --plane-url "PLANE_API_URL" \
+  --workspace "WORKSPACE_SLUG" \
+  --project-id "PROJECT_UUID" \
+  --token-env PLANE_API_TOKEN
+```
+
+The command initializes `.build/config.toml`, runs Setup, verifies the Plane
+project, and exits successfully with a `profile_handoff`. Stop at that handoff.
+Do not ask an agent to invent a profile, framework, install command, build
+command, test command, or review check for a project that does not have them.
+
+### 3. Verify and commit the non-secret connection facts
+
+Persist the token value in an ignored machine-local file, then verify Setup and
+ticket access:
+
+```sh
+build setup --write-token-file secrets/plane-api-token
+build setup --check
+build list --json
+```
+
+`build setup --write-token-file` writes the token value only to the ignored
+token file. It adds the token file's non-secret path to tracked
+`.build/config.toml`. The tracked file should contain indirection such as:
+
+```toml
+plane_api_token_env = "PLANE_API_TOKEN"
+plane_api_token_file = "secrets/plane-api-token"
+```
+
+It must not contain an active literal `plane_api_token = "..."`. Verify both
+sides of that boundary:
+
+```sh
+rg -n '^[[:space:]]*plane_api_token[[:space:]]*=' .build/config.toml
+# Expected: no output.
+
+git check-ignore -v secrets/plane-api-token
+# Expected: the secrets/ ignore rule.
+
+git check-ignore -v .build/config.toml
+# Expected: no output; exit 1 means no ignore rule matched.
+```
+
+Set `[workers].default_agent` to the intended worker, such as `claude-code` or
+`codex`. Then commit the portable repository facts and any supplied inputs that
+are not already tracked:
+
+```sh
+git status --short
+git add -- .gitignore .build/config.toml
+git add -- data docs  # Substitute the actual supplied-input paths.
+git commit -m "bootstrap: preserve inputs and connect throughline build"
+```
+
+Git silently ignores unchanged paths in the `git add` list. Omit the second
+`git add` when all supplied inputs are already tracked.
+
+At this point the repository is Plane-connected, but it is not Build-installed
+or ready for autonomous ticket execution.
+
+### 4. Use the existing ticket as the discovery authority
+
+Read the project and its one existing ticket before making project-shape
+decisions:
+
+```sh
+build list --json
+build get <TICKET-ID>
+build comments <TICKET-ID>
+```
+
+Use the ticket and supplied assignment as the bounded discovery authority. Do
+not create an op-doc merely to satisfy a bootstrap convention. An op-doc is an
+implementation-ready orchestration artifact; it needs known files,
+dependencies, acceptance checks, and a real project gate.
+
+### 5. Perform one bounded discovery implementation
+
+Work with an outer agent directly in the repository for the first pass. The
+agent may use deterministic ticket verbs such as `build get`, `build comments`,
+and `build comment`, but it must not invoke worker-spawning verbs from inside an
+agent session. In particular, do not use `build chain` for this pass.
+
+The discovery implementation should establish the smallest real vertical slice
+that determines:
+
+- the selected project form, such as a CLI, web tool, notebook, or script;
+- the language, framework, and package manager;
+- a manifest and frozen dependency definition or lockfile;
+- exact setup, run, and verification commands in the README;
+- at least one meaningful test and a real build, type-check, package, or
+  equivalent blocking check;
+- the deterministic-versus-AI boundary and how evidence constrains AI output;
+- intentional scope cuts and unresolved decisions; and
+- the Git remote and base branch before any shipping workflow is used.
+
+These must be real project artifacts, not placeholder scaffolding, no-op tests,
+or commands chosen only to make Build report success.
+
+### 6. Complete normal installation after discovery
+
+Once the repository contains enough evidence to derive a truthful profile,
+rerun the first install stage to obtain a current profile prompt, then continue
+through the normal handoffs:
+
+```sh
+build install
+# Give the emitted prompt to an outer agent and save only its JSON response as
+# .build/profile.json.
+
+build install --profile .build/profile.json
+# Give the emitted prompt to an outer agent and save only its TOML response as
+# .build/invariants.toml.
+
+build install --invariants .build/invariants.toml
+```
+
+Run the profile's dependency installation command in the primary checkout and
+then prove the configured gate:
+
+```sh
+build gate --require-checks --json
+```
+
+Only after that command passes is the repository ready for normal autonomous
+ticket execution. Keep the original ticket as the sole implementation ticket
+when it remains concrete enough. Create and scaffold an op-doc only when the
+now-known work benefits from multiple independently verifiable briefs.
+
 ## Before you start
+
+The complete prerequisite list below applies to an existing repository or to a
+greenfield repository finishing state 3. For the initial greenfield connection,
+state 2 needs only Build, Git, the intended agent CLI, and the Plane connection
+values; the target stack and its toolchain are discovered afterward.
 
 Run every command from the target repository root. Have these prerequisites and
 values ready:
