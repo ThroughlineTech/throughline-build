@@ -48,8 +48,9 @@ with output pasted verbatim. Do not report done from a partial or filtered run.
 CI restores, tests, and publishes on `osx-arm64`, `win-x64`, and `linux-x64`.
 
 A fresh clone has no binary: `bin/` is ignored, so build the binary before using
-it. Installed repositories track the secret-free `.build/config.toml`; conductor,
-SOP cache, profile, invariant, event, and session artifacts remain ignored. Root
+it. Installed repositories track the secret-free `.build/config.toml` and the
+repository-owned `.build/conductor.toml`; SOP cache, profile, invariant, event,
+and session artifacts remain ignored. Root
 `Directory.Build.props` and `Directory.Build.targets` are machine-local AOT
 linker overrides; tracked `tests/Directory.Build.props` chains to them only when
 they exist.
@@ -87,8 +88,9 @@ they exist.
 
 This repo tracks Plane tickets (`TLB-NNN`) through the `build` CLI it builds.
 That path requires a configured backend. `.build/config.toml` is tracked and
-secret-free so Plane project facts and gates travel with the clone; each machine
-still provides its ignored token file and conductor state. If config is absent,
+secret-free so Plane project facts and gates travel with the clone; tracked
+conductor policy carries review invariants and repository identity. Each machine
+still provides its ignored token file. If config is absent,
 follow the operator guide's first-install flow, or use GitHub issues/PRs instead.
 
 When a backend is configured, all ticket operations go through `build`. No direct

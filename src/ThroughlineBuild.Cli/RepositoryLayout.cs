@@ -4,14 +4,15 @@ namespace ThroughlineBuild.Cli;
 
 /// <summary>
 /// The one repository-root resolver. Config, conductor, SOP manifest, and catalog stub
-/// resolution all go through this type so a verb run inside a linked worktree resolves the
-/// same data as the same verb run in the main worktree.
+/// resolution all go through this type so a verb run inside a linked worktree stays bounded to
+/// that repository and uses policy from its checked-out revision when present.
 ///
 /// git owns the answer whenever it can give one: "rev-parse --show-toplevel" names the tree
-/// the verb runs in, and "rev-parse --git-common-dir" leads to the main worktree, which is the
-/// only tree of a clone that holds the gitignored, machine-local .build directory. A linked
-/// worktree's .git is a file rather than a directory, which is exactly what hand-rolled walks
-/// used to trip over.
+/// the verb runs in, and "rev-parse --git-common-dir" leads to the main worktree. Tracked
+/// .build/config.toml and .build/conductor.toml resolve from the current tree. The main worktree
+/// remains the fallback for an older or partially-installed tree with no .build directory. A
+/// linked worktree's .git is a file rather than a directory, which is exactly what hand-rolled
+/// walks used to trip over.
 ///
 /// Without git (no git on PATH, or a tree that is not a repository at all) resolution falls
 /// back to a directory walk that stops at the first .git or .build it finds. Either way the
@@ -42,14 +43,14 @@ internal sealed class RepositoryLayout
     /// <summary>Root of the tree the verb runs in. Tracked files resolve from here.</summary>
     public string WorktreeRoot { get; }
 
-    /// <summary>Root of the clone's main worktree, which owns the machine-local .build directory.</summary>
+    /// <summary>Root of the clone's main worktree, used as the fallback for local .build state.</summary>
     public string MainWorktreeRoot { get; }
 
     public bool IsLinkedWorktree => !PathsEqual(WorktreeRoot, MainWorktreeRoot);
 
     /// <summary>
-    /// Root that owns machine-local .build data: the tree holding the resolved .build directory,
-    /// or the main worktree when the repository has none yet (so a fresh install writes there).
+    /// Root that owns the resolved .build directory, or the main worktree when the repository has
+    /// none yet (so a fresh install writes there).
     /// </summary>
     public string DataRoot =>
         FindBuildDirectory() is { } buildDirectory
@@ -89,7 +90,7 @@ internal sealed class RepositoryLayout
     }
 
     /// <summary>
-    /// Absolute path of a machine-local .build file, or null when the repository has no .build
+    /// Absolute path of a .build file, or null when the repository has no .build
     /// directory or that directory does not hold the file. Fails closed rather than climbing
     /// past the repository into an unrelated ancestor.
     /// </summary>
@@ -111,9 +112,9 @@ internal sealed class RepositoryLayout
         if (!IsLinkedWorktree)
             yield break;
 
-        // A linked worktree belongs to the same clone as the main worktree, so machine-local
-        // data resolves from there. The relative position inside the tree is preserved, which
-        // keeps a repository whose .build lives in a subdirectory resolving the same way.
+        // A linked worktree belongs to the same clone as the main worktree. When its current
+        // revision has no tracked .build directory, fall back to local data in the main tree.
+        // Preserve the relative position for repositories whose .build lives in a subdirectory.
         var relative = Path.GetRelativePath(WorktreeRoot, StartDirectory);
         var mapped = relative is "." || relative.StartsWith("..", StringComparison.Ordinal) ||
                      Path.IsPathRooted(relative)

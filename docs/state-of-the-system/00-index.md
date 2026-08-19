@@ -98,7 +98,7 @@ Coordination between phases happens through three persistent channels:
 - **Plane**: ticket state, labels, description, comments (with markers like `[planned_at: <sha>]`), and parent/child sub-issue links. `build setup` provisions the canonical state/label set from `WorkspaceSchema` (Contracts).
 - **Git**: the feature branch `ticket/<id>` and its worktree under `.worktrees/`; a chain runs its subtree inside one shared worktree on a `chain/<slug>` **integration branch** (built by `ChainIntegrationBranch.BranchNameFromId`, [src/ThroughlineBuild.Phases/ChainIntegrationBranch.cs:36](../../src/ThroughlineBuild.Phases/ChainIntegrationBranch.cs#L36)) that accumulates child ships and is landed onto the resolved target branch at the root (rebase, fast-forward merge, push unless `--no-push`/`[ship].push=false`). Chain sweeps its worktrees on success and preserves them on failure; `build sweep` is the standalone recovery verb.
 - **`.build/events/<stem>.jsonl`**: the append-only event log (`EventKind` now has 14 values including `CostLedger`; `Phase` has 11 including `Gate`).
-- **Conductor state**: tracked `.build/config.toml` carries repository-wide checks, worktree, and wave policy; ignored `.build/conductor.toml` carries derived repository identity and review invariants; `.build/sop-manifest.json` caches catalog writes; each conductor worktree carries `.build-worktree-lease.json` ([.gitignore:1](../../.gitignore#L1), [WorktreeLease.cs:7](../../src/ThroughlineBuild.Helpers/WorktreeLease.cs#L7)).
+- **Conductor state**: tracked `.build/config.toml` carries repository-wide checks, worktree, and wave policy; tracked `.build/conductor.toml` carries repository identity and review invariants; ignored `.build/sop-manifest.json` caches catalog writes; each conductor worktree carries `.build-worktree-lease.json` ([.gitignore:1](../../.gitignore#L1), [WorktreeLease.cs:7](../../src/ThroughlineBuild.Helpers/WorktreeLease.cs#L7)).
 
 LLM contact splits into three tiers (architecture Section 3), but at two different maturity levels - see [11-llm-architecture.md](11-llm-architecture.md):
 - **Deterministic** code paths - state machines, gates, scans (e.g. `Ship`, `GatePhase` with its vacuity and control provers).
@@ -115,7 +115,7 @@ LLM contact splits into three tiers (architecture Section 3), but at two differe
 | [01-inventory.md](01-inventory.md) | Every CLI verb (38), source project (20), tool, script, and CI workflow - what it does, what it reads/writes, status. |
 | [02-install-build-run.md](02-install-build-run.md) | Toolchain prerequisites, locked restore and native publish paths, runtime host requirements, `init`/`setup`/three-stage `install`, update/uninstall. |
 | [03-external-dependencies.md](03-external-dependencies.md) | Plane REST API (incl. transport retry + provisioning), Anthropic API, the worker CLIs (claude/codex/gemini/copilot), NuGet packages, what failure looks like for each. |
-| [04-configuration.md](04-configuration.md) | Tracked `.build/config.toml`, ignored conductor/SOP files, per-agent worker blocks, worktree/wave policy, environment variables, secrets, precedence. |
+| [04-configuration.md](04-configuration.md) | Tracked `.build/config.toml` and conductor policy, ignored SOP cache, per-agent worker blocks, worktree/wave policy, environment variables, secrets, precedence. |
 | [05-state-and-persistence.md](05-state-and-persistence.md) | Everything written to disk and to Plane during a session - config, leases, SOP manifests/stubs, evidence, logs, lifetime, and cleanup posture. |
 | [06-public-surfaces.md](06-public-surfaces.md) | CLI exit codes, versioned `--json` envelopes, summary contract, `WORKER_RESULT` + fenced blocks + `COMPLETION_CLAIM`, JSONL schema, tiered help, and the reusable Claude Code facade. |
 | [07-contracts.md](07-contracts.md) | Inter-project type contracts inside the repo (incl. the gate contract), and shared artifacts with Plane / the worker CLIs / the older claude-config workflow. |
@@ -157,6 +157,5 @@ As of the refresh stamped in this doc's header:
 ## Loose ends
 
 - `models` and `sweep` remain outside the tiered help registry even though both action verbs are Functional.
-- `RepositoryLayout` still describes `.build` wholesale as machine-local, while `.gitignore` and install readiness deliberately make `.build/config.toml` tracked; only conductor state, SOP cache, prompts, events, and sessions are ignored.
 - The public Claude Code facade has package metadata but no pack/publish pipeline.
 - The direct model-client abstraction remains unwired, and no GitHub ticketing or MCP server adapter exists.

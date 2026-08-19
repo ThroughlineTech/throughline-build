@@ -1,0 +1,45 @@
+[conductor]
+min_build_version = "0.1.1"
+branch_prefix = "ticket"
+ticket_prefix = "TLB"
+source_roots = ["src", "tests", "docs"]
+architecture_map = "docs/throughline-build-architecture.md"
+rework_cap = 3
+
+[[conductor.review.invariants]]
+id = "contracts-io-free"
+statement = "ThroughlineBuild.Contracts stays I/O-free; filesystem, network, and process integration belong in outer projects."
+paths = ["src/ThroughlineBuild.Contracts/**"]
+blocks_done = true
+
+[[conductor.review.invariants]]
+id = "aot-json-source-generation"
+statement = "CLI JSON output uses source-generated JsonSerializerContext and avoids reflection-based serialization."
+paths = ["src/ThroughlineBuild.Cli/**", "src/ThroughlineBuild.*/*.cs"]
+blocks_done = true
+
+[[conductor.review.invariants]]
+id = "solution-file-authority"
+statement = "Projects under src and tests are real only when they are included in throughline-build.sln."
+paths = ["src/**", "tests/**", "throughline-build.sln"]
+blocks_done = true
+
+[[conductor.review.invariants]]
+id = "non-vacuous-gates"
+statement = "Gate, scaffold, and verification changes preserve a real failing path; zero configured checks never report success."
+paths = ["src/ThroughlineBuild.Verification/**", "src/ThroughlineBuild.Scaffold/**", "src/ThroughlineBuild.Phases/**", "tests/**"]
+blocks_done = true
+
+[conductor.review.escalation]
+model_size = "large"
+paths = [
+  "src/ThroughlineBuild.Cli/**",
+  "src/ThroughlineBuild.Contracts/**",
+  "src/ThroughlineBuild.Phases/**",
+  "src/ThroughlineBuild.Verification/**",
+  "src/ThroughlineBuild.Plane/**",
+]
+
+[constellation]
+platform = "dotnet-cli"
+contract_authority = "src/ThroughlineBuild.Contracts"

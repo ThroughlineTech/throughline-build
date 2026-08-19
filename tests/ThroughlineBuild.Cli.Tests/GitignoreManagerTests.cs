@@ -60,20 +60,20 @@ public class GitignoreManagerTests
     }
 
     [Fact]
-    public void RequiredEntries_IgnoreInstallHandoffsAndMachineLocalSopState()
+    public void RequiredEntries_IgnoreInstallHandoffsAndSopCache()
     {
         Assert.Contains(".build/profile.json", GitignoreManager.RequiredEntries);
         Assert.Contains(".build/invariants.toml", GitignoreManager.RequiredEntries);
-        Assert.Contains(".build/conductor.toml", GitignoreManager.RequiredEntries);
         Assert.Contains(".build/sop-manifest.json", GitignoreManager.RequiredEntries);
     }
 
     [Fact]
-    public void RequiredEntries_DoesNotIgnoreConfigToml()
+    public void RequiredEntries_DoesNotIgnoreRepositoryPolicy()
     {
-        // config.toml is tracked (TLB-627): it carries repository facts ([[review.checks]], [waves],
-        // [worktree], etc.) that must travel with a clone, so it must never be in the ignore list.
+        // These files carry repository-wide gates, conventions, and review invariants. They must
+        // travel with a clone rather than be re-derived independently on every machine.
         Assert.DoesNotContain(".build/config.toml", GitignoreManager.RequiredEntries);
+        Assert.DoesNotContain(".build/conductor.toml", GitignoreManager.RequiredEntries);
     }
 
     [Fact]

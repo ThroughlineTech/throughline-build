@@ -181,7 +181,7 @@ internal static class SopDoctorCommand
         // running. Text scan only - doctor never loads ticketing config or resolves secrets.
         ValidateTokenSafety(configPath, findings);
         // Emitted stubs are tracked repository content, so they are inspected in the tree the
-        // verb actually runs in rather than in the tree that owns the machine-local .build data.
+        // verb actually runs in alongside tracked config and conductor policy.
         if (validateStubs)
             ValidateEmittedStubs(layout.WorktreeRoot, findings);
 

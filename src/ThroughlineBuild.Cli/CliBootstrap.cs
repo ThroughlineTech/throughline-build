@@ -36,8 +36,8 @@ public static class CliBootstrap
         bool requireTicketing,
         BuildConfigLoadMode configLoadMode)
     {
-        // The clone's machine-local .build lives in the main worktree, so every verb bootstraps
-        // against that root whether it was invoked there or inside a linked worktree.
+        // Repository policy resolves through the shared layout, while ticket/worker operations
+        // continue to bootstrap against the clone's main worktree.
         var layout = RepositoryLayout.Resolve(rawWorkingDirectory);
         var workingDirectory = layout.MainWorktreeRoot;
 

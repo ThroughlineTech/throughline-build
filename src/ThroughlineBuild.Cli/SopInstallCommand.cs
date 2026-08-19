@@ -1589,8 +1589,8 @@ internal static class SopInstaller
                !relative.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal);
     }
 
-    // Tracked catalog paths live in the tree the verb runs in; machine-local .build data lives
-    // in the main worktree of the clone. Both answers come from the shared resolver.
+    // Tracked catalog and repository-policy paths live in the tree the verb runs in. The shared
+    // resolver retains a bounded main-worktree fallback for older trees without tracked .build.
     internal static string ResolveRepositoryRoot(string startDirectory) =>
         RepositoryLayout.Resolve(startDirectory).WorktreeRoot;
 

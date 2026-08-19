@@ -39,7 +39,7 @@ configuration and ticketing credentials.
 
 ## Configuration
 
-Binary-hosted SOPs read machine-local conductor data:
+Binary-hosted SOPs read tracked repository conductor policy:
 
 ```toml
 [conductor]
@@ -70,11 +70,11 @@ platform = "dotnet-cli"
 contract_authority = "src/ThroughlineBuild.Contracts"
 ```
 
-`.build/conductor.toml` is ignored, machine-local, and contains no secrets;
-recreate it in each clone through `build install` or `build sop install`. It
-carries the minimum Build version, branch and ticket prefixes, source roots,
-architecture map, review invariants, review escalation rule, rework cap, and
-constellation.
+`.build/conductor.toml` is tracked and contains no secrets. It carries the
+minimum Build version, branch and ticket prefixes, source roots, architecture
+map, review invariants, review escalation rule, rework cap, and constellation.
+Those are repository contracts and must travel with a clone rather than be
+re-derived independently on every machine.
 
 `.build/config.toml`, by contrast, is tracked: it carries repository facts -
 `[[review.checks]]`, `[[ship.regression_checks]]`, `[waves]`, `[worktree]` -
@@ -84,15 +84,12 @@ holds a literal Plane token by default; `plane_api_token_env` (or
 --check` both flag a tracked file that has a literal `plane_api_token` set.
 See `docs/throughline_build_userguide.md` for the full setup flow.
 
-`.build/` belongs to the clone, not to a worktree. A linked worktree, including
-every worktree the conductor cuts under `.worktrees/`, holds no copy of it, so
-`sop doctor`, `sop brief`, and config loading resolve conductor and config data
-from the clone's main worktree and report the same result there as in the
-worktree. Install the SOP once per clone; nothing seeds `.build/` per worktree.
-Emitted host stubs are the exception: they are tracked repository content, so
-they are validated in the tree the verb runs in. Resolution is bounded by the
-repository, so a tree whose repository holds no `.build/config.toml` reports it
-missing rather than adopting an unrelated ancestor's config.
+Tracked `.build/config.toml` and `.build/conductor.toml` are checked out in each
+linked worktree, including conductor worktrees under `.worktrees/`. `sop doctor`,
+`sop brief`, and config loading therefore validate policy from the revision the
+verb runs in. Ignored manifests and transient artifacts remain local. Resolution
+is bounded by the repository, so a tree whose repository holds no tracked policy
+reports it missing rather than adopting an unrelated ancestor's configuration.
 Run `build sop list [--json]` to report available embedded SOPs and their binary
 versions. Run `build sop install [--sop <name>] [--host claude|codex] [--json]`
 to emit host stubs, scaffold a missing `.build/conductor.toml`, and write
@@ -100,8 +97,8 @@ to emit host stubs, scaffold a missing `.build/conductor.toml`, and write
 `--host` narrows emitted stubs to Claude or Codex while still including shared
 scaffolded paths.
 
-A scaffolded `conductor.toml` is not a template filled with generic values -
-install derives what it can from the repository itself, deterministically, with
+A scaffolded `conductor.toml` is only a bootstrap for a repository that does not
+already track one. Install derives what it can from the repository itself, deterministically, with
 no worker and no engine code that special-cases a language or framework:
 `ticket_prefix` from the configured Plane project identifier, `source_roots`
 from `git ls-files`'s tracked top-level directories excluding the ones Build

@@ -362,7 +362,7 @@ result says `READY: run-backlog preflight passed`.
 
 If doctor reports `constellation.contract_authority.placeholder` and the
 repository genuinely has no shared-contract authority, set this explicit
-machine-local value in `.build/conductor.toml`, then rerun the same invariants
+repository value in `.build/conductor.toml`, then rerun the same invariants
 command:
 
 ```toml
@@ -404,28 +404,28 @@ build list --json
 build sop doctor --json
 build sop brief run-backlog --json
 git ls-files --error-unmatch .build/config.toml
+git ls-files --error-unmatch .build/conductor.toml
 git status --short --branch
 ```
 
 The expected result is Plane connectivity, doctor success, a brief containing
-`sopText`, a tracked config file, and an empty porcelain status on a
+`sopText`, tracked config and conductor files, and an empty porcelain status on a
 non-protected branch.
 
 ## Installing a second clone
 
-A completed first installation commits `.build/config.toml` and the Claude and
-Codex host stubs. A clone therefore inherits Plane project facts and the gate,
-but not the token file, dependencies, or machine-local conductor.
+A completed first installation commits `.build/config.toml`, `.build/conductor.toml`,
+and the Claude and Codex host stubs. A clone therefore inherits Plane project
+facts, the gate, and conductor policy, but not the token file or dependencies.
 
 On each new machine:
 
 1. verify the target repository supports that host;
 2. export `PLANE_API_TOKEN` and run
    `build setup --write-token-file secrets/plane-api-token`;
-3. run `build sop install --json` to recreate `.build/conductor.toml`;
-4. reapply the verified conductor invariants;
-5. run the target `[project].install_command` and any one-time host setup; and
-6. run `build setup --check`, `build list --json`, `build sop doctor --json`,
+3. run `build sop install --json` to verify or restore emitted host stubs;
+4. run the target `[project].install_command` and any one-time host setup; and
+5. run `build setup --check`, `build list --json`, `build sop doctor --json`,
    and `build gate --require-checks --json`.
 
 If the clone lacks `.build/config.toml` or the host stubs, the first machine did
@@ -460,7 +460,7 @@ build setup --write-token-file secrets/plane-api-token
 
 ### `sop doctor` passes but `build list` fails
 
-Doctor validates local conductor and gate structure, not Plane. Use
+Doctor validates repository conductor policy and gate structure, not Plane. Use
 `build setup --check` and `build list --json` for ticketing.
 
 ### Only one host stub exists
@@ -703,9 +703,9 @@ sections they use without requiring `[ticketing]`, `[workers]`, or `[events]`,
 resolving ticketing secrets, or constructing a Plane client. Other commands
 still require the full ticketing, worker, and event configuration.
 
-Repositories that use binary-hosted SOPs keep `.build/conductor.toml` ignored
-and machine-local. Recreate it in each clone through `build install` or
-`build sop install`.
+Repositories that use binary-hosted SOPs track `.build/conductor.toml` as
+repository policy. `build install` or `build sop install` scaffolds it only for
+a repository that does not already provide one.
 Run `build sop list [--json]` to report embedded SOPs and their binary versions.
 Run `build sop install [--sop <name>] [--host claude|codex] [--json]` to emit
 host stubs, scaffold a missing `.build/conductor.toml`, and write

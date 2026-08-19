@@ -638,8 +638,14 @@ internal static class InstallReadiness
                 return Fail(branch, porcelain, tokenFinding);
             commitPaths.Add(".build/config.toml");
         }
+        // conductor.toml is repository policy too: branch/ticket conventions, source roots,
+        // review invariants, escalation, and constellation identity must not be re-derived per
+        // clone. It contains no credentials, and SOP install never overwrites an existing
+        // scaffolded file, so readiness can safely commit a newly-created canonical copy.
+        if (ContainsPath(expandedPorcelain, ".build/conductor.toml"))
+            commitPaths.Add(".build/conductor.toml");
         if (HasUnrelatedChanges(expandedPorcelain, commitPaths))
-            return Fail(branch, porcelain, "working tree contains changes outside emitted SOP stubs");
+            return Fail(branch, porcelain, "working tree contains changes outside installer-owned paths");
 
         var gitDir = (await git.RunAsync(ct, "rev-parse", "--git-dir")).Require("resolve git directory").Trim();
         var absoluteGitDir = Path.GetFullPath(gitDir, repositoryRoot);

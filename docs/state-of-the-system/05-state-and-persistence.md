@@ -12,12 +12,12 @@ For configuration file ownership and mutation see [04-configuration.md](04-confi
 
 ### `.build/` (project-local runtime root)
 
-`.build` now mixes tracked repository facts with ignored machine/session state. `.build/config.toml` is deliberately not ignored and is meant to travel with the repository; `.build/conductor.toml`, `.build/sop-manifest.json`, generated handoff files, events, sessions, and transient briefs are ignored ([.gitignore:1](../../.gitignore#L1)).
+`.build` mixes tracked repository policy with ignored session state. `.build/config.toml` and `.build/conductor.toml` deliberately travel with the repository; `.build/sop-manifest.json`, generated handoff files, events, sessions, and transient briefs are ignored ([.gitignore:1](../../.gitignore#L1)).
 
 | Path | Written by | Lifetime | Cleanup |
 |---|---|---|---|
 | `.build/config.toml` | `build init`; `models refresh`; `settarget`; `profile apply` / `install --profile`; `setup --write-token-file` | persistent, tracked repository fact | normal git history; do not treat as disposable local state |
-| `.build/conductor.toml` | SOP install scaffold; install profile identity derivation; `conductor apply` invariant-block replacement | persistent, ignored | manual reset or SOP lifecycle; never silently overwritten wholesale |
+| `.build/conductor.toml` | SOP install scaffold; install profile identity derivation; `conductor apply` invariant-block replacement | persistent, tracked | reviewed repository changes; never silently overwritten wholesale |
 | `.build/sop-manifest.json` | SOP install/upgrade/uninstall | persistent ignored cache | deleted when last manifest entry is removed; safe to rebuild from catalog/status |
 | `.build/profile.json`, `.build/invariants.toml` | external agent/operator handoff convention, not automatically written by `build` | optional ignored handoff artifacts | manual |
 | `.build/events/<stem>.jsonl` | `JsonlEventSink` | persistent (one file per session) | never auto-deleted |
@@ -112,7 +112,7 @@ Status: Functional.
 ### Loose ends
 
 - **`.build/brief.md` and `transcript.jsonl` are claude-code-only.** Other workers leave no brief diagnostic or per-turn transcript.
-- **Only selected `.build` state is ignored.** Config is tracked; conductor, manifest, prompts, logs, and sessions remain local. A clone can receive repository policy but still needs a resolvable Plane token and local conductor state.
+- **Only selected `.build` state is ignored.** Config and conductor policy are tracked; manifest, prompts, logs, and sessions remain local. A clone receives repository policy but still needs a resolvable Plane token.
 - **`MainWorktreeLock` is in-process only** - two separate `build` processes are not serialized.
 - **`.build/sessions/` and `.build/events/` never auto-rotate** (see Cleanup posture).
 - **`rework-round.json` is overwritten per round** within the same capture dir; only the last round's manifest survives a multi-round session.

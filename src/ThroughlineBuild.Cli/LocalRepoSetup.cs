@@ -6,8 +6,8 @@ namespace ThroughlineBuild.Cli;
 /// <summary>
 /// The canonical, language-neutral .gitignore entries a build-managed project should carry, and
 /// the append-only merge logic that adds whatever is missing without disturbing existing content.
-/// Entries cover the build tool's own artifacts (config holding the Plane token, transient brief,
-/// event/session logs, feature worktrees, secrets) plus universal OS/editor noise - nothing
+/// Entries cover the build tool's transient artifacts (briefs, event/session logs, feature
+/// worktrees, secrets) plus universal OS/editor noise - nothing
 /// stack-specific (no node_modules, bin/obj, *.pyc, etc.); those belong to the project's own stack.
 /// </summary>
 public static class GitignoreManager
@@ -16,10 +16,9 @@ public static class GitignoreManager
 
     public static readonly IReadOnlyList<string> RequiredEntries = new[]
     {
-        // build tool artifacts. .build/config.toml is intentionally NOT here - it is tracked (see
-        // TLB-627): it carries repository facts ([[review.checks]], [waves], [worktree], etc.) that
-        // must travel with a clone, and the template default no longer writes a literal token into it.
-        ".build/conductor.toml",
+        // Build tool artifacts. Repository policy in .build/config.toml and
+        // .build/conductor.toml is intentionally NOT here: both files must travel with a clone.
+        // config.toml defaults to token indirection and is scanned before the installer commits it.
         ".build/sop-manifest.json",
         ".build/profile.json",
         ".build/invariants.toml",

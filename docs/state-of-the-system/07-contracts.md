@@ -178,7 +178,7 @@ The in-repository half of the old flow has been removed.
 | `.worktrees/ticket-*`, `chain-*` | `build` | `build sweep` (recovery), operator |
 | `.worktrees/conductor/*/.build-worktree-lease.json` | `build worktree lease` | `worktree list`/`teardown`, `candidate status`, install readiness |
 | tracked `.build/config.toml` | init/profile/setup/settarget/models | all configured phases plus standalone worktree/gate/waves slices |
-| ignored `.build/conductor.toml` + `.build/sop-manifest.json` | SOP install/profile identity/conductor apply | SOP doctor/brief/lifecycle and install readiness |
+| tracked `.build/conductor.toml` + ignored `.build/sop-manifest.json` | SOP install/profile identity/conductor apply | SOP doctor/brief/lifecycle and install readiness |
 | `WORKER_RESULT` envelope + fenced blocks + `COMPLETION_CLAIM` | worker CLI (per brief template) | all four `IWorkerAgent`s via shared parser; `GatePhase` |
 | op-doc spec (embedded; `build op-doc spec`) | this repo (single source) | `/op-plan` skill, operators, `OpDocParser` validation |
 | derived profile JSON -> `.build/config.toml` | external agent plus deterministic `profile apply` / staged install | gate/review/ship checks, worktree install, wave policy, brief pre-load |
@@ -193,7 +193,7 @@ The in-repository half of the old flow has been removed.
 - **Two check-result runners**: `AutomatedChecksRunner` (executes) and `PreComputedChecksRunner` (replays gate results into review, TLB-502) both satisfy the verifier's checks input; the latter exists precisely so gate and review cannot disagree about what ran.
 - **Two verdict producers**: `IVerifier` (review) and `IObsoleteRatifier` (chain auto-resolve) both return `Verdict`. Unchanged.
 - **Usage text vs exit-code mapper**: `CliUsage.UsageText` documents chain exit codes only through 9; `ChainExitCodeMapper` emits 10 and 11. Code wins.
-- **Workspace / project IDs** live in tracked `.build/config.toml`; the token should remain indirect. Ignored conductor state may still be machine-specific.
+- **Workspace / project IDs** live in tracked `.build/config.toml`; the token should remain indirect. Conductor identity and review policy live in tracked `.build/conductor.toml`.
 - **`/ticket-ship` vs `build ship`** - both can transition a ticket to Done. `build` is the current direction; the slash-command flow survives only via the global claude-config install.
 
 ---

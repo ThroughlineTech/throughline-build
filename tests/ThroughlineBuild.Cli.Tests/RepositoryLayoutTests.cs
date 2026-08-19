@@ -70,7 +70,7 @@ public sealed class RepositoryLayoutTests
     }
 
     [Fact]
-    public async Task DoctorAndBrief_InLinkedWorktree_MatchTheMainWorktree()
+    public async Task DoctorAndBrief_InLinkedWorktree_UseTrackedPolicyFromThatTree()
     {
         var scratch = NewScratchDirectory();
         var mainRepo = Path.Combine(scratch, "main-repo");
@@ -81,8 +81,8 @@ public sealed class RepositoryLayoutTests
             await InitRepositoryAsync(mainRepo);
             WriteBuildData(mainRepo);
 
-            // Emitted stubs are tracked content, so they must be committed to reach the
-            // linked worktree; .build stays machine-local to the main worktree.
+            // Emitted stubs and repository policy are tracked content, so all of them must be
+            // committed to reach the linked worktree.
             var install = SopInstaller.Run(
                 "install",
                 mainRepo,
@@ -90,21 +90,21 @@ public sealed class RepositoryLayoutTests
                 "0.1.0+test",
                 DateTimeOffset.UtcNow);
             Assert.True(install.Passed);
-            await RunGitAsync(mainRepo, "add", ".claude", ".agents");
-            await RunGitAsync(mainRepo, "commit", "-m", "install sop stubs");
+            await RunGitAsync(mainRepo, "add", ".claude", ".agents", ".build/config.toml", ".build/conductor.toml");
+            await RunGitAsync(mainRepo, "commit", "-m", "install sop policy and stubs");
 
             await RunGitAsync(mainRepo, "worktree", "add", worktree, "-b", "feature");
-            Assert.False(Directory.Exists(Path.Combine(worktree, ".build")));
+            Assert.True(Directory.Exists(Path.Combine(worktree, ".build")));
 
             var fromMain = SopDoctorCommand.RunDoctor(mainRepo, "0.1.0+test");
             var fromWorktree = SopDoctorCommand.RunDoctor(worktree, "0.1.0+test");
 
             Assert.True(fromMain.Passed, Describe(fromMain));
             Assert.True(fromWorktree.Passed, Describe(fromWorktree));
-            AssertSamePath(fromMain.RepositoryRoot, fromWorktree.RepositoryRoot);
-            AssertSamePath(fromMain.ConductorPath!, fromWorktree.ConductorPath!);
-            AssertSamePath(fromMain.ConfigPath!, fromWorktree.ConfigPath!);
-            AssertSamePath(Path.Combine(mainRepo, ".build", "conductor.toml"), fromWorktree.ConductorPath!);
+            AssertSamePath(mainRepo, fromMain.RepositoryRoot);
+            AssertSamePath(worktree, fromWorktree.RepositoryRoot);
+            AssertSamePath(Path.Combine(worktree, ".build", "conductor.toml"), fromWorktree.ConductorPath!);
+            AssertSamePath(Path.Combine(worktree, ".build", "config.toml"), fromWorktree.ConfigPath!);
 
             // Internal consistency: a report that names a root and a config names the
             // conductor from that same .build directory, never from another tree.
@@ -202,7 +202,7 @@ public sealed class RepositoryLayoutTests
         Directory.CreateDirectory(buildDirectory);
         File.WriteAllText(Path.Combine(buildDirectory, "conductor.toml"), ValidConductorToml);
         File.WriteAllText(Path.Combine(buildDirectory, "config.toml"), ValidReviewChecksToml);
-        File.WriteAllText(Path.Combine(repository, ".gitignore"), ".build/\n");
+        File.WriteAllText(Path.Combine(repository, ".gitignore"), ".build/sop-manifest.json\n");
     }
 
     private static string Describe(SopDoctorView report) =>

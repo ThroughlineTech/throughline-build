@@ -253,9 +253,10 @@ public sealed class InstallCommandTests
                 .Where(path => path.Class == SopBundleCatalog.EmittedPathClass)
                 .Select(path => path.Path)
                 .Append(".gitignore")
-                // .build/config.toml is tracked (TLB-627): it is a new, untracked file on this fresh
-                // repo, so readiness commits it alongside the stubs and .gitignore.
+                // Repository policy is tracked: these are new, untracked files on this fresh repo,
+                // so readiness commits them alongside the stubs and .gitignore.
                 .Append(".build/config.toml")
+                .Append(".build/conductor.toml")
                 .Order(StringComparer.Ordinal);
             Assert.Equal(expected, committed.Order(StringComparer.Ordinal));
 
@@ -597,6 +598,34 @@ public sealed class InstallCommandTests
             var second = await ReadyAsync(repo);
             Assert.True(second.Success, second.Message);
             Assert.Equal(head, await GitAsync(repo, "rev-parse", "HEAD"));
+        }
+        finally
+        {
+            TryDelete(repo);
+        }
+    }
+
+    [Fact]
+    public async Task Readiness_CommitsRepositoryPolicyWithStubs()
+    {
+        var repo = await CreateRepositoryAsync();
+        try
+        {
+            Write(repo, StubPaths[0], "codex stub\n");
+            Write(repo, StubPaths[1], "claude stub\n");
+            Write(repo, ".build/config.toml", "[review]\n");
+            Write(repo, ".build/conductor.toml", "[conductor]\nmin_build_version = \"0.1.0\"\n");
+
+            var result = await ReadyAsync(repo);
+
+            Assert.True(result.Success, result.Message);
+            var committed = (await GitAsync(repo, "show", "--pretty=", "--name-only", "HEAD"))
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            var expected = StubPaths
+                .Append(".build/config.toml")
+                .Append(".build/conductor.toml")
+                .Order(StringComparer.Ordinal);
+            Assert.Equal(expected, committed.Order(StringComparer.Ordinal));
         }
         finally
         {

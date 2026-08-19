@@ -1,7 +1,5 @@
-# Throughline Build (managed by 'build setup'). .build/config.toml is deliberately NOT here - it is
-# tracked (see TLB-627): it carries repository facts ([[review.checks]], [waves], [worktree], etc.)
-# that must travel with a clone, and it never holds a literal Plane token by default.
-.build/conductor.toml
+# Throughline Build (managed by 'build setup'). Repository policy in .build/config.toml and
+# .build/conductor.toml is deliberately NOT here: both files must travel with a clone.
 .build/sop-manifest.json
 .build/profile.json
 .build/invariants.toml

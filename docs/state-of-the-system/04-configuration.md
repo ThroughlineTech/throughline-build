@@ -300,7 +300,7 @@ Two secrets, both resolved by `BuildConfigLoader.ResolveSecrets` ([src/Throughli
 
 Reason translation is the only path in the deterministic CLI that constructs the direct Anthropic client, and it is fully optional. `WireUpConditionalCommands` only runs for `close`/`defer`/`reopen` ([src/ThroughlineBuild.Cli/CliApplication.cs:3225-3268](../../src/ThroughlineBuild.Cli/CliApplication.cs#L3225-L3268)); it tries `LlmClientFactory.Create`, and on `ConfigException` (no key, deprecated `default_model` unset, etc.) it logs `WARNING: LLM unavailable (...); recording reason verbatim without translation.` and substitutes an `EchoLlmClient` ([src/ThroughlineBuild.Cli/EchoLlmClient.cs](../../src/ThroughlineBuild.Cli/EchoLlmClient.cs)) that returns the last user message verbatim. The ticket state transition still runs. `ReasonTranslator.ModelId` pins `claude-haiku-4-5-20251001` ([src/ThroughlineBuild.JudgmentSlots/ReasonTranslator.cs:16](../../src/ThroughlineBuild.JudgmentSlots/ReasonTranslator.cs#L16)). The old module-level `ANTHROPIC_API_KEY` hard gate is gone (TLB-227/TLB-371).
 
-`.build/config.toml` is intentionally tracked; `.build/conductor.toml`, `.build/sop-manifest.json`, generated handoff artifacts, events, sessions, and `secrets/` are ignored ([.gitignore:1](../../.gitignore#L1)). The generated config defaults to `plane_api_token_env` rather than a literal token. `plane_api_token_file` is the stable non-interactive alternative when an agent/editor launch does not inherit the operator's shell environment; `setup --write-token-file` writes the already-resolved token and its config indirection.
+`.build/config.toml` and `.build/conductor.toml` are intentionally tracked; `.build/sop-manifest.json`, generated handoff artifacts, events, sessions, and `secrets/` are ignored ([.gitignore:1](../../.gitignore#L1)). The generated config defaults to `plane_api_token_env` rather than a literal token. `plane_api_token_file` is the stable non-interactive alternative when an agent/editor launch does not inherit the operator's shell environment; `setup --write-token-file` writes the already-resolved token and its config indirection.
 
 ### Loose ends
 
@@ -311,11 +311,10 @@ Reason translation is the only path in the deterministic CLI that constructs the
 
 ## `.build/conductor.toml` and `.build/sop-manifest.json`
 
-These ignored files are separate from tracked repository config. `conductor.toml` is structured TOML containing conductor identity, repository/constellation facts, review invariants and escalation policy; `SopDoctorCommand` is its schema and semantic validator ([SopDoctorCommand.cs:9](../../src/ThroughlineBuild.Cli/SopDoctorCommand.cs#L9), [SopDoctorCommand.cs:116](../../src/ThroughlineBuild.Cli/SopDoctorCommand.cs#L116)). `conductor prompt/apply` edits only invariant blocks, while SOP install scaffolds the file and install-profile derivation fills deterministic identity fields. `sop-manifest.json` is a schema-versioned cache of catalog writes; the embedded catalog and current/trusted hashes remain authoritative, so a damaged or absent manifest never grants permission to touch arbitrary paths ([SopInstallCommand.cs:495](../../src/ThroughlineBuild.Cli/SopInstallCommand.cs#L495)).
+Tracked `conductor.toml` is structured TOML containing conductor identity, repository/constellation facts, review invariants and escalation policy; `SopDoctorCommand` is its schema and semantic validator ([SopDoctorCommand.cs:9](../../src/ThroughlineBuild.Cli/SopDoctorCommand.cs#L9), [SopDoctorCommand.cs:116](../../src/ThroughlineBuild.Cli/SopDoctorCommand.cs#L116)). `conductor prompt/apply` edits only invariant blocks, while SOP install scaffolds the file only when a repository does not already provide it and install-profile derivation fills deterministic identity fields. Ignored `sop-manifest.json` is a schema-versioned cache of catalog writes; the embedded catalog and current/trusted hashes remain authoritative, so a damaged or absent manifest never grants permission to touch arbitrary paths ([SopInstallCommand.cs:495](../../src/ThroughlineBuild.Cli/SopInstallCommand.cs#L495)).
 
 ### Loose ends
 
-- `RepositoryLayout` comments still call `.build` wholesale machine-local even though config is tracked; its actual path behavior deliberately serves both tracked config and ignored conductor state.
 
 ---
 
