@@ -19,7 +19,6 @@ public sealed class AmendCommand : ITicketCommand
         var hasSize = ctx.Args.TryGetValue("size", out var sizeArg);
         var hasNote = ctx.Args.TryGetValue("note", out var noteArg);
         var hasDescription = ctx.Args.TryGetValue("description", out var descriptionArg);
-        var hasAc = ctx.Args.TryGetValue("ac", out var acArg);
         var hasTitle = ctx.Args.TryGetValue("title", out var titleArg);
         var hasPriority = ctx.Args.TryGetValue("priority", out var priorityArg);
         var hasType = ctx.Args.TryGetValue("type", out var typeArg);
@@ -28,12 +27,12 @@ public sealed class AmendCommand : ITicketCommand
         var labelsToRemove = ctx.GetValues("label-remove");
         var hasLabelChanges = labelsToAdd.Count > 0 || labelsToRemove.Count > 0;
 
-        if (!hasSize && !hasNote && !hasDescription && !hasAc && !hasTitle && !hasPriority
+        if (!hasSize && !hasNote && !hasDescription && !hasTitle && !hasPriority
             && !hasType && !hasParent && !hasLabelChanges)
         {
             return new CommandResult(false,
                 "at least one amend option is required (--title, --priority, --type, --label-add, " +
-                "--label-remove, --parent, --size, --note, --description, or --ac)");
+                "--label-remove, --parent, --size, --note, or --description)");
         }
 
         if (hasSize)
@@ -83,27 +82,6 @@ public sealed class AmendCommand : ITicketCommand
             catch (Exception ex)
             {
                 return new CommandResult(false, $"failed to read description file: {ex.Message}");
-            }
-        }
-
-        string? acHtml = null;
-        if (hasAc)
-        {
-            try
-            {
-                if (acArg == "-")
-                {
-                    using var reader = new System.IO.StreamReader(Console.OpenStandardInput());
-                    acHtml = await reader.ReadToEndAsync().ConfigureAwait(false);
-                }
-                else
-                {
-                    acHtml = await System.IO.File.ReadAllTextAsync(acArg!, ct).ConfigureAwait(false);
-                }
-            }
-            catch (Exception ex)
-            {
-                return new CommandResult(false, $"failed to read ac file: {ex.Message}");
             }
         }
 
@@ -214,23 +192,6 @@ public sealed class AmendCommand : ITicketCommand
                 {
                     ["action"] = "update_description",
                     ["detail"] = "description"
-                }), ct).ConfigureAwait(false);
-        }
-
-        if (hasAc)
-        {
-            await _ticketing.UpdateDescriptionAsync(ctx.TicketId, acHtml!, ct).ConfigureAwait(false);
-
-            await _events.EmitAsync(new WorkflowEvent(
-                string.Empty,
-                DateTimeOffset.UtcNow,
-                EventKind.TicketWrite,
-                ctx.TicketId,
-                Phase.Command,
-                new Dictionary<string, object>
-                {
-                    ["action"] = "update_description",
-                    ["detail"] = "ac"
                 }), ct).ConfigureAwait(false);
         }
 

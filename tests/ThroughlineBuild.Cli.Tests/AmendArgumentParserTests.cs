@@ -65,4 +65,18 @@ public class AmendArgumentParserTests
         Assert.False(parsed);
         Assert.Equal("--title may only be specified once", error);
     }
+
+    // TLB-650: --ac was removed; the parser must reject it like any unknown option
+    // rather than silently accepting a value it no longer has a code path for.
+    [Fact]
+    public void TryParse_rejects_removed_ac_option()
+    {
+        string[] args = ["amend", "TLB-563", "--ac", "criteria.html"];
+
+        var parsed = AmendArgumentParser.TryParse("TLB-563", args, 2, out var context, out var error);
+
+        Assert.False(parsed);
+        Assert.Null(context);
+        Assert.Equal("unknown amend option '--ac'", error);
+    }
 }

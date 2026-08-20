@@ -48,7 +48,7 @@ Usage:
   build sop status [--sop <name>] [--host claude|codex] [--json]     Report catalog drift, including missing installed paths
   build amend <ticket-id> [--title "..."] [--priority urgent|high|medium|low|none] [--type <name>]
                           [--label-add <name>]... [--label-remove <name>]... [--parent <ticket-id>]
-                          [--size S|M|L] [--note "..."] [--description <path|->] [--ac <path|->]
+                          [--size S|M|L] [--note "..."] [--description <path|->]
   build close <ticket-id> <reason>                                Close a ticket (reason required)
   build defer <ticket-id> <reason>                                Defer a ticket (reason required)
   build reopen <ticket-id> [reason]                               Reopen a previously closed or deferred ticket (reason optional)

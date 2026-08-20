@@ -44,7 +44,7 @@ build <verb> [args] [--debug | --quiet] [--summary-json] [--json] [--error-locat
   attachment <id> <asset-id> --output <path> [--json]
   amend <id> [--title "..."] [--priority urgent|high|medium|low|none] [--type <name>]
              [--label-add <name>]... [--label-remove <name>]... [--parent <id>]
-             [--size S|M|L] [--note "..."] [--description <path|->] [--ac <path|->]
+             [--size S|M|L] [--note "..."] [--description <path|->]
   close <id> <reason>
   defer <id> <reason>
   reopen <id> [reason]

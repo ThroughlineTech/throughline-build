@@ -393,35 +393,6 @@ public class AmendCommandTests
     }
 
     [Fact]
-    public async Task AcOnly_calls_UpdateDescriptionAsync()
-    {
-        var ticket = MakeTicket();
-        var ticketing = new FakeTicketing(ticket);
-        var events = new FakeEventSink();
-        var cmd = new AmendCommand(ticketing, events);
-
-        var tempFile = System.IO.Path.GetTempFileName();
-        try
-        {
-            await System.IO.File.WriteAllTextAsync(tempFile, "<h3>Acceptance Criteria</h3><ul><li>foo</li></ul>");
-            var ctx = MakeCtx(args: new Dictionary<string, string> { ["ac"] = tempFile });
-            var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
-
-            Assert.True(result.Success);
-            Assert.Single(ticketing.UpdateDescriptions);
-            Assert.Equal("<h3>Acceptance Criteria</h3><ul><li>foo</li></ul>", ticketing.UpdateDescriptions[0].html);
-            Assert.Empty(ticketing.ApplyLabels);
-            Assert.Empty(ticketing.AppendDescriptions);
-            Assert.Single(events.Events);
-            Assert.Equal(EventKind.TicketWrite, events.Events[0].Kind);
-        }
-        finally
-        {
-            System.IO.File.Delete(tempFile);
-        }
-    }
-
-    [Fact]
     public async Task DescriptionAndSize_size_then_description()
     {
         var ticket = MakeTicket(labels: new[] { "plan-ticket" });
@@ -475,30 +446,6 @@ public class AmendCommandTests
         Assert.False(result.Success);
         Assert.NotNull(result.Message);
         Assert.Contains("failed to read description file", result.Message);
-        Assert.Empty(ticketing.TitleUpdates);
-        Assert.Equal(0, ticketing.GetCalls);
-        Assert.Empty(ticketing.UpdateDescriptions);
-        Assert.Empty(events.Events);
-    }
-
-    [Fact]
-    public async Task MissingAcFile_produces_error()
-    {
-        var ticket = MakeTicket();
-        var ticketing = new FakeTicketing(ticket);
-        var events = new FakeEventSink();
-        var cmd = new AmendCommand(ticketing, events);
-
-        var ctx = MakeCtx(args: new Dictionary<string, string>
-        {
-            ["title"] = "Must not be written",
-            ["ac"] = "/nonexistent/path/ac.txt"
-        });
-        var result = await cmd.ExecuteAsync(ctx, CancellationToken.None);
-
-        Assert.False(result.Success);
-        Assert.NotNull(result.Message);
-        Assert.Contains("failed to read ac file", result.Message);
         Assert.Empty(ticketing.TitleUpdates);
         Assert.Equal(0, ticketing.GetCalls);
         Assert.Empty(ticketing.UpdateDescriptions);

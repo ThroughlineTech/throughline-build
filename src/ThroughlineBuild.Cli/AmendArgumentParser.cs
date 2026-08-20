@@ -6,7 +6,7 @@ internal static class AmendArgumentParser
 {
     private static readonly HashSet<string> s_scalarOptions =
     [
-        "size", "note", "description", "ac", "title", "priority", "type", "parent"
+        "size", "note", "description", "title", "priority", "type", "parent"
     ];
 
     private static readonly HashSet<string> s_repeatableOptions = ["label-add", "label-remove"];

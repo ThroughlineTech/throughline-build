@@ -816,7 +816,6 @@ public static class HelpRegistryFactory
             new("--size S|M|L",         "Update the size label",                               false),
             new("--note \"...\"",       "Append a context note to the description",            false),
             new("--description <path>", "Replace the description from a file or stdin (-)",    false),
-            new("--ac <path>",          "Replace the acceptance criteria from a file or stdin (-)", false),
             new("--json",               "Emit the result as a JSON envelope instead of text",  false),
         ],
         ExitCodes: [s_exit0, s_exit1, s_exit2],
